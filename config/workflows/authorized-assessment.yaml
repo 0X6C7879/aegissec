@@ -1,0 +1,32 @@
+name: authorized-assessment
+title: 授权验证流程
+description: 面向授权环境的最小受控验证工作流。
+stages:
+  - key: scope_guard
+    title: 范围确认
+    role: coordinator
+  - key: runtime_boot
+    title: 环境启动
+    role: operator
+  - key: skill_mcp_sync
+    title: Skill/MCP 同步
+    role: researcher
+  - key: context_collect
+    title: 上下文收集
+    role: researcher
+  - key: hypothesis_build
+    title: 假设生成
+    role: planner
+  - key: safe_validation
+    title: 低风险验证
+    role: operator
+    requires_approval: true
+  - key: findings_merge
+    title: 发现归并
+    role: reporter
+  - key: causal_graph_update
+    title: 因果图更新
+    role: coordinator
+  - key: report_export
+    title: 报告导出
+    role: reporter

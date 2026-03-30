@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "aegissec-demo-stdio": {
+      "command": "python",
+      "args": [
+        "D:/AI/aegissec/scripts/mcp_demo_server.py",
+        "stdio"
+      ],
+      "enabled": true,
+      "timeout_ms": 10000
+    },
+    "aegissec-demo-http": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "enabled": true,
+      "timeout_ms": 10000
+    }
+  }
+}

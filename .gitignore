@@ -1,0 +1,15 @@
+.env
+.env.local
+.venv/
+.vscode/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.pyc
+apps/web/node_modules/
+apps/web/dist/
+apps/web/*.tsbuildinfo
+.aegissec/
+pytest-of-ASUS/
+test-results/
