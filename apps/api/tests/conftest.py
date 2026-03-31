@@ -26,9 +26,10 @@ class FakeChatRuntime:
         self,
         content: str,
         attachments: list[object],
+        available_skills: list[object] | None = None,
         execute_tool: object | None = None,
     ) -> str:
-        del execute_tool
+        del available_skills, execute_tool
         normalized_content = " ".join(content.split())
         return f"Test assistant reply: {normalized_content} ({len(attachments)} attachments)"
 

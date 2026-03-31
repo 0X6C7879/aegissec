@@ -9,14 +9,17 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.settings import Settings, get_settings
-from app.db.models import AttachmentMetadata
+from app.db.models import AttachmentMetadata, SkillAgentSummaryRead
 
 SYSTEM_PROMPT = (
     "You are assisting an authorized defensive security research workflow. "
     "Reply in the user's language. Keep answers concise, evidence-oriented, and within the "
-    "user's stated scope. If shell-based verification or tool output would materially improve "
-    "accuracy, call the execute_kali_command tool automatically instead of asking the user to "
-    "run commands manually. After tool execution, summarize what happened clearly."
+    "user's stated scope. The system exposes a dynamic Skills catalog for the current project. "
+    "When the user asks which skills are available, asks what a skill does, or asks you to use "
+    "a skill, call list_available_skills or read_skill_content before asking generic "
+    "clarifying questions, and do not guess skill contents. Use execute_kali_command only when "
+    "shell-based verification or command output would materially improve accuracy. After tool "
+    "execution, summarize what happened clearly."
 )
 
 MAX_TOOL_STEPS = 3
@@ -34,18 +37,14 @@ class ChatRuntimeConfigurationError(ChatRuntimeError):
 @dataclass(slots=True)
 class ToolCallRequest:
     tool_call_id: str
-    command: str
-    timeout_seconds: int | None = None
-    artifact_paths: list[str] = field(default_factory=list)
+    tool_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class ToolCallResult:
-    status: str
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    artifacts: list[str] = field(default_factory=list)
+    tool_name: str
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 ToolExecutor = Callable[[ToolCallRequest], Awaitable[ToolCallResult]]
@@ -56,6 +55,7 @@ class ChatRuntime(Protocol):
         self,
         content: str,
         attachments: list[AttachmentMetadata],
+        available_skills: list[SkillAgentSummaryRead] | None = None,
         execute_tool: ToolExecutor | None = None,
     ) -> str: ...
 
@@ -69,6 +69,7 @@ class OpenAICompatibleChatRuntime:
         self,
         content: str,
         attachments: list[AttachmentMetadata],
+        available_skills: list[SkillAgentSummaryRead] | None = None,
         execute_tool: ToolExecutor | None = None,
     ) -> str:
         api_key, base_url, model = self._require_configuration()
@@ -77,7 +78,7 @@ class OpenAICompatibleChatRuntime:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        messages = self._build_initial_messages(content, attachments)
+        messages = self._build_initial_messages(content, attachments, available_skills or [])
 
         for _ in range(MAX_TOOL_STEPS + 1):
             payload = self._build_payload(model, messages, allow_tools=execute_tool is not None)
@@ -101,12 +102,8 @@ class OpenAICompatibleChatRuntime:
                             "tool_call_id": tool_call.tool_call_id,
                             "content": json.dumps(
                                 {
-                                    "command": tool_call.command,
-                                    "status": tool_result.status,
-                                    "exit_code": tool_result.exit_code,
-                                    "stdout": tool_result.stdout,
-                                    "stderr": tool_result.stderr,
-                                    "artifacts": tool_result.artifacts,
+                                    "tool": tool_result.tool_name,
+                                    "payload": tool_result.payload,
                                 },
                                 ensure_ascii=False,
                             ),
@@ -176,13 +173,14 @@ class OpenAICompatibleChatRuntime:
             "stream": False,
         }
         if allow_tools:
-            payload["tools"] = [self._tool_definition()]
+            payload["tools"] = self._tool_definitions()
         return payload
 
     @staticmethod
     def _build_initial_messages(
         content: str,
         attachments: list[AttachmentMetadata],
+        available_skills: list[SkillAgentSummaryRead],
     ) -> list[dict[str, object]]:
         user_content = content.strip()
         if attachments:
@@ -200,13 +198,25 @@ class OpenAICompatibleChatRuntime:
                 "Attachment metadata provided with this message:\n" + "\n".join(attachment_lines)
             )
 
+        messages: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        skill_catalog_context = OpenAICompatibleChatRuntime._build_skill_catalog_context(
+            available_skills
+        )
+        if skill_catalog_context is not None:
+            messages.append({"role": "system", "content": skill_catalog_context})
+        messages.append({"role": "user", "content": user_content})
+        return messages
+
+    @staticmethod
+    def _tool_definitions() -> list[dict[str, object]]:
         return [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            OpenAICompatibleChatRuntime._execute_kali_command_definition(),
+            OpenAICompatibleChatRuntime._list_available_skills_definition(),
+            OpenAICompatibleChatRuntime._read_skill_content_definition(),
         ]
 
     @staticmethod
-    def _tool_definition() -> dict[str, object]:
+    def _execute_kali_command_definition() -> dict[str, object]:
         return {
             "type": "function",
             "function": {
@@ -239,6 +249,50 @@ class OpenAICompatibleChatRuntime:
                         },
                     },
                     "required": ["command"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    @staticmethod
+    def _list_available_skills_definition() -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "list_available_skills",
+                "description": (
+                    "List the currently loaded project skills with concise summaries. Use this "
+                    "when the user asks which skills exist or when you need to confirm the "
+                    "available catalog before choosing one."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    @staticmethod
+    def _read_skill_content_definition() -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "read_skill_content",
+                "description": (
+                    "Read the real SKILL.md content for a loaded skill by its directory slug, "
+                    "display name, or id. Use this before explaining or applying a specific "
+                    "skill."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill_name_or_id": {
+                            "type": "string",
+                            "description": "Loaded skill directory slug, skill name, or skill id.",
+                        }
+                    },
+                    "required": ["skill_name_or_id"],
                     "additionalProperties": False,
                 },
             },
@@ -303,6 +357,32 @@ class OpenAICompatibleChatRuntime:
         return "模型已完成分析，但没有返回可展示的最终答复。"
 
     @staticmethod
+    def _build_skill_catalog_context(
+        available_skills: list[SkillAgentSummaryRead],
+    ) -> str | None:
+        if not available_skills:
+            return None
+
+        lines = [
+            "Loaded Skills Catalog "
+            "(summary only; use read_skill_content for the real SKILL.md body):"
+        ]
+        for skill in available_skills:
+            description = " ".join(skill.description.split()) or "No description provided."
+            if len(description) > 140:
+                description = description[:137].rstrip() + "..."
+            label = skill.directory_name
+            if skill.name != skill.directory_name:
+                label = f"{skill.directory_name} (name: {skill.name})"
+            lines.append(f"- {label}: {description}")
+
+        lines.append(
+            "If the user asks to list skills, explain a skill, or use a skill, "
+            "call the skills tools before asking broad clarification questions."
+        )
+        return "\n".join(lines)
+
+    @staticmethod
     def _extract_tool_calls(message: dict[str, object]) -> list[ToolCallRequest]:
         raw_tool_calls = message.get("tool_calls")
         if not isinstance(raw_tool_calls, list):
@@ -319,41 +399,87 @@ class OpenAICompatibleChatRuntime:
                 continue
 
             function_name = function_payload.get("name")
-            if function_name != "execute_kali_command":
-                raise ChatRuntimeError("LLM requested an unsupported tool.")
+            if not isinstance(function_name, str) or not function_name:
+                raise ChatRuntimeError("LLM requested an invalid tool.")
 
             arguments = function_payload.get("arguments")
             parsed_arguments = OpenAICompatibleChatRuntime._parse_tool_arguments(arguments)
-            command = parsed_arguments.get("command")
-            if not isinstance(command, str) or not command.strip():
-                raise ChatRuntimeError("LLM tool call did not include a valid command.")
-
-            timeout_seconds = parsed_arguments.get("timeout_seconds")
-            if timeout_seconds is not None and not isinstance(timeout_seconds, int):
-                raise ChatRuntimeError("LLM tool call included an invalid timeout.")
-            if isinstance(timeout_seconds, int) and timeout_seconds <= 0:
-                raise ChatRuntimeError("LLM tool call included a non-positive timeout.")
-
-            artifact_paths = parsed_arguments.get("artifact_paths")
-            if artifact_paths is None:
-                normalized_artifact_paths: list[str] = []
-            elif isinstance(artifact_paths, list) and all(
-                isinstance(item, str) for item in artifact_paths
-            ):
-                normalized_artifact_paths = artifact_paths
-            else:
-                raise ChatRuntimeError("LLM tool call included invalid artifact paths.")
-
-            tool_calls.append(
-                ToolCallRequest(
-                    tool_call_id=tool_call_id,
-                    command=command.strip(),
-                    timeout_seconds=timeout_seconds,
-                    artifact_paths=normalized_artifact_paths,
+            if function_name == "execute_kali_command":
+                tool_calls.append(
+                    OpenAICompatibleChatRuntime._build_execute_kali_command_request(
+                        tool_call_id,
+                        parsed_arguments,
+                    )
                 )
-            )
+                continue
+
+            if function_name == "list_available_skills":
+                if parsed_arguments:
+                    raise ChatRuntimeError(
+                        "LLM list_available_skills tool call included unexpected arguments."
+                    )
+                tool_calls.append(
+                    ToolCallRequest(
+                        tool_call_id=tool_call_id, tool_name=function_name, arguments={}
+                    )
+                )
+                continue
+
+            if function_name == "read_skill_content":
+                raw_identifier = parsed_arguments.get(
+                    "skill_name_or_id", parsed_arguments.get("skill_id")
+                )
+                if not isinstance(raw_identifier, str) or not raw_identifier.strip():
+                    raise ChatRuntimeError(
+                        "LLM read_skill_content tool call did not include a valid skill identifier."
+                    )
+                tool_calls.append(
+                    ToolCallRequest(
+                        tool_call_id=tool_call_id,
+                        tool_name=function_name,
+                        arguments={"skill_name_or_id": raw_identifier.strip()},
+                    )
+                )
+                continue
+
+            raise ChatRuntimeError(f"LLM requested an unsupported tool: {function_name}.")
 
         return tool_calls
+
+    @staticmethod
+    def _build_execute_kali_command_request(
+        tool_call_id: str,
+        parsed_arguments: dict[str, Any],
+    ) -> ToolCallRequest:
+        command = parsed_arguments.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise ChatRuntimeError("LLM tool call did not include a valid command.")
+
+        timeout_seconds = parsed_arguments.get("timeout_seconds")
+        if timeout_seconds is not None and not isinstance(timeout_seconds, int):
+            raise ChatRuntimeError("LLM tool call included an invalid timeout.")
+        if isinstance(timeout_seconds, int) and timeout_seconds <= 0:
+            raise ChatRuntimeError("LLM tool call included a non-positive timeout.")
+
+        artifact_paths = parsed_arguments.get("artifact_paths")
+        if artifact_paths is None:
+            normalized_artifact_paths: list[str] = []
+        elif isinstance(artifact_paths, list) and all(
+            isinstance(item, str) for item in artifact_paths
+        ):
+            normalized_artifact_paths = artifact_paths
+        else:
+            raise ChatRuntimeError("LLM tool call included invalid artifact paths.")
+
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="execute_kali_command",
+            arguments={
+                "command": command.strip(),
+                "timeout_seconds": timeout_seconds,
+                "artifact_paths": normalized_artifact_paths,
+            },
+        )
 
     @staticmethod
     def _parse_tool_arguments(arguments: object) -> dict[str, Any]:

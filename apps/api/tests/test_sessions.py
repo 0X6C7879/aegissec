@@ -1,8 +1,12 @@
 from contextlib import ExitStack
+from pathlib import Path
+from typing import cast
 
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from app.compat.skills.models import SkillScanRoot
+from app.db.models import CompatibilityScope, CompatibilitySource
 from app.db.repositories import SessionRepository
 from app.db.session import get_db_session
 from app.main import app
@@ -177,18 +181,23 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             self,
             content: str,
             attachments: list[object],
-            execute_tool: ToolExecutor,
+            available_skills: list[object] | None = None,
+            execute_tool: ToolExecutor | None = None,
         ) -> str:
-            del content, attachments
+            del content, attachments, available_skills
+            assert execute_tool is not None
             tool_result = await execute_tool(
                 ToolCallRequest(
                     tool_call_id="tool-call-1",
-                    command="printf 'auto tool' > reports/auto.txt",
-                    timeout_seconds=10,
-                    artifact_paths=["reports/auto.txt"],
+                    tool_name="execute_kali_command",
+                    arguments={
+                        "command": "printf 'auto tool' > reports/auto.txt",
+                        "timeout_seconds": 10,
+                        "artifact_paths": ["reports/auto.txt"],
+                    },
                 )
             )
-            return f"工具执行完成，状态：{tool_result.status}。"
+            return f"工具执行完成，状态：{tool_result.payload['status']}。"
 
     original_override = app.dependency_overrides[get_chat_runtime]
     app.dependency_overrides[get_chat_runtime] = lambda: ToolCallingChatRuntime()
@@ -232,13 +241,18 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         )
 
         assert events[started_index]["payload"] == {
-            "tool": "shell",
+            "tool": "execute_kali_command",
             "tool_call_id": "tool-call-1",
+            "arguments": {
+                "command": "printf 'auto tool' > reports/auto.txt",
+                "timeout_seconds": 10,
+                "artifact_paths": ["reports/auto.txt"],
+            },
             "command": "printf 'auto tool' > reports/auto.txt",
             "timeout_seconds": 10,
             "artifact_paths": ["reports/auto.txt"],
         }
-        assert events[finished_index]["payload"]["tool"] == "shell"
+        assert events[finished_index]["payload"]["tool"] == "execute_kali_command"
         assert events[finished_index]["payload"]["tool_call_id"] == "tool-call-1"
         assert isinstance(events[finished_index]["payload"].get("run_id"), str)
         assert isinstance(events[finished_index]["payload"].get("created_at"), str)
@@ -251,6 +265,13 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert events[finished_index]["payload"]["stdout"] == "runtime command completed"
         assert events[finished_index]["payload"]["stderr"] == ""
         assert events[finished_index]["payload"]["artifact_paths"] == ["reports/auto.txt"]
+        assert events[finished_index]["payload"]["result"] == {
+            "status": "success",
+            "exit_code": 0,
+            "stdout": "runtime command completed",
+            "stderr": "",
+            "artifacts": ["reports/auto.txt"],
+        }
         assert events[assistant_created_index]["payload"]["role"] == "assistant"
         assert events[assistant_created_index]["payload"]["content"] == ""
         assert (
@@ -275,9 +296,10 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
             self,
             content: str,
             attachments: list[object],
+            available_skills: list[object] | None = None,
             execute_tool: ToolExecutor | None = None,
         ) -> str:
-            del content, attachments, execute_tool
+            del content, attachments, available_skills, execute_tool
             raise ChatRuntimeError("LLM request timed out.")
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -302,3 +324,165 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
         assert [message["role"] for message in detail_payload["messages"]] == ["user"]
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_can_list_loaded_skills_via_tool(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "adscan": """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration.
+""",
+            "docx": """---
+name: docx
+description: Document skill
+---
+# docx
+
+Create and edit Word documents.
+""",
+        },
+    )
+
+    class ListSkillsChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            available_skills: list[object] | None = None,
+            execute_tool: ToolExecutor | None = None,
+        ) -> str:
+            del content, attachments
+            assert available_skills is not None
+            assert execute_tool is not None
+
+            tool_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="skills-call-1",
+                    tool_name="list_available_skills",
+                    arguments={},
+                )
+            )
+            names = [skill["directory_name"] for skill in tool_result.payload["skills"]]
+            return "已加载 skills: " + ", ".join(names)
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ListSkillsChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "List Skills Session"})
+        session_id = session_response.json()["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "列出所有 skill", "attachments": []},
+        )
+
+        assert chat_response.status_code == 200
+        assert chat_response.json()["assistant_message"]["content"] == "已加载 skills: adscan, docx"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_can_read_skill_content_via_tool(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "adscan": """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration without using ADscan itself.
+""",
+        },
+    )
+
+    class ReadSkillChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            available_skills: list[object] | None = None,
+            execute_tool: ToolExecutor | None = None,
+        ) -> str:
+            del content, attachments, available_skills
+            assert execute_tool is not None
+
+            tool_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="skills-call-2",
+                    tool_name="read_skill_content",
+                    arguments={"skill_name_or_id": "adscan"},
+                )
+            )
+            skill = tool_result.payload["skill"]
+            return f"{skill['directory_name']}: {skill['content'].splitlines()[0]}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ReadSkillChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Read Skill Session"})
+        session_id = session_response.json()["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "查看 adscan skill", "attachments": []},
+        )
+
+        assert chat_response.status_code == 200
+        assert chat_response.json()["assistant_message"]["content"] == "adscan: ---"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def _seed_skills(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    skill_bodies: dict[str, str],
+) -> list[dict[str, object]]:
+    local_root = tmp_path / "project" / "skills"
+    for directory_name, content in skill_bodies.items():
+        _write_skill(local_root / directory_name / "SKILL.md", content)
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(local_root),
+            ),
+        ],
+    )
+
+    rescan_response = client.post("/api/skills/rescan")
+    assert rescan_response.status_code == 200
+    return cast(list[dict[str, object]], rescan_response.json())
+
+
+def _write_skill(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.strip() + "\n", encoding="utf-8")

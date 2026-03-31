@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { getSkill, listSkills, rescanSkills } from "../lib/api";
+import { getSkill, getSkillContent, listSkills, rescanSkills } from "../lib/api";
 import { clampTextByLines } from "../lib/pretext";
 import type { SkillRecord, SkillRecordStatus } from "../types/skills";
 
@@ -150,11 +150,18 @@ export function SkillsWorkbench() {
     queryFn: ({ signal }) => getSkill(selectedSkillId!, signal),
   });
 
+  const skillContentQuery = useQuery({
+    enabled: Boolean(selectedSkillId),
+    queryKey: ["skills", "content", selectedSkillId],
+    queryFn: ({ signal }) => getSkillContent(selectedSkillId!, signal),
+  });
+
   const rescanMutation = useMutation({
     mutationFn: () => rescanSkills(),
     onSuccess: async (rescannedSkills) => {
       queryClient.setQueryData<SkillRecord[]>(SKILLS_QUERY_KEY, rescannedSkills);
       await queryClient.invalidateQueries({ queryKey: ["skills", "detail"] });
+      await queryClient.invalidateQueries({ queryKey: ["skills", "content"] });
 
       if (selectedSkillId && !rescannedSkills.some((skill) => skill.id === selectedSkillId)) {
         const nextSkill = rescannedSkills[0];
@@ -300,6 +307,26 @@ export function SkillsWorkbench() {
                   {skillDetailQuery.isError ? <div className="management-error-banner">{skillDetailQuery.error.message}</div> : null}
 
                   <p className="skills-modal-description">{activeSkill.description || "暂无描述。"}</p>
+
+                  {skillContentQuery.isLoading ? <div className="management-inline-notice">正在加载 SKILL.md。</div> : null}
+                  {skillContentQuery.isError ? (
+                    <div className="management-error-banner">{skillContentQuery.error.message}</div>
+                  ) : null}
+
+                  {skillContentQuery.data ? (
+                    <section className="management-section-card management-section-card-compact">
+                      <div className="management-section-header">
+                        <h4 className="management-section-title">SKILL.md</h4>
+                        <span className="management-status-badge tone-neutral">{activeSkill.directory_name}</span>
+                      </div>
+                      <pre
+                        className="skills-modal-markdown"
+                        style={{ margin: 0, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+                      >
+                        {skillContentQuery.data.content}
+                      </pre>
+                    </section>
+                  ) : null}
                 </section>
               </div>,
               document.body,

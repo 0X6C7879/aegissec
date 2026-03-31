@@ -21,3 +21,11 @@ export type SkillRecord = {
   content_hash: string;
   last_scanned_at: string;
 };
+
+export type SkillContent = {
+  id: string;
+  name: string;
+  directory_name: string;
+  entry_file: string;
+  content: string;
+};

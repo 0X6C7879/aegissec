@@ -13,7 +13,7 @@ import type {
 } from "../types/runtime";
 import type { MCPServer } from "../types/mcp";
 import type { ModelApiSettings, ModelApiSettingsUpdate } from "../types/settings";
-import type { SkillRecord } from "../types/skills";
+import type { SkillContent, SkillRecord } from "../types/skills";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -142,6 +142,10 @@ export async function listSkills(signal?: AbortSignal): Promise<SkillRecord[]> {
 
 export async function getSkill(skillId: string, signal?: AbortSignal): Promise<SkillRecord> {
   return apiRequest<SkillRecord>(`/api/skills/${skillId}`, { signal });
+}
+
+export async function getSkillContent(skillId: string, signal?: AbortSignal): Promise<SkillContent> {
+  return apiRequest<SkillContent>(`/api/skills/${skillId}/content`, { signal });
 }
 
 export async function rescanSkills(): Promise<SkillRecord[]> {

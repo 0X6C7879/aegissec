@@ -16,9 +16,13 @@ KNOWN_FRONTMATTER_FIELDS = {"name", "description", "compatibility", "metadata"}
 SIMPLE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$", re.IGNORECASE)
 
 
+def read_skill_markdown(entry_file: str) -> str:
+    return Path(entry_file).read_text(encoding="utf-8")
+
+
 def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordData:
     entry_path = Path(discovered_file.entry_file)
-    text = entry_path.read_text(encoding="utf-8")
+    text = read_skill_markdown(str(entry_path))
     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     now = datetime.now(UTC)
 

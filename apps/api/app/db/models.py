@@ -453,6 +453,23 @@ class SkillRecordRead(SQLModel):
     last_scanned_at: datetime
 
 
+class SkillAgentSummaryRead(SQLModel):
+    id: str
+    name: str
+    directory_name: str
+    description: str
+    compatibility: list[str] = Field(default_factory=list)
+    entry_file: str
+
+
+class SkillContentRead(SQLModel):
+    id: str
+    name: str
+    directory_name: str
+    entry_file: str
+    content: str
+
+
 class MCPCapabilityRead(SQLModel):
     kind: MCPCapabilityKind
     name: str

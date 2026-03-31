@@ -4,50 +4,46 @@ Guide for agentic coding agents working in `D:\AI\aegissec`.
 ## Mission
 - `aegissec` is a local-first defensive security research workbench for authorized environments.
 - Optimize for reproducible validation, attack-path analysis, evidence capture, and reporting.
-- Prioritize these scenario families:
-  - SRC automation and mainstream vulnerability discovery
-  - Representative CVE, cloud security, and AI infrastructure validation
-  - Multi-step analysis in layered network and OA-style environments
-  - Baseline Active Directory simulation
-- Do not frame the product as a generalized offensive platform.
+- Prioritize SRC automation, representative CVE/cloud/AI validation, layered-network workflows, and baseline AD simulation.
 
 ## Rule Files
 - Checked and not found:
   - `.cursorrules`
   - `.cursor/rules/`
   - `.github/copilot-instructions.md`
-  - `D:\AGENTS.md`
-  - `D:\AI\AGENTS.md`
-- Treat this file as the primary agent instruction source.
+- Treat this file as the primary agent instruction source for this repository.
 
 ## Repository Layout
 ```text
 apps/
   api/        FastAPI + SQLModel backend
   web/        React + TypeScript + Vite frontend
-config/       Project configuration root
+config/       Project configuration
 docker/kali/  Kali image build context
-docs/         Product, architecture, and planning docs
-scripts/      Root development and validation helpers
+docs/         Product and implementation docs
+scripts/      Dev and verification helpers
+TODO.md       Active execution tracker
 ```
 
-## Standard Workflow
+## Working Rules
 - Run commands from the repo root unless a section says otherwise.
-- Prefer `python scripts/dev.py` for local startup.
-- Prefer `python scripts/check.py` for full verification.
-- After each completed tracked task, sync `TODO.md` immediately.
-- Verify behavior against the running app or API before claiming a fix works.
+- Prefer the provided helper scripts over ad hoc startup/check flows.
+- Make the smallest correct change; do not redesign unrelated areas.
+- Verify behavior before claiming a fix works.
+- Update `TODO.md` only for work that is actually complete and verified.
+
+## Primary Commands
 
 ### Local Development
 ```bash
 python scripts/dev.py
 ```
-- Runs `uv sync --all-extras --dev` in `apps/api`.
-- Runs `pnpm install` in `apps/web`.
+- Syncs backend deps with `uv sync --all-extras --dev`.
+- Installs frontend deps with `pnpm install`.
 - Starts FastAPI on `127.0.0.1:8000`.
 - Starts Vite on `127.0.0.1:5173`.
 
-### Full Validation
+### Full Verification
 ```bash
 python scripts/check.py
 ```
@@ -73,7 +69,8 @@ uv run pytest tests/test_runtime.py::test_runtime_start_execute_status_and_stop
 uv run pytest -k runtime
 ```
 - Prefer file or file+function targeting for narrow validation.
-- When debugging websocket/session issues, start with `tests/test_sessions.py`.
+- Start with `tests/test_sessions.py` for session/websocket/chat regressions.
+- Start with `tests/test_runtime.py` or `tests/test_chat_runtime.py` for runtime execution changes.
 
 ## Frontend Commands (`apps/web`)
 ```bash
@@ -89,79 +86,77 @@ pnpm preview
 ```bash
 pnpm exec eslint src/components/ConversationFeed.tsx
 pnpm exec eslint src/components/ConversationWorkbench.tsx
-pnpm exec eslint src/components/WorkbenchComposer.tsx
 pnpm exec tsc --noEmit
 ```
-- There is no frontend unit test runner yet.
-- For substantial frontend work, run at least `pnpm lint` and `pnpm build`.
+- There is no dedicated frontend unit-test runner at the moment.
+- For meaningful frontend changes, run at least `pnpm lint` and `pnpm build`.
 
-## Environment Variables
-- Canonical sample file: `D:\AI\aegissec\.env.example`
-- Backend vars use the `AEGISSEC_` prefix; frontend vars use the `VITE_` prefix.
-- Important current keys:
-  - `LLM_API_KEY`, `LLM_API_BASE_URL`, `LLM_DEFAULT_MODEL`
-  - `AEGISSEC_KALI_IMAGE`, `AEGISSEC_RUNTIME_CONTAINER_NAME`
-  - `AEGISSEC_RUNTIME_WORKSPACE_CONTAINER_PATH`, `AEGISSEC_RUNTIME_DEFAULT_TIMEOUT_SECONDS`
-  - `AEGISSEC_RUNTIME_RECENT_RUNS_LIMIT`, `AEGISSEC_RUNTIME_RECENT_ARTIFACTS_LIMIT`
-  - `AEGISSEC_FRONTEND_ORIGIN`
+## Platform Notes
+- Backend requires Python `>=3.12`.
+- Frontend package manager is `pnpm@10.15.1`.
+- Canonical env sample: `.env.example`.
 
 ## Backend Style Guide
-Source of truth: `apps/api/pyproject.toml` and existing `apps/api/app` files.
+Source of truth: `apps/api/pyproject.toml` and existing files under `apps/api/app`.
 
-- Python 3.12.
-- Black line length: 100.
-- Ruff rules enabled: `E`, `F`, `I`, `UP`.
-- MyPy is `strict`; add explicit types rather than relying on inference at public boundaries.
-- Use `from __future__ import annotations` where already established in the file.
-- Prefer absolute imports such as `from app.core.settings import get_settings`.
-- Order imports as: standard library, third-party, local application imports.
-- Naming: `snake_case` for modules/functions/variables, `PascalCase` for classes/models, `SCREAMING_SNAKE_CASE` for constants.
-- Keep route modules thin; push business logic into services and repositories.
-- Prefer typed request/response models over loose dictionaries.
-- Reuse `Settings` / `get_settings()` instead of ad hoc env lookups.
-- Raise explicit `HTTPException` values for user-visible failures.
+- Use Python 3.12 features deliberately.
+- Black and Ruff line length is `100`.
+- Ruff lint rules enabled: `E`, `F`, `I`, `UP`.
+- MyPy runs in `strict`; add explicit types at public boundaries.
+- Use `from __future__ import annotations` where the file already uses it or where new typing benefits from it.
+- Prefer absolute imports like `from app.core.settings import get_settings`.
+- Import order: standard library, third-party, local application imports.
+- Keep modules, functions, and variables `snake_case`.
+- Keep classes, Pydantic/SQLModel types, and enums `PascalCase`.
+- Keep constants `SCREAMING_SNAKE_CASE`.
+- Keep route modules thin; move business logic into services/repositories/helpers.
+- Prefer typed request/response models over loose `dict[str, Any]` payloads.
+- Reuse `Settings` / `get_settings()` instead of ad hoc environment lookups.
+- Raise explicit `HTTPException` values for user-facing API failures.
 - Do not swallow exceptions silently.
-- Close or release long-lived resources deliberately in websocket/background flows.
+- Close or release long-lived resources in websocket/background/runtime flows.
+- Prefer small focused helpers over deeply nested route handlers.
 
 ## Backend Testing Notes
-- Tests live in `apps/api/tests`.
-- Use `test_*.py` filenames and descriptive `test_...` function names.
-- Preserve dependency overrides in `apps/api/tests/conftest.py` for Docker and LLM isolation.
-- When changing chat or runtime behavior, update both route tests and runtime-oriented tests.
-- When changing session/websocket behavior, update `tests/test_sessions.py`.
+- Tests live in `apps/api/tests` and use `test_*.py` naming.
+- Keep new test names descriptive and behavior-oriented.
+- Preserve dependency overrides in `apps/api/tests/conftest.py`.
+- When changing session/chat/runtime behavior, update both route-level and runtime-level coverage.
 
 ## Frontend Style Guide
-Source of truth: `apps/web/tsconfig.app.json`, `apps/web/eslint.config.js`, and current `apps/web/src` code.
+Source of truth: `apps/web/tsconfig.app.json`, `apps/web/eslint.config.js`, and existing files under `apps/web/src`.
 
-- TypeScript is `strict`; do not weaken compiler settings.
-- UI source of truth: `docs/04_UI设计规范.md`; follow it before adding or reshaping frontend surfaces.
+- TypeScript is `strict`; do not weaken type settings.
 - Use React function components only.
 - Use double quotes consistently.
-- Naming: `PascalCase` for components/types, `camelCase` for variables/helpers/hooks/setters, descriptive CSS class names.
-- Type props, state, mutation payloads, and API responses precisely.
-- Keep derived data in `useMemo` only when it improves clarity or avoids repeated recomputation.
+- Keep component/type names `PascalCase`.
+- Keep variables, helpers, hooks, and setters `camelCase`.
+- Keep CSS class names descriptive and feature-scoped.
+- Type props, API responses, state, and mutation payloads precisely.
+- Check `response.ok` before trusting fetch results.
+- Narrow unknown failures with `error instanceof Error`.
+- Use `AbortController` for cancellable fetches/effects.
 - Keep side effects in `useEffect`.
-- Use `AbortController` for fetch cleanup.
-- Check `response.ok` before trusting payloads.
-- Narrow unknown errors with `error instanceof Error`.
-- Plain CSS is the styling system; prefer targeted end-of-file overrides over broad rewrites.
-- Keep the UI minimal, Chinese-first, and preserve the rule that only the message area scrolls while the composer remains anchored.
+- Use `useMemo` only when it improves clarity or avoids repeated expensive work.
+- Prefer plain CSS and targeted end-of-file overrides over broad rewrites.
+- Preserve the Chinese-first, minimal UI language already present in the app.
+- For conversation pages, keep the message area scrollable while the composer remains anchored.
+- Follow `docs/04_UI设计规范.md` before reshaping frontend surfaces.
 
 ## Runtime, Docker, and Docs
-- Kali image source is `docker/kali/Dockerfile`.
+- Kali image source: `docker/kali/Dockerfile`.
 - Runtime command execution currently uses `/bin/zsh` inside the container.
 - The image should include `kali-linux-default` to avoid missing-tool failures.
-- Validate runtime changes with backend tests and, when needed, a real image build.
-- Planning docs live in `docs/00_个人开源版架构设计.md`, `docs/01_需求文档_PRD.md`, `docs/02_功能实现文档.md`, and `docs/03_开发计划文档.md`.
+- Validate runtime/container changes with backend tests and, when needed, a real image build.
 - `README.md` may lag behind implementation; verify against code and `TODO.md`.
-- `TODO.md` is an active execution tracker, not planning history only.
 
 ## Agent Checklist Before Finishing
-- Run the smallest relevant checks for changed files.
+- Run the smallest relevant checks for the files you changed.
 - Backend: prefer targeted `pytest` + `ruff` + `mypy`.
 - Frontend: prefer `pnpm lint` + `pnpm build`.
-- Update `TODO.md` only for work that is actually complete and verified.
-- Reference exact file paths and commands in your summary.
+- Confirm the changed behavior in the running API or browser when practical.
+- Update `TODO.md` only for completed, verified work.
+- In your summary, cite exact file paths and exact commands you ran.
 
 # context-mode — MANDATORY routing rules
 

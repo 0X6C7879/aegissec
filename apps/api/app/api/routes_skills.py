@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.compat.skills.service import SkillService, get_skill_service
-from app.db.models import SkillRecordRead
+from app.compat.skills.service import SkillContentReadError, SkillService, get_skill_service
+from app.db.models import SkillContentRead, SkillRecordRead
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -24,6 +24,24 @@ async def get_skill(
     if skill_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     return skill_record
+
+
+@router.get("/{skill_id}/content", response_model=SkillContentRead)
+async def get_skill_content(
+    skill_id: str,
+    skill_service: SkillService = Depends(get_skill_service),
+) -> SkillContentRead:
+    try:
+        skill_content = skill_service.get_skill_content(skill_id)
+    except SkillContentReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    if skill_content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    return skill_content
 
 
 @router.post("/rescan", response_model=list[SkillRecordRead])
