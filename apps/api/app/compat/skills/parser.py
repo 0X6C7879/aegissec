@@ -12,7 +12,15 @@ from app.db.models import SkillRecordStatus
 
 from .models import DiscoveredSkillFile, ParsedSkillRecordData
 
-KNOWN_FRONTMATTER_FIELDS = {"name", "description", "compatibility", "metadata"}
+KNOWN_FRONTMATTER_FIELDS = {
+    "name",
+    "description",
+    "compatibility",
+    "metadata",
+    "parameter_schema",
+    "parameters",
+    "input_schema",
+}
 SIMPLE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$", re.IGNORECASE)
 
 
@@ -32,6 +40,7 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         description = _extract_description(frontmatter, body)
         compatibility = _extract_compatibility(frontmatter)
         metadata = _extract_metadata(frontmatter)
+        parameter_schema = _extract_parameter_schema(frontmatter)
         raw_frontmatter = {
             key: value for key, value in frontmatter.items() if key not in KNOWN_FRONTMATTER_FIELDS
         }
@@ -45,6 +54,7 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         description = ""
         compatibility = []
         metadata = {}
+        parameter_schema = {}
         raw_frontmatter = {}
         error_message = str(exc)
         status = SkillRecordStatus.INVALID
@@ -60,8 +70,10 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         description=description,
         compatibility=compatibility,
         metadata=metadata,
+        parameter_schema=parameter_schema,
         raw_frontmatter=raw_frontmatter,
         status=status,
+        enabled=True,
         error_message=error_message,
         content_hash=content_hash,
         last_scanned_at=now,
@@ -165,6 +177,25 @@ def _extract_metadata(frontmatter: dict[str, object]) -> dict[str, object]:
             raise SkillParseError("Frontmatter metadata keys must be strings.")
         normalized[key] = value
     return normalized
+
+
+def _extract_parameter_schema(frontmatter: dict[str, object]) -> dict[str, object]:
+    for key in ("parameter_schema", "parameters", "input_schema"):
+        raw_schema = frontmatter.get(key)
+        if raw_schema is None:
+            continue
+        if not isinstance(raw_schema, dict):
+            raise SkillParseError(
+                "Frontmatter field 'parameter_schema' (or aliases 'parameters'/'input_schema') "
+                "must be an object."
+            )
+        normalized: dict[str, object] = {}
+        for schema_key, schema_value in raw_schema.items():
+            if not isinstance(schema_key, str):
+                raise SkillParseError("Skill parameter schema keys must be strings.")
+            normalized[schema_key] = schema_value
+        return normalized
+    return {}
 
 
 def _build_validation_error(*, frontmatter: dict[str, object], directory_name: str) -> str | None:

@@ -1,0 +1,13 @@
+# Generated from apps/api/pyproject.toml by scripts/sync_requirements.py
+# Run `python scripts/sync_requirements.py` after updating backend dependencies.
+
+alembic>=1.16.5,<2.0.0
+docker>=7.1.0,<8.0.0
+fastapi>=0.116.0,<1.0.0
+httpx>=0.28.1,<1.0.0
+langgraph>=0.6.6,<0.7.0
+mcp[cli]>=1.26.0,<2.0.0
+PyYAML>=6.0.2,<7.0.0
+pydantic-settings>=2.10.1,<3.0.0
+sqlmodel>=0.0.24,<0.1.0
+uvicorn[standard]>=0.35.0,<1.0.0

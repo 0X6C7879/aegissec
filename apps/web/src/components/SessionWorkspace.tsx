@@ -1,9 +1,5 @@
 import { useEffect, useMemo } from "react";
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createSession,
@@ -30,7 +26,10 @@ import { WorkspaceNavigation } from "./WorkspaceNavigation";
 
 const EMPTY_SESSION_EVENTS: SessionEventEntry[] = [];
 
-function filterActiveSessions(sessions: SessionSummary[], includeDeleted: boolean): SessionSummary[] {
+function filterActiveSessions(
+  sessions: SessionSummary[],
+  includeDeleted: boolean,
+): SessionSummary[] {
   return includeDeleted ? sessions : sessions.filter((session) => session.deleted_at === null);
 }
 
@@ -43,7 +42,7 @@ export function SessionWorkspace() {
   const setIncludeDeleted = useUiStore((state) => state.setIncludeDeleted);
   const setLastVisitedSessionId = useUiStore((state) => state.setLastVisitedSessionId);
   const sessionEvents = useUiStore((state) =>
-    sessionId ? state.eventsBySession[sessionId] ?? EMPTY_SESSION_EVENTS : EMPTY_SESSION_EVENTS,
+    sessionId ? (state.eventsBySession[sessionId] ?? EMPTY_SESSION_EVENTS) : EMPTY_SESSION_EVENTS,
   );
 
   const sessionsQuery = useQuery({
@@ -51,7 +50,10 @@ export function SessionWorkspace() {
     queryFn: ({ signal }) => listSessions(includeDeleted, signal),
   });
 
-  const sortedSessions = useMemo(() => sortSessions(sessionsQuery.data ?? []), [sessionsQuery.data]);
+  const sortedSessions = useMemo(
+    () => sortSessions(sessionsQuery.data ?? []),
+    [sessionsQuery.data],
+  );
   const visibleSessions = useMemo(
     () => filterActiveSessions(sortedSessions, includeDeleted),
     [includeDeleted, sortedSessions],
@@ -62,7 +64,10 @@ export function SessionWorkspace() {
       return sessionId;
     }
 
-    if (lastVisitedSessionId && visibleSessions.some((session) => session.id === lastVisitedSessionId)) {
+    if (
+      lastVisitedSessionId &&
+      visibleSessions.some((session) => session.id === lastVisitedSessionId)
+    ) {
       return lastVisitedSessionId;
     }
 
@@ -100,13 +105,15 @@ export function SessionWorkspace() {
   const renameSessionMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => updateSession(id, { title }),
     onSuccess: (updatedSession) => {
-      queryClient.setQueryData<SessionDetail | undefined>(["session", updatedSession.id], (currentValue) =>
-        currentValue
-          ? {
-              ...currentValue,
-              ...updatedSession,
-            }
-          : currentValue,
+      queryClient.setQueryData<SessionDetail | undefined>(
+        ["session", updatedSession.id],
+        (currentValue) =>
+          currentValue
+            ? {
+                ...currentValue,
+                ...updatedSession,
+              }
+            : currentValue,
       );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, updatedSession),
@@ -128,13 +135,15 @@ export function SessionWorkspace() {
   const restoreSessionMutation = useMutation({
     mutationFn: (id: string) => restoreSession(id),
     onSuccess: (restoredSession) => {
-      queryClient.setQueryData<SessionDetail | undefined>(["session", restoredSession.id], (currentValue) =>
-        currentValue
-          ? {
-              ...currentValue,
-              ...restoredSession,
-            }
-          : currentValue,
+      queryClient.setQueryData<SessionDetail | undefined>(
+        ["session", restoredSession.id],
+        (currentValue) =>
+          currentValue
+            ? {
+                ...currentValue,
+                ...restoredSession,
+              }
+            : currentValue,
       );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, restoredSession),
@@ -154,16 +163,22 @@ export function SessionWorkspace() {
       attachments: AttachmentMetadata[];
     }) => sendChatMessage(id, { content, attachments }),
     onSuccess: (response) => {
-      queryClient.setQueryData<SessionDetail | undefined>(["session", response.session.id], (currentValue) => {
-        const updatedDetail = currentValue
-          ? {
-              ...currentValue,
-              ...response.session,
-            }
-          : undefined;
+      queryClient.setQueryData<SessionDetail | undefined>(
+        ["session", response.session.id],
+        (currentValue) => {
+          const updatedDetail = currentValue
+            ? {
+                ...currentValue,
+                ...response.session,
+              }
+            : undefined;
 
-        return mergeSessionMessages(updatedDetail, [response.user_message, response.assistant_message]);
-      });
+          return mergeSessionMessages(updatedDetail, [
+            response.user_message,
+            response.assistant_message,
+          ]);
+        },
+      );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, response.session),
       );
@@ -239,7 +254,9 @@ export function SessionWorkspace() {
             <section className="panel workspace-pane">
               <div className="empty-state">
                 <h1 className="panel-title">Loading sessions…</h1>
-                <p className="empty-copy">Fetching the retained session workspace from the backend.</p>
+                <p className="empty-copy">
+                  Fetching the retained session workspace from the backend.
+                </p>
               </div>
             </section>
           ) : sessionsQuery.isError ? (

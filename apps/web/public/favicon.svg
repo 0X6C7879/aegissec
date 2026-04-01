@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AegisSec">
+  <defs>
+    <linearGradient id="shield" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f7b5a" />
+      <stop offset="1" stop-color="#173126" />
+    </linearGradient>
+    <linearGradient id="accent" x1="20" y1="18" x2="44" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c8f0dc" />
+      <stop offset="1" stop-color="#8fd3b2" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#f3efe4" />
+  <path
+    d="M32 8l18 6.5v13.9c0 12.1-7.5 22.7-18 27.6C21.5 51.1 14 40.5 14 28.4V14.5L32 8z"
+    fill="url(#shield)"
+  />
+  <path
+    d="M32 18l11.5 24h-6.8l-1.8-4.4h-5.8L27.3 42h-6.8L32 18zm0 8.9l-2.4 5.8h4.8L32 26.9z"
+    fill="url(#accent)"
+  />
+</svg>

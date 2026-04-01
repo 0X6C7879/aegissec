@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
 
 
 @router.get("/health", response_model=HealthResponse)
+@router.get("/api/health", response_model=HealthResponse)
 def get_health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(

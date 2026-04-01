@@ -1,5 +1,10 @@
 import { useUiStore } from "../store/uiStore";
-import type { AttachmentMetadata, SessionDetail, SessionEventEntry, SessionSummary } from "../types/sessions";
+import type {
+  AttachmentMetadata,
+  SessionDetail,
+  SessionEventEntry,
+  SessionSummary,
+} from "../types/sessions";
 import { ChatComposer } from "./ChatComposer";
 import { EventStreamPanel } from "./EventStreamPanel";
 import { MessageTimeline } from "./MessageTimeline";

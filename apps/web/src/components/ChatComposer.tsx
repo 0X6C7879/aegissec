@@ -20,12 +20,11 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
 
   const draftContent = draft?.content ?? "";
   const draftAttachments = draft?.attachments ?? [];
-  const attachmentForm =
-    draft?.attachmentForm ?? {
-      name: "",
-      contentType: "application/octet-stream",
-      sizeBytes: "0",
-    };
+  const attachmentForm = draft?.attachmentForm ?? {
+    name: "",
+    contentType: "application/octet-stream",
+    sizeBytes: "0",
+  };
 
   const isSubmitDisabled = useMemo(() => {
     return disabled || isSending || draftContent.trim().length === 0;
@@ -89,7 +88,9 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
                 className="field-inline-input"
                 type="text"
                 value={attachmentForm.contentType}
-                onChange={(event) => updateAttachmentForm(sessionId, "contentType", event.target.value)}
+                onChange={(event) =>
+                  updateAttachmentForm(sessionId, "contentType", event.target.value)
+                }
                 disabled={disabled}
               />
             </label>
@@ -102,7 +103,9 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
                 type="number"
                 min="0"
                 value={attachmentForm.sizeBytes}
-                onChange={(event) => updateAttachmentForm(sessionId, "sizeBytes", event.target.value)}
+                onChange={(event) =>
+                  updateAttachmentForm(sessionId, "sizeBytes", event.target.value)
+                }
                 disabled={disabled}
               />
             </label>
@@ -125,7 +128,8 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
             <div className="attachment-metadata-list">
               {draftAttachments.map((attachment) => (
                 <span key={attachment.id} className="attachment-metadata-item">
-                  {attachment.name} · {attachment.content_type} · {formatBytes(attachment.size_bytes)}
+                  {attachment.name} · {attachment.content_type} ·{" "}
+                  {formatBytes(attachment.size_bytes)}
                   <button
                     className="chip-button"
                     type="button"

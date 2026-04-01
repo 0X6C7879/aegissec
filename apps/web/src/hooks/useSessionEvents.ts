@@ -5,6 +5,7 @@ import {
   buildEventSummary,
   isRecord,
   mergeSessionMessage,
+  shouldStoreRealtimeEvent,
   toSessionMessageEvent,
   toSessionSummaryUpdate,
   upsertSession,
@@ -13,19 +14,6 @@ import { useUiStore } from "../store/uiStore";
 import type { SessionDetail, SessionEventEnvelope, SessionSummary } from "../types/sessions";
 
 type ConnectionState = "connecting" | "open" | "closed" | "error";
-
-function shouldAppendRealtimeEvent(type: string): boolean {
-  if (
-    type === "session.updated" ||
-    type === "message.created" ||
-    type === "message.updated" ||
-    type === "assistant.trace"
-  ) {
-    return false;
-  }
-
-  return true;
-}
 
 function normalizeEventEnvelope(value: unknown): SessionEventEnvelope {
   if (!isRecord(value)) {
@@ -36,27 +24,30 @@ function normalizeEventEnvelope(value: unknown): SessionEventEnvelope {
     };
   }
 
-  const type = typeof value.type === "string"
-    ? value.type
-    : typeof value.event === "string"
-      ? value.event
-      : "unknown";
+  const type =
+    typeof value.type === "string"
+      ? value.type
+      : typeof value.event === "string"
+        ? value.event
+        : "unknown";
 
-  const data = "data" in value
-    ? value.data
-    : "payload" in value
-      ? value.payload
-      : "message" in value
-        ? value.message
-        : "session" in value
-          ? value.session
-          : value;
+  const data =
+    "data" in value
+      ? value.data
+      : "payload" in value
+        ? value.payload
+        : "message" in value
+          ? value.message
+          : "session" in value
+            ? value.session
+            : value;
 
-  const createdAt = typeof value.created_at === "string"
-    ? value.created_at
-    : typeof value.timestamp === "string"
-      ? value.timestamp
-      : new Date().toISOString();
+  const createdAt =
+    typeof value.created_at === "string"
+      ? value.created_at
+      : typeof value.timestamp === "string"
+        ? value.timestamp
+        : new Date().toISOString();
 
   return {
     type,
@@ -96,7 +87,7 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
         const envelope = normalizeEventEnvelope(parsed);
         const createdAt = envelope.created_at ?? new Date().toISOString();
 
-        if (shouldAppendRealtimeEvent(envelope.type)) {
+        if (shouldStoreRealtimeEvent(envelope.type, envelope.data)) {
           appendEvent(sessionId, {
             id: crypto.randomUUID(),
             sessionId,
@@ -108,25 +99,37 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
         }
 
         if (envelope.type.startsWith("session.")) {
-          queryClient.setQueryData<SessionDetail | undefined>(["session", sessionId], (currentValue) => {
-            if (!currentValue) {
-              return currentValue;
-            }
+          queryClient.setQueryData<SessionDetail | undefined>(
+            ["session", sessionId],
+            (currentValue) => {
+              if (!currentValue) {
+                return currentValue;
+              }
 
-            const updatedSession = toSessionSummaryUpdate(currentValue, envelope.data, createdAt);
-            return updatedSession ? { ...currentValue, ...updatedSession } : currentValue;
-          });
+              const updatedSession = toSessionSummaryUpdate(currentValue, envelope.data, createdAt);
+              return updatedSession ? { ...currentValue, ...updatedSession } : currentValue;
+            },
+          );
 
-          queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) => {
-            const currentSession = currentValue?.find((item) => item.id === sessionId);
+          queryClient.setQueriesData<SessionSummary[]>(
+            { queryKey: ["sessions"] },
+            (currentValue) => {
+              const currentSession = currentValue?.find((item) => item.id === sessionId);
 
-            if (!currentSession) {
-              return currentValue;
-            }
+              if (!currentSession) {
+                return currentValue;
+              }
 
-            const updatedSession = toSessionSummaryUpdate(currentSession, envelope.data, createdAt);
-            return updatedSession ? updateSessionLists(currentValue, updatedSession) : currentValue;
-          });
+              const updatedSession = toSessionSummaryUpdate(
+                currentSession,
+                envelope.data,
+                createdAt,
+              );
+              return updatedSession
+                ? updateSessionLists(currentValue, updatedSession)
+                : currentValue;
+            },
+          );
         }
 
         if (envelope.type === "message.created" || envelope.type === "message.updated") {
@@ -136,8 +139,9 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             return;
           }
 
-          queryClient.setQueryData<SessionDetail | undefined>(["session", sessionId], (currentValue) =>
-            mergeSessionMessage(currentValue, createdMessage),
+          queryClient.setQueryData<SessionDetail | undefined>(
+            ["session", sessionId],
+            (currentValue) => mergeSessionMessage(currentValue, createdMessage),
           );
         }
       } catch {

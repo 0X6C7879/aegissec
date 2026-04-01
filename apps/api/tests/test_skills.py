@@ -12,12 +12,15 @@ from app.compat.skills.scanner import default_skill_scan_roots, scan_skill_files
 from app.compat.skills.service import SkillService
 from app.core.settings import Settings
 from app.db.models import CompatibilityScope, CompatibilitySource, SkillRecord, SkillRecordStatus
+from app.main import app
+from tests.utils import api_data
 
 
 def test_default_skill_scan_roots_only_use_repo_local_skills_directory(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
+    home_dir = tmp_path / "home"
 
-    roots = default_skill_scan_roots(repo_root=repo_root)
+    roots = default_skill_scan_roots(repo_root=repo_root, home_dir=home_dir)
 
     assert [(root.source, root.scope, Path(root.root_dir)) for root in roots] == [
         (CompatibilitySource.LOCAL, CompatibilityScope.PROJECT, repo_root / "skills"),
@@ -40,6 +43,11 @@ compatibility:
   - claude
 metadata:
   owner: team-a
+parameter_schema:
+  type: object
+  properties:
+    target:
+      type: string
 extra_flag: true
 ---
 # Demo
@@ -82,7 +90,7 @@ Broken.
     rescan_response = client.post("/api/skills/rescan")
 
     assert rescan_response.status_code == 200
-    records = rescan_response.json()
+    records = api_data(rescan_response)
     assert [(record["source"], record["scope"], record["name"]) for record in records] == [
         ("local", "project", "broken"),
         ("local", "project", "demo"),
@@ -97,20 +105,25 @@ Broken.
     assert demo_record["status"] == "loaded"
     assert demo_record["compatibility"] == ["claude"]
     assert demo_record["metadata"] == {"owner": "team-a"}
+    assert demo_record["parameter_schema"] == {
+        "type": "object",
+        "properties": {"target": {"type": "string"}},
+    }
     assert demo_record["raw_frontmatter"] == {"extra_flag": True}
 
     list_response = client.get("/api/skills")
 
     assert list_response.status_code == 200
-    assert list_response.json() == records
+    assert api_data(list_response) == records
 
     detail_response = client.get(f"/api/skills/{demo_record['id']}")
     assert detail_response.status_code == 200
-    assert detail_response.json()["entry_file"].endswith("demo/SKILL.md")
+    assert api_data(detail_response)["entry_file"].endswith("demo/SKILL.md")
 
 
-def test_default_roots_ignore_adjacent_compatibility_skill_directories(tmp_path: Path) -> None:
+def test_default_roots_ignore_compatibility_skill_directories(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
+    home_dir = tmp_path / "home"
     local_root = repo_root / "skills"
 
     _write_skill(local_root / "local-demo" / "SKILL.md", "# Local Demo")
@@ -120,16 +133,17 @@ def test_default_roots_ignore_adjacent_compatibility_skill_directories(tmp_path:
     )
     _write_skill(repo_root / ".agents" / "skills" / "agents-demo" / "SKILL.md", "# Agents Demo")
 
-    discovered = scan_skill_files(default_skill_scan_roots(repo_root=repo_root))
+    discovered = scan_skill_files(default_skill_scan_roots(repo_root=repo_root, home_dir=home_dir))
 
-    assert [(item.source, item.scope, item.directory_name) for item in discovered] == [
+    assert {(item.source, item.scope, item.directory_name) for item in discovered} == {
         (CompatibilitySource.LOCAL, CompatibilityScope.PROJECT, "local-demo"),
-    ]
+    }
 
 
 def test_skill_service_lists_loaded_summaries(
     tmp_path: Path,
     test_settings: Settings,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     skills_root = tmp_path / "service-skills"
     adscan_entry = skills_root / "adscan" / "SKILL.md"
@@ -148,6 +162,17 @@ Use when performing Active Directory pentest orchestration without using ADscan 
 """,
     )
     _write_skill(broken_entry, "# broken\n")
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
 
     with _create_service_session(test_settings, tmp_path / "service.db") as (
         session,
@@ -187,6 +212,7 @@ Use when performing Active Directory pentest orchestration without using ADscan 
 def test_skill_service_reads_real_skill_markdown(
     tmp_path: Path,
     test_settings: Settings,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     skills_root = tmp_path / "service-skills"
     adscan_entry = skills_root / "adscan" / "SKILL.md"
@@ -202,6 +228,17 @@ compatibility: [opencode]
 
 Use when performing Active Directory pentest orchestration without using ADscan itself.
 """,
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
     )
 
     with _create_service_session(test_settings, tmp_path / "service.db") as (
@@ -251,10 +288,142 @@ Use when performing Active Directory pentest orchestration without using ADscan 
     content_response = client.get(f"/api/skills/{adscan_id}/content")
 
     assert content_response.status_code == 200
-    payload = content_response.json()
+    payload = api_data(content_response)
     assert payload["directory_name"] == "adscan"
     assert payload["entry_file"].endswith("adscan/SKILL.md")
+    assert payload["parameter_schema"] == {}
     assert "Use when performing Active Directory pentest orchestration" in payload["content"]
+
+
+def test_skill_context_endpoint_returns_structured_and_prompt_fragments(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "demo": """---
+name: demo
+description: Demo skill
+parameter_schema:
+  type: object
+  properties:
+    command:
+      type: string
+---
+# Demo
+""",
+        },
+    )
+
+    response = client.get("/api/skills/skill-context")
+    assert response.status_code == 200
+    payload = api_data(response)
+    assert payload["payload"]["skills"][0]["directory_name"] == "demo"
+    assert payload["payload"]["skills"][0]["parameter_schema"]["type"] == "object"
+    assert "Loaded skills context" in payload["prompt_fragment"]
+
+
+def test_skill_toggle_persists_across_rescan_and_scan_aliases(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    records = _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "adscan": """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+""",
+        },
+    )
+    adscan_id = next(record["id"] for record in records if record["name"] == "adscan")
+
+    toggle_response = client.post(f"/api/skills/{adscan_id}/toggle", json={"enabled": False})
+    assert toggle_response.status_code == 200
+    assert api_data(toggle_response)["enabled"] is False
+
+    scan_response = client.post("/api/skills/scan")
+    assert scan_response.status_code == 200
+    rescanned = api_data(scan_response)
+    adscan_record = next(record for record in rescanned if record["id"] == adscan_id)
+    assert adscan_record["enabled"] is False
+
+    loaded_summaries = _list_agent_loaded_skill_directory_names(client)
+    assert "adscan" not in loaded_summaries
+
+    refresh_response = client.post("/api/skills/refresh")
+    assert refresh_response.status_code == 200
+    refreshed = api_data(refresh_response)
+    refreshed_adscan = next(record for record in refreshed if record["id"] == adscan_id)
+    assert refreshed_adscan["enabled"] is False
+
+
+def test_skills_endpoints_hide_records_outside_supported_scan_roots(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    visible_records = _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "demo": """---
+name: demo
+description: Demo skill
+---
+# demo
+""",
+        },
+    )
+    visible_skill_id = next(record["id"] for record in visible_records if record["name"] == "demo")
+
+    external_root = tmp_path / "external" / ".claude" / "skills"
+    external_entry = external_root / "adapt" / "SKILL.md"
+    _write_skill(external_entry, "# adapt")
+
+    database_engine = app.state.database_engine
+    with Session(database_engine) as session:
+        session.add(
+            _build_skill_record(
+                root_dir=external_root,
+                directory_name="adapt",
+                entry_file=external_entry,
+                name="adapt",
+                description="External stale skill",
+                source=CompatibilitySource.CLAUDE,
+                status=SkillRecordStatus.IGNORED,
+                error_message="Skill entry was not found in latest scan.",
+            )
+        )
+        session.commit()
+
+    list_response = client.get("/api/skills")
+    assert list_response.status_code == 200
+    listed_records = cast(list[dict[str, object]], api_data(list_response))
+    assert {record["id"] for record in listed_records} == {visible_skill_id}
+    assert all(record["source"] == "local" for record in listed_records)
+
+    hidden_detail_response = client.get("/api/skills/adapt-id")
+    assert hidden_detail_response.status_code == 404
+
+
+def _list_agent_loaded_skill_directory_names(client: TestClient) -> list[str]:
+    del client
+    database_engine = app.state.database_engine
+    with Session(database_engine) as session:
+        service = SkillService(session, cast(Settings, app.state.settings))
+        return [summary.directory_name for summary in service.list_loaded_skills_for_agent()]
 
 
 def _write_skill(path: Path, content: str) -> None:
@@ -285,7 +454,7 @@ def _seed_skills(
 
     rescan_response = client.post("/api/skills/rescan")
     assert rescan_response.status_code == 200
-    return cast(list[dict[str, object]], rescan_response.json())
+    return cast(list[dict[str, object]], api_data(rescan_response))
 
 
 @contextmanager
@@ -313,13 +482,15 @@ def _build_skill_record(
     name: str,
     description: str,
     compatibility: list[str] | None = None,
+    source: CompatibilitySource = CompatibilitySource.LOCAL,
+    scope: CompatibilityScope = CompatibilityScope.PROJECT,
     status: SkillRecordStatus = SkillRecordStatus.LOADED,
     error_message: str | None = None,
 ) -> SkillRecord:
     return SkillRecord(
         id=f"{directory_name}-id",
-        source=CompatibilitySource.LOCAL,
-        scope=CompatibilityScope.PROJECT,
+        source=source,
+        scope=scope,
         root_dir=str(root_dir),
         directory_name=directory_name,
         entry_file=str(entry_file),

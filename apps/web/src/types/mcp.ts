@@ -37,7 +37,33 @@ export type MCPServer = {
   timeout_ms: number;
   status: MCPServerStatus;
   last_error: string | null;
+  health_status: string | null;
+  health_latency_ms: number | null;
+  health_error: string | null;
+  health_checked_at: string | null;
   config_path: string;
   imported_at: string;
   capabilities: MCPCapability[];
+};
+
+export type ManualMCPServerRegisterRequest = {
+  name: string;
+  transport: MCPTransport;
+  enabled?: boolean;
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string | null;
+  headers?: Record<string, string>;
+  timeout_ms?: number;
+};
+
+export type MCPToolInvokeRequest = {
+  arguments?: Record<string, unknown>;
+};
+
+export type MCPToolInvokeResponse = {
+  server_id: string;
+  tool_name: string;
+  result: Record<string, unknown>;
 };

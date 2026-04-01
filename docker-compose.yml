@@ -1,0 +1,54 @@
+name: aegissec
+
+services:
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace/apps/api
+    environment:
+      AEGISSEC_API_HOST: 0.0.0.0
+      AEGISSEC_API_PORT: 8000
+      AEGISSEC_FRONTEND_ORIGIN: http://127.0.0.1:5173
+      AEGISSEC_DATABASE_URL: sqlite:////workspace/apps/api/data/aegissec.db
+      AEGISSEC_KALI_IMAGE: aegissec-kali:latest
+      AEGISSEC_RUNTIME_CONTAINER_NAME: aegissec-kali-runtime
+      AEGISSEC_RUNTIME_WORKSPACE_DIR: /workspace/apps/api/data/runtime-workspace
+      AEGISSEC_RUNTIME_WORKSPACE_CONTAINER_PATH: /workspace
+    command: >
+      sh -lc "pip install --no-cache-dir uv &&
+      uv sync --all-extras --dev &&
+      uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+    depends_on:
+      - kali-runtime
+
+  web:
+    image: node:22-bookworm
+    working_dir: /workspace/apps/web
+    environment:
+      VITE_API_BASE_URL: http://127.0.0.1:8000
+    command: >
+      sh -lc "corepack enable &&
+      corepack pnpm install &&
+      corepack pnpm dev --host 0.0.0.0 --port 5173"
+    volumes:
+      - .:/workspace
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  kali-runtime:
+    build:
+      context: ./docker/kali
+    image: aegissec-kali:latest
+    container_name: aegissec-kali-runtime
+    working_dir: /workspace
+    command: ["/bin/zsh", "-lc", "while true; do sleep 3600; done"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./apps/api/data/runtime-workspace:/workspace

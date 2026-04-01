@@ -161,6 +161,26 @@ class WorkflowRepository:
         self.db_session.refresh(task_node)
         return task_node
 
+    def patch_task_node(
+        self,
+        task_node: TaskNode,
+        *,
+        status: TaskNodeStatus | None = None,
+        parent_id: str | None = None,
+        update_parent: bool = False,
+        metadata: dict[str, object] | None = None,
+    ) -> TaskNode:
+        if status is not None:
+            task_node.status = status
+        if update_parent:
+            task_node.parent_id = parent_id
+        if metadata is not None:
+            task_node.metadata_json = metadata
+        self.db_session.add(task_node)
+        self.db_session.commit()
+        self.db_session.refresh(task_node)
+        return task_node
+
     def _list_active_runs_for_session(self, session_id: str) -> list[WorkflowRun]:
         statement = (
             select(WorkflowRun)
@@ -195,6 +215,22 @@ class GraphRepository:
             stable_key=stable_key,
             created_at=utc_now(),
         )
+        self.db_session.add(node)
+        self.db_session.commit()
+        self.db_session.refresh(node)
+        return node
+
+    def patch_node(
+        self,
+        node: GraphNode,
+        *,
+        label: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> GraphNode:
+        if label is not None:
+            node.label = label
+        if payload is not None:
+            node.payload_json = payload
         self.db_session.add(node)
         self.db_session.commit()
         self.db_session.refresh(node)

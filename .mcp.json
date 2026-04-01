@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "aegissec-demo-stdio": {
-      "command": "python",
+    "playwright": {
+      "command": "npx",
       "args": [
-        "D:/AI/aegissec/scripts/mcp_demo_server.py",
+        "@playwright/mcp@latest",
         "stdio"
       ],
       "enabled": true,

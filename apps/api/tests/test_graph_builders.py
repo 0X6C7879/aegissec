@@ -31,7 +31,7 @@ def test_task_graph_builder_projects_ordered_stage_nodes_and_edges() -> None:
             status=TaskNodeStatus.IN_PROGRESS,
             sequence=1,
             parent_id=None,
-            metadata={"title": "范围确认", "role": "coordinator"},
+            metadata={"title": "范围确认", "role": "coordinator", "summary": "stage summary"},
         )
         second = workflow_repository.create_task_node(
             workflow_run_id=run.id,
@@ -40,7 +40,13 @@ def test_task_graph_builder_projects_ordered_stage_nodes_and_edges() -> None:
             status=TaskNodeStatus.PENDING,
             sequence=2,
             parent_id=None,
-            metadata={"title": "环境启动", "role": "operator"},
+            metadata={
+                "title": "环境启动",
+                "role": "operator",
+                "depends_on_task_ids": [first.id],
+                "summary": "boot summary",
+                "evidence_confidence": 0.7,
+            },
         )
 
         graph = TaskGraphBuilder().build(run=run, tasks=[first, second])
@@ -52,10 +58,12 @@ def test_task_graph_builder_projects_ordered_stage_nodes_and_edges() -> None:
         assert [node.label for node in graph.nodes] == ["范围确认", "环境启动"]
         assert graph.nodes[0].data["status"] == "in_progress"
         assert graph.nodes[0].data["current"] is True
+        assert graph.nodes[0].data["summary"] == "stage summary"
+        assert graph.nodes[1].data["evidence_confidence"] == 0.7
         assert len(graph.edges) == 1
         assert graph.edges[0].source == first.id
         assert graph.edges[0].target == second.id
-        assert graph.edges[0].relation == "precedes"
+        assert graph.edges[0].relation == "depends_on"
 
 
 def test_causal_graph_builder_projects_findings_relationships() -> None:
@@ -75,6 +83,8 @@ def test_causal_graph_builder_projects_findings_relationships() -> None:
                     {
                         "id": "finding-auth",
                         "title": "Weak auth boundary",
+                        "summary": "Authentication controls can be bypassed",
+                        "confidence": 0.82,
                         "kind": "finding",
                         "supports": ["finding-impact"],
                     },
@@ -95,6 +105,8 @@ def test_causal_graph_builder_projects_findings_relationships() -> None:
         assert graph.current_stage == "findings_merge"
         assert [node.id for node in graph.nodes] == ["finding-auth", "finding-impact"]
         assert [node.label for node in graph.nodes] == ["Weak auth boundary", "Privilege exposure"]
+        assert graph.nodes[0].data["summary"] == "Authentication controls can be bypassed"
+        assert graph.nodes[0].data["confidence"] == 0.82
         assert len(graph.edges) == 1
         assert graph.edges[0].source == "finding-auth"
         assert graph.edges[0].target == "finding-impact"

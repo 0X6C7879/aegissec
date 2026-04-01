@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatBytes } from "../lib/format";
-import { isRecord } from "../lib/sessionUtils";
+import {
+  extractSafeSessionSummary,
+  isRecord,
+  type SafeSessionSummaryEntry,
+} from "../lib/sessionUtils";
 import type { RuntimeExecutionRun } from "../types/runtime";
 import type { SessionEventEntry, SessionMessage } from "../types/sessions";
 import { StatusBadge } from "./StatusBadge";
@@ -23,91 +27,66 @@ type ToolDrawerRun = {
   toolCallId: string | null;
   runtimeRunId: string | null;
   createdAt: string;
-  command: string;
+  toolName: string;
+  command: string | null;
   status: string;
   exitCode: number | null;
   requestedTimeoutSeconds: number | null;
   stdout: string;
   stderr: string;
   artifacts: ToolArtifactChip[];
+  arguments: Record<string, unknown> | null;
+  result: unknown;
 };
 
-type FeedItem =
-  | { id: string; createdAt: string; kind: "message"; order: number; message: SessionMessage }
-  | { id: string; createdAt: string; kind: "trace"; order: number; event: SessionEventEntry }
-  | { id: string; createdAt: string; kind: "tool"; order: number; run: ToolDrawerRun };
+type ThoughtEntry =
+  | {
+      id: string;
+      createdAt: string;
+      kind: "summary";
+      summary: SafeSessionSummaryEntry;
+    }
+  | {
+      id: string;
+      createdAt: string;
+      kind: "trace";
+      event: SessionEventEntry;
+    };
 
-function getFeedItemPriority(item: FeedItem): number {
-  if (item.kind === "message") {
-    return item.message.role === "user" ? 0 : 3;
-  }
+type ConversationTurn = {
+  id: string;
+  createdAt: string;
+  userMessage: SessionMessage;
+  assistantMessages: SessionMessage[];
+  thoughts: ThoughtEntry[];
+  toolRuns: ToolDrawerRun[];
+};
 
-  if (item.kind === "trace") {
-    return 1;
-  }
-
-  return 2;
-}
+const THINK_BLOCK_PATTERN = /<think>([\s\S]*?)<\/think>/gi;
 
 function toTimestamp(value: string): number {
   const timestamp = new Date(value).getTime();
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
-function byCreatedAt(left: FeedItem, right: FeedItem): number {
-  const timestampDiff = toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
-  if (timestampDiff !== 0) {
-    return timestampDiff;
-  }
+function parseAssistantContent(content: string): {
+  visibleContent: string;
+  thinkingBlocks: string[];
+} {
+  const thinkingBlocks: string[] = [];
 
-  const priorityDiff = getFeedItemPriority(left) - getFeedItemPriority(right);
-  if (priorityDiff !== 0) {
-    return priorityDiff;
-  }
+  const visibleContent = content
+    .replace(THINK_BLOCK_PATTERN, (_match, innerContent: string) => {
+      const cleanedContent = innerContent.trim();
+      if (cleanedContent.length > 0) {
+        thinkingBlocks.push(cleanedContent);
+      }
+      return " ";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
-  return left.order - right.order;
-}
-
-function getTraceLabel(event: SessionEventEntry): string {
-  if (event.type === "assistant.trace") {
-    return "请求异常";
-  }
-
-  if (event.type === "tool.call.failed") {
-    return "工具异常";
-  }
-
-  if (event.type === "session.deleted" || event.type === "session.restored") {
-    return "会话事件";
-  }
-
-  return "提示";
-}
-
-function renderTraceMeta(payload: unknown): string[] {
-  if (!isRecord(payload)) {
-    return [];
-  }
-
-  if (typeof payload.phase === "string") {
-    if (typeof payload.error === "string") {
-      return [`异常 · ${payload.error}`];
-    }
-
-    return [];
-  }
-
-  const meta: string[] = [];
-  if (typeof payload.status === "string") {
-    meta.push(`状态 · ${payload.status}`);
-  }
-  if (typeof payload.command === "string") {
-    meta.push(`命令 · ${payload.command}`);
-  }
-  if (typeof payload.error === "string") {
-    meta.push(`异常 · ${payload.error}`);
-  }
-  return meta;
+  return { visibleContent, thinkingBlocks };
 }
 
 function renderUserMessage(content: string) {
@@ -132,7 +111,66 @@ function renderAssistantMessage(content: string) {
   );
 }
 
+function getTraceLabel(event: SessionEventEntry): string {
+  if (event.type === "assistant.trace") {
+    return "请求异常";
+  }
+
+  if (event.type === "tool.call.failed") {
+    return "工具异常";
+  }
+
+  if (event.type === "session.deleted" || event.type === "session.restored") {
+    return "会话事件";
+  }
+
+  return "系统提示";
+}
+
+function renderTraceMeta(payload: unknown): string[] {
+  if (!isRecord(payload)) {
+    return [];
+  }
+
+  const meta: string[] = [];
+  if (typeof payload.status === "string") {
+    meta.push(`状态 · ${payload.status}`);
+  }
+  if (typeof payload.command === "string") {
+    meta.push(`命令 · ${payload.command}`);
+  }
+  if (typeof payload.error === "string") {
+    meta.push(`异常 · ${payload.error}`);
+  }
+  return meta;
+}
+
 function getToolSummary(run: ToolDrawerRun): string {
+  if (run.command === null) {
+    if (run.toolName === "list_available_skills" && isRecord(run.result)) {
+      const skills = run.result.skills;
+      if (Array.isArray(skills)) {
+        return `${skills.length} skills`;
+      }
+    }
+
+    if (
+      run.toolName === "read_skill_content" &&
+      isRecord(run.result) &&
+      isRecord(run.result.skill)
+    ) {
+      const skill = run.result.skill;
+      if (typeof skill.directory_name === "string" && skill.directory_name.length > 0) {
+        return skill.directory_name;
+      }
+      if (typeof skill.name === "string" && skill.name.length > 0) {
+        return skill.name;
+      }
+    }
+
+    return "";
+  }
+
   const successStatuses = new Set(["completed", "success", "succeeded"]);
   const timeoutStatuses = new Set(["timeout", "timed_out"]);
   const meta: string[] = [];
@@ -170,6 +208,7 @@ function toToolDrawerRun(run: RuntimeExecutionRun): ToolDrawerRun {
     toolCallId: null,
     runtimeRunId: run.id,
     createdAt: run.created_at,
+    toolName: "execute_kali_command",
     command: run.command,
     status: run.status,
     exitCode: run.exit_code,
@@ -180,6 +219,14 @@ function toToolDrawerRun(run: RuntimeExecutionRun): ToolDrawerRun {
       id: artifact.id,
       relativePath: artifact.relative_path,
     })),
+    arguments: null,
+    result: {
+      status: run.status,
+      exit_code: run.exit_code,
+      stdout: run.stdout,
+      stderr: run.stderr,
+      artifacts: run.artifacts.map((artifact) => artifact.relative_path),
+    },
   };
 }
 
@@ -188,7 +235,14 @@ function toToolDrawerRunFromEvent(event: SessionEventEntry): ToolDrawerRun | nul
     return null;
   }
 
-  if (typeof event.payload.command !== "string" || event.payload.command.length === 0) {
+  const toolName =
+    typeof event.payload.tool === "string" && event.payload.tool.length > 0
+      ? event.payload.tool
+      : typeof event.payload.command === "string" && event.payload.command.length > 0
+        ? "execute_kali_command"
+        : null;
+
+  if (toolName === null) {
     return null;
   }
 
@@ -204,14 +258,18 @@ function toToolDrawerRunFromEvent(event: SessionEventEntry): ToolDrawerRun | nul
       ? event.payload.status
       : event.type === "tool.call.failed"
         ? "failed"
-        : "running";
+        : event.type === "tool.call.finished"
+          ? "completed"
+          : "running";
 
   return {
     id: event.id,
     toolCallId: typeof event.payload.tool_call_id === "string" ? event.payload.tool_call_id : null,
     runtimeRunId: typeof event.payload.run_id === "string" ? event.payload.run_id : null,
-    createdAt: typeof event.payload.created_at === "string" ? event.payload.created_at : event.createdAt,
-    command: event.payload.command,
+    createdAt:
+      typeof event.payload.created_at === "string" ? event.payload.created_at : event.createdAt,
+    toolName,
+    command: typeof event.payload.command === "string" ? event.payload.command : null,
     status,
     exitCode: typeof event.payload.exit_code === "number" ? event.payload.exit_code : null,
     requestedTimeoutSeconds,
@@ -223,10 +281,16 @@ function toToolDrawerRunFromEvent(event: SessionEventEntry): ToolDrawerRun | nul
           ? event.payload.error
           : "",
     artifacts: toToolArtifacts(getStringArray(event.payload, "artifact_paths"), event.id),
+    arguments: isRecord(event.payload.arguments) ? event.payload.arguments : null,
+    result: event.payload.result,
   };
 }
 
 function hasMatchingRun(candidate: ToolDrawerRun, runtimeRuns: ToolDrawerRun[]): boolean {
+  if (candidate.command === null) {
+    return false;
+  }
+
   if (candidate.runtimeRunId) {
     return runtimeRuns.some((run) => run.runtimeRunId === candidate.runtimeRunId);
   }
@@ -242,6 +306,50 @@ function hasMatchingRun(candidate: ToolDrawerRun, runtimeRuns: ToolDrawerRun[]):
   });
 }
 
+type ToolRunTerminalFailure = {
+  createdAt: string;
+  error: string;
+};
+
+function getLatestToolRunTerminalFailure(
+  events: SessionEventEntry[],
+): ToolRunTerminalFailure | null {
+  let latestFailure: ToolRunTerminalFailure | null = null;
+
+  events.forEach((event) => {
+    if (!isRecord(event.payload)) {
+      return;
+    }
+
+    const isAssistantError = event.type === "assistant.trace" && event.payload.status === "error";
+    const isSessionError =
+      event.type === "session.updated" &&
+      event.payload.status === "error" &&
+      typeof event.payload.error === "string";
+
+    if (!isAssistantError && !isSessionError) {
+      return;
+    }
+
+    const errorMessage =
+      typeof event.payload.error === "string" && event.payload.error.length > 0
+        ? event.payload.error
+        : "Request ended before this tool call reported a result.";
+
+    if (
+      latestFailure === null ||
+      toTimestamp(event.createdAt) >= toTimestamp(latestFailure.createdAt)
+    ) {
+      latestFailure = {
+        createdAt: event.createdAt,
+        error: errorMessage,
+      };
+    }
+  });
+
+  return latestFailure;
+}
+
 function buildToolEventRuns(events: SessionEventEntry[]): ToolDrawerRun[] {
   const runsByCorrelation = new Map<string, ToolDrawerRun>();
 
@@ -250,7 +358,8 @@ function buildToolEventRuns(events: SessionEventEntry[]): ToolDrawerRun[] {
     .filter((run): run is ToolDrawerRun => run !== null)
     .sort((left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt))
     .forEach((run) => {
-      const correlationKey = run.toolCallId ?? run.runtimeRunId ?? `${run.command}:${run.createdAt}:${run.id}`;
+      const correlationKey =
+        run.toolCallId ?? run.runtimeRunId ?? `${run.command}:${run.createdAt}:${run.id}`;
       const currentValue = runsByCorrelation.get(correlationKey);
       if (!currentValue) {
         runsByCorrelation.set(correlationKey, run);
@@ -262,14 +371,35 @@ function buildToolEventRuns(events: SessionEventEntry[]): ToolDrawerRun[] {
         ...run,
         toolCallId: run.toolCallId ?? currentValue.toolCallId,
         runtimeRunId: run.runtimeRunId ?? currentValue.runtimeRunId,
-        requestedTimeoutSeconds: run.requestedTimeoutSeconds ?? currentValue.requestedTimeoutSeconds,
+        toolName: run.toolName || currentValue.toolName,
+        command: run.command ?? currentValue.command,
+        requestedTimeoutSeconds:
+          run.requestedTimeoutSeconds ?? currentValue.requestedTimeoutSeconds,
         stdout: run.stdout || currentValue.stdout,
         stderr: run.stderr || currentValue.stderr,
         artifacts: run.artifacts.length > 0 ? run.artifacts : currentValue.artifacts,
+        arguments: run.arguments ?? currentValue.arguments,
+        result: run.result ?? currentValue.result,
       });
     });
 
-  return [...runsByCorrelation.values()];
+  const terminalFailure = getLatestToolRunTerminalFailure(events);
+
+  return [...runsByCorrelation.values()].map((run) => {
+    if (
+      terminalFailure === null ||
+      run.status !== "running" ||
+      toTimestamp(run.createdAt) > toTimestamp(terminalFailure.createdAt)
+    ) {
+      return run;
+    }
+
+    return {
+      ...run,
+      status: "failed",
+      stderr: run.stderr || terminalFailure.error,
+    };
+  });
 }
 
 function extractOptionValue(command: string, flags: string[]): string | null {
@@ -284,7 +414,10 @@ function extractOptionValue(command: string, flags: string[]): string | null {
 }
 
 function extractCommandTarget(command: string): string | null {
-  const segments = command.trim().split(/\s+/).filter((value) => value.length > 0);
+  const segments = command
+    .trim()
+    .split(/\s+/)
+    .filter((value) => value.length > 0);
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     const segment = segments[index];
     if (!segment.startsWith("-")) {
@@ -325,6 +458,38 @@ function getShellIntent(command: string): string {
   return "执行 shell 命令并返回结果";
 }
 
+function getToolLabel(run: ToolDrawerRun): string {
+  if (run.command !== null) {
+    return "shell";
+  }
+
+  if (run.toolName === "list_available_skills" || run.toolName === "read_skill_content") {
+    return "skill";
+  }
+
+  return run.toolName;
+}
+
+function getToolIntent(run: ToolDrawerRun): string {
+  if (run.command !== null) {
+    return getShellIntent(run.command);
+  }
+
+  if (run.toolName === "list_available_skills") {
+    return "List loaded skills";
+  }
+
+  if (run.toolName === "read_skill_content") {
+    const requestedSkill =
+      run.arguments && typeof run.arguments.skill_name_or_id === "string"
+        ? run.arguments.skill_name_or_id
+        : null;
+    return requestedSkill ? `Read skill ${requestedSkill}` : "Read skill instructions";
+  }
+
+  return `Call ${run.toolName}`;
+}
+
 function getCombinedToolOutput(run: ToolDrawerRun): string {
   const parts: string[] = [];
   if (run.stdout.trim()) {
@@ -336,87 +501,208 @@ function getCombinedToolOutput(run: ToolDrawerRun): string {
   return parts.join("\n\n");
 }
 
-function shouldAutoOpenDrawer(item: FeedItem): boolean {
-  if (item.kind === "trace") {
-    return (
-      item.event.type === "assistant.trace" &&
-      isRecord(item.event.payload) &&
-      item.event.payload.status === "error"
-    );
+function formatToolPayload(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
   }
 
-  return false;
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+    return trimmedValue.length > 0 ? trimmedValue : null;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function getSkillContentFromToolResult(result: unknown): { title: string; content: string } | null {
+  if (!isRecord(result) || !isRecord(result.skill)) {
+    return null;
+  }
+
+  const skill = result.skill;
+  if (typeof skill.content !== "string" || skill.content.trim().length === 0) {
+    return null;
+  }
+
+  const title =
+    typeof skill.directory_name === "string" && skill.directory_name.length > 0
+      ? skill.directory_name
+      : typeof skill.name === "string" && skill.name.length > 0
+        ? skill.name
+        : "skill";
+
+  return { title, content: skill.content };
+}
+
+function buildThoughtEntries(events: SessionEventEntry[]): ThoughtEntry[] {
+  const summaryEntries = events
+    .map((event) => {
+      const summary = extractSafeSessionSummary(event.type, event.payload);
+      if (!summary) {
+        return null;
+      }
+
+      return {
+        id: event.id,
+        createdAt: event.createdAt,
+        kind: "summary" as const,
+        summary,
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        id: string;
+        createdAt: string;
+        kind: "summary";
+        summary: SafeSessionSummaryEntry;
+      } => entry !== null,
+    );
+
+  const traceEntries = events
+    .filter(
+      (event) =>
+        event.type === "assistant.trace" &&
+        isRecord(event.payload) &&
+        event.payload.status === "error",
+    )
+    .map(
+      (event) =>
+        ({
+          id: event.id,
+          createdAt: event.createdAt,
+          kind: "trace" as const,
+          event,
+        }) satisfies ThoughtEntry,
+    );
+
+  return [...summaryEntries, ...traceEntries].sort(
+    (left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt),
+  );
+}
+
+function buildTurns(
+  messages: SessionMessage[],
+  thoughts: ThoughtEntry[],
+  toolRuns: ToolDrawerRun[],
+): {
+  turns: ConversationTurn[];
+  orphanMessages: SessionMessage[];
+  orphanThoughts: ThoughtEntry[];
+  orphanToolRuns: ToolDrawerRun[];
+} {
+  const sortedMessages = [...messages].sort(
+    (left, right) => toTimestamp(left.created_at) - toTimestamp(right.created_at),
+  );
+  const userMessages = sortedMessages.filter((message) => message.role === "user");
+
+  if (userMessages.length === 0) {
+    return {
+      turns: [],
+      orphanMessages: sortedMessages,
+      orphanThoughts: thoughts,
+      orphanToolRuns: toolRuns,
+    };
+  }
+
+  const firstUserTimestamp = toTimestamp(userMessages[0].created_at);
+  const turns = userMessages.map((userMessage, index) => {
+    const nextUserMessage = userMessages[index + 1] ?? null;
+    const start = toTimestamp(userMessage.created_at);
+    const end = nextUserMessage
+      ? toTimestamp(nextUserMessage.created_at)
+      : Number.POSITIVE_INFINITY;
+
+    return {
+      id: userMessage.id,
+      createdAt: userMessage.created_at,
+      userMessage,
+      assistantMessages: sortedMessages.filter((message) => {
+        if (message.role === "user") {
+          return false;
+        }
+
+        const timestamp = toTimestamp(message.created_at);
+        return timestamp >= start && timestamp < end;
+      }),
+      thoughts: thoughts.filter((entry) => {
+        const timestamp = toTimestamp(entry.createdAt);
+        return timestamp >= start && timestamp < end;
+      }),
+      toolRuns: toolRuns.filter((run) => {
+        const timestamp = toTimestamp(run.createdAt);
+        return timestamp >= start && timestamp < end;
+      }),
+    } satisfies ConversationTurn;
+  });
+
+  return {
+    turns,
+    orphanMessages: sortedMessages.filter(
+      (message) => message.role !== "user" && toTimestamp(message.created_at) < firstUserTimestamp,
+    ),
+    orphanThoughts: thoughts.filter((entry) => toTimestamp(entry.createdAt) < firstUserTimestamp),
+    orphanToolRuns: toolRuns.filter((run) => toTimestamp(run.createdAt) < firstUserTimestamp),
+  };
 }
 
 export function ConversationFeed({ messages, events, runtimeRuns }: ConversationFeedProps) {
   const feedRef = useRef<HTMLElement | null>(null);
   const previousLastItemSignature = useRef<string | null>(null);
-  const [openDrawerIds, setOpenDrawerIds] = useState<string[]>([]);
+  const [expandedToolGroupIds, setExpandedToolGroupIds] = useState<string[]>([]);
+  const [expandedToolRunIds, setExpandedToolRunIds] = useState<string[]>([]);
 
-  const items = useMemo(() => {
-    const sortedMessages = [...messages].sort(
-      (left, right) => toTimestamp(left.created_at) - toTimestamp(right.created_at),
-    );
-    const sortedRuntimeRuns = [...runtimeRuns]
-      .map((run) => toToolDrawerRun(run))
-      .sort((left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt));
-    const filteredTraceEvents = [...events]
-      .filter((event) => {
-        if (event.type !== "assistant.trace") {
-          return false;
-        }
+  const sortedRuntimeRuns = useMemo(
+    () =>
+      [...runtimeRuns]
+        .map((run) => toToolDrawerRun(run))
+        .sort((left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt)),
+    [runtimeRuns],
+  );
 
-        return isRecord(event.payload) && event.payload.status === "error";
-      })
-      .sort((left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt));
-    const fallbackToolRuns = buildToolEventRuns(events).filter(
-      (run) => !hasMatchingRun(run, sortedRuntimeRuns),
-    );
+  const fallbackToolRuns = useMemo(
+    () => buildToolEventRuns(events).filter((run) => !hasMatchingRun(run, sortedRuntimeRuns)),
+    [events, sortedRuntimeRuns],
+  );
 
-    let order = 0;
-    return [
-      ...sortedMessages.map((message) => ({
-        id: message.id,
-        createdAt: message.created_at,
-        kind: "message" as const,
-        order: order++,
-        message,
-      })),
-      ...filteredTraceEvents.map((event) => ({
-        id: event.id,
-        createdAt: event.createdAt,
-        kind: "trace" as const,
-        order: order++,
-        event,
-      })),
-      ...[...sortedRuntimeRuns, ...fallbackToolRuns]
-        .sort((left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt))
-        .map((run) => ({
-          id: run.id,
-          createdAt: run.createdAt,
-          kind: "tool" as const,
-          order: order++,
-          run,
-        })),
-    ].sort(byCreatedAt);
-  }, [events, messages, runtimeRuns]);
+  const toolRuns = useMemo(
+    () =>
+      [...sortedRuntimeRuns, ...fallbackToolRuns].sort(
+        (left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt),
+      ),
+    [fallbackToolRuns, sortedRuntimeRuns],
+  );
+
+  const thoughts = useMemo(() => buildThoughtEntries(events), [events]);
+
+  const { turns, orphanMessages, orphanThoughts, orphanToolRuns } = useMemo(
+    () => buildTurns(messages, thoughts, toolRuns),
+    [messages, thoughts, toolRuns],
+  );
 
   const lastItemSignature = useMemo(() => {
-    const lastItem = items[items.length - 1];
-    if (!lastItem) {
-      return null;
-    }
+    const lastMessage = messages[messages.length - 1];
+    const lastEvent = events[events.length - 1];
+    const lastRun = runtimeRuns[runtimeRuns.length - 1];
 
-    if (lastItem.kind === "message") {
-      return `${lastItem.id}:${lastItem.message.content.length}:${lastItem.message.attachments.length}`;
-    }
-
-    if (lastItem.kind === "tool") {
-      return `${lastItem.id}:${lastItem.run.stdout.length}:${lastItem.run.stderr.length}`;
-    }
-
-    return `${lastItem.id}:${lastItem.event.summary.length}`;
-  }, [items]);
+    return [
+      messages.length,
+      lastMessage?.id ?? "none",
+      lastMessage?.content.length ?? 0,
+      events.length,
+      lastEvent?.id ?? "none",
+      lastEvent?.summary.length ?? 0,
+      runtimeRuns.length,
+      lastRun?.id ?? "none",
+      lastRun?.stdout.length ?? 0,
+      lastRun?.stderr.length ?? 0,
+    ].join(":");
+  }, [events, messages, runtimeRuns]);
 
   useEffect(() => {
     const feedElement = feedRef.current;
@@ -446,37 +732,47 @@ export function ConversationFeed({ messages, events, runtimeRuns }: Conversation
   }, [lastItemSignature]);
 
   useEffect(() => {
-    const itemIds = new Set(items.map((item) => item.id));
+    const validTurnIds = new Set(
+      turns.filter((turn) => turn.toolRuns.length > 0).map((turn) => turn.id),
+    );
+    const validRunIds = new Set(toolRuns.map((run) => run.id));
 
-    setOpenDrawerIds((currentValue) => {
-      const nextValue = currentValue.filter((id) => itemIds.has(id));
-      const knownIds = new Set(nextValue);
+    setExpandedToolGroupIds((currentValue) => {
+      const nextValue = currentValue.filter((id) => validTurnIds.has(id));
+      const lastTurn = turns[turns.length - 1];
 
-      items.forEach((item) => {
-        if (shouldAutoOpenDrawer(item) && !knownIds.has(item.id)) {
-          nextValue.push(item.id);
-          knownIds.add(item.id);
-        }
-      });
+      if (
+        lastTurn &&
+        lastTurn.toolRuns.length > 0 &&
+        !nextValue.includes(lastTurn.id) &&
+        (lastTurn.assistantMessages.length === 0 ||
+          lastTurn.toolRuns.some((run) => run.status === "running"))
+      ) {
+        nextValue.push(lastTurn.id);
+      }
 
       return nextValue;
     });
-  }, [items]);
 
-  function toggleDrawer(id: string): void {
-    setOpenDrawerIds((currentValue) =>
-      currentValue.includes(id) ? currentValue.filter((value) => value !== id) : [...currentValue, id],
+    setExpandedToolRunIds((currentValue) => currentValue.filter((id) => validRunIds.has(id)));
+  }, [toolRuns, turns]);
+
+  function toggleToolGroup(turnId: string): void {
+    setExpandedToolGroupIds((currentValue) =>
+      currentValue.includes(turnId)
+        ? currentValue.filter((value) => value !== turnId)
+        : [...currentValue, turnId],
     );
   }
 
-  function scrollShellDrawerIntoView(drawerId: string): void {
+  function scrollToolRunIntoView(runId: string): void {
     window.requestAnimationFrame(() => {
       const currentFeed = feedRef.current;
       if (!currentFeed) {
         return;
       }
 
-      const drawer = currentFeed.querySelector<HTMLElement>(`[data-tool-drawer-id="${drawerId}"]`);
+      const drawer = currentFeed.querySelector<HTMLElement>(`[data-tool-run-id="${runId}"]`);
       if (!drawer) {
         return;
       }
@@ -484,7 +780,8 @@ export function ConversationFeed({ messages, events, runtimeRuns }: Conversation
       const composer = currentFeed.parentElement?.querySelector(".workbench-composer-shell");
       const feedRect = currentFeed.getBoundingClientRect();
       const drawerRect = drawer.getBoundingClientRect();
-      const composerTop = composer instanceof HTMLElement ? composer.getBoundingClientRect().top : feedRect.bottom;
+      const composerTop =
+        composer instanceof HTMLElement ? composer.getBoundingClientRect().top : feedRect.bottom;
       const visibleTop = feedRect.top + 12;
       const visibleBottom = Math.min(feedRect.bottom, composerTop) - 18;
 
@@ -505,124 +802,268 @@ export function ConversationFeed({ messages, events, runtimeRuns }: Conversation
     });
   }
 
-  function handleToolDrawerClick(drawerId: string): void {
-    const isOpening = !openDrawerIds.includes(drawerId);
-    toggleDrawer(drawerId);
+  function toggleToolRun(runId: string): void {
+    const isOpening = !expandedToolRunIds.includes(runId);
+
+    setExpandedToolRunIds((currentValue) =>
+      currentValue.includes(runId)
+        ? currentValue.filter((value) => value !== runId)
+        : [...currentValue, runId],
+    );
 
     if (isOpening) {
-      scrollShellDrawerIntoView(drawerId);
+      scrollToolRunIntoView(runId);
     }
   }
 
-  if (items.length === 0) {
-    return <section ref={feedRef} className="conversation-feed conversation-feed-empty" />;
+  function renderMessageBubble(message: SessionMessage) {
+    const assistantContent =
+      message.role === "assistant" || message.role === "system"
+        ? parseAssistantContent(message.content)
+        : null;
+
+    return (
+      <article key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
+        {message.role === "user"
+          ? renderUserMessage(message.content)
+          : renderAssistantMessage(assistantContent?.visibleContent ?? message.content)}
+        {message.attachments.length > 0 ? (
+          <div className="chat-bubble-artifacts">
+            {message.attachments.map((attachment) => (
+              <span key={attachment.id} className="chat-artifact-chip">
+                {attachment.name} · {attachment.content_type} · {formatBytes(attachment.size_bytes)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderThinkingBlock(messageId: string, content: string, index: number) {
+    return (
+      <article
+        key={`${messageId}-thinking-${index}`}
+        className="assistant-reasoning-item assistant-reasoning-item-connected"
+      >
+        <span className="assistant-reasoning-label">模型思路</span>
+        <div className="assistant-reasoning-markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        </div>
+      </article>
+    );
+  }
+
+  function renderThought(entry: ThoughtEntry) {
+    if (entry.kind === "summary") {
+      return (
+        <article
+          key={entry.id}
+          className={`assistant-reasoning-item assistant-reasoning-item-${entry.summary.tone}`}
+        >
+          <span className="assistant-reasoning-label">{entry.summary.label}</span>
+          <p className="assistant-reasoning-text">{entry.summary.summary}</p>
+        </article>
+      );
+    }
+
+    const meta = renderTraceMeta(entry.event.payload);
+
+    return (
+      <article key={entry.id} className="assistant-reasoning-item assistant-reasoning-item-error">
+        <div className="assistant-reasoning-header">
+          <span className="assistant-reasoning-label">{getTraceLabel(entry.event)}</span>
+          {meta[0] ? <span className="assistant-reasoning-meta">{meta[0]}</span> : null}
+        </div>
+        <p className="assistant-reasoning-text">{entry.event.summary}</p>
+        {meta.length > 1 ? (
+          <div className="assistant-reasoning-tags">
+            {meta.slice(1).map((value) => (
+              <span key={value} className="assistant-reasoning-tag">
+                {value}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderToolRun(run: ToolDrawerRun) {
+    const combinedOutput = getCombinedToolOutput(run);
+    const toolSummary = getToolSummary(run);
+    const isOpen = expandedToolRunIds.includes(run.id);
+    const requestPayload = formatToolPayload(run.arguments);
+    const genericResultPayload = formatToolPayload(run.result);
+    const skillContent = getSkillContentFromToolResult(run.result);
+
+    return (
+      <article
+        key={run.id}
+        className={`assistant-tool-run${isOpen ? " assistant-tool-run-open" : ""}`}
+        data-tool-run-id={run.id}
+      >
+        <button
+          className="assistant-tool-run-toggle"
+          type="button"
+          onClick={() => toggleToolRun(run.id)}
+        >
+          <div className="assistant-tool-run-copy">
+            <div className="assistant-tool-run-heading">
+              <strong className="assistant-tool-run-label">{getToolLabel(run)}</strong>
+              <span className="assistant-tool-run-intent">{getToolIntent(run)}</span>
+            </div>
+            {toolSummary ? <span className="assistant-tool-run-meta">{toolSummary}</span> : null}
+          </div>
+          <div className="assistant-tool-run-side">
+            <StatusBadge status={run.status} />
+            <span className="drawer-chevron" aria-hidden="true" />
+          </div>
+        </button>
+
+        {isOpen ? (
+          <div className="assistant-tool-run-body">
+            {run.command !== null ? (
+              <div className="shell-terminal-block">
+                <pre className="shell-terminal-code">{`$ ${run.command}${combinedOutput ? `\n\n${combinedOutput}` : "\n\n# 无输出"}`}</pre>
+              </div>
+            ) : null}
+
+            {requestPayload && run.command === null ? (
+              <div className="shell-terminal-block">
+                <pre className="shell-terminal-code">{requestPayload}</pre>
+              </div>
+            ) : null}
+
+            {skillContent ? (
+              <div className="shell-terminal-block">
+                <pre className="shell-terminal-code">{skillContent.content}</pre>
+              </div>
+            ) : null}
+
+            {run.command === null && !skillContent && genericResultPayload ? (
+              <div className="shell-terminal-block">
+                <pre className="shell-terminal-code">{genericResultPayload}</pre>
+              </div>
+            ) : null}
+
+            {run.artifacts.length > 0 ? (
+              <div className="chat-bubble-artifacts shell-drawer-artifacts">
+                {run.artifacts.map((artifact) => (
+                  <span key={artifact.id} className="chat-artifact-chip">
+                    {artifact.relativePath}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
+  const hasContent =
+    turns.length > 0 ||
+    orphanMessages.length > 0 ||
+    orphanThoughts.length > 0 ||
+    orphanToolRuns.length > 0;
+
+  if (!hasContent) {
+    return (
+      <section ref={feedRef} className="conversation-feed conversation-feed-empty">
+        <div className="conversation-feed-empty-card">
+          <p className="conversation-feed-empty-title">从这里开始新的对话</p>
+          <p className="conversation-feed-empty-copy">
+            发送第一条提示后，这里会按正常聊天顺序展示消息、思路摘要与执行过程。
+          </p>
+        </div>
+      </section>
+    );
   }
 
   return (
-    <section ref={feedRef} className="conversation-feed">
-      {items.map((item) => {
-        if (item.kind === "message") {
-          const { message } = item;
-          const isUserMessage = message.role === "user";
+    <section ref={feedRef} className="conversation-feed conversation-feed-threaded">
+      {orphanMessages.map((message) => renderMessageBubble(message))}
+      {orphanThoughts.map((entry) => renderThought(entry))}
+      {orphanToolRuns.length > 0 ? (
+        <section className="assistant-tool-group assistant-tool-group-orphan">
+          <div className="assistant-tool-group-header">
+            <span className="assistant-tool-group-title">执行过程</span>
+            <span className="assistant-tool-group-count">{orphanToolRuns.length} 步</span>
+          </div>
+          <div className="assistant-tool-group-list">
+            {orphanToolRuns.map((run) => renderToolRun(run))}
+          </div>
+        </section>
+      ) : null}
 
-          return (
-            <article key={item.id} className={`chat-bubble chat-bubble-${message.role}`}>
-              {isUserMessage ? renderUserMessage(message.content) : renderAssistantMessage(message.content)}
-              {message.attachments.length > 0 ? (
-                <div className="chat-bubble-artifacts">
-                  {message.attachments.map((attachment) => (
-                    <span key={attachment.id} className="chat-artifact-chip">
-                      {attachment.name} · {attachment.content_type} · {formatBytes(attachment.size_bytes)}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </article>
+      {turns.map((turn) => {
+        const isToolGroupOpen = expandedToolGroupIds.includes(turn.id);
+        const inlineThinkingBlocks = turn.assistantMessages.flatMap((message) => {
+          const parsedContent = parseAssistantContent(message.content);
+          return parsedContent.thinkingBlocks.map((content, index) =>
+            renderThinkingBlock(message.id, content, index),
           );
-        }
-
-        if (item.kind === "trace") {
-          const meta = renderTraceMeta(item.event.payload);
-          const isOpen = openDrawerIds.includes(item.id);
-          return (
-            <article key={item.id} className={`drawer-card trace-card${isOpen ? " drawer-card-open" : ""}`}>
-              <button className="drawer-summary" type="button" onClick={() => toggleDrawer(item.id)}>
-                <div className="drawer-summary-copy">
-                  <div className="drawer-summary-heading">
-                    <span className="trace-card-label">{getTraceLabel(item.event)}</span>
-                    <span className="drawer-summary-inline">{item.event.summary}</span>
-                  </div>
-                  {meta[0] ? <span className="drawer-summary-text">{meta[0]}</span> : null}
-                </div>
-                <div className="drawer-summary-side">
-                  <span className="drawer-chevron" aria-hidden="true" />
-                </div>
-              </button>
-              {isOpen ? (
-                <div className="drawer-body">
-                  <p className="trace-card-summary">{item.event.summary}</p>
-                  {meta.length > 0 ? (
-                    <div className="trace-card-tags">
-                      {meta.map((value) => (
-                        <span key={value} className="trace-card-tag">
-                          {value}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </article>
-          );
-        }
-
-        const { run } = item;
-        const combinedOutput = getCombinedToolOutput(run);
-        const toolSummary = getToolSummary(run);
-
-        const isOpen = openDrawerIds.includes(item.id);
+        });
 
         return (
-          <article
-            key={item.id}
-            className={`drawer-card tool-card shell-drawer${isOpen ? " drawer-card-open" : ""}`}
-            data-tool-drawer-id={item.id}
-          >
-            <button
-              className="drawer-summary shell-drawer-toggle"
-              type="button"
-              onClick={() => handleToolDrawerClick(item.id)}
-            >
-              <div className="drawer-summary-copy shell-drawer-copy">
-                <div className="drawer-summary-heading shell-drawer-heading">
-                  <strong className="shell-drawer-label">shell</strong>
-                  <span className="shell-drawer-intent">{getShellIntent(run.command)}</span>
-                </div>
-                {toolSummary ? (
-                  <span className="drawer-summary-text shell-drawer-meta-text">{toolSummary}</span>
-                ) : null}
-              </div>
-              <div className="drawer-summary-side tool-card-status shell-drawer-side">
-                <StatusBadge status={run.status} />
-                <span className="drawer-chevron" aria-hidden="true" />
-              </div>
-            </button>
-            {isOpen ? (
-              <div className="drawer-body shell-drawer-body">
-                <div className="shell-terminal-block">
-                  <pre className="shell-terminal-code">{`$ ${run.command}${combinedOutput ? `\n\n${combinedOutput}` : "\n\n# 无输出"}`}</pre>
-                </div>
+          <article key={turn.id} className="chat-turn">
+            {renderMessageBubble(turn.userMessage)}
 
-                {run.artifacts.length > 0 ? (
-                  <div className="chat-bubble-artifacts shell-drawer-artifacts">
-                    {run.artifacts.map((artifact) => (
-                      <span key={artifact.id} className="chat-artifact-chip">
-                        {artifact.relativePath}
+            {inlineThinkingBlocks.length > 0 ||
+            turn.thoughts.length > 0 ||
+            turn.toolRuns.length > 0 ||
+            turn.assistantMessages.length > 0 ? (
+              <section className="assistant-turn-card">
+                {inlineThinkingBlocks.length > 0 || turn.thoughts.length > 0 ? (
+                  <section className="assistant-reasoning-panel">
+                    <div className="assistant-section-header">
+                      <span className="assistant-section-kicker">思考过程</span>
+                      <span className="assistant-section-count">
+                        {inlineThinkingBlocks.length + turn.thoughts.length}
                       </span>
-                    ))}
-                  </div>
+                    </div>
+                    <div className="assistant-reasoning-list">
+                      {inlineThinkingBlocks}
+                      {turn.thoughts.map((entry) => renderThought(entry))}
+                    </div>
+                  </section>
                 ) : null}
-              </div>
+
+                {turn.toolRuns.length > 0 ? (
+                  <section
+                    className={`assistant-tool-group${isToolGroupOpen ? " assistant-tool-group-open" : ""}`}
+                  >
+                    <button
+                      className="assistant-tool-group-toggle"
+                      type="button"
+                      onClick={() => toggleToolGroup(turn.id)}
+                    >
+                      <div className="assistant-tool-group-header">
+                        <span className="assistant-tool-group-title">执行过程</span>
+                        <span className="assistant-tool-group-count">
+                          {turn.toolRuns.length} 步
+                        </span>
+                      </div>
+                      <span className="drawer-chevron" aria-hidden="true" />
+                    </button>
+
+                    {isToolGroupOpen ? (
+                      <div className="assistant-tool-group-list">
+                        {turn.toolRuns.map((run) => renderToolRun(run))}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                {turn.assistantMessages.length > 0 ? (
+                  turn.assistantMessages.map((message) => renderMessageBubble(message))
+                ) : turn.thoughts.length > 0 || turn.toolRuns.length > 0 ? (
+                  <article className="chat-bubble chat-bubble-assistant">
+                    {renderAssistantMessage("")}
+                  </article>
+                ) : null}
+              </section>
             ) : null}
           </article>
         );

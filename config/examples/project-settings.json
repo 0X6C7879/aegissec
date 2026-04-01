@@ -1,0 +1,11 @@
+{
+  "default_workflow_template": "authorized-assessment",
+  "default_runtime_profile_name": "default",
+  "default_queue_backend": "in_process",
+  "runtime_defaults": {
+    "allow_network": false,
+    "allow_write": true,
+    "max_execution_seconds": 180
+  },
+  "notes": "示例项目配置：用于联调和演示环境。"
+}

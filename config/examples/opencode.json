@@ -1,0 +1,12 @@
+{
+  "mcp": {
+    "demo-http": {
+      "type": "remote",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer replace-me"
+      },
+      "timeout_ms": 5000
+    }
+  }
+}

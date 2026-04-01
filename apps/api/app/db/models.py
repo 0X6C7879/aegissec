@@ -4,8 +4,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import Column
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
 
 
@@ -17,6 +16,7 @@ class SessionStatus(str, Enum):
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
     ERROR = "error"
     DONE = "done"
 
@@ -36,6 +36,15 @@ class ExecutionStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     TIMEOUT = "timeout"
+
+
+class RuntimePolicy(SQLModel):
+    model_config = {"extra": "ignore"}
+
+    allow_network: bool = True
+    allow_write: bool = True
+    max_execution_seconds: int = Field(default=300, gt=0)
+    max_command_length: int = Field(default=4000, gt=0)
 
 
 class CompatibilitySource(str, Enum):
@@ -108,6 +117,35 @@ class GraphType(str, Enum):
     CAUSAL = "causal"
 
 
+class ProjectBase(SQLModel):
+    name: str = Field(max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class Project(ProjectBase, table=True):
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
+    deleted_at: datetime | None = Field(default=None, nullable=True)
+
+
+class ProjectSettings(SQLModel, table=True):
+    __tablename__ = "project_settings"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    project_id: str = Field(foreign_key="project.id", index=True, unique=True)
+    default_workflow_template: str | None = Field(default=None, max_length=120)
+    default_runtime_profile_name: str | None = Field(default=None, max_length=120)
+    default_queue_backend: str | None = Field(default=None, max_length=32)
+    runtime_defaults_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("runtime_defaults", JSON, nullable=False),
+    )
+    notes: str | None = Field(default=None, max_length=2000)
+    created_at: datetime = Field(default_factory=utc_now, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
+
+
 class AttachmentMetadata(SQLModel):
     id: str | None = None
     name: str | None = None
@@ -118,6 +156,15 @@ class AttachmentMetadata(SQLModel):
 class SessionBase(SQLModel):
     title: str = Field(default="New Session", max_length=200)
     status: SessionStatus = Field(default=SessionStatus.IDLE)
+    project_id: str | None = Field(default=None, foreign_key="project.id")
+    goal: str | None = Field(default=None, max_length=4000)
+    scenario_type: str | None = Field(default=None, max_length=200)
+    current_phase: str | None = Field(default=None, max_length=200)
+    runtime_policy_json: dict[str, object] | None = Field(
+        default=None,
+        sa_column=Column("runtime_policy_json", JSON, nullable=True),
+    )
+    runtime_profile_name: str | None = Field(default=None, max_length=120)
 
 
 class Session(SessionBase, table=True):
@@ -167,6 +214,24 @@ class RuntimeArtifact(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
 
 
+class RunLog(SQLModel, table=True):
+    __tablename__ = "run_log"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    session_id: str | None = Field(default=None, foreign_key="session.id", index=True)
+    project_id: str | None = Field(default=None, foreign_key="project.id", index=True)
+    run_id: str | None = Field(default=None, foreign_key="runtime_execution_run.id", index=True)
+    level: str = Field(default="info", nullable=False, index=True)
+    source: str = Field(nullable=False, index=True)
+    event_type: str = Field(nullable=False, index=True)
+    message: str = Field(nullable=False)
+    payload_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("payload", JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+
+
 class SkillRecord(SQLModel, table=True):
     __tablename__ = "skill_record"
 
@@ -186,11 +251,16 @@ class SkillRecord(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column("metadata", JSON, nullable=False),
     )
+    parameter_schema_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("parameter_schema", JSON, nullable=False),
+    )
     raw_frontmatter_json: dict[str, object] = Field(
         default_factory=dict,
         sa_column=Column("raw_frontmatter", JSON, nullable=False),
     )
     status: SkillRecordStatus = Field(nullable=False, index=True)
+    enabled: bool = Field(default=True, nullable=False, index=True)
     error_message: str | None = Field(default=None, nullable=True)
     content_hash: str = Field(nullable=False)
     last_scanned_at: datetime = Field(default_factory=utc_now, nullable=False)
@@ -220,6 +290,10 @@ class MCPServer(SQLModel, table=True):
     timeout_ms: int = Field(default=5000, nullable=False)
     status: MCPServerStatus = Field(default=MCPServerStatus.INACTIVE, nullable=False, index=True)
     last_error: str | None = Field(default=None, nullable=True)
+    health_status: str | None = Field(default=None, nullable=True)
+    health_latency_ms: int | None = Field(default=None, nullable=True)
+    health_error: str | None = Field(default=None, nullable=True)
+    health_checked_at: datetime | None = Field(default=None, nullable=True)
     config_path: str = Field(nullable=False)
     imported_at: datetime = Field(default_factory=utc_now, nullable=False)
 
@@ -349,11 +423,52 @@ class GraphSnapshot(SQLModel):
 
 class SessionCreate(SQLModel):
     title: str | None = Field(default=None, max_length=200)
+    project_id: str | None = None
+    goal: str | None = Field(default=None, max_length=4000)
+    scenario_type: str | None = Field(default=None, max_length=200)
+    current_phase: str | None = Field(default=None, max_length=200)
+    runtime_policy_json: dict[str, object] | None = None
+    runtime_profile_name: str | None = Field(default=None, max_length=120)
+
+
+class ProjectCreate(SQLModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class SessionUpdate(SQLModel):
     title: str | None = Field(default=None, max_length=200)
     status: SessionStatus | None = None
+    project_id: str | None = None
+    goal: str | None = Field(default=None, max_length=4000)
+    scenario_type: str | None = Field(default=None, max_length=200)
+    current_phase: str | None = Field(default=None, max_length=200)
+    runtime_policy_json: dict[str, object] | None = None
+    runtime_profile_name: str | None = Field(default=None, max_length=120)
+
+
+class ProjectUpdate(SQLModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectSettingsRead(SQLModel):
+    project_id: str
+    default_workflow_template: str | None = None
+    default_runtime_profile_name: str | None = None
+    default_queue_backend: str | None = None
+    runtime_defaults: dict[str, object] = Field(default_factory=dict)
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectSettingsUpdate(SQLModel):
+    default_workflow_template: str | None = Field(default=None, max_length=120)
+    default_runtime_profile_name: str | None = Field(default=None, max_length=120)
+    default_queue_backend: str | None = Field(default=None, max_length=32)
+    runtime_defaults: dict[str, object] | None = None
+    notes: str | None = Field(default=None, max_length=2000)
 
 
 class SessionRead(SessionBase):
@@ -361,6 +476,17 @@ class SessionRead(SessionBase):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+
+
+class ProjectRead(ProjectBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+
+class ProjectDetail(ProjectRead):
+    sessions: list[SessionRead] = Field(default_factory=list)
 
 
 class MessageRead(SQLModel):
@@ -393,6 +519,19 @@ class RuntimeArtifactRead(SQLModel):
     relative_path: str
     host_path: str
     container_path: str
+    created_at: datetime
+
+
+class RunLogRead(SQLModel):
+    id: str
+    session_id: str | None = None
+    project_id: str | None = None
+    run_id: str | None = None
+    level: str
+    source: str
+    event_type: str
+    message: str
+    payload: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -435,6 +574,11 @@ class RuntimeExecuteRequest(SQLModel):
     artifact_paths: list[str] = Field(default_factory=list)
 
 
+class RuntimeProfileRead(SQLModel):
+    name: str
+    policy: RuntimePolicy
+
+
 class SkillRecordRead(SQLModel):
     id: str
     source: CompatibilitySource
@@ -446,8 +590,10 @@ class SkillRecordRead(SQLModel):
     description: str
     compatibility: list[str] = Field(default_factory=list)
     metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    parameter_schema: dict[str, object] = Field(default_factory=dict)
     raw_frontmatter: dict[str, object] = Field(default_factory=dict)
     status: SkillRecordStatus
+    enabled: bool
     error_message: str | None = None
     content_hash: str
     last_scanned_at: datetime
@@ -467,6 +613,7 @@ class SkillContentRead(SQLModel):
     name: str
     directory_name: str
     entry_file: str
+    parameter_schema: dict[str, object] = Field(default_factory=dict)
     content: str
 
 
@@ -496,6 +643,10 @@ class MCPServerRead(SQLModel):
     timeout_ms: int
     status: MCPServerStatus
     last_error: str | None = None
+    health_status: str | None = None
+    health_latency_ms: int | None = None
+    health_error: str | None = None
+    health_checked_at: datetime | None = None
     config_path: str
     imported_at: datetime
     capabilities: list[MCPCapabilityRead] = Field(default_factory=list)
@@ -531,6 +682,49 @@ class WorkflowRunDetailRead(WorkflowRunRead):
     tasks: list[TaskNodeRead] = Field(default_factory=list)
 
 
+class WorkflowTemplateStageRead(SQLModel):
+    key: str
+    title: str
+    role: str
+    phase: str
+    role_prompt: str = ""
+    sub_agent_role_prompt: str = ""
+    requires_approval: bool = False
+
+
+class WorkflowTemplateRead(SQLModel):
+    name: str
+    title: str
+    description: str
+    template_kinds: list[str] = Field(default_factory=list)
+    stages: list[WorkflowTemplateStageRead] = Field(default_factory=list)
+
+
+class WorkflowRunReplayStepRead(SQLModel):
+    index: int
+    trace_id: str
+    task_node_id: str
+    task_name: str
+    status: str
+    started_at: str
+    ended_at: str
+    summary: str | None = None
+    evidence_confidence: float | None = None
+    retry_attempt: int | None = None
+    batch_cycle: int | None = None
+
+
+class WorkflowRunReplayRead(SQLModel):
+    run_id: str
+    session_id: str
+    template_name: str
+    status: WorkflowRunStatus
+    current_stage: str | None = None
+    replay_steps: list[WorkflowRunReplayStepRead] = Field(default_factory=list)
+    replan_records: list[dict[str, object]] = Field(default_factory=list)
+    batch_state: dict[str, object] = Field(default_factory=dict)
+
+
 class SessionGraphNodeRead(SQLModel):
     id: str
     graph_type: GraphType
@@ -555,6 +749,16 @@ class SessionGraphRead(SQLModel):
     current_stage: str | None = None
     nodes: list[SessionGraphNodeRead] = Field(default_factory=list)
     edges: list[SessionGraphEdgeRead] = Field(default_factory=list)
+
+
+class WorkflowRunExportRead(SQLModel):
+    run: WorkflowRunDetailRead
+    task_graph: SessionGraphRead
+    evidence_graph: SessionGraphRead
+    causal_graph: SessionGraphRead
+    execution_records: list[dict[str, object]] = Field(default_factory=list)
+    replan_records: list[dict[str, object]] = Field(default_factory=list)
+    batch_state: dict[str, object] = Field(default_factory=dict)
 
 
 def attachments_to_storage(
@@ -585,6 +789,14 @@ def to_session_read(session: Session) -> SessionRead:
         id=session.id,
         title=session.title,
         status=session.status,
+        project_id=session.project_id,
+        goal=session.goal,
+        scenario_type=session.scenario_type,
+        current_phase=session.current_phase,
+        runtime_policy_json=(
+            dict(session.runtime_policy_json) if session.runtime_policy_json is not None else None
+        ),
+        runtime_profile_name=session.runtime_profile_name,
         created_at=session.created_at,
         updated_at=session.updated_at,
         deleted_at=session.deleted_at,
@@ -598,6 +810,37 @@ def to_session_detail(session: Session, messages: list[Message]) -> SessionDetai
     )
 
 
+def to_project_read(project: Project) -> ProjectRead:
+    return ProjectRead(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        deleted_at=project.deleted_at,
+    )
+
+
+def to_project_detail(project: Project, sessions: list[Session]) -> ProjectDetail:
+    return ProjectDetail(
+        **to_project_read(project).model_dump(),
+        sessions=[to_session_read(session) for session in sessions],
+    )
+
+
+def to_project_settings_read(project_settings: ProjectSettings) -> ProjectSettingsRead:
+    return ProjectSettingsRead(
+        project_id=project_settings.project_id,
+        default_workflow_template=project_settings.default_workflow_template,
+        default_runtime_profile_name=project_settings.default_runtime_profile_name,
+        default_queue_backend=project_settings.default_queue_backend,
+        runtime_defaults=dict(project_settings.runtime_defaults_json),
+        notes=project_settings.notes,
+        created_at=project_settings.created_at,
+        updated_at=project_settings.updated_at,
+    )
+
+
 def to_runtime_artifact_read(artifact: RuntimeArtifact) -> RuntimeArtifactRead:
     return RuntimeArtifactRead(
         id=artifact.id,
@@ -606,6 +849,21 @@ def to_runtime_artifact_read(artifact: RuntimeArtifact) -> RuntimeArtifactRead:
         host_path=artifact.host_path,
         container_path=artifact.container_path,
         created_at=artifact.created_at,
+    )
+
+
+def to_run_log_read(run_log: RunLog) -> RunLogRead:
+    return RunLogRead(
+        id=run_log.id,
+        session_id=run_log.session_id,
+        project_id=run_log.project_id,
+        run_id=run_log.run_id,
+        level=run_log.level,
+        source=run_log.source,
+        event_type=run_log.event_type,
+        message=run_log.message,
+        payload=dict(run_log.payload_json),
+        created_at=run_log.created_at,
     )
 
 
@@ -642,8 +900,10 @@ def to_skill_record_read(record: SkillRecord) -> SkillRecordRead:
         name=record.name,
         description=record.description,
         compatibility=list(record.compatibility_json),
+        parameter_schema=dict(record.parameter_schema_json),
         raw_frontmatter=dict(record.raw_frontmatter_json),
         status=record.status,
+        enabled=record.enabled,
         error_message=record.error_message,
         content_hash=record.content_hash,
         last_scanned_at=record.last_scanned_at,
@@ -682,6 +942,10 @@ def to_mcp_server_read(
         timeout_ms=server.timeout_ms,
         status=server.status,
         last_error=server.last_error,
+        health_status=server.health_status,
+        health_latency_ms=server.health_latency_ms,
+        health_error=server.health_error,
+        health_checked_at=server.health_checked_at,
         config_path=server.config_path,
         imported_at=server.imported_at,
         capabilities=capabilities,

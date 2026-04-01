@@ -1,0 +1,6 @@
+apps/web/dist
+apps/web/coverage
+apps/web/node_modules
+apps/web/src/generated/api-schema.json
+apps/api/data
+test-results

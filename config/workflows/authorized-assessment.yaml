@@ -1,32 +1,64 @@
 name: authorized-assessment
 title: 授权验证流程
 description: 面向授权环境的最小受控验证工作流。
+template_kinds:
+  - recon
+  - analysis
+  - validation
+  - reporting
 stages:
   - key: scope_guard
     title: 范围确认
     role: coordinator
+    phase: recon
+    role_prompt: 严格验证授权范围、目标边界与禁止项，避免越界操作。
+    sub_agent_role_prompt: 使用简洁核对清单记录授权证据与限制条件。
   - key: runtime_boot
     title: 环境启动
     role: operator
+    phase: recon
+    role_prompt: 在最小权限模式下准备执行环境并验证策略配置。
+    sub_agent_role_prompt: 仅执行低风险初始化步骤并保留审计痕迹。
   - key: skill_mcp_sync
     title: Skill/MCP 同步
     role: researcher
+    phase: analysis
+    role_prompt: 收集可用技能与工具能力快照，标注适用范围。
+    sub_agent_role_prompt: 只保留与当前授权目标相关的能力信息。
   - key: context_collect
     title: 上下文收集
     role: researcher
+    phase: analysis
+    role_prompt: 建立目标上下文基线并归档可验证线索。
+    sub_agent_role_prompt: 结构化记录证据来源、时间与可信度。
   - key: hypothesis_build
     title: 假设生成
     role: planner
+    phase: analysis
+    role_prompt: 形成可验证、可回滚的低风险假设集合。
+    sub_agent_role_prompt: 每个假设必须绑定依赖证据与验证路径。
   - key: safe_validation
     title: 低风险验证
     role: operator
+    phase: validation
+    role_prompt: 执行受控验证并优先保障目标可用性。
+    sub_agent_role_prompt: 输出结构化执行结果和失败原因，禁止高风险动作。
     requires_approval: true
   - key: findings_merge
     title: 发现归并
     role: reporter
+    phase: reporting
+    role_prompt: 合并验证结果并统一风险描述口径。
+    sub_agent_role_prompt: 将重复线索去重并补充证据置信度。
   - key: causal_graph_update
     title: 因果图更新
     role: coordinator
+    phase: reporting
+    role_prompt: 将证据、假设和结论建立可追溯因果关系。
+    sub_agent_role_prompt: 保持节点关系可解释且与执行记录一致。
   - key: report_export
     title: 报告导出
     role: reporter
+    phase: reporting
+    role_prompt: 产出可复现实验路径与结论摘要。
+    sub_agent_role_prompt: 确保输出包含关键证据索引与时间线。

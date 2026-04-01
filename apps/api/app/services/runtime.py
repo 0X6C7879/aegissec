@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from time import sleep
@@ -16,16 +17,20 @@ from sqlmodel import Session as DBSession
 from app.core.settings import Settings, get_settings
 from app.db.models import (
     ExecutionStatus,
+    RuntimeArtifact,
     RuntimeContainerStateRead,
     RuntimeContainerStatus,
     RuntimeExecuteRequest,
     RuntimeExecutionRunRead,
+    RuntimePolicy,
+    RuntimeProfileRead,
     RuntimeStatusRead,
+    Session,
     to_runtime_artifact_read,
     to_runtime_execution_run_read,
     utc_now,
 )
-from app.db.repositories import RuntimeRepository
+from app.db.repositories import RunLogRepository, RuntimeRepository
 from app.db.session import get_db_session
 
 SHELL_PATH = "/bin/zsh"
@@ -40,6 +45,10 @@ class RuntimeArtifactPathError(RuntimeServiceError):
 
 
 class RuntimeOperationError(RuntimeServiceError):
+    pass
+
+
+class RuntimePolicyViolationError(RuntimeServiceError):
     pass
 
 
@@ -451,10 +460,12 @@ class RuntimeService:
         self,
         settings: Settings,
         repository: RuntimeRepository,
+        run_log_repository: RunLogRepository,
         backend: RuntimeBackend,
     ) -> None:
         self._settings = settings
         self._repository = repository
+        self._run_log_repository = run_log_repository
         self._backend = backend
         self._workspace_dir = Path(settings.runtime_workspace_dir).resolve()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -486,11 +497,173 @@ class RuntimeService:
     def stop(self) -> RuntimeContainerStateRead:
         return self._to_container_state_read(self._backend.stop())
 
-    def execute(self, payload: RuntimeExecuteRequest) -> RuntimeExecutionRunRead:
+    def list_profiles(self) -> list[RuntimeProfileRead]:
+        profiles = self._settings.runtime_profiles_json
+        reads: list[RuntimeProfileRead] = []
+        for name, payload in profiles.items():
+            try:
+                reads.append(
+                    RuntimeProfileRead(name=name, policy=RuntimePolicy.model_validate(payload))
+                )
+            except Exception:
+                continue
+        if not reads:
+            reads.append(RuntimeProfileRead(name="default", policy=RuntimePolicy()))
+        return sorted(reads, key=lambda item: item.name)
+
+    def resolve_policy_for_session(self, session: Session | None) -> RuntimePolicy:
+        base_policy = self._resolve_policy_for_profile(
+            session.runtime_profile_name if session is not None else None
+        )
+        if session is None or not isinstance(session.runtime_policy_json, dict):
+            return base_policy
+
+        merged_payload = base_policy.model_dump(mode="json")
+        merged_payload.update(session.runtime_policy_json)
+        return RuntimePolicy.model_validate(merged_payload)
+
+    def upload_artifact(
+        self,
+        *,
+        destination_path: str,
+        content: bytes,
+        session_id: str | None = None,
+        overwrite: bool = False,
+    ) -> RuntimeExecutionRunRead:
+        relative_path = self._normalize_relative_artifact_path(destination_path)
+        host_path = (self._workspace_dir / Path(relative_path)).resolve()
+        if not host_path.is_relative_to(self._workspace_dir):
+            raise RuntimeArtifactPathError("Upload destination must stay in runtime workspace.")
+        if host_path.exists() and not overwrite:
+            raise RuntimeArtifactPathError(
+                "Destination already exists; set overwrite=true to replace."
+            )
+
+        host_path.parent.mkdir(parents=True, exist_ok=True)
+        host_path.write_bytes(content)
+        created_at = utc_now()
+        run, artifact_rows = self._repository.create_run(
+            session_id=session_id,
+            command=f"runtime.upload {relative_path}",
+            requested_timeout_seconds=1,
+            status=ExecutionStatus.SUCCESS,
+            exit_code=0,
+            stdout=f"Uploaded {len(content)} bytes to {relative_path}.",
+            stderr="",
+            container_name=self._settings.runtime_container_name,
+            started_at=created_at,
+            ended_at=created_at,
+            artifacts=[
+                (
+                    relative_path,
+                    str(host_path),
+                    str(
+                        PurePosixPath(self._settings.runtime_workspace_container_path)
+                        / relative_path
+                    ),
+                )
+            ],
+        )
+        self._run_log_repository.create_log(
+            session_id=session_id,
+            project_id=None,
+            run_id=run.id,
+            level="info",
+            source="runtime",
+            event_type="runtime.upload",
+            message=relative_path,
+            payload={"bytes": len(content), "overwrite": overwrite},
+        )
+        return to_runtime_execution_run_read(run, artifact_rows)
+
+    def download_artifact_bytes(self, *, artifact_path: str) -> tuple[Path, bytes]:
+        relative_path = self._normalize_relative_artifact_path(artifact_path)
+        host_path = (self._workspace_dir / Path(relative_path)).resolve()
+        if not host_path.is_relative_to(self._workspace_dir):
+            raise RuntimeArtifactPathError("Download path must stay in runtime workspace.")
+        if not host_path.exists() or not host_path.is_file():
+            raise RuntimeArtifactPathError(f"Artifact path '{artifact_path}' was not found.")
+        return host_path, host_path.read_bytes()
+
+    def cleanup_artifacts(self) -> dict[str, int]:
+        all_artifacts = self._repository.list_artifacts_ordered_newest()
+        if not all_artifacts:
+            return {"deleted_files": 0, "deleted_rows": 0, "kept": 0}
+
+        keep_recent = max(0, self._settings.runtime_artifact_retain_recent_count)
+        cutoff = utc_now() - timedelta(
+            seconds=max(0, self._settings.runtime_artifact_retention_seconds)
+        )
+        preserved = all_artifacts[:keep_recent]
+        candidates = all_artifacts[keep_recent:]
+
+        run_ids = {artifact.run_id for artifact in candidates}
+        runs_by_id = self._repository.get_runs_by_ids(run_ids)
+        session_ids = {run.session_id for run in runs_by_id.values() if run.session_id is not None}
+        session_statuses = self._repository.get_session_statuses(
+            {sid for sid in session_ids if sid is not None}
+        )
+
+        terminal_statuses = {"done", "cancelled", "error"}
+        deletable: list[RuntimeArtifact] = []
+        for artifact in candidates:
+            if artifact.created_at >= cutoff:
+                continue
+            run = runs_by_id.get(artifact.run_id)
+            session_status = (
+                session_statuses.get(run.session_id)
+                if run is not None and run.session_id is not None
+                else None
+            )
+            if session_status is not None and session_status.value not in terminal_statuses:
+                continue
+            deletable.append(artifact)
+
+        deleted_files = 0
+        for artifact in deletable:
+            host_path = Path(artifact.host_path).resolve()
+            if host_path.is_file() and host_path.is_relative_to(self._workspace_dir):
+                host_path.unlink(missing_ok=True)
+                deleted_files += 1
+
+        deleted_rows = self._repository.delete_artifacts(deletable)
+        self._run_log_repository.create_log(
+            session_id=None,
+            project_id=None,
+            run_id=None,
+            level="info",
+            source="runtime",
+            event_type="runtime.artifact.cleanup",
+            message="Completed runtime artifact cleanup.",
+            payload={
+                "deleted_files": deleted_files,
+                "deleted_rows": deleted_rows,
+                "keep_recent": keep_recent,
+                "retention_seconds": self._settings.runtime_artifact_retention_seconds,
+                "preserved_count": len(preserved),
+            },
+        )
+        return {
+            "deleted_files": deleted_files,
+            "deleted_rows": deleted_rows,
+            "kept": len(preserved),
+        }
+
+    def execute(
+        self,
+        payload: RuntimeExecuteRequest,
+        *,
+        runtime_policy: RuntimePolicy | None = None,
+    ) -> RuntimeExecutionRunRead:
+        policy = runtime_policy or RuntimePolicy()
         timeout_seconds = payload.timeout_seconds or self._settings.runtime_default_timeout_seconds
         command = payload.command.strip()
         if not command:
             raise RuntimeArtifactPathError("Command must not be empty.")
+
+        self._enforce_runtime_policy(
+            command=command, timeout_seconds=timeout_seconds, policy=policy
+        )
 
         result = self._backend.execute(command, timeout_seconds, payload.artifact_paths)
         artifacts = self._resolve_artifacts(payload.artifact_paths)
@@ -507,7 +680,71 @@ class RuntimeService:
             ended_at=result.ended_at,
             artifacts=artifacts,
         )
+        self._run_log_repository.create_log(
+            session_id=payload.session_id,
+            project_id=None,
+            run_id=run.id,
+            level="info",
+            source="runtime",
+            event_type="runtime.execute",
+            message=command,
+            payload={
+                "status": result.status.value,
+                "exit_code": result.exit_code,
+                "artifact_count": len(artifact_rows),
+                "requested_timeout_seconds": timeout_seconds,
+                "runtime_policy": policy.model_dump(mode="json"),
+            },
+        )
         return to_runtime_execution_run_read(run, artifact_rows)
+
+    def _resolve_policy_for_profile(self, profile_name: str | None) -> RuntimePolicy:
+        selected_profile = profile_name or self._settings.runtime_default_profile_name
+        raw_profiles = self._settings.runtime_profiles_json
+        raw_policy = raw_profiles.get(selected_profile)
+        if isinstance(raw_policy, dict):
+            return RuntimePolicy.model_validate(raw_policy)
+        return RuntimePolicy()
+
+    @staticmethod
+    def _enforce_runtime_policy(
+        *, command: str, timeout_seconds: int, policy: RuntimePolicy
+    ) -> None:
+        if len(command) > policy.max_command_length:
+            limit = policy.max_command_length
+            raise RuntimePolicyViolationError(
+                f"Command length exceeds runtime policy max_command_length={limit}."
+            )
+        if timeout_seconds > policy.max_execution_seconds:
+            raise RuntimePolicyViolationError(
+                "Requested timeout exceeds runtime policy "
+                f"max_execution_seconds={policy.max_execution_seconds}."
+            )
+
+        if not policy.allow_network and RuntimeService._looks_like_network_command(command):
+            raise RuntimePolicyViolationError("Runtime policy blocks network-capable commands.")
+        if not policy.allow_write and RuntimeService._looks_like_write_command(command):
+            raise RuntimePolicyViolationError("Runtime policy blocks write-capable commands.")
+
+    @staticmethod
+    def _looks_like_network_command(command: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(curl|wget|nc|ncat|telnet|ssh|scp|ftp|dig|nslookup|ping|nmap)\b|https?://",
+                command,
+                re.IGNORECASE,
+            )
+        )
+
+    @staticmethod
+    def _looks_like_write_command(command: str) -> bool:
+        return bool(
+            re.search(
+                r"(>|>>)|\b(touch|mkdir|rm|mv|cp|tee|chmod|chown|sed\s+-i)\b",
+                command,
+                re.IGNORECASE,
+            )
+        )
 
     def _resolve_artifacts(self, artifact_paths: list[str]) -> list[tuple[str, str, str]]:
         workspace_container_path = PurePosixPath(self._settings.runtime_workspace_container_path)
@@ -596,4 +833,6 @@ def get_runtime_service(
     settings: Settings = Depends(get_settings),
     backend: RuntimeBackend = Depends(get_runtime_backend),
 ) -> RuntimeService:
-    return RuntimeService(settings, RuntimeRepository(db_session), backend)
+    return RuntimeService(
+        settings, RuntimeRepository(db_session), RunLogRepository(db_session), backend
+    )

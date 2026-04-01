@@ -5,15 +5,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fastapi import Request, WebSocket
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.events import SessionEventBroker, get_event_broker
 from app.core.settings import Settings, get_settings
 from app.db.models import ExecutionStatus, RuntimeContainerStatus
-from app.db.session import get_db_session
+from app.db.session import get_db_session, get_websocket_db_session, persist_request_log
 from app.main import app
-from app.services.chat_runtime import get_chat_runtime
+from app.services.chat_runtime import GenerationCallbacks, get_chat_runtime
 from app.services.runtime import (
     RuntimeCommandResult,
     RuntimeContainerState,
@@ -27,11 +28,18 @@ class FakeChatRuntime:
         content: str,
         attachments: list[object],
         available_skills: list[object] | None = None,
+        skill_context_prompt: str | None = None,
         execute_tool: object | None = None,
+        callbacks: GenerationCallbacks | None = None,
     ) -> str:
-        del available_skills, execute_tool
+        del available_skills, skill_context_prompt, execute_tool
         normalized_content = " ".join(content.split())
-        return f"Test assistant reply: {normalized_content} ({len(attachments)} attachments)"
+        reply = f"Test assistant reply: {normalized_content} ({len(attachments)} attachments)"
+        if callbacks is not None and callbacks.on_text_delta is not None:
+            midpoint = max(1, len(reply) // 2)
+            await callbacks.on_text_delta(reply[:midpoint])
+            await callbacks.on_text_delta(reply[midpoint:])
+        return reply
 
 
 class FakeRuntimeBackend:
@@ -143,7 +151,7 @@ class FakeRuntimeBackend:
 @pytest.fixture
 def test_settings(tmp_path: Path) -> Settings:
     database_url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
-    return Settings.model_validate(
+    settings = Settings.model_validate(
         {
             "app_name": "aegissec",
             "app_version": "0.1.0",
@@ -164,6 +172,11 @@ def test_settings(tmp_path: Path) -> Settings:
             "llm_default_model": None,
         }
     )
+    settings.llm_provider = "openai"
+    settings.anthropic_api_key = None
+    settings.anthropic_api_base_url = None
+    settings.anthropic_model = None
+    return settings
 
 
 @pytest.fixture
@@ -182,9 +195,24 @@ def client(
     SQLModel.metadata.create_all(engine)
     event_broker = SessionEventBroker()
 
-    def override_db_session() -> Generator[Session, None, None]:
+    def override_db_session(request: Request) -> Generator[Session, None, None]:
         with Session(engine) as session:
-            yield session
+            try:
+                yield session
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                persist_request_log(session, request)
+
+    def override_websocket_db_session(websocket: WebSocket) -> Generator[Session, None, None]:
+        del websocket
+        with Session(engine) as session:
+            try:
+                yield session
+            except Exception:
+                session.rollback()
+                raise
 
     def override_event_broker() -> SessionEventBroker:
         return event_broker
@@ -199,10 +227,13 @@ def client(
         return runtime_backend
 
     app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_websocket_db_session] = override_websocket_db_session
     app.dependency_overrides[get_event_broker] = override_event_broker
     app.dependency_overrides[get_chat_runtime] = override_chat_runtime
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_runtime_backend] = override_runtime_backend
+    app.state.database_engine = engine
+    app.state.settings = test_settings
 
     with TestClient(app) as test_client:
         yield test_client

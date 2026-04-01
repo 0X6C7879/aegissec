@@ -40,18 +40,18 @@ class SkillService:
         self._settings = settings
 
     def list_skills(self) -> list[SkillRecordRead]:
-        return [to_skill_record_read(record) for record in self._repository.list_skills()]
+        return [to_skill_record_read(record) for record in self._list_visible_skill_records()]
 
     def get_skill(self, skill_id: str) -> SkillRecordRead | None:
-        record = self._repository.get_skill(skill_id)
+        record = self._get_visible_skill_record(skill_id)
         if record is None:
             return None
         return to_skill_record_read(record)
 
     def list_loaded_skills_for_agent(self) -> list[SkillAgentSummaryRead]:
         summaries: list[SkillAgentSummaryRead] = []
-        for record in self._repository.list_skills():
-            if record.status != SkillRecordStatus.LOADED:
+        for record in self._list_visible_skill_records():
+            if record.status != SkillRecordStatus.LOADED or not record.enabled:
                 continue
             summaries.append(
                 SkillAgentSummaryRead(
@@ -72,13 +72,13 @@ class SkillService:
         return to_skill_record_read(record)
 
     def read_skill_content(self, skill_id: str) -> str:
-        record = self._repository.get_skill(skill_id)
+        record = self._get_visible_skill_record(skill_id)
         if record is None:
             raise SkillLookupError("Skill not found.")
         return self._read_skill_entry_file(record.entry_file)
 
     def get_skill_content(self, skill_id: str) -> SkillContentRead | None:
-        record = self._repository.get_skill(skill_id)
+        record = self._get_visible_skill_record(skill_id)
         if record is None:
             return None
         return self._build_skill_content(record)
@@ -89,10 +89,55 @@ class SkillService:
             raise SkillLookupError(f"Skill '{name_or_slug}' not found among loaded skills.")
         return self._build_skill_content(record)
 
+    def build_skill_context_payload(self) -> dict[str, object]:
+        skills = [
+            record
+            for record in self._list_visible_skill_records()
+            if record.status == SkillRecordStatus.LOADED and record.enabled
+        ]
+        return {
+            "skills": [
+                {
+                    "id": record.id,
+                    "name": record.name,
+                    "directory_name": record.directory_name,
+                    "description": record.description,
+                    "compatibility": list(record.compatibility_json),
+                    "parameter_schema": dict(record.parameter_schema_json),
+                }
+                for record in skills
+            ]
+        }
+
+    def build_skill_context_prompt_fragment(self) -> str:
+        payload = self.build_skill_context_payload()
+        skills = payload.get("skills", [])
+        if not isinstance(skills, list) or not skills:
+            return "No loaded skills are currently available."
+        lines = ["Loaded skills context:"]
+        for item in skills:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("directory_name") or item.get("name") or "unknown")
+            description = str(item.get("description") or "")
+            parameter_schema = item.get("parameter_schema")
+            if isinstance(parameter_schema, dict) and parameter_schema:
+                lines.append(f"- {label}: {description} | parameters={parameter_schema}")
+            else:
+                lines.append(f"- {label}: {description}")
+        return "\n".join(lines)
+
     def rescan_skills(self) -> list[SkillRecordRead]:
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
         self._repository.replace_all(records)
         return self.list_skills()
+
+    def set_skill_enabled(self, skill_id: str, enabled: bool) -> SkillRecordRead | None:
+        record = self._get_visible_skill_record(skill_id)
+        if record is None:
+            return None
+        updated = self._repository.set_enabled(record, enabled)
+        return to_skill_record_read(updated)
 
     def _scan_and_parse(self) -> list[ParsedSkillRecordData]:
         discovered_files = scan_skill_files(resolve_skill_scan_roots(self._settings))
@@ -108,9 +153,13 @@ class SkillService:
         if not normalized_identifier:
             return None
 
-        records = self._repository.list_skills()
+        records = self._list_visible_skill_records()
         if loaded_only:
-            records = [record for record in records if record.status == SkillRecordStatus.LOADED]
+            records = [
+                record
+                for record in records
+                if record.status == SkillRecordStatus.LOADED and record.enabled
+            ]
 
         for record in records:
             if record.id == normalized_identifier:
@@ -124,12 +173,49 @@ class SkillService:
                     return record
         return None
 
+    def _list_visible_skill_records(self) -> list[SkillRecord]:
+        supported_root_keys = self._supported_root_keys()
+        if not supported_root_keys:
+            return []
+
+        return [
+            record
+            for record in self._repository.list_skills()
+            if (
+                record.source,
+                record.scope,
+                self._normalize_path(record.root_dir),
+            )
+            in supported_root_keys
+        ]
+
+    def _get_visible_skill_record(self, skill_id: str) -> SkillRecord | None:
+        for record in self._list_visible_skill_records():
+            if record.id == skill_id:
+                return record
+        return None
+
+    def _supported_root_keys(self) -> set[tuple[object, object, str]]:
+        return {
+            (
+                scan_root.source,
+                scan_root.scope,
+                self._normalize_path(scan_root.root_dir),
+            )
+            for scan_root in resolve_skill_scan_roots(self._settings)
+        }
+
+    @staticmethod
+    def _normalize_path(path_value: str) -> str:
+        return Path(path_value).resolve().as_posix().casefold()
+
     def _build_skill_content(self, record: SkillRecord) -> SkillContentRead:
         return SkillContentRead(
             id=record.id,
             name=record.name,
             directory_name=record.directory_name,
             entry_file=record.entry_file,
+            parameter_schema=dict(record.parameter_schema_json),
             content=self._read_skill_entry_file(record.entry_file),
         )
 
@@ -156,8 +242,10 @@ class SkillService:
             description=parsed.description,
             compatibility_json=parsed.compatibility,
             metadata_json=parsed.metadata,
+            parameter_schema_json=parsed.parameter_schema,
             raw_frontmatter_json=parsed.raw_frontmatter,
             status=parsed.status,
+            enabled=parsed.enabled,
             error_message=parsed.error_message,
             content_hash=parsed.content_hash,
             last_scanned_at=parsed.last_scanned_at,

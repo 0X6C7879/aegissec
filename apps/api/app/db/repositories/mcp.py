@@ -39,16 +39,54 @@ class MCPRepository:
         servers: list[MCPServer],
         capabilities_by_server_id: dict[str, list[MCPCapability]],
     ) -> None:
-        for capability in list(self.db_session.exec(select(MCPCapability)).all()):
-            self.db_session.delete(capability)
-        for server in self.list_servers():
-            self.db_session.delete(server)
+        imported_by_id = {server.id: server for server in servers}
+        imported_ids = set(imported_by_id)
 
-        for server in servers:
-            self.db_session.add(server)
-        self.db_session.flush()
-        for capabilities in capabilities_by_server_id.values():
-            for capability in capabilities:
+        existing_servers = self.list_servers()
+        for existing_server in existing_servers:
+            is_manual = existing_server.config_path.startswith("manual://")
+            if is_manual:
+                continue
+
+            if existing_server.id not in imported_ids:
+                for capability in self.list_capabilities(existing_server.id):
+                    self.db_session.delete(capability)
+                self.db_session.delete(existing_server)
+                continue
+
+            imported = imported_by_id[existing_server.id]
+            existing_server.name = imported.name
+            existing_server.source = imported.source
+            existing_server.scope = imported.scope
+            existing_server.transport = imported.transport
+            existing_server.enabled = imported.enabled
+            existing_server.command = imported.command
+            existing_server.args_json = list(imported.args_json)
+            existing_server.env_json = dict(imported.env_json)
+            existing_server.url = imported.url
+            existing_server.headers_json = dict(imported.headers_json)
+            existing_server.timeout_ms = imported.timeout_ms
+            existing_server.status = imported.status
+            existing_server.last_error = imported.last_error
+            existing_server.health_status = imported.health_status
+            existing_server.health_latency_ms = imported.health_latency_ms
+            existing_server.health_error = imported.health_error
+            existing_server.health_checked_at = imported.health_checked_at
+            existing_server.config_path = imported.config_path
+            existing_server.imported_at = imported.imported_at
+            self.db_session.add(existing_server)
+
+            for capability in self.list_capabilities(existing_server.id):
+                self.db_session.delete(capability)
+            for capability in capabilities_by_server_id.get(existing_server.id, []):
+                self.db_session.add(capability)
+
+            imported_ids.remove(existing_server.id)
+
+        for imported_id in imported_ids:
+            imported = imported_by_id[imported_id]
+            self.db_session.add(imported)
+            for capability in capabilities_by_server_id.get(imported_id, []):
                 self.db_session.add(capability)
         self.db_session.commit()
 
@@ -60,3 +98,9 @@ class MCPRepository:
         for capability in capabilities:
             self.db_session.add(capability)
         self.db_session.commit()
+
+    def update_server(self, server: MCPServer) -> MCPServer:
+        self.db_session.add(server)
+        self.db_session.commit()
+        self.db_session.refresh(server)
+        return server

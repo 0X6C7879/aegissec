@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import Depends
 from sqlmodel import Session as DBSession
@@ -15,10 +17,13 @@ from app.compat.mcp.importer import (
 from app.compat.mcp.models import DiscoveredMCPCapability, ImportedMCPServer
 from app.core.settings import Settings, get_settings
 from app.db.models import (
+    CompatibilityScope,
+    CompatibilitySource,
     MCPCapability,
     MCPServer,
     MCPServerRead,
     MCPServerStatus,
+    MCPTransport,
     to_mcp_capability_read,
     to_mcp_server_read,
 )
@@ -55,6 +60,42 @@ class MCPService:
 
         self._repository.replace_all(server_records, capabilities_by_server_id)
         return self.list_servers()
+
+    async def register_manual_server(
+        self,
+        *,
+        name: str,
+        transport: str,
+        enabled: bool,
+        command: str | None,
+        args: list[str],
+        env: dict[str, str],
+        url: str | None,
+        headers: dict[str, str],
+        timeout_ms: int,
+    ) -> MCPServerRead:
+        imported_server = ImportedMCPServer(
+            id=str(uuid4()),
+            name=name,
+            source=CompatibilitySource.LOCAL,
+            scope=CompatibilityScope.PROJECT,
+            transport=MCPTransport(transport),
+            enabled=enabled,
+            command=command,
+            args=list(args),
+            env=dict(env),
+            url=url,
+            headers=dict(headers),
+            timeout_ms=timeout_ms,
+            config_path=f"manual://{name}",
+        )
+        server_record = self._to_server_record(imported_server)
+        capabilities: list[MCPCapability] = []
+        if imported_server.enabled:
+            discovered = await self._safe_discover(imported_server, server_record)
+            capabilities = self._to_capability_records(server_record.id, discovered)
+        self._repository.save_server(server_record, capabilities)
+        return self._read_server(server_record)
 
     def list_servers(self) -> list[MCPServerRead]:
         return [self._read_server(server) for server in self._repository.list_servers()]
@@ -93,6 +134,45 @@ class MCPService:
         self._repository.save_server(server, capabilities)
         return self.get_server(server_id)
 
+    async def check_server_health(self, server_id: str) -> MCPServerRead | None:
+        server = self._repository.get_server(server_id)
+        if server is None:
+            return None
+
+        result = await self._client_manager.check_health(self._to_imported_server(server))
+        self._apply_health_result(server, result.status, result.latency_ms, result.error)
+        self._repository.update_server(server)
+        return self.get_server(server_id)
+
+    async def call_tool(
+        self,
+        server_id: str,
+        tool_name: str,
+        arguments: dict[str, object],
+    ) -> dict[str, object] | None:
+        server = self._repository.get_server(server_id)
+        if server is None:
+            return None
+        imported_server = self._to_imported_server(server)
+        try:
+            result = await self._client_manager.call_tool(
+                imported_server,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+        except Exception as exc:
+            server.status = MCPServerStatus.ERROR
+            server.last_error = str(exc)
+            self._apply_health_result(server, "error", None, str(exc))
+            self._repository.update_server(server)
+            raise
+
+        server.status = MCPServerStatus.CONNECTED
+        server.last_error = None
+        self._apply_health_result(server, "ok", None, None)
+        self._repository.update_server(server)
+        return result
+
     async def _safe_discover(
         self,
         imported_server: ImportedMCPServer,
@@ -103,10 +183,12 @@ class MCPService:
         except Exception as exc:
             server_record.status = MCPServerStatus.ERROR
             server_record.last_error = str(exc)
+            self._apply_health_result(server_record, "error", None, str(exc))
             return []
 
         server_record.status = MCPServerStatus.CONNECTED
         server_record.last_error = None
+        self._apply_health_result(server_record, "ok", None, None)
         return discovered
 
     def _read_server(self, server: MCPServer) -> MCPServerRead:
@@ -133,6 +215,10 @@ class MCPService:
             timeout_ms=imported_server.timeout_ms,
             status=MCPServerStatus.INACTIVE,
             last_error=None,
+            health_status=imported_server.health_status,
+            health_latency_ms=imported_server.health_latency_ms,
+            health_error=imported_server.health_error,
+            health_checked_at=imported_server.health_checked_at,
             config_path=imported_server.config_path,
         )
 
@@ -179,8 +265,24 @@ class MCPService:
             url=server.url,
             headers=dict(server.headers_json),
             timeout_ms=server.timeout_ms,
+            health_status=server.health_status,
+            health_latency_ms=server.health_latency_ms,
+            health_error=server.health_error,
+            health_checked_at=server.health_checked_at,
             config_path=server.config_path,
         )
+
+    @staticmethod
+    def _apply_health_result(
+        server: MCPServer,
+        status: str,
+        latency_ms: int | None,
+        error: str | None,
+    ) -> None:
+        server.health_status = status
+        server.health_latency_ms = latency_ms
+        server.health_error = error
+        server.health_checked_at = datetime.now(UTC)
 
 
 def resolve_mcp_import_targets(settings: Settings) -> list[MCPImportTarget]:

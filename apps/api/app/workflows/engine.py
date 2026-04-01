@@ -19,6 +19,7 @@ class DeterministicWorkflowEngine:
         template: WorkflowTemplate,
         skill_snapshot: list[dict[str, object]],
         mcp_snapshot: list[dict[str, object]],
+        runtime_policy: dict[str, object],
         seed_message_id: str | None,
     ) -> WorkflowState:
         return WorkflowState(
@@ -28,6 +29,7 @@ class DeterministicWorkflowEngine:
             messages=[],
             skill_snapshot=skill_snapshot,
             mcp_snapshot=mcp_snapshot,
+            runtime_policy=runtime_policy,
             findings=[],
             graph_updates=[],
             seed_message_id=seed_message_id,

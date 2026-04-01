@@ -16,14 +16,21 @@ def run(command: list[str], workdir: Path) -> None:
 
 
 def main() -> int:
+    run(["python", str(REPO_ROOT / "scripts" / "sync_requirements.py")], REPO_ROOT)
     run(["uv", "sync", "--all-extras", "--dev"], API_DIR)
     run(["uv", "run", "ruff", "check", "."], API_DIR)
     run(["uv", "run", "black", "--check", "."], API_DIR)
     run(["uv", "run", "mypy", "app", "tests"], API_DIR)
     run(["uv", "run", "pytest"], API_DIR)
+    run(
+        ["uv", "run", "python", str(REPO_ROOT / "scripts" / "export_api_schema.py")],
+        API_DIR,
+    )
 
     run([*PNPM, "install"], WEB_DIR)
     run([*PNPM, "lint"], WEB_DIR)
+    run([*PNPM, "format:check"], WEB_DIR)
+    run([*PNPM, "test"], WEB_DIR)
     run([*PNPM, "exec", "tsc", "-b"], WEB_DIR)
     run([*PNPM, "build"], WEB_DIR)
     return 0

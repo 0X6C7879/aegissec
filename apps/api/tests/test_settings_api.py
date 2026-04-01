@@ -9,6 +9,7 @@ from pytest import MonkeyPatch
 
 from app.core.settings import Settings, get_settings
 from app.main import app
+from tests.utils import api_data
 
 
 @pytest.fixture
@@ -49,10 +50,14 @@ def test_get_model_api_settings_masks_api_key(isolated_settings_env: Path) -> No
         response = client.get("/api/settings/model-api")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert api_data(response) == {
+        "provider": "openai",
         "base_url": "https://example.com/v1",
         "model": "gpt-5",
         "api_key_configured": True,
+        "anthropic_base_url": None,
+        "anthropic_model": None,
+        "anthropic_api_key_configured": False,
     }
 
 
@@ -73,13 +78,17 @@ def test_put_model_api_settings_round_trips_and_clears_cache(isolated_settings_e
         follow_up_response = client.get("/api/settings/model-api")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert api_data(response) == {
+        "provider": "openai",
         "base_url": "https://api.example.com/v1",
         "model": "model-alpha",
         "api_key_configured": True,
+        "anthropic_base_url": None,
+        "anthropic_model": None,
+        "anthropic_api_key_configured": False,
     }
     assert follow_up_response.status_code == 200
-    assert follow_up_response.json() == response.json()
+    assert api_data(follow_up_response) == api_data(response)
     assert get_settings().llm_api_base_url == "https://api.example.com/v1"
     assert get_settings().llm_default_model == "model-alpha"
     assert get_settings().llm_api_key == "new-secret"
@@ -116,10 +125,14 @@ def test_put_model_api_settings_preserves_existing_key_when_not_replaced(
     env_local_text = isolated_settings_env.read_text(encoding="utf-8")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert api_data(response) == {
+        "provider": "openai",
         "base_url": "https://new.example.com/v1",
         "model": None,
         "api_key_configured": True,
+        "anthropic_base_url": None,
+        "anthropic_model": None,
+        "anthropic_api_key_configured": False,
     }
     assert env_local_text.startswith("# existing settings\n")
     assert env_local_text.count("LLM_API_KEY=") == 1
@@ -155,10 +168,14 @@ def test_put_model_api_settings_can_clear_api_key_and_base_url(isolated_settings
     env_local_text = isolated_settings_env.read_text(encoding="utf-8")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert api_data(response) == {
+        "provider": "openai",
         "base_url": None,
         "model": "model-after-clear",
         "api_key_configured": False,
+        "anthropic_base_url": None,
+        "anthropic_model": None,
+        "anthropic_api_key_configured": False,
     }
     assert "LLM_API_BASE_URL=" not in env_local_text
     assert "LLM_API_KEY=" not in env_local_text

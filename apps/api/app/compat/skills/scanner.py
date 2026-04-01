@@ -11,12 +11,15 @@ from .models import DiscoveredSkillFile, SkillScanRoot
 def default_skill_scan_roots(
     *,
     repo_root: Path = REPO_ROOT,
+    home_dir: Path = Path.home(),
 ) -> list[SkillScanRoot]:
+    del home_dir
+    resolved_repo_root = repo_root.resolve()
     return [
         SkillScanRoot(
             source=CompatibilitySource.LOCAL,
             scope=CompatibilityScope.PROJECT,
-            root_dir=(repo_root / "skills").resolve().as_posix(),
+            root_dir=(resolved_repo_root / "skills").as_posix(),
         ),
     ]
 

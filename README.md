@@ -369,7 +369,7 @@ UI 必须做到：
 ## 8. 技术选型
 
 ### 后端
-- Python 3.11+
+- Python 3.12+
 - FastAPI
 - Pydantic v2
 - SQLAlchemy 2.x
@@ -402,22 +402,68 @@ UI 必须做到：
 
 ## 9. 快速开始
 
+### 9.1 本地开发
+
 ```bash
 git clone <your-repo-url>
 cd aegissec
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
-docker compose up -d
-make dev
+python scripts/dev.py
 ```
 
-启动后：
+默认启动地址：
 
-- API: http://localhost:8000
-- Web: http://localhost:3000
-- Docs: http://localhost:8000/docs
+- API: http://127.0.0.1:8000
+- Web: http://127.0.0.1:5173
+- Docs: http://127.0.0.1:8000/docs
+
+如果只想启动单侧服务，可使用：
+
+```bash
+./scripts/dev_backend.sh
+./scripts/dev_frontend.sh
+```
+
+> Windows 环境建议直接使用 `python scripts/dev.py`；`.sh` 脚本主要用于 Unix/macOS 开发机和 CI 容器。
+
+### 9.2 全量检查
+
+```bash
+python scripts/check.py
+```
+
+该命令会串行执行：后端依赖同步、Ruff、Black、MyPy、Pytest、OpenAPI 导出，以及前端安装、ESLint、Prettier、Vitest、TypeScript 构建和 Vite build。
+
+### 9.3 演示数据
+
+```bash
+python scripts/seed_demo.py
+```
+
+该脚本会写入一个 Demo Project 和一个 Demo Session，方便在 Workspace / History 页面做浏览器验收。
+
+### 9.4 Docker Compose 一键启动
+
+```bash
+docker compose up --build
+```
+
+Compose 会启动：
+
+- `api`：FastAPI 开发服务
+- `web`：Vite 前端开发服务
+- `kali-runtime`：供 Runtime 页面与 API 检查的 Kali 容器
+
+详细说明见 `docs/Docker开发说明.md`。
+
+### 9.5 模块 E 文档索引
+
+- `docs/API约定.md`
+- `docs/联调清单.md`
+- `docs/Docker开发说明.md`
+- `docs/发布说明模板.md`
+- `docs/demo-script.md`
+- `docs/05_前后端Schema共享策略.md`
 
 ---
 
@@ -425,27 +471,24 @@ make dev
 
 ```text
 aegissec/
+├─ .github/workflows/       # CI 定义
 ├─ apps/
 │  ├─ api/                 # FastAPI app
 │  └─ web/                 # React app
-├─ aegis/
-│  ├─ agent/               # Coordinator / Planner / Executor / Reflector
-│  ├─ workflow/            # Workflow template and state machine
-│  ├─ runtime/             # Kali Docker executor
-│  ├─ skills/              # Skill discovery and compatibility layer
-│  ├─ mcp/                 # MCP registry and client adapters
-│  ├─ graph/               # task graph / evidence graph / causal graph
-│  ├─ persistence/         # models, repositories, migrations
-│  ├─ services/            # orchestration service, session service
-│  ├─ schemas/             # pydantic models
-│  └─ utils/
-├─ configs/
-├─ data/
-├─ artifacts/
-├─ tests/
+├─ config/
+│  ├─ workflows/           # workflow 模板
+│  └─ examples/            # 模块 E 示例配置包
 ├─ docker/
+│  └─ kali/                # Runtime 镜像构建上下文
 ├─ scripts/
+│  ├─ dev.py               # 本地双服务启动入口
+│  ├─ check.py             # 全量校验入口
+│  ├─ export_api_schema.py # OpenAPI 契约导出
+│  └─ seed_demo.py         # 演示数据种子
 ├─ docs/
+├─ skills/                 # 项目级 skills 扫描目录
+├─ docker-compose.yml
+├─ TODO.md
 └─ README.md
 ```
 

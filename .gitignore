@@ -13,3 +13,5 @@ apps/web/*.tsbuildinfo
 .aegissec/
 pytest-of-ASUS/
 test-results/
+apps/api/data/*.db
+apps/api/data/runtime-workspace/

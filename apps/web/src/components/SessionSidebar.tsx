@@ -74,8 +74,8 @@ export function SessionSidebar({
         <section className="empty-state">
           <h2 className="panel-title">No sessions yet</h2>
           <p className="empty-copy">
-            Start a session to capture chat history, status updates, and live event activity from the
-            backend.
+            Start a session to capture chat history, status updates, and live event activity from
+            the backend.
           </p>
         </section>
       ) : (
@@ -104,7 +104,9 @@ export function SessionSidebar({
                   </p>
 
                   <div className="session-meta-row">
-                    <span className="session-meta-copy">Updated {formatRelativeTime(session.updated_at)}</span>
+                    <span className="session-meta-copy">
+                      Updated {formatRelativeTime(session.updated_at)}
+                    </span>
                     {session.deleted_at ? <span className="meta-pill">Deleted</span> : null}
                   </div>
                 </button>

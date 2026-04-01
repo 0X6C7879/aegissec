@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 import pytest
 from pydantic import AnyUrl, TypeAdapter
@@ -20,6 +21,7 @@ class _FakeSession:
         self.list_resources_calls = 0
         self.list_resource_templates_calls = 0
         self.list_prompts_calls = 0
+        self.call_tool_calls: list[tuple[str, dict[str, object]]] = []
         self.closed = False
 
     async def initialize(self) -> None:
@@ -134,6 +136,19 @@ class _FakeSession:
 
     async def close(self) -> None:
         self.closed = True
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+        self.call_tool_calls.append((tool_name, dict(arguments)))
+        return type(
+            "CallToolResult",
+            (),
+            {
+                "model_dump": lambda self, mode="python": {
+                    "content": [{"type": "text", "text": "ok"}],
+                    "isError": False,
+                }
+            },
+        )()
 
 
 class _FakeAsyncClient:
@@ -298,3 +313,47 @@ async def test_discover_http_server_uses_streamable_http_transport_and_replaces_
 
     await manager.shutdown(server.id)
     assert second_session.closed is True
+
+
+@pytest.mark.anyio
+async def test_call_tool_reuses_existing_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+
+    def fake_client_session(read_stream: object, write_stream: object) -> _FakeSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="tool-server",
+        name="tool-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    result = await manager.call_tool(server, tool_name="scan", arguments={"target": "demo"})
+    content = cast(list[dict[str, object]], result["content"])
+    first_item = content[0]
+
+    assert result["isError"] is False
+    assert first_item["text"] == "ok"
+    assert session.call_tool_calls == [("scan", {"target": "demo"})]
+    assert session.initialize_calls == 1

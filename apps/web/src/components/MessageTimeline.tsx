@@ -17,7 +17,8 @@ export function MessageTimeline({ messages }: MessageTimelineProps) {
 
       {messages.length === 0 ? (
         <p className="message-empty">
-          No messages in this session yet. Send a prompt below to create a retained transcript entry.
+          No messages in this session yet. Send a prompt below to create a retained transcript
+          entry.
         </p>
       ) : (
         <div className="message-list">
@@ -32,7 +33,8 @@ export function MessageTimeline({ messages }: MessageTimelineProps) {
                 <div className="attachment-list">
                   {message.attachments.map((attachment) => (
                     <span key={attachment.id} className="attachment-chip">
-                      {attachment.name} · {attachment.content_type} · {formatBytes(attachment.size_bytes)}
+                      {attachment.name} · {attachment.content_type} ·{" "}
+                      {formatBytes(attachment.size_bytes)}
                     </span>
                   ))}
                 </div>

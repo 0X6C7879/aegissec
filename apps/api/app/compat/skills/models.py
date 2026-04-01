@@ -34,8 +34,10 @@ class ParsedSkillRecordData:
     description: str
     compatibility: list[str]
     metadata: dict[str, object]
+    parameter_schema: dict[str, object]
     raw_frontmatter: dict[str, object]
     status: SkillRecordStatus
+    enabled: bool
     error_message: str | None
     content_hash: str
     last_scanned_at: datetime

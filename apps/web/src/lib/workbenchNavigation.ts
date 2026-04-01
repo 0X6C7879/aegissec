@@ -10,11 +10,19 @@ export type WorkbenchNavItem = {
 export const WORKBENCH_NAV_ITEMS: WorkbenchNavItem[] = [
   {
     id: "sessions",
-    label: "对话",
-    shortLabel: "SE",
-    description: "保留工作流、事件轨迹与工具输出。",
+    label: "Workspace",
+    shortLabel: "WS",
+    description: "主工作台：聊天、推进与按需展开的执行视图。",
     to: "/sessions",
     isActive: (pathname) => pathname.startsWith("/sessions"),
+  },
+  {
+    id: "runtime",
+    label: "Runtime",
+    shortLabel: "RT",
+    description: "查看容器状态、执行命令并对照会话策略。",
+    to: "/runtime",
+    isActive: (pathname) => pathname.startsWith("/runtime"),
   },
   {
     id: "skills",

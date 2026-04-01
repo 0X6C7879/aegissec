@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, cast
 
 import httpx
 
-from app.compat.mcp.models import DiscoveredMCPCapability, ImportedMCPServer
+from app.compat.mcp.models import DiscoveredMCPCapability, ImportedMCPServer, MCPHealthCheckResult
 from app.db.models import MCPCapabilityKind, MCPTransport
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -37,15 +39,59 @@ class MCPClientManager:
             self._connections.pop(server.id, None)
             raise
 
+    async def call_tool(
+        self,
+        server: ImportedMCPServer,
+        *,
+        tool_name: str,
+        arguments: dict[str, object],
+    ) -> dict[str, object]:
+        connection = await self._get_or_open_connection(server)
+        call_tool = getattr(connection.session, "call_tool", None)
+        if not callable(call_tool):
+            raise RuntimeError("MCP client session does not support call_tool().")
+        call_tool_fn = cast(Callable[[str, dict[str, object]], Awaitable[object]], call_tool)
+        result = await call_tool_fn(tool_name, arguments)
+        return self._payload_to_json_dict(result)
+
     async def shutdown(self, server_id: str) -> None:
         connection = self._connections.pop(server_id, None)
         if connection is not None:
             await connection.exit_stack.aclose()
 
+    async def check_health(self, server: ImportedMCPServer) -> MCPHealthCheckResult:
+        started = perf_counter()
+        try:
+            connection = await self._open_connection(server)
+            try:
+                await self._initialize(connection.session)
+            finally:
+                await connection.exit_stack.aclose()
+        except Exception as exc:
+            latency_ms = int((perf_counter() - started) * 1000)
+            return MCPHealthCheckResult(status="error", latency_ms=latency_ms, error=str(exc))
+
+        latency_ms = int((perf_counter() - started) * 1000)
+        return MCPHealthCheckResult(status="ok", latency_ms=latency_ms, error=None)
+
     async def _open_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
         if server.transport == MCPTransport.STDIO:
             return await self._open_stdio_connection(server)
         return await self._open_http_connection(server)
+
+    async def _get_or_open_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
+        existing = self._connections.get(server.id)
+        if existing is not None:
+            return existing
+        connection = await self._open_connection(server)
+        self._connections[server.id] = connection
+        try:
+            await self._initialize(connection.session)
+        except Exception:
+            await connection.exit_stack.aclose()
+            self._connections.pop(server.id, None)
+            raise
+        return connection
 
     async def _open_stdio_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
         if server.command is None:
@@ -99,7 +145,8 @@ class MCPClientManager:
         initialize = getattr(session, "initialize", None)
         if not callable(initialize):
             raise RuntimeError("MCP client session does not support initialize().")
-        await initialize()
+        initialize_fn = cast(Callable[[], Awaitable[object]], initialize)
+        await initialize_fn()
 
     async def _discover_capabilities(self, session: Any) -> list[DiscoveredMCPCapability]:
         capabilities: list[DiscoveredMCPCapability] = []
@@ -188,6 +235,21 @@ class MCPClientManager:
     @staticmethod
     def _make_json_safe(payload: dict[str, object]) -> dict[str, object]:
         return cast(dict[str, object], json.loads(json.dumps(payload, default=str)))
+
+    @staticmethod
+    def _payload_to_json_dict(payload: object) -> dict[str, object]:
+        model_dump = getattr(payload, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dumped = model_dump(mode="json")
+            except TypeError:
+                dumped = model_dump()
+            if isinstance(dumped, dict):
+                return MCPClientManager._make_json_safe(dumped)
+            return {"result": dumped}
+        if isinstance(payload, dict):
+            return MCPClientManager._make_json_safe(payload)
+        return {"result": payload}
 
     def _metadata(self, item: Any) -> dict[str, object]:
         payload = self._raw_payload(item)

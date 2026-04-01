@@ -5,6 +5,15 @@ import type {
   SessionSummary,
 } from "../types/sessions";
 
+const THINK_BLOCK_PATTERN = /<think>[\s\S]*?<\/think>/gi;
+const MAX_SAFE_SUMMARY_LENGTH = 280;
+
+export type SafeSessionSummaryEntry = {
+  label: string;
+  summary: string;
+  tone: "neutral" | "connected" | "warning" | "success" | "error";
+};
+
 function toTimestamp(value: string): number {
   return new Date(value).getTime();
 }
@@ -14,7 +23,9 @@ function isOptimisticUserMessage(message: SessionMessage): boolean {
 }
 
 export function sortSessions(sessions: SessionSummary[]): SessionSummary[] {
-  return [...sessions].sort((left, right) => toTimestamp(right.updated_at) - toTimestamp(left.updated_at));
+  return [...sessions].sort(
+    (left, right) => toTimestamp(right.updated_at) - toTimestamp(left.updated_at),
+  );
 }
 
 export function upsertSession(
@@ -38,7 +49,8 @@ export function mergeSessionMessage(
   const reconciledMessages =
     message.role === "user" && !isOptimisticUserMessage(message)
       ? remainingMessages.filter(
-          (item) => !(isOptimisticUserMessage(item) && item.content.trim() === message.content.trim()),
+          (item) =>
+            !(isOptimisticUserMessage(item) && item.content.trim() === message.content.trim()),
         )
       : remainingMessages;
   const nextMessages = [...reconciledMessages, message].sort(
@@ -63,6 +75,196 @@ export function mergeSessionMessages(
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function readFirstNonEmptyString(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): string | null {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function sanitizeSafeSummaryText(value: string): string {
+  const cleaned = value.replace(THINK_BLOCK_PATTERN, " ").replace(/\s+/g, " ").trim();
+  if (cleaned.length <= MAX_SAFE_SUMMARY_LENGTH) {
+    return cleaned;
+  }
+
+  return `${cleaned.slice(0, MAX_SAFE_SUMMARY_LENGTH - 1).trimEnd()}…`;
+}
+
+function buildSessionStatusSummary(value: Record<string, unknown>): SafeSessionSummaryEntry | null {
+  const status = typeof value.status === "string" ? value.status : null;
+  if (!status) {
+    return null;
+  }
+
+  const queuedPromptCount =
+    typeof value.queued_prompt_count === "number" && value.queued_prompt_count > 0
+      ? value.queued_prompt_count
+      : null;
+
+  switch (status) {
+    case "running":
+      return {
+        label: "模型进度",
+        summary: queuedPromptCount
+          ? `正在生成回复，后面还有 ${queuedPromptCount} 条提示排队。`
+          : "正在生成回复，可继续整理下一条提示。",
+        tone: "connected",
+      };
+    case "done":
+      return {
+        label: "模型进度",
+        summary: "当前回复已完成，可继续发送下一条提示。",
+        tone: "success",
+      };
+    case "cancelled":
+      return {
+        label: "中断反馈",
+        summary: "当前回复已停止，可立即继续下一步。",
+        tone: "warning",
+      };
+    case "error": {
+      const errorMessage = readFirstNonEmptyString(value, ["error", "message"]);
+      return {
+        label: "模型进度",
+        summary: errorMessage
+          ? `生成过程中出现异常：${sanitizeSafeSummaryText(errorMessage)}`
+          : "生成过程中出现异常。",
+        tone: "error",
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function isAssistantSummaryType(type: string): boolean {
+  return (
+    type === "assistant.summary" ||
+    type === "assistant.status" ||
+    type.startsWith("assistant.summary.") ||
+    type.startsWith("assistant.progress.") ||
+    type === "assistant.progress"
+  );
+}
+
+export function extractSafeSessionSummary(
+  type: string,
+  data: unknown,
+): SafeSessionSummaryEntry | null {
+  if (!isRecord(data)) {
+    return null;
+  }
+
+  if (type === "generation.started") {
+    const queuedPromptCount =
+      typeof data.queued_prompt_count === "number" && data.queued_prompt_count > 0
+        ? data.queued_prompt_count
+        : null;
+
+    return {
+      label: "模型进度",
+      summary: queuedPromptCount
+        ? `新一轮生成已开始，后面还有 ${queuedPromptCount} 条提示等待处理。`
+        : "新一轮生成已开始，助手正在整理回复。",
+      tone: "connected",
+    };
+  }
+
+  if (type === "generation.cancelled") {
+    return {
+      label: "中断反馈",
+      summary: "当前回复已停止，已保留到目前为止的可见输出。",
+      tone: "warning",
+    };
+  }
+
+  if (type === "session.updated") {
+    const queuedPromptCount =
+      typeof data.queued_prompt_count === "number" && data.queued_prompt_count > 0
+        ? data.queued_prompt_count
+        : null;
+    if (queuedPromptCount !== null) {
+      const summaryText = readFirstNonEmptyString(data, [
+        "queued_prompt_summary",
+        "queued_prompt_message",
+      ]);
+      return {
+        label: "排队提示",
+        summary: summaryText
+          ? sanitizeSafeSummaryText(summaryText)
+          : `已有 ${queuedPromptCount} 条提示在排队区等待执行。`,
+        tone: "neutral",
+      };
+    }
+
+    return buildSessionStatusSummary(data);
+  }
+
+  if (!isAssistantSummaryType(type)) {
+    return null;
+  }
+
+  const summaryText = readFirstNonEmptyString(data, [
+    "safe_summary",
+    "summary",
+    "message",
+    "status_text",
+  ]);
+
+  if (!summaryText) {
+    return null;
+  }
+
+  const status = typeof data.status === "string" ? data.status : null;
+  const phase = typeof data.phase === "string" ? data.phase : null;
+  const label =
+    readFirstNonEmptyString(data, ["label", "title"]) ??
+    (phase ? `思路摘要 · ${phase.replace(/_/g, " ")}` : "思路摘要");
+
+  return {
+    label,
+    summary: sanitizeSafeSummaryText(summaryText),
+    tone:
+      status === "error"
+        ? "error"
+        : status === "cancelled"
+          ? "warning"
+          : status === "done"
+            ? "success"
+            : status === "running"
+              ? "connected"
+              : "neutral",
+  };
+}
+
+export function shouldStoreRealtimeEvent(type: string, data: unknown): boolean {
+  if (type === "message.created" || type === "message.updated") {
+    return false;
+  }
+
+  if (type === "assistant.trace") {
+    return isRecord(data) && data.status === "error";
+  }
+
+  if (type === "session.updated") {
+    return extractSafeSessionSummary(type, data) !== null;
+  }
+
+  if (isAssistantSummaryType(type)) {
+    return extractSafeSessionSummary(type, data) !== null;
+  }
+
+  return true;
 }
 
 export function isSessionSummary(value: unknown): value is SessionSummary {
@@ -154,6 +356,11 @@ export function toSessionMessageEvent(
 }
 
 export function buildEventSummary(type: string, data: unknown): string {
+  const safeSummary = extractSafeSessionSummary(type, data);
+  if (safeSummary) {
+    return safeSummary.summary;
+  }
+
   if (type.startsWith("session.") && isRecord(data)) {
     const title = typeof data.title === "string" ? data.title : "当前会话";
     const status = typeof data.status === "string" ? data.status : "已更新";

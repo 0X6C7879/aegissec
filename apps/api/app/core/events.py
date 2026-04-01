@@ -15,8 +15,11 @@ class SessionEventType(str, Enum):
     SESSION_UPDATED = "session.updated"
     SESSION_DELETED = "session.deleted"
     SESSION_RESTORED = "session.restored"
+    GENERATION_STARTED = "generation.started"
+    GENERATION_CANCELLED = "generation.cancelled"
     MESSAGE_CREATED = "message.created"
     MESSAGE_UPDATED = "message.updated"
+    ASSISTANT_SUMMARY = "assistant.summary"
     ASSISTANT_TRACE = "assistant.trace"
     TOOL_CALL_STARTED = "tool.call.started"
     TOOL_CALL_FINISHED = "tool.call.finished"
@@ -24,6 +27,11 @@ class SessionEventType(str, Enum):
     WORKFLOW_RUN_STARTED = "workflow.run.started"
     WORKFLOW_STAGE_CHANGED = "workflow.stage.changed"
     WORKFLOW_TASK_UPDATED = "workflow.task.updated"
+    TASK_PLANNED = "task.planned"
+    TASK_STARTED = "task.started"
+    TASK_FINISHED = "task.finished"
+    APPROVAL_REQUIRED = "workflow.approval.required"
+    WORKFLOW_APPROVAL_REQUIRED = "workflow.approval.required"
     GRAPH_UPDATED = "graph.updated"
 
 

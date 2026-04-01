@@ -1,6 +1,15 @@
 export type RuntimeStatus = "missing" | "stopped" | "running";
 
-export type RuntimeRunStatus = "success" | "failed" | "timeout";
+export type RuntimeRunStatus = "success" | "failed" | "timeout" | (string & {});
+
+export type RuntimeHealthStatus = "ok" | "degraded" | (string & {});
+
+export type RuntimePolicy = {
+  allow_network: boolean;
+  allow_write: boolean;
+  max_execution_seconds: number;
+  max_command_length: number;
+};
 
 export type RuntimeArtifact = {
   id: string;
@@ -13,6 +22,17 @@ export type RuntimeArtifact = {
 
 export type RuntimeState = {
   status: RuntimeStatus;
+  container_name: string;
+  image: string;
+  container_id: string | null;
+  workspace_host_path: string;
+  workspace_container_path: string;
+  started_at: string | null;
+};
+
+export type RuntimeHealth = {
+  status: RuntimeHealthStatus;
+  runtime_status: RuntimeStatus;
   container_name: string;
   image: string;
   container_id: string | null;
@@ -43,9 +63,20 @@ export type RuntimeStatusResponse = {
   recent_artifacts: RuntimeArtifact[];
 };
 
+export type RuntimeProfile = {
+  name: string;
+  policy: RuntimePolicy;
+};
+
+export type RuntimeArtifactsCleanupResult = {
+  deleted_files: number;
+  deleted_rows: number;
+  kept: number;
+};
+
 export type RuntimeExecuteRequest = {
   command: string;
-  timeout_seconds?: number;
+  timeout_seconds?: number | null;
   session_id?: string | null;
   artifact_paths: string[];
 };

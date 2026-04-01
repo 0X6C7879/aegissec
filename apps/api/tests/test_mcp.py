@@ -6,6 +6,7 @@ from pytest import MonkeyPatch
 
 from app.core.settings import Settings
 from app.main import app
+from tests.utils import api_data
 
 
 def test_default_mcp_import_targets_cover_supported_sources(tmp_path: Path) -> None:
@@ -17,11 +18,90 @@ def test_default_mcp_import_targets_cover_supported_sources(tmp_path: Path) -> N
 
     targets = default_mcp_import_targets(repo_root=repo_root, home_dir=home_dir)
 
-    assert [(target.source, target.scope, Path(target.file_path)) for target in targets] == [
+    discovered = {(target.source, target.scope, Path(target.file_path)) for target in targets}
+    assert {
         (CompatibilitySource.CLAUDE, CompatibilityScope.PROJECT, repo_root / ".mcp.json"),
         (CompatibilitySource.CLAUDE, CompatibilityScope.USER, home_dir / ".claude.json"),
         (CompatibilitySource.OPENCODE, CompatibilityScope.PROJECT, repo_root / "opencode.json"),
-    ]
+        (
+            CompatibilitySource.OPENCODE,
+            CompatibilityScope.PROJECT,
+            repo_root / ".opencode" / "mcp.json",
+        ),
+        (CompatibilitySource.OPENCODE, CompatibilityScope.PROJECT, repo_root / ".opencode.json"),
+        (
+            CompatibilitySource.OPENCODE,
+            CompatibilityScope.USER,
+            home_dir / ".config" / "opencode" / "opencode.json",
+        ),
+        (
+            CompatibilitySource.OPENCODE,
+            CompatibilityScope.USER,
+            home_dir / ".config" / "opencode" / "mcp.json",
+        ),
+        (
+            CompatibilitySource.AGENTS,
+            CompatibilityScope.PROJECT,
+            repo_root / ".agents" / "mcp.json",
+        ),
+        (CompatibilitySource.AGENTS, CompatibilityScope.USER, home_dir / ".agents" / "mcp.json"),
+    }.issubset(discovered)
+
+
+def test_importer_supports_opencode_and_agents_adjacent_variants(tmp_path: Path) -> None:
+    from app.compat.mcp.importer import MCPImportTarget, import_mcp_servers
+    from app.db.models import CompatibilityScope, CompatibilitySource
+
+    project_root = tmp_path / "repo"
+    _write_json(
+        project_root / ".opencode" / "mcp.json",
+        {
+            "mcp": {
+                "op-remote": {
+                    "type": "remote",
+                    "endpoint": "https://remote.example.test/mcp",
+                    "http_headers": {"X-Test": "1"},
+                    "timeout": "7000",
+                }
+            }
+        },
+    )
+    _write_json(
+        project_root / ".agents" / "mcp.json",
+        {
+            "agents": {
+                "mcpServers": {
+                    "agent-local": {
+                        "cmd": "python",
+                        "arguments": ["-m", "agent_server"],
+                        "environment": {"MODE": "test"},
+                    }
+                }
+            }
+        },
+    )
+
+    imported = import_mcp_servers(
+        [
+            MCPImportTarget(
+                source=CompatibilitySource.OPENCODE,
+                scope=CompatibilityScope.PROJECT,
+                file_path=(project_root / ".opencode" / "mcp.json").as_posix(),
+            ),
+            MCPImportTarget(
+                source=CompatibilitySource.AGENTS,
+                scope=CompatibilityScope.PROJECT,
+                file_path=(project_root / ".agents" / "mcp.json").as_posix(),
+            ),
+        ]
+    )
+    by_name = {server.name: server for server in imported}
+    assert by_name["op-remote"].url == "https://remote.example.test/mcp"
+    assert by_name["op-remote"].headers == {"X-Test": "1"}
+    assert by_name["op-remote"].timeout_ms == 7000
+    assert by_name["agent-local"].command == "python"
+    assert by_name["agent-local"].args == ["-m", "agent_server"]
+    assert by_name["agent-local"].env == {"MODE": "test"}
 
 
 def test_mcp_import_lists_servers_and_discovered_capabilities(
@@ -177,7 +257,7 @@ def test_mcp_import_lists_servers_and_discovered_capabilities(
         import_response = client.post("/api/mcp/import")
         assert import_response.status_code == 200
 
-        servers = import_response.json()
+        servers = api_data(import_response)
         assert [(server["source"], server["scope"], server["name"]) for server in servers] == [
             ("claude", "project", "claude-local"),
             ("claude", "project", "claude-remote"),
@@ -220,12 +300,13 @@ def test_mcp_import_lists_servers_and_discovered_capabilities(
 
         list_response = client.get("/api/mcp/servers")
         assert list_response.status_code == 200
-        assert list_response.json() == servers
+        assert api_data(list_response) == servers
 
         detail_response = client.get(f"/api/mcp/servers/{claude_local['id']}")
         assert detail_response.status_code == 200
-        assert detail_response.json()["name"] == "claude-local"
-        assert detail_response.json()["capabilities"][0]["name"] == "scan"
+        detail_payload = api_data(detail_response)
+        assert detail_payload["name"] == "claude-local"
+        assert detail_payload["capabilities"][0]["name"] == "scan"
     finally:
         mcp_service_module.resolve_mcp_import_targets = original_resolver
         app.dependency_overrides.pop(get_mcp_client_manager, None)
@@ -294,7 +375,7 @@ def test_mcp_import_serializes_non_json_capability_payloads(
 
         import_response = client.post("/api/mcp/import")
         assert import_response.status_code == 200
-        capability = import_response.json()[0]["capabilities"][0]
+        capability = api_data(import_response)[0]["capabilities"][0]
         assert capability["metadata"] == {"endpoint": "http://127.0.0.1:8765/mcp"}
         assert capability["input_schema"] == {"endpoint": "http://127.0.0.1:8765/mcp"}
         assert capability["raw_payload"] == {"endpoint": "http://127.0.0.1:8765/mcp"}
@@ -372,20 +453,21 @@ def test_mcp_toggle_and_refresh_update_server_state(
 
         import_response = client.post("/api/mcp/import")
         assert import_response.status_code == 200
-        server_id = import_response.json()[0]["id"]
+        server_id = api_data(import_response)[0]["id"]
 
         toggle_on_response = client.post(
             f"/api/mcp/servers/{server_id}/toggle",
             json={"enabled": True},
         )
         assert toggle_on_response.status_code == 200
-        assert toggle_on_response.json()["enabled"] is True
-        assert toggle_on_response.json()["status"] == MCPServerStatus.CONNECTED
-        assert toggle_on_response.json()["capabilities"][0]["name"] == "collect"
+        toggle_on_payload = api_data(toggle_on_response)
+        assert toggle_on_payload["enabled"] is True
+        assert toggle_on_payload["status"] == MCPServerStatus.CONNECTED
+        assert toggle_on_payload["capabilities"][0]["name"] == "collect"
 
         refresh_response = client.post(f"/api/mcp/servers/{server_id}/refresh")
         assert refresh_response.status_code == 200
-        assert refresh_response.json()["status"] == MCPServerStatus.CONNECTED
+        assert api_data(refresh_response)["status"] == MCPServerStatus.CONNECTED
         assert fake_manager.discover_calls.count("open-local") == 2
 
         toggle_off_response = client.post(
@@ -393,19 +475,218 @@ def test_mcp_toggle_and_refresh_update_server_state(
             json={"enabled": False},
         )
         assert toggle_off_response.status_code == 200
-        assert toggle_off_response.json()["enabled"] is False
-        assert toggle_off_response.json()["status"] == MCPServerStatus.INACTIVE
+        toggle_off_payload = api_data(toggle_off_response)
+        assert toggle_off_payload["enabled"] is False
+        assert toggle_off_payload["status"] == MCPServerStatus.INACTIVE
         assert fake_manager.shutdown_calls == [server_id]
     finally:
         mcp_service_module.resolve_mcp_import_targets = original_resolver
         app.dependency_overrides.pop(get_mcp_client_manager, None)
 
 
+def test_mcp_health_check_updates_last_known_health_non_blocking_list(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.compat.mcp.importer import MCPImportTarget
+    from app.compat.mcp.models import DiscoveredMCPCapability
+    from app.compat.mcp.service import get_mcp_client_manager
+    from app.db.models import CompatibilityScope, CompatibilitySource, MCPCapabilityKind
+
+    project_root = tmp_path / "project"
+    _write_json(
+        project_root / "opencode.json",
+        {"mcp": {"open-local": {"type": "local", "command": ["node", "server.js"]}}},
+    )
+
+    class _HealthFakeManager(_FakeMCPClientManager):
+        async def check_health(self, server: object) -> object:
+            del server
+            return type("Health", (), {"status": "ok", "latency_ms": 12, "error": None})()
+
+    fake_manager = _HealthFakeManager(
+        capabilities_by_server={
+            "open-local": [
+                DiscoveredMCPCapability(
+                    kind=MCPCapabilityKind.TOOL,
+                    name="collect",
+                    title="Collect",
+                    description="Collect data",
+                    uri=None,
+                    metadata={},
+                    input_schema={"type": "object"},
+                    raw_payload={"name": "collect"},
+                )
+            ]
+        }
+    )
+    app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
+
+    try:
+        from app.compat.mcp import service as mcp_service_module
+
+        original_resolver = mcp_service_module.resolve_mcp_import_targets
+        monkeypatch.setattr(
+            mcp_service_module,
+            "resolve_mcp_import_targets",
+            lambda _settings: [
+                MCPImportTarget(
+                    source=CompatibilitySource.OPENCODE,
+                    scope=CompatibilityScope.PROJECT,
+                    file_path=(project_root / "opencode.json").as_posix(),
+                )
+            ],
+        )
+
+        imported = client.post("/api/mcp/import")
+        assert imported.status_code == 200
+        server_id = api_data(imported)[0]["id"]
+
+        listed_before = client.get("/api/mcp/servers")
+        assert listed_before.status_code == 200
+        assert api_data(listed_before)[0]["health_status"] in {None, "ok"}
+
+        health = client.post(f"/api/mcp/servers/{server_id}/health")
+        assert health.status_code == 200
+        health_payload = api_data(health)
+        assert health_payload["health_status"] == "ok"
+        assert health_payload["health_latency_ms"] == 12
+        assert health_payload["health_error"] is None
+
+        listed_after = client.get("/api/mcp/servers")
+        assert listed_after.status_code == 200
+        after_payload = api_data(listed_after)[0]
+        assert after_payload["health_status"] == "ok"
+        assert after_payload["health_latency_ms"] == 12
+    finally:
+        mcp_service_module.resolve_mcp_import_targets = original_resolver
+        app.dependency_overrides.pop(get_mcp_client_manager, None)
+
+
+def test_mcp_manual_registration_invocation_and_import_preserves_manual_servers(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.compat.mcp.importer import MCPImportTarget
+    from app.compat.mcp.models import DiscoveredMCPCapability
+    from app.compat.mcp.service import get_mcp_client_manager
+    from app.db.models import CompatibilityScope, CompatibilitySource, MCPCapabilityKind
+
+    project_root = tmp_path / "project"
+    _write_json(
+        project_root / "opencode.json",
+        {
+            "mcp": {
+                "open-local": {
+                    "type": "local",
+                    "command": ["node", "server.js"],
+                }
+            }
+        },
+    )
+
+    fake_manager = _FakeMCPClientManager(
+        capabilities_by_server={
+            "manual-demo": [
+                DiscoveredMCPCapability(
+                    kind=MCPCapabilityKind.TOOL,
+                    name="manual_tool",
+                    title="Manual Tool",
+                    description="Manual tool invocation",
+                    uri=None,
+                    metadata={},
+                    input_schema={"type": "object"},
+                    raw_payload={"name": "manual_tool"},
+                )
+            ],
+            "open-local": [
+                DiscoveredMCPCapability(
+                    kind=MCPCapabilityKind.TOOL,
+                    name="collect",
+                    title="Collect",
+                    description="Collect data",
+                    uri=None,
+                    metadata={},
+                    input_schema={"type": "object"},
+                    raw_payload={"name": "collect"},
+                )
+            ],
+        },
+        tool_results={
+            ("manual-demo", "manual_tool"): {
+                "content": [{"type": "text", "text": "manual-ok"}],
+                "isError": False,
+            }
+        },
+    )
+    app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
+
+    try:
+        from app.compat.mcp import service as mcp_service_module
+
+        original_resolver = mcp_service_module.resolve_mcp_import_targets
+
+        def override_resolve_mcp_import_targets(_settings: Settings) -> list[MCPImportTarget]:
+            return [
+                MCPImportTarget(
+                    source=CompatibilitySource.OPENCODE,
+                    scope=CompatibilityScope.PROJECT,
+                    file_path=(project_root / "opencode.json").as_posix(),
+                )
+            ]
+
+        monkeypatch.setattr(
+            mcp_service_module,
+            "resolve_mcp_import_targets",
+            override_resolve_mcp_import_targets,
+        )
+
+        manual_register_response = client.post(
+            "/api/mcp/register",
+            json={
+                "name": "manual-demo",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["-m", "manual_mcp"],
+            },
+        )
+        assert manual_register_response.status_code == 200
+        manual_server = api_data(manual_register_response)
+        assert manual_server["name"] == "manual-demo"
+        assert manual_server["config_path"].startswith("manual://")
+
+        invoke_response = client.post(
+            f"/api/mcp/servers/{manual_server['id']}/tools/manual_tool/invoke",
+            json={"arguments": {"target": "demo"}},
+        )
+        assert invoke_response.status_code == 200
+        invoke_payload = api_data(invoke_response)
+        assert invoke_payload["result"]["content"][0]["text"] == "manual-ok"
+
+        import_response = client.post("/api/mcp/import")
+        assert import_response.status_code == 200
+        servers = api_data(import_response)
+        names = [server["name"] for server in servers]
+        assert "manual-demo" in names
+        assert "open-local" in names
+    finally:
+        mcp_service_module.resolve_mcp_import_targets = original_resolver
+        app.dependency_overrides.pop(get_mcp_client_manager, None)
+
+
 class _FakeMCPClientManager:
-    def __init__(self, capabilities_by_server: dict[str, list[object]]) -> None:
+    def __init__(
+        self,
+        capabilities_by_server: dict[str, list[object]],
+        tool_results: dict[tuple[str, str], dict[str, object]] | None = None,
+    ) -> None:
         self._capabilities_by_server = capabilities_by_server
+        self._tool_results = tool_results or {}
         self.discover_calls: list[str] = []
         self.shutdown_calls: list[str] = []
+        self.tool_calls: list[tuple[str, str, dict[str, object]]] = []
 
     async def discover(self, server: object) -> list[object]:
         server_name = getattr(server, "name")
@@ -414,6 +695,17 @@ class _FakeMCPClientManager:
 
     async def shutdown(self, server_id: str) -> None:
         self.shutdown_calls.append(server_id)
+
+    async def call_tool(
+        self,
+        server: object,
+        *,
+        tool_name: str,
+        arguments: dict[str, object],
+    ) -> dict[str, object]:
+        server_name = getattr(server, "name")
+        self.tool_calls.append((server_name, tool_name, dict(arguments)))
+        return dict(self._tool_results.get((server_name, tool_name), {"content": []}))
 
 
 def _write_json(path: Path, content: dict[str, object]) -> None:

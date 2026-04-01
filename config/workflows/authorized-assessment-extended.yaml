@@ -1,0 +1,64 @@
+name: authorized-assessment-extended
+title: 授权验证流程（扩展）
+description: 面向授权环境的扩展验证模板，强调上下文治理与证据可追溯性。
+template_kinds:
+  - recon
+  - analysis
+  - validation
+  - reporting
+stages:
+  - key: scope_guard
+    title: 范围确认
+    role: coordinator
+    phase: recon
+    role_prompt: 先确认授权边界与禁测项，再进入后续执行。
+    sub_agent_role_prompt: 将授权材料结构化并写入会话上下文。
+  - key: runtime_boot
+    title: 环境启动
+    role: operator
+    phase: recon
+    role_prompt: 在隔离且可审计的策略下完成运行时准备。
+    sub_agent_role_prompt: 对关键安全开关进行双重校验并留痕。
+  - key: skill_mcp_sync
+    title: Skill/MCP 同步
+    role: researcher
+    phase: analysis
+    role_prompt: 同步可用能力并筛选与目标关联度最高的工具链。
+    sub_agent_role_prompt: 标注能力快照来源与可用约束。
+  - key: context_collect
+    title: 上下文收集
+    role: researcher
+    phase: analysis
+    role_prompt: 按资产、入口、线索维度分层收集上下文。
+    sub_agent_role_prompt: 输出证据清单并附带可信度。
+  - key: hypothesis_build
+    title: 假设生成
+    role: planner
+    phase: analysis
+    role_prompt: 形成最小化风险且可验证的假设路径。
+    sub_agent_role_prompt: 绑定假设与证据、依赖、回滚条件。
+  - key: safe_validation
+    title: 低风险验证
+    role: operator
+    phase: validation
+    role_prompt: 执行低风险验证并在异常时即时中断。
+    sub_agent_role_prompt: 固化执行输入输出，禁止越界验证动作。
+    requires_approval: true
+  - key: findings_merge
+    title: 发现归并
+    role: reporter
+    phase: reporting
+    role_prompt: 合并发现并给出统一结论口径。
+    sub_agent_role_prompt: 归并重复证据并补齐置信度注释。
+  - key: causal_graph_update
+    title: 因果图更新
+    role: coordinator
+    phase: reporting
+    role_prompt: 更新证据与结论之间的因果关系图。
+    sub_agent_role_prompt: 保证每条关系可追溯到执行记录。
+  - key: report_export
+    title: 报告导出
+    role: reporter
+    phase: reporting
+    role_prompt: 输出可复盘的报告与证据索引。
+    sub_agent_role_prompt: 保留关键上下文摘要，便于复审与回放。

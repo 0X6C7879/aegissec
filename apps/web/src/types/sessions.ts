@@ -2,6 +2,7 @@ export type SessionStatus =
   | "idle"
   | "running"
   | "paused"
+  | "cancelled"
   | "error"
   | "done"
   | (string & {});
@@ -15,10 +16,17 @@ export type AttachmentMetadata = {
   size_bytes: number;
 };
 
+export type RuntimePolicy = Record<string, unknown>;
+
 export type SessionSummary = {
   id: string;
   title: string;
   status: SessionStatus;
+  project_id: string | null;
+  goal: string | null;
+  scenario_type: string | null;
+  current_phase: string | null;
+  runtime_policy_json: RuntimePolicy | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

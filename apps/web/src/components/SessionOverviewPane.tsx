@@ -58,8 +58,8 @@ export function SessionOverviewPane({
 
       {session.deleted_at ? (
         <div className="notice">
-          This session has been soft deleted. Restore it to continue the conversation or retain it as
-          part of your authorized research record.
+          This session has been soft deleted. Restore it to continue the conversation or retain it
+          as part of your authorized research record.
         </div>
       ) : null}
 
@@ -73,13 +73,17 @@ export function SessionOverviewPane({
         <article className="summary-card">
           <p className="summary-label">Last activity</p>
           <p className="summary-value">{formatDateTime(session.updated_at)}</p>
-          <p className="session-meta-copy">Status and title changes stay aligned with backend state.</p>
+          <p className="session-meta-copy">
+            Status and title changes stay aligned with backend state.
+          </p>
         </article>
 
         <article className="summary-card">
           <p className="summary-label">Retention</p>
           <p className="summary-value">{session.deleted_at ? "Soft deleted" : "Active"}</p>
-          <p className="session-meta-copy">Deleted sessions remain restorable for audit continuity.</p>
+          <p className="session-meta-copy">
+            Deleted sessions remain restorable for audit continuity.
+          </p>
         </article>
       </div>
 

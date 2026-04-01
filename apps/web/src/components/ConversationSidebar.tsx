@@ -6,6 +6,7 @@ type ConversationSidebarProps = {
   activeSessionId: string | null;
   collapsed: boolean;
   isCreating: boolean;
+  extraSections?: React.ReactNode;
   onCreate: () => Promise<void>;
   onToggleCollapsed: () => void;
   onSelect: (sessionId: string) => void;
@@ -23,6 +24,7 @@ export function ConversationSidebar({
   activeSessionId,
   collapsed,
   isCreating,
+  extraSections,
   onCreate,
   onToggleCollapsed,
   onSelect,
@@ -39,7 +41,9 @@ export function ConversationSidebar({
       return sessions;
     }
 
-    return sessions.filter((session) => getSessionTitle(session.title).toLowerCase().includes(keyword));
+    return sessions.filter((session) =>
+      getSessionTitle(session.title).toLowerCase().includes(keyword),
+    );
   }, [searchValue, sessions]);
 
   async function handleRename(sessionId: string): Promise<void> {
@@ -58,7 +62,9 @@ export function ConversationSidebar({
   }
 
   return (
-    <aside className={`conversation-sidebar-shell${collapsed ? " conversation-sidebar-shell-collapsed" : ""}`}>
+    <aside
+      className={`conversation-sidebar-shell${collapsed ? " conversation-sidebar-shell-collapsed" : ""}`}
+    >
       <section className="conversation-sidebar">
         <div className="conversation-sidebar-actions">
           <button
@@ -79,8 +85,7 @@ export function ConversationSidebar({
                 xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
                 focusable="false"
-              >
-              </svg>
+              ></svg>
             </span>
           </button>
 
@@ -95,7 +100,9 @@ export function ConversationSidebar({
             <span className="conversation-new-button-icon" aria-hidden="true">
               +
             </span>
-            <span className="conversation-new-button-label">{isCreating ? "创建中" : "新对话"}</span>
+            <span className="conversation-new-button-label">
+              {isCreating ? "创建中" : "新对话"}
+            </span>
           </button>
         </div>
 
@@ -123,7 +130,9 @@ export function ConversationSidebar({
 
                   return (
                     <li key={session.id} className="conversation-item-shell">
-                      <div className={`conversation-item-card${isActive ? " conversation-item-card-active" : ""}`}>
+                      <div
+                        className={`conversation-item-card${isActive ? " conversation-item-card-active" : ""}`}
+                      >
                         <button
                           className="conversation-item-main"
                           type="button"
@@ -133,8 +142,13 @@ export function ConversationSidebar({
                           }}
                         >
                           <div className="conversation-link-row">
-                            <span className={`conversation-link-dot status-${session.status}`} aria-hidden="true" />
-                            <span className="conversation-link-title">{getSessionTitle(session.title)}</span>
+                            <span
+                              className={`conversation-link-dot status-${session.status}`}
+                              aria-hidden="true"
+                            />
+                            <span className="conversation-link-title">
+                              {getSessionTitle(session.title)}
+                            </span>
                           </div>
                           {session.deleted_at ? (
                             <div className="conversation-link-row conversation-link-meta-row">
@@ -164,11 +178,17 @@ export function ConversationSidebar({
                                 重命名
                               </button>
                               {session.deleted_at ? (
-                                <button type="button" onClick={() => void handleRestore(session.id)}>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRestore(session.id)}
+                                >
                                   恢复对话
                                 </button>
                               ) : (
-                                <button type="button" onClick={() => void handleArchive(session.id)}>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleArchive(session.id)}
+                                >
                                   归档对话
                                 </button>
                               )}
@@ -182,6 +202,10 @@ export function ConversationSidebar({
               </ul>
             )}
           </div>
+
+          {extraSections ? (
+            <div className="conversation-sidebar-extra-sections">{extraSections}</div>
+          ) : null}
         </div>
       </section>
     </aside>
