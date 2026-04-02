@@ -97,11 +97,6 @@ export function WorkbenchComposer({
     <section className="workbench-composer-shell">
       <div className="workbench-composer-status-row">
         <div className="workbench-composer-status-copy">
-          <span
-            className={`workbench-composer-mode-pill${isGenerating ? " workbench-composer-mode-pill-active" : ""}`}
-          >
-            {isGenerating ? "回复中" : "准备发送"}
-          </span>
           <p className="workbench-composer-hint">{composerHint}</p>
         </div>
       </div>

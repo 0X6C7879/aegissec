@@ -174,14 +174,6 @@ function getTaskStatusTone(status: string | null): string {
   }
 }
 
-function formatStageFallback(stage: string | null): string {
-  if (!stage) {
-    return "未开始";
-  }
-
-  return stage.replace(/_/g, " · ");
-}
-
 function formatConfidence(value: number | null): string | null {
   if (value === null) {
     return null;
@@ -1807,20 +1799,6 @@ export function SessionWorkspaceWorkbench() {
     },
   });
 
-  const switchBranchMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, branchId }: { sessionId: string; branchId: string }) =>
-      updateSession(targetSessionId, { active_branch_id: branchId }),
-    onSuccess: async (updatedSession) => {
-      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
-        upsertSession(currentValue, updatedSession),
-      );
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["conversation", updatedSession.id] }),
-        queryClient.invalidateQueries({ queryKey: ["session-queue", updatedSession.id] }),
-      ]);
-    },
-  });
-
   const invalidateWorkflowViews = useCallback(
     async (targetSessionId: string, targetRunId: string | null): Promise<void> => {
       const invalidations = [
@@ -1926,17 +1904,6 @@ export function SessionWorkspaceWorkbench() {
     workflowQuery.data?.status === "needs_approval" ||
     workflowQuery.data?.state.approval?.required === true;
   const currentTaskNode = getCurrentTaskNode(taskGraph);
-  const currentStageLabel =
-    currentTaskNode?.label ??
-    workflowQuery.data?.current_stage ??
-    formatStageFallback(
-      taskGraph?.current_stage ??
-        evidenceGraph?.current_stage ??
-        causalGraph?.current_stage ??
-        activeSession?.current_phase ??
-        null,
-    );
-
   const selectedGraphNode = getSelectedGraphNode(
     selectedNode,
     taskGraph,
@@ -2085,32 +2052,6 @@ export function SessionWorkspaceWorkbench() {
                 <h2 className="conversation-title">
                   {getSessionDisplayTitle(activeSession.title)}
                 </h2>
-                <p className="management-unified-description">当前阶段：{currentStageLabel}</p>
-                {activeConversation.branches.length > 0 ? (
-                  <label className="field-label workspace-inline-field">
-                    对话分支
-                    <select
-                      className="field-inline-input"
-                      value={activeConversation.active_branch?.id ?? ""}
-                      onChange={(event) => {
-                        const branchId = event.target.value;
-                        if (!branchId || branchId === activeConversation.active_branch?.id) {
-                          return;
-                        }
-                        void switchBranchMutation.mutateAsync({
-                          sessionId: activeSession.id,
-                          branchId,
-                        });
-                      }}
-                    >
-                      {activeConversation.branches.map((branch) => (
-                        <option key={branch.id} value={branch.id}>
-                          {branch.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
               </div>
 
               <div className="conversation-header-actions workspace-session-header-actions">
