@@ -4,12 +4,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.agent.context_models import ContextSnapshot
+from app.agent.context_projection import ContextProjectionBuilder
 from app.agent.executor import ExecutionResult, Executor
 from app.agent.loop_models import LoopSelectedTask, WorkflowCycleArtifact, WorkflowLoopState
+from app.agent.memory import MemoryManager
+from app.agent.prompting import build_workflow_prompting_state
 from app.agent.reflector import ReflectionResult, Reflector
+from app.agent.retrieval import RetrievalPipeline
 from app.agent.selection import RunnableSelection, WorkflowRunnableSelector
 from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
-from app.db.models import TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
+from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
+from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
+from app.services.capabilities import CapabilityFacade
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,10 @@ class WorkflowLoopEngine:
         reflector: Reflector,
         max_active_execution_records: int,
         max_active_messages: int,
+        session_repository: SessionRepository,
+        run_log_repository: RunLogRepository,
+        graph_repository: GraphRepository,
+        capability_facade: CapabilityFacade,
         selector: WorkflowRunnableSelector | None = None,
         runtime: WorkflowGraphRuntime | None = None,
     ) -> None:
@@ -39,8 +50,17 @@ class WorkflowLoopEngine:
         self._reflector = reflector
         self._max_active_execution_records = max_active_execution_records
         self._max_active_messages = max_active_messages
+        self._session_repository = session_repository
+        self._graph_repository = graph_repository
+        self._capability_facade = capability_facade
+        self._retrieval_pipeline = RetrievalPipeline(run_log_repository=run_log_repository)
+        self._memory_manager = MemoryManager()
+        self._context_projection_builder = ContextProjectionBuilder()
         self._runtime = runtime or WorkflowGraphRuntime()
-        self._selector = selector or WorkflowRunnableSelector(self._runtime)
+        self._selector = selector or WorkflowRunnableSelector(
+            self._runtime,
+            self._executor.resolve_tool_spec,
+        )
 
     def advance(
         self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
@@ -48,7 +68,14 @@ class WorkflowLoopEngine:
         mutable_state = dict(run.state_json)
         self._ensure_batch_contract(mutable_state)
         loop_state = WorkflowLoopState.from_state(mutable_state)
+        session = self._session_repository.get_session(run.session_id)
         self._runtime.materialize_ready_tasks(tasks)
+        context_snapshot = self._build_context_snapshot(
+            run=run,
+            session=session,
+            mutable_state=mutable_state,
+            tasks=tasks,
+        )
 
         blocked_approval_tasks = self._runtime.blocked_for_approval(tasks)
         if blocked_approval_tasks and not approve:
@@ -69,6 +96,7 @@ class WorkflowLoopEngine:
                         batch_size=self._runtime.resolve_batch_size(mutable_state),
                         selected_tasks=[],
                     ),
+                    context_snapshot=context_snapshot,
                     tool_results=[],
                     reflection_summaries=[],
                     next_action="await_approval",
@@ -93,7 +121,9 @@ class WorkflowLoopEngine:
         selection = self._selector.select(tasks=tasks, state=mutable_state)
         task_by_id = {task.id: task for task in tasks}
         runnable_tasks = [
-            task_by_id[task_id] for task_id in selection.selected_task_ids if task_id in task_by_id
+            task_by_id[selected_task.task_id]
+            for selected_task in selection.selected_tasks
+            if selected_task.task_id in task_by_id
         ]
         if not runnable_tasks:
             resolved_status = self._runtime.resolve_run_status(tasks)
@@ -109,6 +139,7 @@ class WorkflowLoopEngine:
                 self._build_cycle_artifact(
                     mutable_state,
                     selection=selection,
+                    context_snapshot=context_snapshot,
                     tool_results=[],
                     reflection_summaries=[],
                     next_action="complete" if resolved_status is WorkflowRunStatus.DONE else "idle",
@@ -127,6 +158,12 @@ class WorkflowLoopEngine:
             )
 
         self._start_batch_cycle(mutable_state, selected_task_ids=selection.selected_task_ids)
+        context_snapshot = self._build_context_snapshot(
+            run=run,
+            session=session,
+            mutable_state=mutable_state,
+            tasks=tasks,
+        )
         executed_task_ids: list[str] = []
         tool_results: list[dict[str, object]] = []
         reflection_summaries: list[str] = []
@@ -146,10 +183,17 @@ class WorkflowLoopEngine:
                     selected_task_ids=selection.selected_task_ids,
                     executed_task_ids=executed_task_ids,
                 )
+                context_snapshot = self._build_context_snapshot(
+                    run=run,
+                    session=session,
+                    mutable_state=mutable_state,
+                    tasks=tasks,
+                )
                 loop_state = loop_state.append_cycle(
                     self._build_cycle_artifact(
                         mutable_state,
                         selection=selection,
+                        context_snapshot=context_snapshot,
                         tool_results=tool_results,
                         reflection_summaries=reflection_summaries,
                         next_action="await_approval",
@@ -172,6 +216,7 @@ class WorkflowLoopEngine:
             execution_context = WorkflowExecutionContext(
                 session_id=run.session_id,
                 workflow_run_id=run.id,
+                project_id=session.project_id if session is not None else None,
                 goal=str(mutable_state.get("goal") or "authorized assessment"),
                 template_name=run.template_name,
                 current_stage=self._runtime.task_stage(runnable_task),
@@ -180,6 +225,10 @@ class WorkflowLoopEngine:
                     if isinstance((policy := mutable_state.get("runtime_policy")), dict)
                     else {}
                 ),
+                retrieval=context_snapshot.retrieval.to_state(),
+                memory=context_snapshot.memory.to_state(),
+                context_projection=context_snapshot.projection.to_state(),
+                prompting=dict(context_snapshot.prompting),
             )
             execution_result = self._executor.execute(context=execution_context, task=runnable_task)
             reflection_result = self._reflector.review(
@@ -230,10 +279,17 @@ class WorkflowLoopEngine:
         mutable_state["approval"] = {"required": False, "pending_task_id": None}
         self._finish_batch_cycle(mutable_state, executed_task_ids=executed_task_ids)
         last_error = last_failure_reason if resolved_status is WorkflowRunStatus.ERROR else None
+        context_snapshot = self._build_context_snapshot(
+            run=run,
+            session=session,
+            mutable_state=mutable_state,
+            tasks=tasks,
+        )
         loop_state = loop_state.append_cycle(
             self._build_cycle_artifact(
                 mutable_state,
                 selection=selection,
+                context_snapshot=context_snapshot,
                 tool_results=tool_results,
                 reflection_summaries=reflection_summaries,
                 next_action=(
@@ -542,6 +598,7 @@ class WorkflowLoopEngine:
         mutable_state: dict[str, object],
         *,
         selection: RunnableSelection,
+        context_snapshot: ContextSnapshot,
         tool_results: list[dict[str, object]],
         reflection_summaries: list[str],
         next_action: str,
@@ -558,8 +615,6 @@ class WorkflowLoopEngine:
             if isinstance(compaction_raw, dict)
             else {}
         )
-        hypothesis_updates = mutable_state.get("hypothesis_updates")
-        findings = mutable_state.get("findings")
         execution_compaction_raw = compaction.get("execution")
         message_compaction_raw = compaction.get("messages")
         execution_compaction = (
@@ -584,13 +639,26 @@ class WorkflowLoopEngine:
                     stage_key=task.stage_key,
                     priority=task.priority,
                     approval_required=task.approval_required,
+                    tool_name=task.tool_name,
+                    writes_state=task.writes_state,
+                    scheduler_group=task.scheduler_group,
                 )
                 for task in selection.selected_tasks
             ],
-            retrieval_summary=(
-                f"Selected {len(selection.selected_tasks)} runnable task(s) for batch cycle "
-                f"{self._batch_cycle(mutable_state)}."
-            ),
+            parallel_read_group=[task.task_id for task in selection.parallel_read_group],
+            serialized_write_group=[task.task_id for task in selection.serialized_write_group],
+            scheduler_summary={
+                "mode": "phase2_sequential",
+                "selected_task_ids": selection.selected_task_ids,
+                "parallel_read_group": [task.task_id for task in selection.parallel_read_group],
+                "serialized_write_group": [
+                    task.task_id for task in selection.serialized_write_group
+                ],
+                "parallel_read_count": len(selection.parallel_read_group),
+                "serialized_write_count": len(selection.serialized_write_group),
+            },
+            retrieval_summary=context_snapshot.retrieval.summary,
+            retrieval=context_snapshot.retrieval.to_state(),
             tool_results=list(tool_results),
             reflection_summary=(
                 "; ".join(reflection_summaries)
@@ -599,23 +667,114 @@ class WorkflowLoopEngine:
             ),
             memory_writes=[
                 {
-                    "kind": "hypothesis_updates",
-                    "count": len(hypothesis_updates) if isinstance(hypothesis_updates, list) else 0,
+                    "kind": "promotions",
+                    "count": len(context_snapshot.memory.promotions),
                 },
                 {
-                    "kind": "findings",
-                    "count": len(findings) if isinstance(findings, list) else 0,
+                    "kind": "session_distilled_entries",
+                    "count": len(context_snapshot.memory.session.distilled_entries),
                 },
             ],
+            memory=context_snapshot.memory.to_state(),
             compaction_summary={
                 "batch_status": batch.get("status"),
                 "execution": execution_compaction,
                 "messages": message_compaction,
+                "projection_active_level": context_snapshot.projection.active_level,
+                "projection_summary": context_snapshot.projection.summary,
             },
+            context_projection=context_snapshot.projection.to_state(),
             next_action=next_action,
             started_at=started_at,
             ended_at=ended_at,
         )
+
+    def _build_context_snapshot(
+        self,
+        *,
+        run: WorkflowRun,
+        session: Session | None,
+        mutable_state: dict[str, object],
+        tasks: list[TaskNode],
+    ) -> ContextSnapshot:
+        retrieval = self._retrieval_pipeline.build(
+            run=run,
+            session=session,
+            state=mutable_state,
+            tasks=tasks,
+        )
+        memory = self._memory_manager.build(
+            session=session,
+            state=mutable_state,
+            retrieval=retrieval,
+        )
+        projection = self._context_projection_builder.build(
+            state=mutable_state,
+            retrieval=retrieval,
+            memory=memory,
+        )
+        capability_fragments = self._capability_facade.build_prompt_fragments(
+            session_id=run.session_id
+        )
+        prompting = build_workflow_prompting_state(
+            goal=str(mutable_state.get("goal") or "authorized assessment"),
+            template_name=run.template_name,
+            current_stage=str(mutable_state.get("current_stage") or "") or None,
+            task_name=self._active_task_name(tasks),
+            role_prompt=self._active_task_metadata(tasks, "role_prompt"),
+            sub_agent_role_prompt=self._active_task_metadata(tasks, "sub_agent_role_prompt"),
+            task_description=self._active_task_metadata(tasks, "description"),
+            retrieval_summary=retrieval.summary,
+            history_summary=self._history_summary(mutable_state),
+            memory_summary=memory.summary,
+            projection_summary=projection.summary,
+            capability_inventory_summary=capability_fragments["inventory_summary"],
+            capability_schema_summary=capability_fragments["schema_summary"],
+            capability_prompt_fragment=capability_fragments["prompt_fragment"],
+        )
+        snapshot = ContextSnapshot(
+            retrieval=retrieval,
+            memory=memory,
+            projection=projection,
+            prompting=prompting,
+        )
+        mutable_state["context"] = snapshot.to_state()
+        return snapshot
+
+    @staticmethod
+    def _history_summary(mutable_state: dict[str, object]) -> str:
+        records_raw = mutable_state.get("execution_records")
+        records = records_raw if isinstance(records_raw, list) else []
+        if not records:
+            return "No prior workflow execution records are currently active."
+        lines = ["Recent workflow execution history:"]
+        for item in records[-5:]:
+            if not isinstance(item, dict):
+                continue
+            task_name = str(item.get("task_name") or item.get("task_node_id") or "unknown-task")
+            status = str(item.get("status") or "unknown")
+            summary = str(item.get("summary") or "")
+            lines.append(f"- {task_name}: {status} {summary}".strip())
+        return "\n".join(lines)
+
+    @staticmethod
+    def _active_task_name(tasks: list[TaskNode]) -> str:
+        for task in tasks:
+            if task.status is TaskNodeStatus.IN_PROGRESS:
+                return task.name
+        for task in tasks:
+            if task.status is TaskNodeStatus.READY:
+                return task.name
+        return "workflow-context"
+
+    @staticmethod
+    def _active_task_metadata(tasks: list[TaskNode], key: str) -> str:
+        for task in tasks:
+            if task.status in {TaskNodeStatus.IN_PROGRESS, TaskNodeStatus.READY}:
+                value = task.metadata_json.get(key)
+                if isinstance(value, str):
+                    return value
+        return ""
 
     @staticmethod
     def _build_tool_result(execution: ExecutionResult, task: TaskNode) -> dict[str, object]:

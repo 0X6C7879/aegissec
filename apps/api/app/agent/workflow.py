@@ -45,6 +45,11 @@ class WorkflowExecutionContext:
     template_name: str
     current_stage: str | None
     runtime_policy: dict[str, object]
+    project_id: str | None = None
+    retrieval: dict[str, object] = field(default_factory=dict)
+    memory: dict[str, object] = field(default_factory=dict)
+    context_projection: dict[str, object] = field(default_factory=dict)
+    prompting: dict[str, object] = field(default_factory=dict)
 
 
 class WorkflowGraphRuntime:

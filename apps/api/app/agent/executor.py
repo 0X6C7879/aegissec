@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.agent.tool_registry import ToolRegistry, build_default_tool_registry
+from app.agent.tool_registry import ToolRegistry, ToolSpec, build_default_tool_registry
 from app.agent.workflow import WorkflowExecutionContext
 from app.db.models import TaskNode, TaskNodeStatus
 from app.services.capabilities import CapabilityFacade
@@ -50,3 +50,6 @@ class Executor:
             tool_category=tool_result.spec.category.value,
             tool_capability=tool_result.spec.capability.value,
         )
+
+    def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+        return self._tool_registry.resolve(task=task)

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 
+from app.agent.prompting import build_chat_capability_prompt, build_chat_prompt_budget
 from app.compat.mcp.service import MCPService, get_mcp_service
 from app.compat.skills.service import (
     SkillContentReadError,
@@ -67,7 +68,6 @@ from app.services.chat_runtime import (
     ToolCallResult,
     get_chat_runtime,
     sanitize_assistant_content,
-    strip_think_blocks,
 )
 from app.services.runtime import (
     RuntimeArtifactPathError,
@@ -1409,13 +1409,14 @@ async def _process_generation(
                 else None
             )
             token_budget = generation.metadata_json.get("token_budget")
+            total_token_budget = token_budget if isinstance(token_budget, int) else 12_000
 
             available_skills = skill_service.list_loaded_skills_for_agent()
             capability_facade = CapabilityFacade(
                 skill_service=skill_service,
                 mcp_service=mcp_service,
             )
-            skill_context_prompt = capability_facade.build_skill_prompt_fragment()
+            capability_fragments = capability_facade.build_prompt_fragments(session_id=session.id)
             execute_tool = _build_tool_executor(
                 session=session,
                 assistant_message=loaded_assistant_message,
@@ -1425,10 +1426,45 @@ async def _process_generation(
                 skill_service=skill_service,
                 mcp_service=mcp_service,
             )
+            latest_message_text = (
+                _build_conversation_messages([user_message])[0].content
+                if user_message is not None
+                else loaded_assistant_message.content
+            )
+            prompt_budget = build_chat_prompt_budget(
+                total_budget=total_token_budget,
+                available_skills=available_skills,
+                inventory_summary=capability_fragments["inventory_summary"],
+                schema_summary=capability_fragments["schema_summary"],
+                prompt_fragment=capability_fragments["prompt_fragment"],
+                latest_message_text=latest_message_text,
+                history_text="",
+            )
+            history_token_budget = max(
+                prompt_budget.component_tokens.get("history", 0),
+                total_token_budget // 2,
+            )
             conversation_history = repository.build_conversation_context(
                 session_id=session.id,
                 branch_id=generation.branch_id,
-                rough_token_budget=token_budget if isinstance(token_budget, int) else 12_000,
+                rough_token_budget=history_token_budget,
+            )
+            history_text = "\n\n".join(message.content for message in conversation_history[:-1])
+            prompt_budget = build_chat_prompt_budget(
+                total_budget=total_token_budget,
+                available_skills=available_skills,
+                inventory_summary=capability_fragments["inventory_summary"],
+                schema_summary=capability_fragments["schema_summary"],
+                prompt_fragment=capability_fragments["prompt_fragment"],
+                latest_message_text=latest_message_text,
+                history_text=history_text,
+            )
+            skill_context_prompt = build_chat_capability_prompt(
+                inventory_summary=capability_fragments["inventory_summary"],
+                schema_summary=capability_fragments["schema_summary"],
+                prompt_fragment=capability_fragments["prompt_fragment"],
+                allocated_schema_tokens=prompt_budget.component_tokens.get("capability_schema", 0),
+                allocated_prompt_tokens=prompt_budget.component_tokens.get("capability_prompt", 0),
             )
 
             await _publish_generation_started(

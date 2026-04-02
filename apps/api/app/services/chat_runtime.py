@@ -9,24 +9,15 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.agent.prompting import (
+    SYSTEM_PROMPT,
+    build_anthropic_prompt_assembly,
+    build_openai_prompt_assembly,
+    format_message_content,
+    render_skill_catalog_context,
+)
 from app.core.settings import Settings, get_settings
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
-
-SYSTEM_PROMPT = (
-    "You are assisting an authorized defensive security research workflow. "
-    "Reply in the user's language. Keep answers concise, evidence-oriented, and within the "
-    "user's stated scope. The system exposes a dynamic Skills catalog for the current project. "
-    "When the user asks which skills are available, asks what a skill does, or asks you to use "
-    "a skill, call list_available_skills or read_skill_content before asking generic "
-    "clarifying questions, and do not guess skill contents. Skills are reference documents, "
-    "not callable tool names, so never emit a tool call using a skill slug such as "
-    "agent-browser directly. The only callable tool names are execute_kali_command, "
-    "list_available_skills, and read_skill_content. Use execute_kali_command only when "
-    "shell-based verification or command output would materially improve accuracy. Prefer "
-    "batching adjacent low-risk reconnaissance checks into a single command instead of many "
-    "small commands, and avoid redundant tool calls once you have enough evidence. After tool "
-    "execution, summarize what happened clearly."
-)
 
 MAX_TOOL_STEPS = 24
 TOOL_BUDGET_EXHAUSTED_PROMPT = (
@@ -413,55 +404,19 @@ class OpenAICompatibleChatRuntime:
         skill_context_prompt: str | None,
         conversation_messages: list[ConversationMessage] | None,
     ) -> list[dict[str, object]]:
-        messages: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        skill_catalog_context = OpenAICompatibleChatRuntime._build_skill_catalog_context(
-            available_skills
+        assembly = build_openai_prompt_assembly(
+            content=content,
+            attachments=attachments,
+            conversation_messages=conversation_messages,
+            available_skills=available_skills,
+            skill_context_prompt=skill_context_prompt,
+            total_budget=12_000,
         )
-        if skill_catalog_context is not None:
-            messages.append({"role": "system", "content": skill_catalog_context})
-        if isinstance(skill_context_prompt, str) and skill_context_prompt.strip():
-            messages.append({"role": "system", "content": skill_context_prompt.strip()})
-
-        if conversation_messages:
-            for message in conversation_messages:
-                messages.append(
-                    {
-                        "role": message.role.value,
-                        "content": OpenAICompatibleChatRuntime._format_message_content(
-                            message.content,
-                            message.attachments,
-                        ),
-                    }
-                )
-            return messages
-
-        messages.append(
-            {
-                "role": "user",
-                "content": OpenAICompatibleChatRuntime._format_message_content(
-                    content, attachments
-                ),
-            }
-        )
-        return messages
+        return assembly.messages
 
     @staticmethod
     def _format_message_content(content: str, attachments: list[AttachmentMetadata]) -> str:
-        formatted_content = content.strip()
-        if not attachments:
-            return formatted_content
-
-        attachment_lines = []
-        for attachment in attachments:
-            name = attachment.name or "unnamed"
-            content_type = attachment.content_type or "unknown"
-            size_bytes = attachment.size_bytes if attachment.size_bytes is not None else "unknown"
-            attachment_lines.append(f"- {name} ({content_type}, {size_bytes} bytes)")
-
-        return (
-            f"{formatted_content}\n\n"
-            "Attachment metadata provided with this message:\n" + "\n".join(attachment_lines)
-        )
+        return format_message_content(content, attachments)
 
     @staticmethod
     def _tool_definitions() -> list[dict[str, object]]:
@@ -619,30 +574,7 @@ class OpenAICompatibleChatRuntime:
     def _build_skill_catalog_context(
         available_skills: list[SkillAgentSummaryRead],
     ) -> str | None:
-        if not available_skills:
-            return None
-
-        lines = [
-            "Loaded Skills Catalog "
-            "(summary only; use read_skill_content for the real SKILL.md body):"
-        ]
-        for skill in available_skills:
-            description = " ".join(skill.description.split()) or "No description provided."
-            if len(description) > 140:
-                description = description[:137].rstrip() + "..."
-            label = skill.directory_name
-            if skill.name != skill.directory_name:
-                label = f"{skill.directory_name} (name: {skill.name})"
-            lines.append(f"- {label}: {description}")
-
-        lines.append(
-            "If the user asks to list skills, explain a skill, or use a skill, "
-            "call the skills tools before asking broad clarification questions. "
-            "Skill names in this catalog are reference entries, not callable tools. "
-            "The only callable tool names are execute_kali_command, list_available_skills, "
-            "and read_skill_content."
-        )
-        return "\n".join(lines)
+        return render_skill_catalog_context(available_skills)
 
     @staticmethod
     def _find_skill_identifier(
@@ -1111,31 +1043,15 @@ class AnthropicChatRuntime:
         skill_context_prompt: str | None,
         conversation_messages: list[ConversationMessage] | None,
     ) -> list[dict[str, object]]:
-        messages: list[dict[str, object]] = []
-        skill_catalog_context = AnthropicChatRuntime._build_skill_catalog_context(available_skills)
-        prefix_parts: list[str] = []
-        if skill_catalog_context is not None:
-            prefix_parts.append(skill_catalog_context)
-        if isinstance(skill_context_prompt, str) and skill_context_prompt.strip():
-            prefix_parts.append(skill_context_prompt.strip())
-        prefix = "\n\n".join(prefix_parts)
-
-        if conversation_messages:
-            for index, message in enumerate(conversation_messages):
-                message_content = OpenAICompatibleChatRuntime._format_message_content(
-                    message.content,
-                    message.attachments,
-                )
-                if index == 0 and prefix:
-                    message_content = f"{prefix}\n\n{message_content}"
-                messages.append({"role": message.role.value, "content": message_content})
-            return messages
-
-        user_content = OpenAICompatibleChatRuntime._format_message_content(content, attachments)
-        if prefix:
-            user_content = f"{prefix}\n\n{user_content}"
-        messages.append({"role": "user", "content": user_content})
-        return messages
+        assembly = build_anthropic_prompt_assembly(
+            content=content,
+            attachments=attachments,
+            conversation_messages=conversation_messages,
+            available_skills=available_skills,
+            skill_context_prompt=skill_context_prompt,
+            total_budget=12_000,
+        )
+        return assembly.messages
 
     @staticmethod
     def _tool_definitions() -> list[dict[str, object]]:

@@ -6,7 +6,20 @@ from fastapi.testclient import TestClient
 
 from app.agent.coordinator import Coordinator
 from app.agent.executor import ExecutionResult
-from app.db.models import TaskNodeStatus
+from app.agent.selection import WorkflowRunnableSelector
+from app.agent.tool_registry import (
+    NoOpToolExecutionHooks,
+    ToolCapability,
+    ToolCategory,
+    ToolExecutionRequest,
+    ToolExecutionResult,
+    ToolPolicyDecision,
+    ToolRegistry,
+    ToolSafetyProfile,
+    ToolSpec,
+)
+from app.agent.workflow import WorkflowExecutionContext
+from app.db.models import TaskNode, TaskNodeStatus, TaskNodeType
 from tests.utils import api_data
 
 
@@ -216,12 +229,137 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(latest_cycle["cycle_id"], str) and latest_cycle["cycle_id"]
     assert latest_cycle["batch_cycle"] == batch_state["cycle"]
     assert isinstance(latest_cycle["selected_tasks"], list)
+    assert isinstance(latest_cycle["parallel_read_group"], list)
+    assert isinstance(latest_cycle["serialized_write_group"], list)
+    assert isinstance(latest_cycle["scheduler_summary"], dict)
     assert isinstance(latest_cycle["retrieval_summary"], str)
     assert isinstance(latest_cycle["tool_results"], list)
     assert isinstance(latest_cycle["reflection_summary"], str)
     assert isinstance(latest_cycle["memory_writes"], list)
     assert isinstance(latest_cycle["compaction_summary"], dict)
     assert latest_cycle["next_action"] in {"continue", "complete", "await_approval", "idle"}
+    scheduler_summary = cast(dict[str, Any], latest_cycle["scheduler_summary"])
+    assert scheduler_summary["mode"] == "phase2_sequential"
+    assert scheduler_summary["selected_task_ids"] == [
+        task["task_id"] for task in cast(list[dict[str, Any]], latest_cycle["selected_tasks"])
+    ]
+
+
+def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_tool_inputs(
+    client: TestClient,
+) -> None:
+    session_id = _create_session(client, goal="Build workflow context projections")
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    assert advance.status_code == 200
+    payload = cast(dict[str, Any], api_data(advance))
+    state = cast(dict[str, Any], payload["state"])
+    context = cast(dict[str, Any], state["context"])
+    retrieval = cast(dict[str, Any], context["retrieval"])
+    memory = cast(dict[str, Any], context["memory"])
+    projection = cast(dict[str, Any], context["projection"])
+    prompting = cast(dict[str, Any], context["prompting"])
+
+    session_local_pack = cast(dict[str, Any], retrieval["session_local"])
+    project_pack = cast(dict[str, Any], retrieval["project"])
+    capability_pack = cast(dict[str, Any], retrieval["capability"])
+    assert session_local_pack["scope"] == "session_local"
+    assert session_local_pack["status"] in {"ready", "empty"}
+    assert project_pack["scope"] == "project"
+    assert capability_pack["scope"] == "capability"
+
+    working_memory = cast(dict[str, Any], memory["working"])
+    session_memory = cast(dict[str, Any], memory["session"])
+    project_memory = cast(dict[str, Any], memory["project"])
+    assert working_memory["layer"] == "working"
+    assert session_memory["layer"] == "session"
+    assert project_memory["layer"] == "project"
+    assert isinstance(memory["promotions"], list)
+    assert isinstance(memory["demotions"], list)
+
+    levels = cast(list[dict[str, Any]], projection["levels"])
+    assert len(levels) == 5
+    assert [level["level"] for level in levels] == [1, 2, 3, 4, 5]
+    assert projection["active_level"] in {1, 2, 3, 4, 5}
+    assert isinstance(prompting["fragments"], list)
+    assert isinstance(prompting["budget"], dict)
+
+    loop_state = cast(dict[str, Any], state["loop"])
+    latest_cycle = cast(list[dict[str, Any]], loop_state["cycles"])[-1]
+    assert isinstance(latest_cycle["retrieval"], dict)
+    assert isinstance(latest_cycle["memory"], dict)
+    assert isinstance(latest_cycle["context_projection"], dict)
+    assert cast(dict[str, Any], latest_cycle["context_projection"])["active_level"] in {
+        1,
+        2,
+        3,
+        4,
+        5,
+    }
+
+    execution_records = cast(list[dict[str, Any]], state["execution_records"])
+    assert execution_records
+    first_input = cast(dict[str, Any], execution_records[0]["input_json"])
+    assert isinstance(first_input["retrieval"], dict)
+    assert isinstance(first_input["memory"], dict)
+    assert isinstance(first_input["context_projection"], dict)
+    assert isinstance(first_input["prompting"], dict)
+
+
+def test_context_additions_preserve_export_replay_and_session_history_compatibility(
+    client: TestClient,
+) -> None:
+    session_id = _create_session(
+        client, goal="Preserve export replay session history compatibility"
+    )
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    for _ in range(2):
+        advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+        assert advance.status_code == 200
+
+    export_response = client.get(f"/api/workflows/{run_id}/export")
+    assert export_response.status_code == 200
+    export_payload = cast(dict[str, Any], api_data(export_response))
+    assert set(export_payload.keys()) == {
+        "run",
+        "task_graph",
+        "evidence_graph",
+        "causal_graph",
+        "execution_records",
+        "replan_records",
+        "batch_state",
+    }
+
+    replay_response = client.get(f"/api/workflows/{run_id}/replay")
+    assert replay_response.status_code == 200
+    replay_payload = cast(dict[str, Any], api_data(replay_response))
+    replay_step = cast(list[dict[str, Any]], replay_payload["replay_steps"])[0]
+    assert set(replay_step.keys()) == {
+        "index",
+        "trace_id",
+        "task_node_id",
+        "task_name",
+        "status",
+        "started_at",
+        "ended_at",
+        "summary",
+        "evidence_confidence",
+        "retry_attempt",
+        "batch_cycle",
+    }
+
+    history_response = client.get(
+        f"/api/sessions/{session_id}/history",
+        params={"event_type": "workflow.execution.recorded", "sort_order": "asc"},
+    )
+    assert history_response.status_code == 200
+    history_entries = cast(list[dict[str, Any]], api_data(history_response))
+    assert history_entries
+    assert all(entry["source"] == "workflow.executor" for entry in history_entries)
 
 
 def test_start_workflow_publishes_graph_events_for_task_evidence_and_causal(
@@ -552,3 +690,194 @@ def test_execution_context_compaction_archives_old_records_and_replay_export_rem
     replay_payload = cast(dict[str, Any], api_data(replay_response))
     replay_steps = cast(list[dict[str, Any]], replay_payload["replay_steps"])
     assert len(replay_steps) == len(exported_records)
+
+
+def test_runnable_selector_groups_read_and_write_tasks_without_changing_flat_order() -> None:
+    selector = WorkflowRunnableSelector(
+        tool_spec_resolver=lambda task: (
+            ToolSpec(
+                name=f"tool.{task.name}",
+                category=ToolCategory.DISCOVERY,
+                capability=ToolCapability.CAPABILITY_SNAPSHOT,
+                safety_profile=ToolSafetyProfile(writes_state=task.name.endswith("write")),
+            )
+        ),
+    )
+    tasks = [
+        TaskNode(
+            workflow_run_id="run-1",
+            name="alpha_read",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=1,
+            metadata_json={"stage_key": "discovery", "priority": 30, "approval_required": False},
+        ),
+        TaskNode(
+            workflow_run_id="run-1",
+            name="beta_write",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=2,
+            metadata_json={"stage_key": "validation", "priority": 20, "approval_required": False},
+        ),
+        TaskNode(
+            workflow_run_id="run-1",
+            name="gamma_read",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=3,
+            metadata_json={"stage_key": "analysis", "priority": 10, "approval_required": False},
+        ),
+    ]
+
+    selection = selector.select(tasks=tasks, state={"batch": {"max_nodes_per_cycle": 3}})
+
+    assert [task.task_name for task in selection.selected_tasks] == [
+        "alpha_read",
+        "beta_write",
+        "gamma_read",
+    ]
+    assert [task.task_name for task in selection.parallel_read_group] == [
+        "alpha_read",
+        "gamma_read",
+    ]
+    assert [task.task_name for task in selection.serialized_write_group] == ["beta_write"]
+    assert [task.scheduler_group for task in selection.selected_tasks] == [
+        "parallel_read_group",
+        "serialized_write_group",
+        "parallel_read_group",
+    ]
+
+
+def test_tool_registry_policy_denial_returns_failed_result_without_approval_state() -> None:
+    class DenyAllPolicy:
+        def evaluate(self, *, request: ToolExecutionRequest, spec: ToolSpec) -> ToolPolicyDecision:
+            del request, spec
+            return ToolPolicyDecision.deny("blocked by policy", metadata={"allow_write": False})
+
+    registry = ToolRegistry(policy=DenyAllPolicy(), hooks=NoOpToolExecutionHooks())
+    runtime_spec = ToolSpec(
+        name="workflow.structured_runtime",
+        category=ToolCategory.EXECUTION,
+        capability=ToolCapability.STRUCTURED_RUNTIME,
+        safety_profile=ToolSafetyProfile(writes_state=True, uses_runtime=True),
+    )
+    registry.register(
+        spec=runtime_spec,
+        matcher=lambda _task: True,
+        handler=lambda request: (_ for _ in ()).throw(AssertionError(request.task.name)),
+    )
+    task = TaskNode(
+        workflow_run_id="run-1",
+        name="safe_validation.validate_primary_hypothesis",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={"stage_key": "validation", "approval_required": True},
+    )
+    context = WorkflowExecutionContext(
+        session_id="session-1",
+        workflow_run_id="run-1",
+        goal="test policy denial",
+        template_name="authorized-assessment",
+        current_stage="validation",
+        runtime_policy={"allow_write": False},
+    )
+
+    result = registry.execute(context=context, task=task)
+
+    assert result.status is TaskNodeStatus.FAILED
+    assert result.output_payload["policy_denied"] is True
+    assert result.output_payload["policy_reason"] == "blocked by policy"
+    assert result.output_payload.get("approval_required") is None
+    assert result.command_or_action == f"execute:{task.name}"
+
+
+def test_tool_registry_invokes_before_after_and_error_hooks() -> None:
+    class RecordingHooks:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def before_execution(self, *, request: ToolExecutionRequest, spec: ToolSpec) -> None:
+            self.events.append(f"before:{spec.name}:{request.task.name}")
+
+        def after_execution(self, *, request: ToolExecutionRequest, result: Any) -> None:
+            self.events.append(f"after:{result.spec.name}:{request.task.name}")
+
+        def on_execution_error(
+            self, *, request: ToolExecutionRequest, spec: ToolSpec, error: Exception
+        ) -> None:
+            self.events.append(f"error:{spec.name}:{request.task.name}:{error}")
+
+    hooks = RecordingHooks()
+    registry = ToolRegistry(hooks=hooks)
+    success_spec = ToolSpec(
+        name="workflow.success",
+        category=ToolCategory.DISCOVERY,
+        capability=ToolCapability.CAPABILITY_SNAPSHOT,
+    )
+    failure_spec = ToolSpec(
+        name="workflow.failure",
+        category=ToolCategory.EXECUTION,
+        capability=ToolCapability.STRUCTURED_RUNTIME,
+    )
+
+    def success_handler(request: ToolExecutionRequest) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            spec=success_spec,
+            source_type="runtime",
+            source_name="test",
+            command_or_action=f"execute:{request.task.name}",
+            input_payload={"trace_id": request.trace_id},
+            output_payload={"status": "ok"},
+            status=TaskNodeStatus.COMPLETED,
+            started_at=request.started_at,
+            ended_at=request.started_at,
+        )
+
+    def failure_handler(request: ToolExecutionRequest) -> ToolExecutionResult:
+        raise RuntimeError(f"boom:{request.task.name}")
+
+    registry.register(
+        spec=success_spec, matcher=lambda task: task.name == "success", handler=success_handler
+    )
+    registry.register(spec=failure_spec, matcher=lambda _task: True, handler=failure_handler)
+    context = WorkflowExecutionContext(
+        session_id="session-1",
+        workflow_run_id="run-1",
+        goal="test hooks",
+        template_name="authorized-assessment",
+        current_stage="analysis",
+        runtime_policy={},
+    )
+    success_task = TaskNode(
+        workflow_run_id="run-1",
+        name="success",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={},
+    )
+    failure_task = TaskNode(
+        workflow_run_id="run-1",
+        name="failure",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=2,
+        metadata_json={},
+    )
+
+    registry.execute(context=context, task=success_task)
+    try:
+        registry.execute(context=context, task=failure_task)
+    except RuntimeError as error:
+        assert str(error) == "boom:failure"
+    else:
+        assert False, "expected runtime error"
+
+    assert hooks.events == [
+        "before:workflow.success:success",
+        "after:workflow.success:success",
+        "before:workflow.failure:failure",
+        "error:workflow.failure:failure:boom:failure",
+    ]

@@ -10,6 +10,9 @@ class LoopSelectedTask:
     stage_key: str | None
     priority: int
     approval_required: bool
+    tool_name: str | None = None
+    writes_state: bool = False
+    scheduler_group: str | None = None
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -18,6 +21,9 @@ class LoopSelectedTask:
             "stage_key": self.stage_key,
             "priority": self.priority,
             "approval_required": self.approval_required,
+            "tool_name": self.tool_name,
+            "writes_state": self.writes_state,
+            "scheduler_group": self.scheduler_group,
         }
 
     @classmethod
@@ -34,12 +40,24 @@ class LoopSelectedTask:
         raw_priority = raw_dict.get("priority")
         priority = raw_priority if isinstance(raw_priority, int) else 0
         approval_required = bool(raw_dict.get("approval_required", False))
+        tool_name = (
+            raw_dict.get("tool_name") if isinstance(raw_dict.get("tool_name"), str) else None
+        )
+        writes_state = bool(raw_dict.get("writes_state", False))
+        scheduler_group = (
+            raw_dict.get("scheduler_group")
+            if isinstance(raw_dict.get("scheduler_group"), str)
+            else None
+        )
         return cls(
             task_id=task_id,
             task_name=task_name,
             stage_key=stage_key,
             priority=priority,
             approval_required=approval_required,
+            tool_name=tool_name,
+            writes_state=writes_state,
+            scheduler_group=scheduler_group,
         )
 
 
@@ -48,11 +66,17 @@ class WorkflowCycleArtifact:
     cycle_id: str
     batch_cycle: int
     selected_tasks: list[LoopSelectedTask] = field(default_factory=list)
+    parallel_read_group: list[str] = field(default_factory=list)
+    serialized_write_group: list[str] = field(default_factory=list)
+    scheduler_summary: dict[str, object] = field(default_factory=dict)
     retrieval_summary: str = ""
+    retrieval: dict[str, object] = field(default_factory=dict)
     tool_results: list[dict[str, object]] = field(default_factory=list)
     reflection_summary: str = ""
     memory_writes: list[dict[str, object]] = field(default_factory=list)
+    memory: dict[str, object] = field(default_factory=dict)
     compaction_summary: dict[str, object] = field(default_factory=dict)
+    context_projection: dict[str, object] = field(default_factory=dict)
     next_action: str = "idle"
     started_at: str | None = None
     ended_at: str | None = None
@@ -62,11 +86,17 @@ class WorkflowCycleArtifact:
             "cycle_id": self.cycle_id,
             "batch_cycle": self.batch_cycle,
             "selected_tasks": [task.to_state() for task in self.selected_tasks],
+            "parallel_read_group": list(self.parallel_read_group),
+            "serialized_write_group": list(self.serialized_write_group),
+            "scheduler_summary": dict(self.scheduler_summary),
             "retrieval_summary": self.retrieval_summary,
+            "retrieval": dict(self.retrieval),
             "tool_results": list(self.tool_results),
             "reflection_summary": self.reflection_summary,
             "memory_writes": list(self.memory_writes),
+            "memory": dict(self.memory),
             "compaction_summary": dict(self.compaction_summary),
+            "context_projection": dict(self.context_projection),
             "next_action": self.next_action,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
@@ -91,6 +121,28 @@ class WorkflowCycleArtifact:
             parsed_task = LoopSelectedTask.from_state(item)
             if parsed_task is not None:
                 selected_tasks.append(parsed_task)
+        parallel_read_group = (
+            [item for item in raw_dict.get("parallel_read_group", []) if isinstance(item, str)]
+            if isinstance(raw_dict.get("parallel_read_group", []), list)
+            else []
+        )
+        serialized_write_group = (
+            [item for item in raw_dict.get("serialized_write_group", []) if isinstance(item, str)]
+            if isinstance(raw_dict.get("serialized_write_group", []), list)
+            else []
+        )
+        raw_scheduler_summary = raw_dict.get("scheduler_summary")
+        scheduler_summary = (
+            {str(key): value for key, value in raw_scheduler_summary.items()}
+            if isinstance(raw_scheduler_summary, dict)
+            else {}
+        )
+        raw_retrieval = raw_dict.get("retrieval")
+        retrieval = (
+            {str(key): value for key, value in raw_retrieval.items()}
+            if isinstance(raw_retrieval, dict)
+            else {}
+        )
         tool_results_raw: list[object] = []
         tool_results_value = raw_dict.get("tool_results")
         if isinstance(tool_results_value, list):
@@ -113,15 +165,33 @@ class WorkflowCycleArtifact:
             if isinstance(raw_compaction_summary, dict)
             else {}
         )
+        raw_memory = raw_dict.get("memory")
+        memory = (
+            {str(key): value for key, value in raw_memory.items()}
+            if isinstance(raw_memory, dict)
+            else {}
+        )
+        raw_context_projection = raw_dict.get("context_projection")
+        context_projection = (
+            {str(key): value for key, value in raw_context_projection.items()}
+            if isinstance(raw_context_projection, dict)
+            else {}
+        )
         return cls(
             cycle_id=cycle_id,
             batch_cycle=batch_cycle,
             selected_tasks=selected_tasks,
+            parallel_read_group=parallel_read_group,
+            serialized_write_group=serialized_write_group,
+            scheduler_summary=scheduler_summary,
             retrieval_summary=str(raw_dict.get("retrieval_summary") or ""),
+            retrieval=retrieval,
             tool_results=tool_results,
             reflection_summary=str(raw_dict.get("reflection_summary") or ""),
             memory_writes=memory_writes,
+            memory=memory,
             compaction_summary=compaction_summary,
+            context_projection=context_projection,
             next_action=str(raw_dict.get("next_action") or "idle"),
             started_at=(
                 raw_dict.get("started_at") if isinstance(raw_dict.get("started_at"), str) else None

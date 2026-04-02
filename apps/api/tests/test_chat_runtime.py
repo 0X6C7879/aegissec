@@ -48,7 +48,7 @@ def test_extract_message_content_strips_tool_protocol_markup_from_string_payload
 
 
 def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
-    message = {
+    message: dict[str, object] = {
         "content": (
             '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
             '{"task":"demo"}</invoke></minimax:tool_call>最终答复'
@@ -171,6 +171,29 @@ def test_openai_build_initial_messages_uses_persisted_conversation_messages() ->
     assert "first question" in str(messages[1]["content"])
     assert "scope.txt" in str(messages[1]["content"])
     assert messages[-1]["content"] == "follow-up"
+
+
+def test_anthropic_build_initial_messages_prefixes_capability_prompt_on_first_message() -> None:
+    messages = AnthropicChatRuntime._build_initial_messages(
+        "latest prompt",
+        [],
+        [
+            SkillAgentSummaryRead(
+                id="skill-1",
+                name="agent-browser",
+                directory_name="agent-browser",
+                description="Browser automation skill.",
+                compatibility=[],
+                entry_file="skills/agent-browser/SKILL.md",
+            )
+        ],
+        skill_context_prompt="Loaded skills context.",
+        conversation_messages=[ConversationMessage(role=MessageRole.USER, content="follow-up")],
+    )
+
+    assert messages[0]["role"] == "user"
+    assert "Loaded skills context." in str(messages[0]["content"])
+    assert "follow-up" in str(messages[0]["content"])
 
 
 def _build_openai_tool_response(call_id: int, command: str) -> dict[str, object]:

@@ -105,6 +105,10 @@ class WorkflowService:
             executor=Executor(capability_facade=self._capability_facade),
             reflector=Reflector(),
             graph_manager=GraphManager(self._graph_repository),
+            session_repository=self._session_repository,
+            run_log_repository=self._run_log_repository,
+            graph_repository=self._graph_repository,
+            capability_facade=self._capability_facade,
         )
 
     def _run_runtime_command(

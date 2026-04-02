@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from app.agent.context_models import ContextSnapshot
 from app.agent.executor import ExecutionResult, Executor
 from app.agent.graph_manager import GraphManager
 from app.agent.loop_engine import WorkflowLoopEngine
@@ -11,6 +12,8 @@ from app.agent.planner import PlannedWorkflow, Planner
 from app.agent.reflector import ReflectionResult, Reflector
 from app.agent.workflow import WorkflowGraphRuntime
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
+from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
+from app.services.capabilities import CapabilityFacade
 from app.workflows.template_loader import WorkflowTemplate
 
 
@@ -44,6 +47,10 @@ class Coordinator:
         executor: Executor,
         reflector: Reflector,
         graph_manager: GraphManager,
+        session_repository: SessionRepository,
+        run_log_repository: RunLogRepository,
+        graph_repository: GraphRepository,
+        capability_facade: CapabilityFacade,
     ) -> None:
         self._planner = planner
         self._executor = executor
@@ -54,6 +61,10 @@ class Coordinator:
             reflector=reflector,
             max_active_execution_records=self.MAX_ACTIVE_EXECUTION_RECORDS,
             max_active_messages=self.MAX_ACTIVE_MESSAGES,
+            session_repository=session_repository,
+            run_log_repository=run_log_repository,
+            graph_repository=graph_repository,
+            capability_facade=capability_facade,
         )
 
     def initialize_workflow(
@@ -130,6 +141,7 @@ class Coordinator:
             },
             "approval": {"required": False, "pending_task_id": None},
             "replan_records": [],
+            "context": ContextSnapshot.empty().to_state(),
             "batch": {
                 "contract_version": "v1",
                 "cycle": 0,

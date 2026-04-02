@@ -17,6 +17,13 @@ from app.db.repositories import RunLogRepository
 
 
 class CapabilityFacade:
+    INVENTORY_SUMMARY_CACHE_EVENT = "capability.skills.inventory_summary.cache"
+    INVENTORY_SUMMARY_CACHE_HIT_EVENT = "capability.skills.inventory_summary.cache_hit"
+    SCHEMA_SUMMARY_CACHE_EVENT = "capability.skills.schema_summary.cache"
+    SCHEMA_SUMMARY_CACHE_HIT_EVENT = "capability.skills.schema_summary.cache_hit"
+    PROMPT_FRAGMENT_CACHE_EVENT = "capability.skills.prompt_fragment.cache"
+    PROMPT_FRAGMENT_CACHE_HIT_EVENT = "capability.skills.prompt_fragment.cache_hit"
+
     def __init__(
         self,
         *,
@@ -190,14 +197,174 @@ class CapabilityFacade:
         )
         return payload
 
-    def build_skill_prompt_fragment(self) -> str:
-        prompt_fragment = self._skill_service.build_skill_context_prompt_fragment()
+    def build_skill_inventory_summary(
+        self,
+        *,
+        use_cache: bool = True,
+        max_cache_age_seconds: int = 120,
+        session_id: str | None = None,
+    ) -> str:
+        if use_cache:
+            cached = self._load_cached_fragment(
+                event_type=self.INVENTORY_SUMMARY_CACHE_EVENT,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            )
+            if cached is not None:
+                self._log_capability_event(
+                    event_type=self.INVENTORY_SUMMARY_CACHE_HIT_EVENT,
+                    message="Returned cached capability inventory summary.",
+                    payload={"max_cache_age_seconds": max_cache_age_seconds},
+                    session_id=session_id,
+                )
+                return cached
+
+        payload = self.build_skill_context()
+        skills = payload.get("skills")
+        if not isinstance(skills, list) or not skills:
+            summary = "No loaded skills are currently available."
+        else:
+            lines = ["Loaded skills inventory:"]
+            for item in skills:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("directory_name") or item.get("name") or "unknown")
+                description = str(item.get("description") or "No description provided.")
+                lines.append(f"- {label}: {description}")
+            summary = "\n".join(lines)
+        self._save_cached_fragment(
+            event_type=self.INVENTORY_SUMMARY_CACHE_EVENT,
+            content=summary,
+            session_id=session_id,
+        )
+        return summary
+
+    def build_skill_schema_summary(
+        self,
+        *,
+        use_cache: bool = True,
+        max_cache_age_seconds: int = 120,
+        session_id: str | None = None,
+    ) -> str:
+        if use_cache:
+            cached = self._load_cached_fragment(
+                event_type=self.SCHEMA_SUMMARY_CACHE_EVENT,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            )
+            if cached is not None:
+                self._log_capability_event(
+                    event_type=self.SCHEMA_SUMMARY_CACHE_HIT_EVENT,
+                    message="Returned cached capability schema summary.",
+                    payload={"max_cache_age_seconds": max_cache_age_seconds},
+                    session_id=session_id,
+                )
+                return cached
+
+        payload = self.build_skill_context()
+        skills = payload.get("skills")
+        if not isinstance(skills, list) or not skills:
+            summary = "No loaded skill parameter schemas are currently available."
+        else:
+            lines = ["Loaded skill parameter schemas:"]
+            for item in skills:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("directory_name") or item.get("name") or "unknown")
+                parameter_schema = item.get("parameter_schema")
+                if isinstance(parameter_schema, dict) and parameter_schema:
+                    lines.append(f"- {label}: {parameter_schema}")
+                else:
+                    lines.append(f"- {label}: no parameters")
+            summary = "\n".join(lines)
+        self._save_cached_fragment(
+            event_type=self.SCHEMA_SUMMARY_CACHE_EVENT,
+            content=summary,
+            session_id=session_id,
+        )
+        return summary
+
+    def build_skill_prompt_fragment(
+        self,
+        *,
+        use_cache: bool = True,
+        max_cache_age_seconds: int = 120,
+        session_id: str | None = None,
+    ) -> str:
+        if use_cache:
+            cached = self._load_cached_fragment(
+                event_type=self.PROMPT_FRAGMENT_CACHE_EVENT,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            )
+            if cached is not None:
+                self._log_capability_event(
+                    event_type=self.PROMPT_FRAGMENT_CACHE_HIT_EVENT,
+                    message="Returned cached skill prompt fragment.",
+                    payload={"max_cache_age_seconds": max_cache_age_seconds},
+                    session_id=session_id,
+                )
+                return cached
+
+        inventory_summary = self.build_skill_inventory_summary(
+            use_cache=use_cache,
+            max_cache_age_seconds=max_cache_age_seconds,
+            session_id=session_id,
+        )
+        schema_summary = self.build_skill_schema_summary(
+            use_cache=use_cache,
+            max_cache_age_seconds=max_cache_age_seconds,
+            session_id=session_id,
+        )
+        prompt_fragment = "\n\n".join(
+            [
+                inventory_summary,
+                schema_summary,
+                (
+                    "Never call a skill slug or skill name directly as a tool. The only callable "
+                    "tool names are execute_kali_command, list_available_skills, and "
+                    "read_skill_content. If you need a skill, call read_skill_content with the "
+                    "skill slug, name, or id."
+                ),
+            ]
+        )
         self._log_capability_event(
             event_type="capability.skills.context_prompt",
             message="Built skill context prompt fragment.",
             payload={"length": len(prompt_fragment)},
+            session_id=session_id,
+        )
+        self._save_cached_fragment(
+            event_type=self.PROMPT_FRAGMENT_CACHE_EVENT,
+            content=prompt_fragment,
+            session_id=session_id,
         )
         return prompt_fragment
+
+    def build_prompt_fragments(
+        self,
+        *,
+        use_cache: bool = True,
+        max_cache_age_seconds: int = 120,
+        session_id: str | None = None,
+    ) -> dict[str, str]:
+        return {
+            "inventory_summary": self.build_skill_inventory_summary(
+                use_cache=use_cache,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            ),
+            "schema_summary": self.build_skill_schema_summary(
+                use_cache=use_cache,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            ),
+            "prompt_fragment": self.build_skill_prompt_fragment(
+                use_cache=use_cache,
+                max_cache_age_seconds=max_cache_age_seconds,
+                session_id=session_id,
+            ),
+        }
 
     def _save_cached_snapshot(self, snapshot: dict[str, object], *, session_id: str | None) -> None:
         self._log_capability_event(
@@ -232,6 +399,48 @@ class CapabilityFacade:
         snapshot = latest_log.payload_json.get("snapshot")
         if isinstance(snapshot, dict):
             return snapshot
+        return None
+
+    def _save_cached_fragment(
+        self,
+        *,
+        event_type: str,
+        content: str,
+        session_id: str | None,
+    ) -> None:
+        self._log_capability_event(
+            event_type=event_type,
+            message=f"Persisted latest capability fragment cache for {event_type}.",
+            payload={"content": content},
+            session_id=session_id,
+        )
+
+    def _load_cached_fragment(
+        self,
+        *,
+        event_type: str,
+        max_cache_age_seconds: int,
+        session_id: str | None,
+    ) -> str | None:
+        if self._run_log_repository is None:
+            return None
+        latest_log = self._run_log_repository.get_latest_log(
+            source="capability_facade",
+            event_type=event_type,
+            session_id=session_id,
+        )
+        if latest_log is None:
+            return None
+        created_at = latest_log.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        else:
+            created_at = created_at.astimezone(UTC)
+        if created_at < datetime.now(UTC) - timedelta(seconds=max_cache_age_seconds):
+            return None
+        content = latest_log.payload_json.get("content")
+        if isinstance(content, str):
+            return content
         return None
 
     def _log_capability_event(
