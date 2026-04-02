@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { mergeSessionEventEntries } from "../lib/sessionUtils";
 import type { AttachmentMetadata, SessionEventEntry } from "../types/sessions";
 
 type DraftAttachmentForm = {
@@ -23,6 +24,7 @@ type UiState = {
   uiDensity: "compact" | "comfortable";
   draftsBySession: Record<string, SessionDraftState>;
   eventsBySession: Record<string, SessionEventEntry[]>;
+  lastServerCursorBySession: Record<string, number>;
   setIncludeDeleted: (value: boolean) => void;
   toggleEventPanel: () => void;
   setLastVisitedSessionId: (sessionId: string | null) => void;
@@ -41,12 +43,9 @@ type UiState = {
   addDraftAttachment: (sessionId: string) => boolean;
   removeDraftAttachment: (sessionId: string, attachmentId: string) => void;
   clearDraft: (sessionId: string) => void;
-  appendEvent: (sessionId: string, event: SessionEventEntry) => void;
+  markEventCursorSeen: (sessionId: string, cursor: number) => boolean;
+  appendEvent: (sessionId: string, event: SessionEventEntry) => boolean;
 };
-
-function byCreatedAt(left: SessionEventEntry, right: SessionEventEntry): number {
-  return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-}
 
 const defaultAttachmentForm = (): DraftAttachmentForm => ({
   name: "",
@@ -84,6 +83,7 @@ export const useUiStore = create<UiState>((set) => ({
       : "compact",
   draftsBySession: {},
   eventsBySession: {},
+  lastServerCursorBySession: {},
   setIncludeDeleted: (value) => set({ includeDeleted: value }),
   toggleEventPanel: () => set((state) => ({ isEventPanelOpen: !state.isEventPanelOpen })),
   setLastVisitedSessionId: (sessionId) => set({ lastVisitedSessionId: sessionId }),
@@ -241,16 +241,57 @@ export const useUiStore = create<UiState>((set) => ({
         [sessionId]: defaultDraftState(),
       },
     })),
-  appendEvent: (sessionId, event) =>
+  markEventCursorSeen: (sessionId, cursor) => {
+    let shouldApply = false;
+
+    set((state) => {
+      const currentCursor = state.lastServerCursorBySession[sessionId];
+      if (typeof currentCursor === "number" && cursor <= currentCursor) {
+        return state;
+      }
+
+      shouldApply = true;
+
+      return {
+        lastServerCursorBySession: {
+          ...state.lastServerCursorBySession,
+          [sessionId]: cursor,
+        },
+      };
+    });
+
+    return shouldApply;
+  },
+  appendEvent: (sessionId, event) => {
+    let wasApplied = false;
+
     set((state) => {
       const currentEvents = state.eventsBySession[sessionId] ?? [];
-      const nextEvents = [...currentEvents, event].sort(byCreatedAt).slice(-50);
+      const nextEvents = mergeSessionEventEntries(currentEvents, event);
+      const nextCursor =
+        typeof event.cursor === "number" && Number.isFinite(event.cursor)
+          ? event.cursor
+          : state.lastServerCursorBySession[sessionId];
+
+      wasApplied =
+        nextEvents.length !== currentEvents.length ||
+        nextEvents.some((item, index) => item !== currentEvents[index]);
 
       return {
         eventsBySession: {
           ...state.eventsBySession,
           [sessionId]: nextEvents,
         },
+        lastServerCursorBySession:
+          typeof nextCursor === "number" && Number.isFinite(nextCursor)
+            ? {
+                ...state.lastServerCursorBySession,
+                [sessionId]: nextCursor,
+              }
+            : state.lastServerCursorBySession,
       };
-    }),
+    });
+
+    return wasApplied;
+  },
 }));

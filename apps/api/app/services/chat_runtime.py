@@ -36,6 +36,10 @@ THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTAL
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 
 
+def strip_think_blocks(content: str) -> str:
+    return THINK_BLOCK_PATTERN.sub("", content).strip()
+
+
 class ChatRuntimeError(Exception):
     pass
 
@@ -136,9 +140,9 @@ class OpenAICompatibleChatRuntime:
                 model,
                 messages,
                 allow_tools=execute_tool is not None,
-                stream=callbacks is not None and execute_tool is None,
+                stream=callbacks is not None,
             )
-            if callbacks is not None and execute_tool is None:
+            if callbacks is not None:
                 response_payload = await self._stream_completion(
                     endpoint, headers, payload, callbacks
                 )
@@ -563,7 +567,7 @@ class OpenAICompatibleChatRuntime:
 
     @staticmethod
     def _sanitize_assistant_content(content: str) -> str:
-        cleaned_content = THINK_BLOCK_PATTERN.sub("", content).strip()
+        cleaned_content = strip_think_blocks(content)
         if cleaned_content:
             return cleaned_content
 
@@ -746,9 +750,9 @@ class AnthropicChatRuntime:
                 model,
                 messages,
                 allow_tools=execute_tool is not None,
-                stream=callbacks is not None and execute_tool is None,
+                stream=callbacks is not None,
             )
-            if callbacks is not None and execute_tool is None:
+            if callbacks is not None:
                 response_payload = await self._stream_completion(
                     endpoint, headers, payload, callbacks
                 )
@@ -906,6 +910,8 @@ class AnthropicChatRuntime:
     ) -> dict[str, object]:
         timeout = httpx.Timeout(self._timeout_seconds, connect=min(self._timeout_seconds, 10.0))
         text_parts: list[str] = []
+        tool_use_fragments: dict[int, dict[str, object]] = {}
+        tool_use_input_fragments: dict[int, list[str]] = {}
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -940,11 +946,35 @@ class AnthropicChatRuntime:
                             delta = event_payload.get("delta")
                             if not isinstance(delta, dict):
                                 continue
-                            text = delta.get("text")
-                            if isinstance(text, str) and text:
-                                text_parts.append(text)
-                                if callbacks.on_text_delta is not None:
-                                    await callbacks.on_text_delta(text)
+                            delta_type = delta.get("type")
+                            if delta_type in {"text_delta", "text"}:
+                                text = delta.get("text")
+                                if isinstance(text, str) and text:
+                                    text_parts.append(text)
+                                    if callbacks.on_text_delta is not None:
+                                        await callbacks.on_text_delta(text)
+                                continue
+                            if delta_type == "input_json_delta":
+                                index = event_payload.get("index")
+                                partial_json = delta.get("partial_json")
+                                if isinstance(index, int) and isinstance(partial_json, str):
+                                    fragments = tool_use_input_fragments.setdefault(index, [])
+                                    fragments.append(partial_json)
+                                continue
+
+                        if event_name == "content_block_start":
+                            index = event_payload.get("index")
+                            content_block = event_payload.get("content_block")
+                            if not isinstance(index, int) or not isinstance(content_block, dict):
+                                continue
+                            if content_block.get("type") != "tool_use":
+                                continue
+                            tool_use_fragments[index] = {
+                                "type": "tool_use",
+                                "id": content_block.get("id"),
+                                "name": content_block.get("name"),
+                                "input": {},
+                            }
             except asyncio.CancelledError:
                 raise
             except httpx.TimeoutException as exc:
@@ -958,7 +988,25 @@ class AnthropicChatRuntime:
             except json.JSONDecodeError as exc:
                 raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
 
-        return {"content": [{"type": "text", "text": "".join(text_parts)}]}
+        content_blocks: list[dict[str, object]] = []
+        if text_parts:
+            content_blocks.append({"type": "text", "text": "".join(text_parts)})
+
+        for index in sorted(tool_use_fragments):
+            tool_use = dict(tool_use_fragments[index])
+            input_payload: dict[str, object] = {}
+            raw_input = "".join(tool_use_input_fragments.get(index, []))
+            if raw_input:
+                try:
+                    parsed_input = json.loads(raw_input)
+                    if isinstance(parsed_input, dict):
+                        input_payload = parsed_input
+                except json.JSONDecodeError:
+                    input_payload = {}
+            tool_use["input"] = input_payload
+            content_blocks.append(tool_use)
+
+        return {"content": content_blocks}
 
     @staticmethod
     def _build_initial_messages(
@@ -1106,7 +1154,7 @@ class AnthropicChatRuntime:
 
     @staticmethod
     def _sanitize_assistant_content(content: str) -> str:
-        cleaned_content = THINK_BLOCK_PATTERN.sub("", content).strip()
+        cleaned_content = strip_think_blocks(content)
         if cleaned_content:
             return cleaned_content
         return ""

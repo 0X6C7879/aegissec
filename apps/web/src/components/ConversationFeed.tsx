@@ -3,16 +3,19 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatBytes } from "../lib/format";
 import {
+  buildReasoningDedupeKey,
+  extractGenerationReasoningEntries,
   extractSafeSessionSummary,
   isRecord,
-  type SafeSessionSummaryEntry,
+  stripHiddenThinkingBlocks,
 } from "../lib/sessionUtils";
 import type { RuntimeExecutionRun } from "../types/runtime";
-import type { SessionEventEntry, SessionMessage } from "../types/sessions";
+import type { ChatGeneration, SessionEventEntry, SessionMessage } from "../types/sessions";
 import { StatusBadge } from "./StatusBadge";
 
 type ConversationFeedProps = {
   messages: SessionMessage[];
+  generations: ChatGeneration[];
   events: SessionEventEntry[];
   runtimeRuns: RuntimeExecutionRun[];
   activeBranchId?: string | null;
@@ -46,18 +49,17 @@ type ToolDrawerRun = {
 };
 
 type ThoughtEntry =
-  | {
-      id: string;
-      createdAt: string;
-      kind: "summary";
-      summary: SafeSessionSummaryEntry;
-    }
-  | {
-      id: string;
-      createdAt: string;
-      kind: "trace";
-      event: SessionEventEntry;
-    };
+  {
+    id: string;
+    dedupeKey: string;
+    createdAt: string;
+    cursor: number | null;
+    assistantMessageId: string | null;
+    label: string;
+    summary: string;
+    tone: "neutral" | "connected" | "warning" | "success" | "error";
+    meta: string[];
+  };
 
 type ConversationTurn = {
   id: string;
@@ -68,31 +70,9 @@ type ConversationTurn = {
   toolRuns: ToolDrawerRun[];
 };
 
-const THINK_BLOCK_PATTERN = /<think>([\s\S]*?)<\/think>/gi;
-
 function toTimestamp(value: string): number {
   const timestamp = new Date(value).getTime();
   return Number.isNaN(timestamp) ? 0 : timestamp;
-}
-
-function parseAssistantContent(content: string): {
-  visibleContent: string;
-  thinkingBlocks: string[];
-} {
-  const thinkingBlocks: string[] = [];
-
-  const visibleContent = content
-    .replace(THINK_BLOCK_PATTERN, (_match, innerContent: string) => {
-      const cleanedContent = innerContent.trim();
-      if (cleanedContent.length > 0) {
-        thinkingBlocks.push(cleanedContent);
-      }
-      return " ";
-    })
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return { visibleContent, thinkingBlocks };
 }
 
 function renderUserMessage(content: string) {
@@ -149,6 +129,35 @@ function renderTraceMeta(payload: unknown): string[] {
     meta.push(`异常 · ${payload.error}`);
   }
   return meta;
+}
+
+function compareThoughtEntries(left: ThoughtEntry, right: ThoughtEntry): number {
+  const timestampDifference = toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
+  if (timestampDifference !== 0) {
+    return timestampDifference;
+  }
+
+  if (left.cursor !== null && right.cursor !== null && left.cursor !== right.cursor) {
+    return left.cursor - right.cursor;
+  }
+
+  if (left.cursor !== right.cursor) {
+    return left.cursor === null ? 1 : -1;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function isAssistantErrorTraceEvent(event: SessionEventEntry): boolean {
+  if (event.type !== "assistant.trace" || !isRecord(event.payload)) {
+    return false;
+  }
+
+  return (
+    event.payload.status === "error" ||
+    typeof event.payload.error === "string" ||
+    (typeof event.payload.state === "string" && event.payload.state.endsWith(".failed"))
+  );
 }
 
 function getToolSummary(run: ToolDrawerRun): string {
@@ -327,7 +336,7 @@ function getLatestToolRunTerminalFailure(
       return;
     }
 
-    const isAssistantError = event.type === "assistant.trace" && event.payload.status === "error";
+    const isAssistantError = isAssistantErrorTraceEvent(event);
     const isSessionError =
       event.type === "session.updated" &&
       event.payload.status === "error" &&
@@ -544,52 +553,141 @@ function getSkillContentFromToolResult(result: unknown): { title: string; conten
   return { title, content: skill.content };
 }
 
-function buildThoughtEntries(events: SessionEventEntry[]): ThoughtEntry[] {
-  const summaryEntries = events
-    .map((event) => {
-      const summary = extractSafeSessionSummary(event.type, event.payload);
-      if (!summary) {
-        return null;
+function buildThoughtEntries(events: SessionEventEntry[], generations: ChatGeneration[]): ThoughtEntry[] {
+  const dedupedEntries = new Map<string, ThoughtEntry>();
+  const overlapKeys = new Set<string>();
+
+  const buildOverlapKey = ({
+    assistantMessageId,
+    label,
+    summary,
+    tone,
+    createdAt,
+  }: {
+    assistantMessageId: string | null;
+    label: string;
+    summary: string;
+    tone: ThoughtEntry["tone"];
+    createdAt: string;
+  }): string => {
+    return [
+      assistantMessageId ?? "none",
+      label.trim(),
+      summary.trim(),
+      tone,
+      createdAt,
+    ].join("|");
+  };
+
+  generations
+    .flatMap((generation) => extractGenerationReasoningEntries(generation))
+    .forEach((entry) => {
+      dedupedEntries.set(entry.identityKey, {
+        id: entry.id,
+        dedupeKey: entry.identityKey,
+        createdAt: entry.createdAt,
+        cursor: entry.cursor,
+        assistantMessageId: entry.assistantMessageId,
+        label: entry.label,
+        summary: entry.summary,
+        tone: entry.tone,
+        meta: entry.meta,
+      });
+      overlapKeys.add(
+        buildOverlapKey({
+          assistantMessageId: entry.assistantMessageId,
+          label: entry.label,
+          summary: entry.summary,
+          tone: entry.tone,
+          createdAt: entry.createdAt,
+        }),
+      );
+    });
+
+  events.forEach((event) => {
+    const safeSummary = extractSafeSessionSummary(event.type, event.payload);
+    if (safeSummary) {
+      const assistantMessageId =
+        isRecord(event.payload) && typeof event.payload.message_id === "string"
+          ? event.payload.message_id
+          : null;
+      const overlapKey = buildOverlapKey({
+        assistantMessageId,
+        label: safeSummary.label,
+        summary: safeSummary.summary,
+        tone: safeSummary.tone,
+        createdAt: event.createdAt,
+      });
+
+      if (overlapKeys.has(overlapKey)) {
+        return;
       }
 
-      return {
+      const dedupeKey = `${event.cursor ?? event.id}:${buildReasoningDedupeKey({
+        assistantMessageId,
+        label: safeSummary.label,
+        summary: safeSummary.summary,
+        tone: safeSummary.tone,
+      })}`;
+
+      dedupedEntries.set(dedupeKey, {
         id: event.id,
+        dedupeKey,
         createdAt: event.createdAt,
-        kind: "summary" as const,
-        summary,
-      };
-    })
-    .filter(
-      (
-        entry,
-      ): entry is {
-        id: string;
-        createdAt: string;
-        kind: "summary";
-        summary: SafeSessionSummaryEntry;
-      } => entry !== null,
-    );
+        cursor: event.cursor ?? null,
+        assistantMessageId,
+        label: safeSummary.label,
+        summary: safeSummary.summary,
+        tone: safeSummary.tone,
+        meta: [],
+      });
+      overlapKeys.add(overlapKey);
+      return;
+    }
 
-  const traceEntries = events
-    .filter(
-      (event) =>
-        event.type === "assistant.trace" &&
-        isRecord(event.payload) &&
-        event.payload.status === "error",
-    )
-    .map(
-      (event) =>
-        ({
-          id: event.id,
-          createdAt: event.createdAt,
-          kind: "trace" as const,
-          event,
-        }) satisfies ThoughtEntry,
-    );
+    if (!isAssistantErrorTraceEvent(event)) {
+      return;
+    }
 
-  return [...summaryEntries, ...traceEntries].sort(
-    (left, right) => toTimestamp(left.createdAt) - toTimestamp(right.createdAt),
-  );
+    const meta = renderTraceMeta(event.payload);
+    const assistantMessageId =
+      isRecord(event.payload) && typeof event.payload.message_id === "string"
+        ? event.payload.message_id
+        : null;
+    const overlapKey = buildOverlapKey({
+      assistantMessageId,
+      label: getTraceLabel(event),
+      summary: event.summary,
+      tone: "error",
+      createdAt: event.createdAt,
+    });
+
+    if (overlapKeys.has(overlapKey)) {
+      return;
+    }
+
+    const dedupeKey = `${event.cursor ?? event.id}:${buildReasoningDedupeKey({
+      assistantMessageId,
+      label: getTraceLabel(event),
+      summary: event.summary,
+      tone: "error",
+    })}`;
+
+    dedupedEntries.set(dedupeKey, {
+      id: event.id,
+      dedupeKey,
+      createdAt: event.createdAt,
+      cursor: event.cursor ?? null,
+      assistantMessageId,
+      label: getTraceLabel(event),
+      summary: event.summary,
+      tone: "error",
+      meta,
+    });
+    overlapKeys.add(overlapKey);
+  });
+
+  return [...dedupedEntries.values()].sort(compareThoughtEntries);
 }
 
 function buildTurns(
@@ -623,20 +721,26 @@ function buildTurns(
     const end = nextUserMessage
       ? toTimestamp(nextUserMessage.created_at)
       : Number.POSITIVE_INFINITY;
+    const assistantMessages = sortedMessages.filter((message) => {
+      if (message.role === "user") {
+        return false;
+      }
+
+      const timestamp = toTimestamp(message.created_at);
+      return timestamp >= start && timestamp < end;
+    });
+    const assistantMessageIds = new Set(assistantMessages.map((message) => message.id));
 
     return {
       id: userMessage.id,
       createdAt: userMessage.created_at,
       userMessage,
-      assistantMessages: sortedMessages.filter((message) => {
-        if (message.role === "user") {
-          return false;
+      assistantMessages,
+      thoughts: thoughts.filter((entry) => {
+        if (entry.assistantMessageId && assistantMessageIds.has(entry.assistantMessageId)) {
+          return true;
         }
 
-        const timestamp = toTimestamp(message.created_at);
-        return timestamp >= start && timestamp < end;
-      }),
-      thoughts: thoughts.filter((entry) => {
         const timestamp = toTimestamp(entry.createdAt);
         return timestamp >= start && timestamp < end;
       }),
@@ -659,6 +763,7 @@ function buildTurns(
 
 export function ConversationFeed({
   messages,
+  generations,
   events,
   runtimeRuns,
   activeBranchId,
@@ -694,7 +799,7 @@ export function ConversationFeed({
     [fallbackToolRuns, sortedRuntimeRuns],
   );
 
-  const thoughts = useMemo(() => buildThoughtEntries(events), [events]);
+  const thoughts = useMemo(() => buildThoughtEntries(events, generations), [events, generations]);
 
   const { turns, orphanMessages, orphanThoughts, orphanToolRuns } = useMemo(
     () => buildTurns(messages, thoughts, toolRuns),
@@ -705,11 +810,15 @@ export function ConversationFeed({
     const lastMessage = messages[messages.length - 1];
     const lastEvent = events[events.length - 1];
     const lastRun = runtimeRuns[runtimeRuns.length - 1];
+    const lastThought = thoughts[thoughts.length - 1];
 
     return [
       messages.length,
       lastMessage?.id ?? "none",
       lastMessage?.content.length ?? 0,
+      thoughts.length,
+      lastThought?.id ?? "none",
+      lastThought?.summary.length ?? 0,
       events.length,
       lastEvent?.id ?? "none",
       lastEvent?.summary.length ?? 0,
@@ -718,7 +827,7 @@ export function ConversationFeed({
       lastRun?.stdout.length ?? 0,
       lastRun?.stderr.length ?? 0,
     ].join(":");
-  }, [events, messages, runtimeRuns]);
+  }, [events, messages, runtimeRuns, thoughts]);
 
   useEffect(() => {
     const feedElement = feedRef.current;
@@ -835,7 +944,7 @@ export function ConversationFeed({
   function renderMessageBubble(message: SessionMessage) {
     const assistantContent =
       message.role === "assistant" || message.role === "system"
-        ? parseAssistantContent(message.content)
+        ? stripHiddenThinkingBlocks(message.content)
         : null;
     const isBusy = messageActionBusyId === message.id;
     const canEdit = message.role === "user" && typeof onEditMessage === "function";
@@ -856,7 +965,7 @@ export function ConversationFeed({
         </div>
         {message.role === "user"
           ? renderUserMessage(message.content)
-          : renderAssistantMessage(assistantContent?.visibleContent ?? message.content)}
+          : renderAssistantMessage(assistantContent ?? message.content)}
         {message.attachments.length > 0 ? (
           <div className="chat-bubble-artifacts">
             {message.attachments.map((attachment) => (
@@ -914,45 +1023,17 @@ export function ConversationFeed({
     );
   }
 
-  function renderThinkingBlock(messageId: string, content: string, index: number) {
-    return (
-      <article
-        key={`${messageId}-thinking-${index}`}
-        className="assistant-reasoning-item assistant-reasoning-item-connected"
-      >
-        <span className="assistant-reasoning-label">模型思路</span>
-        <div className="assistant-reasoning-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        </div>
-      </article>
-    );
-  }
-
   function renderThought(entry: ThoughtEntry) {
-    if (entry.kind === "summary") {
-      return (
-        <article
-          key={entry.id}
-          className={`assistant-reasoning-item assistant-reasoning-item-${entry.summary.tone}`}
-        >
-          <span className="assistant-reasoning-label">{entry.summary.label}</span>
-          <p className="assistant-reasoning-text">{entry.summary.summary}</p>
-        </article>
-      );
-    }
-
-    const meta = renderTraceMeta(entry.event.payload);
-
     return (
-      <article key={entry.id} className="assistant-reasoning-item assistant-reasoning-item-error">
+      <article key={entry.id} className={`assistant-reasoning-item assistant-reasoning-item-${entry.tone}`}>
         <div className="assistant-reasoning-header">
-          <span className="assistant-reasoning-label">{getTraceLabel(entry.event)}</span>
-          {meta[0] ? <span className="assistant-reasoning-meta">{meta[0]}</span> : null}
+          <span className="assistant-reasoning-label">{entry.label}</span>
+          {entry.meta[0] ? <span className="assistant-reasoning-meta">{entry.meta[0]}</span> : null}
         </div>
-        <p className="assistant-reasoning-text">{entry.event.summary}</p>
-        {meta.length > 1 ? (
+        <p className="assistant-reasoning-text">{entry.summary}</p>
+        {entry.meta.length > 1 ? (
           <div className="assistant-reasoning-tags">
-            {meta.slice(1).map((value) => (
+            {entry.meta.slice(1).map((value) => (
               <span key={value} className="assistant-reasoning-tag">
                 {value}
               </span>
@@ -1073,34 +1154,22 @@ export function ConversationFeed({
 
       {turns.map((turn) => {
         const isToolGroupOpen = expandedToolGroupIds.includes(turn.id);
-        const inlineThinkingBlocks = turn.assistantMessages.flatMap((message) => {
-          const parsedContent = parseAssistantContent(message.content);
-          return parsedContent.thinkingBlocks.map((content, index) =>
-            renderThinkingBlock(message.id, content, index),
-          );
-        });
 
         return (
           <article key={turn.id} className="chat-turn">
             {renderMessageBubble(turn.userMessage)}
 
-            {inlineThinkingBlocks.length > 0 ||
-            turn.thoughts.length > 0 ||
+            {turn.thoughts.length > 0 ||
             turn.toolRuns.length > 0 ||
             turn.assistantMessages.length > 0 ? (
               <section className="assistant-turn-card">
-                {inlineThinkingBlocks.length > 0 || turn.thoughts.length > 0 ? (
+                {turn.thoughts.length > 0 ? (
                   <section className="assistant-reasoning-panel">
                     <div className="assistant-section-header">
                       <span className="assistant-section-kicker">思考过程</span>
-                      <span className="assistant-section-count">
-                        {inlineThinkingBlocks.length + turn.thoughts.length}
-                      </span>
+                      <span className="assistant-section-count">{turn.thoughts.length}</span>
                     </div>
-                    <div className="assistant-reasoning-list">
-                      {inlineThinkingBlocks}
-                      {turn.thoughts.map((entry) => renderThought(entry))}
-                    </div>
+                    <div className="assistant-reasoning-list">{turn.thoughts.map((entry) => renderThought(entry))}</div>
                   </section>
                 ) : null}
 

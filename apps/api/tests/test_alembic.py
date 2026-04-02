@@ -28,6 +28,7 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
         "runtime_artifact",
         "runtime_execution_run",
         "run_log",
+        "session_event_log",
     }.issubset(table_names)
     session_columns = {column["name"] for column in inspector.get_columns("session")}
     assert {
@@ -60,4 +61,14 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
         "reasoning_summary",
         "reasoning_trace",
         "cancel_requested_at",
+        "worker_id",
+        "lease_claimed_at",
+        "lease_expires_at",
+        "attempt_count",
     }.issubset(generation_columns)
+    session_event_columns = {
+        column["name"] for column in inspector.get_columns("session_event_log")
+    }
+    assert {"cursor", "session_id", "event_type", "timestamp", "payload"}.issubset(
+        session_event_columns
+    )

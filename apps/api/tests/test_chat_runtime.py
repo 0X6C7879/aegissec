@@ -9,6 +9,7 @@ from app.services.chat_runtime import (
     MAX_TOOL_STEPS,
     AnthropicChatRuntime,
     ConversationMessage,
+    GenerationCallbacks,
     OpenAICompatibleChatRuntime,
     ToolCallRequest,
     ToolCallResult,
@@ -603,3 +604,154 @@ def test_get_chat_runtime_applies_configured_timeout_for_anthropic(
 
     assert isinstance(runtime, AnthropicChatRuntime)
     assert runtime._timeout_seconds == 90  # noqa: SLF001
+
+
+def test_openai_runtime_streams_when_tools_are_enabled() -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+    )
+
+    class StreamingToolRuntime(OpenAICompatibleChatRuntime):
+        def __init__(self) -> None:
+            super().__init__(settings=settings)
+            self.stream_payloads: list[dict[str, object]] = []
+            self.stream_calls = 0
+
+        async def _stream_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+            callbacks: object,
+        ) -> dict[str, object]:
+            del endpoint, headers
+            self.stream_calls += 1
+            self.stream_payloads.append(payload)
+            if self.stream_calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "execute_kali_command",
+                                            "arguments": json.dumps({"command": "pwd"}),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            assert isinstance(callbacks, object)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "streamed final answer",
+                        }
+                    }
+                ]
+            }
+
+        async def _request_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del endpoint, headers, payload
+            raise AssertionError(
+                "_request_completion should not be used when callbacks are provided"
+            )
+
+    runtime = StreamingToolRuntime()
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        return ToolCallResult(tool_name=tool_request.tool_name, payload={"status": "ok"})
+
+    result = asyncio.run(
+        runtime.generate_reply(
+            "Collect initial evidence",
+            [],
+            execute_tool=execute_tool,
+            callbacks=GenerationCallbacks(),
+        )
+    )
+
+    assert result == "streamed final answer"
+    assert runtime.stream_calls == 2
+    assert all(payload["stream"] is True for payload in runtime.stream_payloads)
+
+
+def test_anthropic_runtime_streams_when_tools_are_enabled() -> None:
+    settings = Settings.model_construct(
+        anthropic_api_key="test-key",
+        anthropic_api_base_url="https://example.test",
+        anthropic_model="claude-demo",
+    )
+
+    class StreamingToolRuntime(AnthropicChatRuntime):
+        def __init__(self) -> None:
+            super().__init__(settings=settings)
+            self.stream_payloads: list[dict[str, object]] = []
+            self.stream_calls = 0
+
+        async def _stream_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+            callbacks: object,
+        ) -> dict[str, object]:
+            del endpoint, headers, callbacks
+            self.stream_calls += 1
+            self.stream_payloads.append(payload)
+            if self.stream_calls == 1:
+                return {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call-1",
+                            "name": "execute_kali_command",
+                            "input": {"command": "pwd"},
+                        }
+                    ]
+                }
+            return {"content": [{"type": "text", "text": "streamed final answer"}]}
+
+        async def _request_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del endpoint, headers, payload
+            raise AssertionError(
+                "_request_completion should not be used when callbacks are provided"
+            )
+
+    runtime = StreamingToolRuntime()
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        return ToolCallResult(tool_name=tool_request.tool_name, payload={"status": "ok"})
+
+    result = asyncio.run(
+        runtime.generate_reply(
+            "Collect initial evidence",
+            [],
+            execute_tool=execute_tool,
+            callbacks=GenerationCallbacks(),
+        )
+    )
+
+    assert result == "streamed final answer"
+    assert runtime.stream_calls == 2
+    assert all(payload["stream"] is True for payload in runtime.stream_payloads)

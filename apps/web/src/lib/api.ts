@@ -510,8 +510,8 @@ export async function cancelGeneration(
   });
 }
 
-export function getSessionEventsUrl(sessionId: string): string {
-  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/events`;
+export function getSessionEventsUrl(sessionId: string, cursor?: number | null): string {
+  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/events${buildQueryString({ cursor })}`;
 }
 
 export async function listSkills(signal?: AbortSignal): Promise<SkillRecord[]> {

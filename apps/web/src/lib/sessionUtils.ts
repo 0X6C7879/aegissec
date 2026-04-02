@@ -1,12 +1,17 @@
 import type {
   AttachmentMetadata,
+  ChatGeneration,
+  GenerationReasoningTraceEntry,
+  SessionConversation,
   SessionDetail,
+  SessionEventEntry,
   SessionMessage,
   SessionSummary,
 } from "../types/sessions";
 
-const THINK_BLOCK_PATTERN = /<think>[\s\S]*?<\/think>/gi;
+const HIDDEN_THINK_BLOCK_PATTERN = /<think>[\s\S]*?<\/think>/gi;
 const MAX_SAFE_SUMMARY_LENGTH = 280;
+const MAX_TIMELINE_EVENTS = 200;
 
 export type SafeSessionSummaryEntry = {
   label: string;
@@ -14,8 +19,25 @@ export type SafeSessionSummaryEntry = {
   tone: "neutral" | "connected" | "warning" | "success" | "error";
 };
 
+export type PersistedGenerationReasoningEntry = {
+  id: string;
+  identityKey: string;
+  generationId: string;
+  assistantMessageId: string | null;
+  createdAt: string;
+  cursor: number | null;
+  label: string;
+  summary: string;
+  tone: SafeSessionSummaryEntry["tone"];
+  meta: string[];
+};
+
 function toTimestamp(value: string): number {
   return new Date(value).getTime();
+}
+
+function isFiniteCursor(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function getMessageSortKey(message: SessionMessage): [number, number] {
@@ -99,12 +121,530 @@ function readFirstNonEmptyString(
 }
 
 function sanitizeSafeSummaryText(value: string): string {
-  const cleaned = value.replace(THINK_BLOCK_PATTERN, " ").replace(/\s+/g, " ").trim();
+  const cleaned = stripHiddenThinkingBlocks(value).replace(/\s+/g, " ").trim();
   if (cleaned.length <= MAX_SAFE_SUMMARY_LENGTH) {
     return cleaned;
   }
 
   return `${cleaned.slice(0, MAX_SAFE_SUMMARY_LENGTH - 1).trimEnd()}…`;
+}
+
+export function stripHiddenThinkingBlocks(content: string): string {
+  return content
+    .replace(HIDDEN_THINK_BLOCK_PATTERN, " ")
+    .replace(/<\/?think>/gi, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function buildReasoningDedupeKey({
+  assistantMessageId,
+  label,
+  summary,
+  tone,
+}: {
+  assistantMessageId: string | null;
+  label: string;
+  summary: string;
+  tone: SafeSessionSummaryEntry["tone"];
+}): string {
+  return [assistantMessageId ?? "none", tone, label.trim(), summary.trim()].join("|");
+}
+
+function readFirstFiniteNumber(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): number | null {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function buildReasoningIdentityKey({
+  generationId,
+  assistantMessageId,
+  label,
+  summary,
+  tone,
+  createdAt,
+  cursor,
+  sequence,
+}: {
+  generationId: string;
+  assistantMessageId: string | null;
+  label: string;
+  summary: string;
+  tone: SafeSessionSummaryEntry["tone"];
+  createdAt: string;
+  cursor: number | null;
+  sequence: number | null;
+}): string {
+  if (typeof sequence === "number" && Number.isFinite(sequence)) {
+    return `sequence:${generationId}:${sequence}`;
+  }
+
+  if (typeof cursor === "number" && Number.isFinite(cursor)) {
+    return `cursor:${cursor}`;
+  }
+
+  return `content:${buildReasoningDedupeKey({
+    assistantMessageId,
+    label,
+    summary,
+    tone,
+  })}|${createdAt}`;
+}
+
+function toReasoningTone(status: string | null): SafeSessionSummaryEntry["tone"] {
+  if (status === "error" || status?.endsWith(".failed")) {
+    return "error";
+  }
+
+  if (status === "cancelled") {
+    return "warning";
+  }
+
+  if (status === "done" || status === "completed") {
+    return "success";
+  }
+
+  if (status === "running") {
+    return "connected";
+  }
+
+  return "neutral";
+}
+
+function getReasoningPhaseLabel(phase: string | null): string | null {
+  return phase ? `思路进展 · ${phase.replace(/_/g, " ")}` : null;
+}
+
+function isAssistantTraceErrorPayload(payload: Record<string, unknown>): boolean {
+  return (
+    payload.status === "error" ||
+    typeof payload.error === "string" ||
+    (typeof payload.state === "string" && payload.state.endsWith(".failed"))
+  );
+}
+
+function getPersistedReasoningPayload(
+  entry: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isRecord(entry.payload)) {
+    return entry.payload;
+  }
+
+  if (isRecord(entry.data)) {
+    return entry.data;
+  }
+
+  return entry;
+}
+
+function getPersistedReasoningType(
+  entry: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): string {
+  const explicitType = readFirstNonEmptyString(entry, ["type", "event", "kind"]);
+  if (explicitType) {
+    return explicitType;
+  }
+
+  return readFirstNonEmptyString(payload, ["type", "event", "kind"]) ?? "assistant.trace";
+}
+
+function getPersistedReasoningCreatedAt(
+  generation: ChatGeneration,
+  entry: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): string {
+  return (
+    readFirstNonEmptyString(entry, [
+      "created_at",
+      "recorded_at",
+      "updated_at",
+      "timestamp",
+      "emitted_at",
+    ]) ??
+    readFirstNonEmptyString(payload, [
+      "created_at",
+      "recorded_at",
+      "updated_at",
+      "timestamp",
+      "emitted_at",
+    ]) ??
+    generation.started_at ??
+    generation.created_at
+  );
+}
+
+function getPersistedReasoningCursor(
+  entry: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): number | null {
+  return readFirstFiniteNumber(entry, ["cursor"]) ?? readFirstFiniteNumber(payload, ["cursor"]);
+}
+
+function getPersistedReasoningSequence(
+  entry: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): number | null {
+  return readFirstFiniteNumber(entry, ["sequence"]) ?? readFirstFiniteNumber(payload, ["sequence"]);
+}
+
+function formatAssistantTraceStateLabel(state: string): string {
+  return `思路进展 · ${state.replace(/[._]/g, " ")}`;
+}
+
+function buildAssistantTraceSummary(data: Record<string, unknown>): SafeSessionSummaryEntry | null {
+  const state = typeof data.state === "string" ? data.state : null;
+  const status = typeof data.status === "string" ? data.status : null;
+  const command = readFirstNonEmptyString(data, ["command"]);
+  const errorMessage = readFirstNonEmptyString(data, ["error"]);
+  const summaryText = readFirstNonEmptyString(data, [
+    "safe_summary",
+    "summary",
+    "message",
+    "status_text",
+  ]);
+
+  let summary = summaryText;
+  if (!summary && state === "generation.started") {
+    summary = "助手正在整理当前请求的可见推理过程。";
+  } else if (!summary && state === "generation.completed") {
+    summary = "助手已完成本轮推理整理。";
+  } else if (!summary && state === "generation.cancelled") {
+    summary = "当前推理过程已停止。";
+  } else if (!summary && state === "generation.failed") {
+    summary = errorMessage ? `生成失败：${errorMessage}` : "生成失败。";
+  } else if (!summary && state === "tool.started") {
+    summary = command ? `开始调用工具：${command}` : "开始调用工具。";
+  } else if (!summary && state === "tool.finished") {
+    summary = command ? `工具调用已完成：${command}` : "工具调用已完成。";
+  } else if (!summary && state === "tool.failed") {
+    if (command && errorMessage) {
+      summary = `工具调用失败：${command}，${errorMessage}`;
+    } else if (command) {
+      summary = `工具调用失败：${command}`;
+    } else if (errorMessage) {
+      summary = `工具调用失败：${errorMessage}`;
+    } else {
+      summary = "工具调用失败。";
+    }
+  }
+
+  if (!summary) {
+    return null;
+  }
+
+  const normalizedStatus =
+    status ??
+    (state?.endsWith(".failed")
+      ? "error"
+      : state?.endsWith(".cancelled")
+        ? "cancelled"
+        : state?.endsWith(".completed") || state === "tool.finished"
+          ? "completed"
+          : state?.endsWith(".started")
+            ? "running"
+            : null);
+
+  return {
+    label:
+      readFirstNonEmptyString(data, ["label", "title"]) ??
+      (state ? formatAssistantTraceStateLabel(state) : "思路进展"),
+    summary: sanitizeSafeSummaryText(summary),
+    tone: toReasoningTone(normalizedStatus),
+  };
+}
+
+function getPersistedReasoningAssistantMessageId(
+  generation: ChatGeneration,
+  entry: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): string | null {
+  return (
+    readFirstNonEmptyString(entry, ["assistant_message_id", "message_id"]) ??
+    readFirstNonEmptyString(payload, ["assistant_message_id", "message_id"]) ??
+    generation.assistant_message_id
+  );
+}
+
+function getPersistedReasoningMeta(payload: Record<string, unknown>): string[] {
+  const meta: string[] = [];
+
+  if (typeof payload.status === "string") {
+    meta.push(`状态 · ${payload.status}`);
+  }
+
+  if (typeof payload.command === "string") {
+    meta.push(`命令 · ${payload.command}`);
+  }
+
+  if (typeof payload.error === "string") {
+    meta.push(`异常 · ${payload.error}`);
+  }
+
+  return meta;
+}
+
+export function extractGenerationReasoningEntries(
+  generation: ChatGeneration,
+): PersistedGenerationReasoningEntry[] {
+  const entries: PersistedGenerationReasoningEntry[] = [];
+
+  (generation.reasoning_trace ?? []).forEach((rawEntry, index) => {
+    if (!isRecord(rawEntry)) {
+      return;
+    }
+
+    const payload = getPersistedReasoningPayload(rawEntry);
+    const type = getPersistedReasoningType(rawEntry, payload);
+    const createdAt = getPersistedReasoningCreatedAt(generation, rawEntry, payload);
+    const assistantMessageId = getPersistedReasoningAssistantMessageId(generation, rawEntry, payload);
+    const cursor = getPersistedReasoningCursor(rawEntry, payload);
+    const sequence = getPersistedReasoningSequence(rawEntry, payload);
+    const persistedId = `${generation.id}:reasoning:${index}`;
+    const safeSummary = extractSafeSessionSummary(type, payload);
+
+    if (safeSummary) {
+      entries.push({
+        id: persistedId,
+        identityKey: buildReasoningIdentityKey({
+          generationId: generation.id,
+          assistantMessageId,
+          label: safeSummary.label,
+          summary: safeSummary.summary,
+          tone: safeSummary.tone,
+          createdAt,
+          cursor,
+          sequence,
+        }),
+        generationId: generation.id,
+        assistantMessageId,
+        createdAt,
+        cursor,
+        label: safeSummary.label,
+        summary: safeSummary.summary,
+        tone: safeSummary.tone,
+        meta: [],
+      });
+      return;
+    }
+
+    if (type !== "assistant.trace") {
+      return;
+    }
+
+    const summaryText = readFirstNonEmptyString(payload, [
+      "safe_summary",
+      "summary",
+      "message",
+      "status_text",
+    ]);
+    const errorText = readFirstNonEmptyString(payload, ["error"]);
+    const visibleText = summaryText ?? errorText;
+
+    if (!visibleText) {
+      return;
+    }
+
+    const summary = sanitizeSafeSummaryText(visibleText);
+    if (!summary) {
+      return;
+    }
+
+    const status = typeof payload.status === "string" ? payload.status : null;
+    const isError = isAssistantTraceErrorPayload(payload);
+    const label =
+      readFirstNonEmptyString(payload, ["label", "title"]) ??
+      getReasoningPhaseLabel(typeof payload.phase === "string" ? payload.phase : null) ??
+      (isError ? "请求异常" : "思路进展");
+    const tone = isError ? "error" : toReasoningTone(status);
+
+    entries.push({
+      id: persistedId,
+      identityKey: buildReasoningIdentityKey({
+        generationId: generation.id,
+        assistantMessageId,
+        label,
+        summary,
+        tone,
+        createdAt,
+        cursor,
+        sequence,
+      }),
+      generationId: generation.id,
+      assistantMessageId,
+      createdAt,
+      cursor,
+      label,
+      summary,
+      tone,
+      meta: getPersistedReasoningMeta(payload),
+    });
+  });
+
+  if (entries.length === 0 && typeof generation.reasoning_summary === "string") {
+    const summary = sanitizeSafeSummaryText(generation.reasoning_summary);
+    if (summary) {
+      const tone = toReasoningTone(generation.status);
+      const assistantMessageId = generation.assistant_message_id;
+      entries.push({
+        id: `${generation.id}:reasoning-summary`,
+        identityKey: buildReasoningIdentityKey({
+          generationId: generation.id,
+          assistantMessageId,
+          label: "思路摘要",
+          summary,
+          tone,
+          createdAt: generation.ended_at ?? generation.updated_at,
+          cursor: null,
+          sequence: null,
+        }),
+        generationId: generation.id,
+        assistantMessageId,
+        createdAt: generation.ended_at ?? generation.updated_at,
+        cursor: null,
+        label: "思路摘要",
+        summary,
+        tone,
+        meta: [],
+      });
+    }
+  }
+
+  return entries;
+}
+
+function compareSessionEventEntries(left: SessionEventEntry, right: SessionEventEntry): number {
+  if (isFiniteCursor(left.cursor) && isFiniteCursor(right.cursor) && left.cursor !== right.cursor) {
+    return left.cursor - right.cursor;
+  }
+
+  const createdAtDifference = toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
+  if (createdAtDifference !== 0) {
+    return createdAtDifference;
+  }
+
+  if (isFiniteCursor(left.cursor) !== isFiniteCursor(right.cursor)) {
+    return isFiniteCursor(left.cursor) ? -1 : 1;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+export function mergeSessionEventEntries(
+  events: SessionEventEntry[] | undefined,
+  event: SessionEventEntry,
+): SessionEventEntry[] {
+  const currentEvents = events ?? [];
+  const nextEvents = currentEvents.filter((item) => {
+    if (isFiniteCursor(event.cursor) && isFiniteCursor(item.cursor)) {
+      return item.cursor !== event.cursor;
+    }
+
+    return item.id !== event.id;
+  });
+
+  return [...nextEvents, event].sort(compareSessionEventEntries).slice(-MAX_TIMELINE_EVENTS);
+}
+
+function cloneReasoningTraceEntry(
+  type: string,
+  data: Record<string, unknown>,
+  createdAt: string,
+  cursor: number | null,
+  sequence: number | null,
+): GenerationReasoningTraceEntry {
+  return {
+    ...data,
+    type,
+    created_at: typeof data.created_at === "string" ? data.created_at : createdAt,
+    recorded_at:
+      typeof data.recorded_at === "string"
+        ? data.recorded_at
+        : typeof data.created_at === "string"
+          ? data.created_at
+          : createdAt,
+    cursor,
+    sequence,
+  };
+}
+
+function getNextReasoningSequence(generation: ChatGeneration): number {
+  const maxSequence = (generation.reasoning_trace ?? []).reduce((currentMax, entry) => {
+    if (!isRecord(entry)) {
+      return currentMax;
+    }
+
+    const payload = getPersistedReasoningPayload(entry);
+    return Math.max(currentMax, getPersistedReasoningSequence(entry, payload) ?? 0);
+  }, 0);
+
+  return maxSequence + 1;
+}
+
+function mergeGenerationReasoningTrace(
+  generation: ChatGeneration,
+  type: string,
+  data: Record<string, unknown>,
+  createdAt: string,
+  cursor: number | null,
+): ChatGeneration {
+  const safeSummary = extractSafeSessionSummary(type, data);
+  const nextSequence = getPersistedReasoningSequence(data, data) ?? getNextReasoningSequence(generation);
+  const traceEntry = cloneReasoningTraceEntry(type, data, createdAt, cursor, nextSequence);
+
+  return {
+    ...generation,
+    reasoning_summary:
+      type === "assistant.summary" && safeSummary ? safeSummary.summary : generation.reasoning_summary,
+    reasoning_trace: [...(generation.reasoning_trace ?? []), traceEntry],
+    updated_at: createdAt,
+  };
+}
+
+export function mergeConversationReasoningEvent(
+  conversation: SessionConversation | undefined,
+  type: string,
+  data: unknown,
+  createdAt: string,
+  cursor: number | null,
+): SessionConversation | undefined {
+  if (!conversation || !isRecord(data) || (type !== "assistant.summary" && type !== "assistant.trace")) {
+    return conversation;
+  }
+
+  const generationId = readFirstNonEmptyString(data, ["generation_id"]);
+  const assistantMessageId = readFirstNonEmptyString(data, ["assistant_message_id", "message_id"]);
+  const generationIndex = conversation.generations.findIndex((generation) => {
+    if (generationId && generation.id === generationId) {
+      return true;
+    }
+
+    return assistantMessageId ? generation.assistant_message_id === assistantMessageId : false;
+  });
+
+  if (generationIndex < 0) {
+    return conversation;
+  }
+
+  const nextGenerations = conversation.generations.map((generation, index) =>
+    index === generationIndex
+      ? mergeGenerationReasoningTrace(generation, type, data, createdAt, cursor)
+      : generation,
+  );
+
+  return {
+    ...conversation,
+    generations: nextGenerations,
+  };
 }
 
 function buildSessionStatusSummary(value: Record<string, unknown>): SafeSessionSummaryEntry | null {
@@ -226,6 +766,10 @@ export function extractSafeSessionSummary(
     return buildSessionStatusSummary(data);
   }
 
+  if (type === "assistant.trace") {
+    return buildAssistantTraceSummary(data);
+  }
+
   if (!isAssistantSummaryType(type)) {
     return null;
   }
@@ -274,7 +818,7 @@ export function shouldStoreRealtimeEvent(type: string, data: unknown): boolean {
   }
 
   if (type === "assistant.trace") {
-    return isRecord(data) && data.status === "error";
+    return extractSafeSessionSummary(type, data) !== null;
   }
 
   if (type === "session.updated") {
@@ -455,7 +999,7 @@ export function buildEventSummary(type: string, data: unknown): string {
 
   if (type === "message.created" && isRecord(data)) {
     const role = typeof data.role === "string" ? data.role : "message";
-    const content = typeof data.content === "string" ? data.content : "";
+    const content = typeof data.content === "string" ? stripHiddenThinkingBlocks(data.content) : "";
     const preview = content.trim().replace(/\s+/g, " ").slice(0, 72);
     if (role === "assistant") {
       return `模型已回复${preview ? `：${preview}` : "。"}`;

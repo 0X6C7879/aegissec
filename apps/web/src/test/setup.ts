@@ -32,5 +32,6 @@ afterEach(() => {
     uiDensity: "compact",
     draftsBySession: {},
     eventsBySession: {},
+    lastServerCursorBySession: {},
   });
 });

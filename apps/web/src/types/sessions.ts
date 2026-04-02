@@ -46,6 +46,33 @@ export type AttachmentMetadata = {
 
 export type RuntimePolicy = Record<string, unknown>;
 
+export type GenerationReasoningTraceEntry = Record<string, unknown> & {
+  type?: string;
+  event?: string;
+  kind?: string;
+  cursor?: number | null;
+  sequence?: number | null;
+  recorded_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  timestamp?: string | null;
+  emitted_at?: string | null;
+  payload?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+  summary?: string | null;
+  safe_summary?: string | null;
+  status_text?: string | null;
+  message?: string | null;
+  label?: string | null;
+  title?: string | null;
+  status?: string | null;
+  phase?: string | null;
+  error?: string | null;
+  message_id?: string | null;
+  assistant_message_id?: string | null;
+  generation_id?: string | null;
+};
+
 export type SessionSummary = {
   id: string;
   title: string;
@@ -82,7 +109,7 @@ export type ChatGeneration = {
   target_message_id?: string | null;
   status: GenerationStatus;
   reasoning_summary?: string | null;
-  reasoning_trace?: Record<string, unknown>[];
+  reasoning_trace?: GenerationReasoningTraceEntry[];
   metadata?: Record<string, unknown>;
   error_message?: string | null;
   created_at: string;
@@ -148,6 +175,7 @@ export type ChatResponse = {
 
 export type SessionEventEnvelope = {
   type: string;
+  cursor?: number | null;
   created_at?: string;
   data?: unknown;
 };
@@ -155,6 +183,7 @@ export type SessionEventEnvelope = {
 export type SessionEventEntry = {
   id: string;
   sessionId: string;
+  cursor?: number | null;
   type: string;
   createdAt: string;
   summary: string;

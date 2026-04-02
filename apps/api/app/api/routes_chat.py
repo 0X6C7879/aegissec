@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
@@ -42,6 +44,7 @@ from app.db.models import (
     to_conversation_branch_read,
     to_message_read,
     to_session_read,
+    utc_now,
 )
 from app.db.repositories import SessionRepository
 from app.db.session import get_db_session
@@ -55,6 +58,7 @@ from app.services.chat_runtime import (
     ToolCallRequest,
     ToolCallResult,
     get_chat_runtime,
+    strip_think_blocks,
 )
 from app.services.runtime import (
     RuntimeArtifactPathError,
@@ -72,6 +76,9 @@ from app.services.session_generation import (
 router = APIRouter(prefix="/api/sessions", tags=["chat"])
 
 SAFE_THINKING_SUMMARY = "Assistant is analyzing the request and preparing a response."
+THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_OPEN_TAG = "<think>"
+_THINK_CLOSE_TAG = "</think>"
 
 
 def _get_session_or_404(repository: SessionRepository, session_id: str) -> Session:
@@ -91,6 +98,41 @@ def _get_message_or_404(
     if message is None or message.session_id != session_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
     return message
+
+
+def _message_trace_entries(message: Message) -> list[dict[str, object]]:
+    raw_trace = message.metadata_json.get("trace")
+    if not isinstance(raw_trace, list):
+        return []
+    return [dict(entry) for entry in raw_trace if isinstance(entry, dict)]
+
+
+def _persist_reasoning_trace_entry(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    entry: dict[str, object],
+) -> dict[str, object]:
+    generation = None
+    generation_trace_length = 0
+    if assistant_message.generation_id is not None:
+        generation = repository.get_generation(assistant_message.generation_id)
+        if generation is not None:
+            generation_trace_length = len(generation.reasoning_trace_json)
+
+    message_trace_length = len(_message_trace_entries(assistant_message))
+    persisted_entry = {
+        "sequence": max(message_trace_length, generation_trace_length) + 1,
+        "recorded_at": utc_now().isoformat(),
+        **entry,
+    }
+
+    repository.append_message_trace(assistant_message, persisted_entry)
+    if generation is not None:
+        generation_trace = list(generation.reasoning_trace_json)
+        generation_trace.append(dict(persisted_entry))
+        repository.update_generation(generation, reasoning_trace_json=generation_trace)
+    return persisted_entry
 
 
 async def _publish_session_updated(
@@ -204,16 +246,28 @@ async def _publish_assistant_summary(
     assistant_message: Message,
     summary: str,
 ) -> None:
-    repository.update_message_summary(assistant_message, summary)
+    sanitized_summary = strip_think_blocks(summary)
+    if not sanitized_summary:
+        sanitized_summary = SAFE_THINKING_SUMMARY
+    repository.update_message_summary(assistant_message, sanitized_summary)
     if assistant_message.generation_id is not None:
         generation = repository.get_generation(assistant_message.generation_id)
         if generation is not None:
-            repository.update_generation(generation, reasoning_summary=summary)
+            repository.update_generation(generation, reasoning_summary=sanitized_summary)
+    _persist_reasoning_trace_entry(
+        repository,
+        assistant_message=assistant_message,
+        entry={
+            "event": SessionEventType.ASSISTANT_SUMMARY.value,
+            "state": "summary.updated",
+            "summary": sanitized_summary,
+        },
+    )
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.ASSISTANT_SUMMARY,
             session_id=session_id,
-            payload={"message_id": assistant_message.id, "summary": summary},
+            payload={"message_id": assistant_message.id, "summary": sanitized_summary},
         )
     )
 
@@ -226,14 +280,22 @@ async def _publish_assistant_trace(
     assistant_message: Message,
     entry: dict[str, object],
 ) -> None:
-    repository.append_message_trace(assistant_message, entry)
-    if assistant_message.generation_id is not None:
-        generation = repository.get_generation(assistant_message.generation_id)
-        if generation is not None:
-            generation_trace = list(generation.reasoning_trace_json)
-            generation_trace.append(dict(entry))
-            repository.update_generation(generation, reasoning_trace_json=generation_trace)
-    payload = {"message_id": assistant_message.id, **entry}
+    sanitized_entry: dict[str, object] = {}
+    for key, value in entry.items():
+        if isinstance(value, str):
+            sanitized_value = strip_think_blocks(value)
+            if THINK_BLOCK_RE.search(value) and not sanitized_value:
+                continue
+            sanitized_entry[key] = sanitized_value
+        else:
+            sanitized_entry[key] = value
+
+    persisted_entry = _persist_reasoning_trace_entry(
+        repository,
+        assistant_message=assistant_message,
+        entry={"event": SessionEventType.ASSISTANT_TRACE.value, **sanitized_entry},
+    )
+    payload = {"message_id": assistant_message.id, **persisted_entry}
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.ASSISTANT_TRACE,
@@ -241,6 +303,40 @@ async def _publish_assistant_trace(
             payload=payload,
         )
     )
+
+
+def _project_visible_stream_content(content: str) -> str:
+    visible_parts: list[str] = []
+    index = 0
+    inside_think_block = False
+
+    while index < len(content):
+        remaining_content = content[index:]
+        remaining_lower = remaining_content.lower()
+
+        if inside_think_block:
+            if remaining_lower.startswith(_THINK_CLOSE_TAG):
+                inside_think_block = False
+                index += len(_THINK_CLOSE_TAG)
+                continue
+            if _THINK_CLOSE_TAG.startswith(remaining_lower):
+                break
+            index += 1
+            continue
+
+        if remaining_lower.startswith(_THINK_OPEN_TAG):
+            inside_think_block = True
+            index += len(_THINK_OPEN_TAG)
+            continue
+        if _THINK_OPEN_TAG.startswith(remaining_lower) or _THINK_CLOSE_TAG.startswith(
+            remaining_lower
+        ):
+            break
+
+        visible_parts.append(content[index])
+        index += 1
+
+    return "".join(visible_parts).strip()
 
 
 def _build_conversation_messages(messages: list[Message]) -> list[ConversationMessage]:
@@ -627,13 +723,24 @@ async def _process_generation(
                 entry={"state": "generation.started", "generation_id": generation.id},
             )
 
-            streamed_content = loaded_assistant_message.content
+            raw_streamed_content = loaded_assistant_message.content
+            streamed_content = _project_visible_stream_content(raw_streamed_content)
 
             async def on_text_delta(delta: str) -> None:
-                nonlocal streamed_content
+                nonlocal raw_streamed_content, streamed_content
                 if cancel_event.is_set():
                     raise asyncio.CancelledError
-                streamed_content += delta
+                raw_streamed_content += delta
+                next_streamed_content = _project_visible_stream_content(raw_streamed_content)
+                if next_streamed_content == streamed_content:
+                    return
+
+                sanitized_delta = (
+                    next_streamed_content[len(streamed_content) :]
+                    if next_streamed_content.startswith(streamed_content)
+                    else next_streamed_content
+                )
+                streamed_content = next_streamed_content
                 repository.update_message(
                     loaded_assistant_message,
                     content=streamed_content,
@@ -644,7 +751,7 @@ async def _process_generation(
                     event_type=SessionEventType.MESSAGE_DELTA,
                     session_id=session.id,
                     message=loaded_assistant_message,
-                    delta=delta,
+                    delta=sanitized_delta,
                 )
                 await _publish_message_event(
                     event_broker,
@@ -664,9 +771,11 @@ async def _process_generation(
                     )
 
             final_content = await chat_runtime.generate_reply(
-                user_message.content
-                if user_message is not None
-                else loaded_assistant_message.content,
+                (
+                    user_message.content
+                    if user_message is not None
+                    else loaded_assistant_message.content
+                ),
                 (
                     attachments_from_storage(user_message.attachments_json)
                     if user_message is not None
@@ -681,6 +790,9 @@ async def _process_generation(
                     on_summary=on_summary,
                     is_cancelled=cancel_event.is_set,
                 ),
+            )
+            final_content = strip_think_blocks(final_content) or (
+                "模型已完成分析，但没有返回可展示的最终答复。"
             )
 
             if cancel_event.is_set():
@@ -808,6 +920,7 @@ async def _run_session_worker(
     current_task = asyncio.current_task()
     if current_task is None:
         return
+    worker_id = f"session-worker-{uuid4()}"
 
     terminal_error: ChatRuntimeError | ChatRuntimeConfigurationError | None = None
 
@@ -815,7 +928,7 @@ async def _run_session_worker(
         while True:
             with DBSession(db_engine) as worker_db_session:
                 repository = SessionRepository(worker_db_session)
-                generation = repository.claim_next_generation(session_id)
+                generation = repository.claim_next_generation(session_id, worker_id=worker_id)
 
             if generation is None:
                 break
@@ -1034,11 +1147,11 @@ async def create_chat_message(
     future = await generation_manager.register_future(session.id, generation.id)
     queued_prompt_count = repository.queue_size(session.id)
     should_start_worker = await generation_manager.should_start_worker(session.id)
-    if not should_start_worker and queued_prompt_count >= 1:
+    if not should_start_worker:
         await _publish_session_updated(
             event_broker,
             session,
-            queued_prompt_count=queued_prompt_count,
+            queued_prompt_count=max(1, queued_prompt_count),
         )
     await _start_worker_if_needed(
         db_session=db_session,

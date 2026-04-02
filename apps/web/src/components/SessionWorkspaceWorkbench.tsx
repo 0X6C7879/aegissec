@@ -1946,6 +1946,7 @@ export function SessionWorkspaceWorkbench() {
                 <section className="workspace-message-panel">
                   <ConversationFeed
                     messages={activeConversation.messages}
+                    generations={activeConversation.generations}
                     events={sessionEvents}
                     runtimeRuns={sessionRuns}
                     activeBranchId={activeConversation.active_branch?.id ?? null}

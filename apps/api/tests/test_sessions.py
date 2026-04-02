@@ -2,15 +2,23 @@ import asyncio
 import threading
 import time
 from contextlib import ExitStack
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 from fastapi.testclient import TestClient
 from httpx import Response
 from pytest import MonkeyPatch
+from sqlmodel import Session as DBSession
 
 from app.compat.skills.models import SkillScanRoot
-from app.db.models import CompatibilityScope, CompatibilitySource
+from app.db.models import (
+    CompatibilityScope,
+    CompatibilitySource,
+    GenerationStatus,
+    MessageRole,
+    MessageStatus,
+)
 from app.db.repositories import SessionRepository
 from app.db.session import get_websocket_db_session
 from app.main import app
@@ -21,6 +29,7 @@ from app.services.chat_runtime import (
     ToolExecutor,
     get_chat_runtime,
 )
+from app.services.session_generation import recover_abandoned_generations
 from tests.utils import api_data
 
 
@@ -614,6 +623,47 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
     )
 
 
+def test_websocket_supports_replay_cursor(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Replay Cursor Session"})
+    session_id = api_data(session_response)["id"]
+
+    chat_response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": "seed replay", "attachments": []},
+    )
+    assert chat_response.status_code == 200
+
+    replayed_events: list[dict[str, object]] = []
+    with client.websocket_connect(f"/api/sessions/{session_id}/events?cursor=0") as websocket:
+        while True:
+            event = websocket.receive_json()
+            replayed_events.append(event)
+            if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                break
+
+    assert replayed_events
+    typed_cursors: list[int] = []
+    for event in replayed_events:
+        cursor_value = event.get("cursor")
+        if isinstance(cursor_value, int):
+            typed_cursors.append(cursor_value)
+    assert typed_cursors
+    assert typed_cursors == sorted(typed_cursors)
+    max_cursor = int(typed_cursors[-1])
+
+    with client.websocket_connect(
+        f"/api/sessions/{session_id}/events?cursor={max_cursor}"
+    ) as websocket:
+        pause_response = client.post(f"/api/sessions/{session_id}/pause")
+        assert pause_response.status_code == 200
+        replay_event = websocket.receive_json()
+
+    assert replay_event["type"] == "session.updated"
+    assert replay_event["payload"]["status"] == "paused"
+    assert isinstance(replay_event.get("cursor"), int)
+    assert int(replay_event["cursor"]) > max_cursor
+
+
 def test_cancel_session_interrupts_active_generation(client: TestClient) -> None:
     class SlowStreamingChatRuntime:
         async def generate_reply(
@@ -1058,6 +1108,155 @@ def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClien
         event_types = [event["type"] for event in events]
         assert "generation.failed" in event_types
         assert "assistant.trace" in event_types
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_startup_recovery_requeues_abandoned_generations(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Recovery Session"})
+    session_id = api_data(session_response)["id"]
+    db_engine = app.state.database_engine
+
+    with DBSession(db_engine) as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.get_session(session_id)
+        assert session is not None
+        branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="recover me",
+            attachments=[],
+            branch_id=branch.id,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="partial",
+            attachments=[],
+            branch_id=branch.id,
+            parent_message_id=user_message.id,
+            status=MessageStatus.STREAMING,
+        )
+        generation = repository.create_generation(
+            session_id=session.id,
+            branch_id=branch.id,
+            assistant_message_id=assistant_message.id,
+            user_message_id=user_message.id,
+        )
+        repository.update_generation(
+            generation,
+            status=GenerationStatus.RUNNING,
+            worker_id="worker-old",
+            lease_claimed_at=datetime.now(UTC) - timedelta(minutes=10),
+            lease_expires_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+
+    recovered_count = recover_abandoned_generations(db_engine)
+    assert recovered_count == 1
+
+    with DBSession(db_engine) as db_session:
+        repository = SessionRepository(db_session)
+        recovered_generation = repository.get_generation(generation.id)
+        assert recovered_generation is not None
+        assert recovered_generation.status == GenerationStatus.QUEUED
+        assert recovered_generation.worker_id is None
+        assert recovered_generation.lease_claimed_at is None
+        assert recovered_generation.lease_expires_at is None
+
+
+def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: TestClient) -> None:
+    class UnsafeReasoningChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_summary is not None
+            assert callbacks.on_text_delta is not None
+            await callbacks.on_summary("<think>private</think>分析中")
+            await callbacks.on_text_delta("<thi")
+            await callbacks.on_text_delta("nk>hidden</thi")
+            await callbacks.on_text_delta("nk>最终")
+            return "<think>very secret</think>最终答复"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: UnsafeReasoningChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Safe Reasoning Session"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"content": "请给出结果", "attachments": []},
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        summary_events = [event for event in events if event["type"] == "assistant.summary"]
+        trace_events = [event for event in events if event["type"] == "assistant.trace"]
+        delta_events = [event for event in events if event["type"] == "message.delta"]
+        completed_events = [event for event in events if event["type"] == "message.completed"]
+
+        assert summary_events
+        assert "<think>" not in summary_events[-1]["payload"]["summary"]
+        assert trace_events
+        assert all(isinstance(event["payload"].get("sequence"), int) for event in trace_events)
+        assert all(isinstance(event["payload"].get("recorded_at"), str) for event in trace_events)
+        assert delta_events
+        assert "".join(event["payload"]["delta"] for event in delta_events) == "最终答复"
+        assert all("<" not in event["payload"]["delta"] for event in delta_events)
+        assert all("hidden" not in event["payload"]["delta"] for event in delta_events)
+        assert completed_events
+        assert "<think>" not in completed_events[-1]["payload"]["content"]
+        assert chat_payload["generation"] is not None
+        persisted_trace = chat_payload["generation"]["reasoning_trace"]
+        assert [entry["sequence"] for entry in persisted_trace] == list(
+            range(1, len(persisted_trace) + 1)
+        )
+        assert all(isinstance(entry.get("recorded_at"), str) for entry in persisted_trace)
+        summary_trace_entries = [
+            entry for entry in persisted_trace if entry.get("state") == "summary.updated"
+        ]
+        assert summary_trace_entries
+        assert all(entry["event"] == "assistant.summary" for entry in summary_trace_entries)
+        assert summary_trace_entries[0]["summary"] == (
+            "Assistant is analyzing the request and preparing a response."
+        )
+        assert summary_trace_entries[-1]["summary"] == "分析中"
+        assert all("<think>" not in str(entry) for entry in persisted_trace)
+
+        detail_response = client.get(f"/api/sessions/{session_id}")
+        assert detail_response.status_code == 200
+        detail_payload = api_data(detail_response)
+        assistant_messages = [
+            message for message in detail_payload["messages"] if message["role"] == "assistant"
+        ]
+        assert assistant_messages
+        assert "<think>" not in assistant_messages[-1]["content"]
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

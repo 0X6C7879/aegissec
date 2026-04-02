@@ -195,6 +195,7 @@ def client(
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
     event_broker = SessionEventBroker()
+    event_broker.configure_persistence(lambda: Session(engine))
 
     def override_db_session(request: Request) -> Generator[Session, None, None]:
         with Session(engine) as session:

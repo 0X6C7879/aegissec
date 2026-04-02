@@ -279,6 +279,23 @@ class ChatGeneration(SQLModel, table=True):
     started_at: datetime | None = Field(default=None, nullable=True)
     ended_at: datetime | None = Field(default=None, nullable=True)
     cancel_requested_at: datetime | None = Field(default=None, nullable=True)
+    worker_id: str | None = Field(default=None, nullable=True, index=True)
+    lease_claimed_at: datetime | None = Field(default=None, nullable=True)
+    lease_expires_at: datetime | None = Field(default=None, nullable=True, index=True)
+    attempt_count: int = Field(default=0, nullable=False, ge=0)
+
+
+class SessionEventLog(SQLModel, table=True):
+    __tablename__ = "session_event_log"
+
+    cursor: int | None = Field(default=None, primary_key=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    event_type: str = Field(nullable=False, index=True)
+    timestamp: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+    payload_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("payload", JSON, nullable=False),
+    )
 
 
 class RuntimeExecutionRun(SQLModel, table=True):

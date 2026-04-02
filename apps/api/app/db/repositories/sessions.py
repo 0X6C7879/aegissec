@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlmodel import Session as DBSession
 from sqlmodel import col, or_, select
@@ -16,6 +16,7 @@ from app.db.models import (
     MessageRole,
     MessageStatus,
     Session,
+    SessionEventLog,
     SessionStatus,
     utc_now,
 )
@@ -518,6 +519,38 @@ class SessionRepository:
             self.db_session.refresh(generation)
         return generation
 
+    def create_session_event(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        payload: dict[str, object],
+        timestamp: datetime | None = None,
+    ) -> SessionEventLog:
+        event = SessionEventLog(
+            session_id=session_id,
+            event_type=event_type,
+            payload_json=dict(payload),
+            timestamp=timestamp or utc_now(),
+        )
+        self.db_session.add(event)
+        self.db_session.commit()
+        self.db_session.refresh(event)
+        return event
+
+    def list_session_events(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 2_000,
+    ) -> list[SessionEventLog]:
+        statement = select(SessionEventLog).where(SessionEventLog.session_id == session_id)
+        if after_cursor is not None:
+            statement = statement.where(col(SessionEventLog.cursor) > after_cursor)
+        statement = statement.order_by(col(SessionEventLog.cursor).asc()).limit(limit)
+        return list(self.db_session.exec(statement).all())
+
     def get_generation(self, generation_id: str) -> ChatGeneration | None:
         statement = select(ChatGeneration).where(ChatGeneration.id == generation_id)
         return self.db_session.exec(statement).first()
@@ -545,7 +578,13 @@ class SessionRepository:
         )
         return self.db_session.exec(statement).first()
 
-    def claim_next_generation(self, session_id: str) -> ChatGeneration | None:
+    def claim_next_generation(
+        self,
+        session_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> ChatGeneration | None:
         statement = (
             select(ChatGeneration)
             .where(ChatGeneration.session_id == session_id)
@@ -559,6 +598,13 @@ class SessionRepository:
         generation.status = GenerationStatus.RUNNING
         generation.updated_at = now
         generation.started_at = now
+        generation.worker_id = worker_id
+        generation.lease_claimed_at = now
+        generation.lease_expires_at = now
+        generation.lease_expires_at = generation.lease_expires_at.replace(
+            microsecond=0
+        ) + timedelta(seconds=lease_seconds)
+        generation.attempt_count = (generation.attempt_count or 0) + 1
         self.db_session.add(generation)
         self.db_session.commit()
         self.db_session.refresh(generation)
@@ -574,6 +620,9 @@ class SessionRepository:
         reasoning_trace_json: list[dict[str, object]] | None = None,
         metadata_json: dict[str, object] | None = None,
         cancel_requested_at: datetime | None = None,
+        worker_id: str | None = None,
+        lease_claimed_at: datetime | None = None,
+        lease_expires_at: datetime | None = None,
         commit: bool = True,
     ) -> ChatGeneration:
         if status is not None:
@@ -585,6 +634,9 @@ class SessionRepository:
                 GenerationStatus.CANCELLED,
             }:
                 generation.ended_at = utc_now()
+                generation.worker_id = None
+                generation.lease_claimed_at = None
+                generation.lease_expires_at = None
         if error_message is not None:
             generation.error_message = error_message
         if reasoning_summary is not None:
@@ -595,11 +647,45 @@ class SessionRepository:
             generation.metadata_json = dict(metadata_json)
         if cancel_requested_at is not None:
             generation.cancel_requested_at = cancel_requested_at
+        if worker_id is not None:
+            generation.worker_id = worker_id
+        if lease_claimed_at is not None:
+            generation.lease_claimed_at = lease_claimed_at
+        if lease_expires_at is not None:
+            generation.lease_expires_at = lease_expires_at
         self.db_session.add(generation)
         if commit:
             self.db_session.commit()
             self.db_session.refresh(generation)
         return generation
+
+    def recover_abandoned_generations(self, *, now: datetime | None = None) -> int:
+        current_time = now or utc_now()
+        statement = (
+            select(ChatGeneration)
+            .where(ChatGeneration.status == GenerationStatus.RUNNING)
+            .where(
+                or_(
+                    col(ChatGeneration.lease_expires_at).is_(None),
+                    col(ChatGeneration.lease_expires_at) < current_time,
+                )
+            )
+            .order_by(col(ChatGeneration.created_at).asc(), col(ChatGeneration.id).asc())
+        )
+        abandoned = list(self.db_session.exec(statement).all())
+        for generation in abandoned:
+            generation.status = GenerationStatus.QUEUED
+            generation.updated_at = current_time
+            generation.worker_id = None
+            generation.lease_claimed_at = None
+            generation.lease_expires_at = None
+            generation.error_message = None
+            self.db_session.add(generation)
+        if abandoned:
+            self.db_session.commit()
+            for generation in abandoned:
+                self.db_session.refresh(generation)
+        return len(abandoned)
 
     def mark_generation_completed(self, generation: ChatGeneration) -> ChatGeneration:
         return self.update_generation(generation, status=GenerationStatus.COMPLETED)

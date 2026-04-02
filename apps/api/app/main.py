@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session as DBSession
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
@@ -18,9 +19,11 @@ from app.api.routes_settings import router as settings_router
 from app.api.routes_skills import router as skills_router
 from app.api.routes_workflows import router as workflows_router
 from app.core.errors import register_exception_handlers
+from app.core.events import get_event_broker
 from app.core.logging_middleware import APIRequestMiddleware
 from app.core.settings import get_settings
 from app.db.session import engine, init_db
+from app.services.session_generation import recover_abandoned_generations
 
 settings = get_settings()
 LOCAL_DEV_ORIGIN_REGEX = r"^https?://(127\.0\.0\.1|localhost):\d+$"
@@ -45,6 +48,8 @@ OPENAPI_TAGS = [
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    get_event_broker().configure_persistence(lambda: DBSession(engine))
+    recover_abandoned_generations(engine)
     yield
 
 

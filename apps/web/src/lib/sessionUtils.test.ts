@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractSafeSessionSummary, shouldStoreRealtimeEvent } from "./sessionUtils";
+import {
+  extractSafeSessionSummary,
+  mergeConversationReasoningEvent,
+  mergeSessionEventEntries,
+  shouldStoreRealtimeEvent,
+} from "./sessionUtils";
 
 describe("sessionUtils realtime summaries", () => {
   it("maps generation cancellation events to safe timeline text", () => {
@@ -33,5 +38,124 @@ describe("sessionUtils realtime summaries", () => {
         content: "partial",
       }),
     ).toBe(false);
+    expect(
+      shouldStoreRealtimeEvent("assistant.trace", {
+        state: "generation.failed",
+        error: "runtime crashed",
+      }),
+    ).toBe(true);
+    expect(
+      shouldStoreRealtimeEvent("assistant.trace", {
+        state: "tool.started",
+        command: "nmap 127.0.0.1",
+      }),
+    ).toBe(true);
+  });
+
+  it("maps observable assistant traces to safe visible summaries", () => {
+    expect(
+      extractSafeSessionSummary("assistant.trace", {
+        state: "tool.started",
+        command: "nmap 127.0.0.1",
+      }),
+    ).toEqual({
+      label: "思路进展 · tool started",
+      summary: "开始调用工具：nmap 127.0.0.1",
+      tone: "connected",
+    });
+  });
+
+  it("strips dangling think tags in visible summaries", () => {
+    expect(
+      extractSafeSessionSummary("assistant.summary", {
+        summary: "<think>private reasoning 正在整理可展示摘要。",
+        status: "running",
+      }),
+    ).toEqual({
+      label: "思路摘要",
+      summary: "private reasoning 正在整理可展示摘要。",
+      tone: "connected",
+    });
+  });
+
+  it("merges live reasoning events into conversation generations", () => {
+    const merged = mergeConversationReasoningEvent(
+      {
+        session: {
+          id: "session-1",
+          title: "当前对话",
+          status: "running",
+          project_id: null,
+          goal: null,
+          scenario_type: null,
+          current_phase: null,
+          runtime_policy_json: null,
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+          deleted_at: null,
+        },
+        active_branch: null,
+        branches: [],
+        messages: [],
+        generations: [
+          {
+            id: "generation-1",
+            session_id: "session-1",
+            branch_id: "branch-1",
+            action: "reply",
+            assistant_message_id: "assistant-message-1",
+            status: "running",
+            reasoning_trace: [],
+            created_at: "2026-04-01T10:00:00.000Z",
+            updated_at: "2026-04-01T10:00:00.000Z",
+          },
+        ],
+      },
+      "assistant.summary",
+      {
+        message_id: "assistant-message-1",
+        summary: "新的可见摘要",
+      },
+      "2026-04-01T10:00:01.000Z",
+      21,
+    );
+
+    expect(merged?.generations[0]?.reasoning_summary).toBe("新的可见摘要");
+    expect(merged?.generations[0]?.reasoning_trace).toMatchObject([
+      {
+        type: "assistant.summary",
+        cursor: 21,
+        sequence: 1,
+        summary: "新的可见摘要",
+      },
+    ]);
+  });
+
+  it("dedupes replayed timeline entries by server cursor", () => {
+    const initialEvents = mergeSessionEventEntries([], {
+      id: "session-1:12",
+      sessionId: "session-1",
+      cursor: 12,
+      type: "assistant.summary",
+      createdAt: "2026-04-01T10:00:02.000Z",
+      summary: "第一次摘要",
+      payload: { summary: "第一次摘要" },
+    });
+
+    const replayedEvents = mergeSessionEventEntries(initialEvents, {
+      id: "session-1:12",
+      sessionId: "session-1",
+      cursor: 12,
+      type: "assistant.summary",
+      createdAt: "2026-04-01T10:00:03.000Z",
+      summary: "重复回放",
+      payload: { summary: "重复回放" },
+    });
+
+    expect(replayedEvents).toHaveLength(1);
+    expect(replayedEvents[0]).toMatchObject({
+      cursor: 12,
+      summary: "重复回放",
+    });
   });
 });

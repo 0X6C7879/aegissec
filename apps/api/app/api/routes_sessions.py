@@ -543,6 +543,7 @@ async def get_session_artifacts(
 async def stream_session_events(
     websocket: WebSocket,
     session_id: str,
+    cursor: int | None = Query(default=None, ge=0),
     db_session: DBSession = Depends(get_websocket_db_session),
     event_broker: SessionEventBroker = Depends(get_event_broker),
 ) -> None:
@@ -558,10 +559,26 @@ async def stream_session_events(
         return
 
     queue = await event_broker.subscribe(session_id)
+    replay_cursor = cursor
+    last_cursor_sent = replay_cursor
     try:
+        if replay_cursor is not None:
+            replay_events = await event_broker.replay(session_id, after_cursor=replay_cursor)
+            for replay_event in replay_events:
+                await websocket.send_json(replay_event.model_dump(mode="json"))
+                if replay_event.cursor is not None:
+                    last_cursor_sent = replay_event.cursor
         while True:
             event = await queue.get()
+            if (
+                last_cursor_sent is not None
+                and event.cursor is not None
+                and event.cursor <= last_cursor_sent
+            ):
+                continue
             await websocket.send_json(event.model_dump(mode="json"))
+            if event.cursor is not None:
+                last_cursor_sent = event.cursor
     except WebSocketDisconnect:
         return
     finally:

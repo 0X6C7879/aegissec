@@ -82,6 +82,10 @@ _SQLITE_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "reasoning_summary": "TEXT",
         "reasoning_trace": "JSON NOT NULL DEFAULT '[]'",
         "cancel_requested_at": "DATETIME",
+        "worker_id": "TEXT",
+        "lease_claimed_at": "DATETIME",
+        "lease_expires_at": "DATETIME",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
     },
     "skill_record": {
         "parameter_schema": "JSON NOT NULL DEFAULT '{}'",
@@ -115,6 +119,14 @@ _SQLITE_INDEX_STATEMENTS = (
     ),
     "CREATE INDEX IF NOT EXISTS ix_chat_generation_status ON chat_generation (status)",
     "CREATE INDEX IF NOT EXISTS ix_chat_generation_created_at ON chat_generation (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_chat_generation_worker_id ON chat_generation (worker_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chat_generation_lease_expires_at "
+        "ON chat_generation (lease_expires_at)"
+    ),
+    "CREATE INDEX IF NOT EXISTS ix_session_event_log_session_id ON session_event_log (session_id)",
+    "CREATE INDEX IF NOT EXISTS ix_session_event_log_event_type ON session_event_log (event_type)",
+    "CREATE INDEX IF NOT EXISTS ix_session_event_log_timestamp ON session_event_log (timestamp)",
 )
 
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from sqlmodel import Field, SQLModel
+from sqlmodel import Session as DBSession
 
 from app.db.models import utc_now
 
@@ -41,6 +43,7 @@ class SessionEventType(str, Enum):
 class SessionEvent(SQLModel):
     type: SessionEventType
     session_id: str
+    cursor: int | None = None
     timestamp: datetime = Field(default_factory=utc_now)
     payload: dict[str, Any]
 
@@ -49,6 +52,10 @@ class SessionEventBroker:
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[SessionEvent]]] = {}
         self._lock = asyncio.Lock()
+        self._session_factory: Callable[[], DBSession] | None = None
+
+    def configure_persistence(self, session_factory: Callable[[], DBSession]) -> None:
+        self._session_factory = session_factory
 
     async def subscribe(self, session_id: str) -> asyncio.Queue[SessionEvent]:
         queue: asyncio.Queue[SessionEvent] = asyncio.Queue()
@@ -68,11 +75,71 @@ class SessionEventBroker:
                 self._subscribers.pop(session_id, None)
 
     async def publish(self, event: SessionEvent) -> None:
+        persisted_event = self._persist_event(event)
         async with self._lock:
-            subscribers = list(self._subscribers.get(event.session_id, set()))
+            subscribers = list(self._subscribers.get(persisted_event.session_id, set()))
 
         for queue in subscribers:
-            await queue.put(event)
+            await queue.put(persisted_event)
+
+    async def replay(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 2_000,
+    ) -> list[SessionEvent]:
+        if self._session_factory is None:
+            return []
+
+        from app.db.repositories import SessionRepository
+
+        with self._session_factory() as db_session:
+            repository = SessionRepository(db_session)
+            events = repository.list_session_events(
+                session_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+
+        replay_events: list[SessionEvent] = []
+        for event in events:
+            try:
+                event_type = SessionEventType(event.event_type)
+            except ValueError:
+                continue
+            replay_events.append(
+                SessionEvent(
+                    type=event_type,
+                    session_id=event.session_id,
+                    cursor=event.cursor,
+                    timestamp=event.timestamp,
+                    payload=dict(event.payload_json),
+                )
+            )
+        return replay_events
+
+    def _persist_event(self, event: SessionEvent) -> SessionEvent:
+        if self._session_factory is None:
+            return event
+
+        from app.db.repositories import SessionRepository
+
+        with self._session_factory() as db_session:
+            repository = SessionRepository(db_session)
+            persisted = repository.create_session_event(
+                session_id=event.session_id,
+                event_type=event.type.value,
+                payload=dict(event.payload),
+                timestamp=event.timestamp,
+            )
+        return SessionEvent(
+            type=event.type,
+            session_id=event.session_id,
+            cursor=persisted.cursor,
+            timestamp=persisted.timestamp,
+            payload=dict(event.payload),
+        )
 
 
 event_broker = SessionEventBroker()
