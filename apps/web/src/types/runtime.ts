@@ -74,6 +74,11 @@ export type RuntimeArtifactsCleanupResult = {
   kept: number;
 };
 
+export type RuntimeRunsClearResult = {
+  deleted_runs: number;
+  deleted_artifacts: number;
+};
+
 export type RuntimeExecuteRequest = {
   command: string;
   timeout_seconds?: number | null;
