@@ -31,10 +31,22 @@ import {
 } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { useSessionEvents } from "../hooks/useSessionEvents";
-import { mergeSessionMessages, sortSessions, upsertSession } from "../lib/sessionUtils";
+import {
+  mergeConversationGeneration,
+  mergeSessionMessages,
+  sortSessions,
+  upsertSession,
+} from "../lib/sessionUtils";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraph, SessionGraphEdge, SessionGraphNode } from "../types/graphs";
-import type { SessionConversation, SessionSummary } from "../types/sessions";
+import type {
+  ChatGeneration,
+  GenerationStep,
+  SessionConversation,
+  SessionMessage,
+  SessionQueue,
+  SessionSummary,
+} from "../types/sessions";
 import type {
   WorkflowRunDetail,
   WorkflowRunExport,
@@ -221,7 +233,7 @@ function getRelationLabel(relation: string): string {
   }
 }
 
-function buildOptimisticUserMessage(sessionId: string, content: string) {
+function buildOptimisticUserMessage(sessionId: string, content: string): SessionMessage {
   return {
     id: `optimistic-user-${crypto.randomUUID()}`,
     session_id: sessionId,
@@ -229,6 +241,69 @@ function buildOptimisticUserMessage(sessionId: string, content: string) {
     content,
     attachments: [],
     created_at: new Date().toISOString(),
+  };
+}
+
+function buildOptimisticAssistantMessage(
+  sessionId: string,
+  branchId: string | null,
+  generationId: string,
+  createdAt: string,
+): SessionMessage {
+  return {
+    id: `optimistic-assistant-${crypto.randomUUID()}`,
+    session_id: sessionId,
+    branch_id: branchId,
+    generation_id: generationId,
+    role: "assistant",
+    status: "queued",
+    message_kind: "message",
+    content: "",
+    attachments: [],
+    created_at: createdAt,
+  };
+}
+
+function buildOptimisticGeneration(
+  sessionId: string,
+  branchId: string | null,
+  userMessageId: string,
+  assistantMessageId: string,
+  createdAt: string,
+  queuePosition: number,
+): ChatGeneration {
+  const queuedStep: GenerationStep = {
+    id: `optimistic-step-${crypto.randomUUID()}`,
+    generation_id: `optimistic-generation-${crypto.randomUUID()}`,
+    session_id: sessionId,
+    message_id: assistantMessageId,
+    sequence: 1,
+    kind: "status",
+    phase: "planning",
+    status: "pending",
+    state: "queued",
+    label: "已加入队列",
+    safe_summary:
+      queuePosition > 1 ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。` : "已进入队列，等待开始。",
+    delta_text: "",
+    started_at: createdAt,
+    ended_at: null,
+  };
+
+  const generationId = queuedStep.generation_id;
+
+  return {
+    id: generationId,
+    session_id: sessionId,
+    branch_id: branchId ?? "default-branch",
+    action: "reply",
+    user_message_id: userMessageId,
+    assistant_message_id: assistantMessageId,
+    status: "queued",
+    steps: [{ ...queuedStep, generation_id: generationId }],
+    created_at: createdAt,
+    updated_at: createdAt,
+    queue_position: queuePosition,
   };
 }
 
@@ -1422,25 +1497,77 @@ export function SessionWorkspaceWorkbench() {
         "conversation",
         id,
       ]);
+      const previousQueue = queryClient.getQueryData<SessionQueue | undefined>(["session-queue", id]);
       const optimisticMessage = buildOptimisticUserMessage(id, content);
+      const createdAt = optimisticMessage.created_at;
+      const branchId = previousDetail?.active_branch?.id ?? null;
+      const activeGenerationId =
+        previousQueue?.active_generation_id ?? previousQueue?.active_generation?.id ?? null;
+      const queuedGenerationCount =
+        previousQueue?.queued_generation_count ?? previousQueue?.queued_generations.length ?? 0;
+      const optimisticGeneration = buildOptimisticGeneration(
+        id,
+        branchId,
+        optimisticMessage.id,
+        `optimistic-assistant-${crypto.randomUUID()}`,
+        createdAt,
+        queuedGenerationCount + 1,
+      );
+      const optimisticAssistantMessage = buildOptimisticAssistantMessage(
+        id,
+        branchId,
+        optimisticGeneration.id,
+        createdAt,
+      );
+      optimisticGeneration.assistant_message_id = optimisticAssistantMessage.id;
+      optimisticGeneration.steps = (optimisticGeneration.steps ?? []).map((step) => ({
+        ...step,
+        generation_id: optimisticGeneration.id,
+        message_id: optimisticAssistantMessage.id,
+      }));
 
       queryClient.setQueryData<SessionConversation | undefined>(["conversation", id], (currentValue) => {
         const targetDetail = currentValue ?? previousDetail;
         if (!targetDetail) {
           return targetDetail;
         }
+
+        const nextMessages =
+          mergeSessionMessages(
+            { ...targetDetail.session, messages: targetDetail.messages },
+            [optimisticMessage, optimisticAssistantMessage],
+          )?.messages ?? targetDetail.messages;
+
         return {
           ...targetDetail,
           session: {
             ...targetDetail.session,
             status: "running",
-            updated_at: optimisticMessage.created_at,
+            updated_at: createdAt,
           },
-          messages:
-            mergeSessionMessages(
-              { ...targetDetail.session, messages: targetDetail.messages },
-              [optimisticMessage],
-            )?.messages ?? targetDetail.messages,
+          messages: nextMessages,
+          generations: [...targetDetail.generations, optimisticGeneration],
+          active_generation_id: targetDetail.active_generation_id ?? activeGenerationId,
+          queued_generation_count: (targetDetail.queued_generation_count ?? queuedGenerationCount) + 1,
+        };
+      });
+
+      queryClient.setQueryData<SessionQueue | undefined>(["session-queue", id], (currentValue) => {
+        const targetQueue = currentValue ?? previousQueue;
+        if (!targetQueue) {
+          return targetQueue;
+        }
+
+        return {
+          ...targetQueue,
+          session: {
+            ...targetQueue.session,
+            status: "running",
+            updated_at: createdAt,
+          },
+          queued_generations: [...targetQueue.queued_generations, optimisticGeneration],
+          active_generation_id: activeGenerationId,
+          queued_generation_count: queuedGenerationCount + 1,
         };
       });
 
@@ -1459,39 +1586,91 @@ export function SessionWorkspaceWorkbench() {
 
       void queryClient.invalidateQueries({ queryKey: ["session-queue", id] });
 
-      return { previousDetail, optimisticMessageId: optimisticMessage.id };
+      return {
+        previousDetail,
+        previousQueue,
+        optimisticMessageId: optimisticMessage.id,
+        optimisticAssistantMessageId: optimisticAssistantMessage.id,
+        optimisticGenerationId: optimisticGeneration.id,
+      };
     },
     onSuccess: async (response, _variables, context) => {
       queryClient.setQueryData<SessionConversation | undefined>(
         ["conversation", response.session.id],
         (currentValue) => {
           const baseMessages = (currentValue?.messages ?? []).filter(
-            (message) => message.id !== context?.optimisticMessageId,
+            (message) =>
+              message.id !== context?.optimisticMessageId &&
+              message.id !== context?.optimisticAssistantMessageId,
           );
           const nextMessages = [response.user_message, response.assistant_message];
           const updatedDetail = currentValue
-            ? { ...currentValue, session: response.session, messages: baseMessages }
+            ? {
+                ...currentValue,
+                session: response.session,
+                messages: baseMessages,
+                generations: currentValue.generations.filter(
+                  (generation) => generation.id !== context?.optimisticGenerationId,
+                ),
+                active_generation_id:
+                  response.active_generation_id ?? currentValue.active_generation_id,
+                queued_generation_count:
+                  response.queued_generation_count ?? currentValue.queued_generation_count,
+              }
             : undefined;
           if (!updatedDetail) {
             return updatedDetail;
           }
-          return {
+          const nextConversation = {
             ...updatedDetail,
             active_branch: response.branch ?? updatedDetail.active_branch,
-            generations: response.generation
-              ? [
-                  ...updatedDetail.generations.filter((generation) => generation.id !== response.generation?.id),
-                  response.generation,
-                ]
-              : updatedDetail.generations,
             messages:
               mergeSessionMessages(
                 { ...updatedDetail.session, messages: updatedDetail.messages },
                 nextMessages,
               )?.messages ?? updatedDetail.messages,
           };
+
+          return response.generation
+            ? mergeConversationGeneration(nextConversation, response.generation) ?? nextConversation
+            : nextConversation;
         },
       );
+      queryClient.setQueryData<SessionQueue | undefined>(["session-queue", response.session.id], (currentValue) => {
+        const targetQueue = currentValue ?? context?.previousQueue;
+        if (!targetQueue) {
+          return targetQueue;
+        }
+
+        const filteredQueued = targetQueue.queued_generations.filter(
+          (generation) => generation.id !== context?.optimisticGenerationId,
+        );
+        const activeGenerationId = response.active_generation_id ?? targetQueue.active_generation_id ?? null;
+        const nextQueuedGenerations = response.generation
+          ? activeGenerationId === response.generation.id || response.generation.status !== "queued"
+            ? filteredQueued.filter((generation) => generation.id !== response.generation?.id)
+            : [
+                ...filteredQueued.filter((generation) => generation.id !== response.generation?.id),
+                response.generation,
+              ]
+          : filteredQueued;
+        const nextActiveGeneration =
+          response.generation && activeGenerationId === response.generation.id
+            ? response.generation
+            : targetQueue.active_generation?.id === context?.optimisticGenerationId
+              ? null
+              : targetQueue.active_generation;
+
+        return {
+          ...targetQueue,
+          session: response.session,
+          active_generation: nextActiveGeneration,
+          queued_generations: nextQueuedGenerations,
+          active_generation_id: activeGenerationId,
+          queued_generation_count:
+            response.queued_generation_count ?? nextQueuedGenerations.length,
+        };
+      });
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, response.session),
       );
@@ -1519,7 +1698,12 @@ export function SessionWorkspaceWorkbench() {
             ? {
                 ...detail,
                 messages: detail.messages.filter(
-                  (message) => message.id !== context.optimisticMessageId,
+                  (message) =>
+                    message.id !== context.optimisticMessageId &&
+                    message.id !== context.optimisticAssistantMessageId,
+                ),
+                generations: detail.generations.filter(
+                  (generation) => generation.id !== context.optimisticGenerationId,
                 ),
               }
             : detail,
@@ -1532,6 +1716,10 @@ export function SessionWorkspaceWorkbench() {
         queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
           upsertSession(currentValue, previousDetail.session),
         );
+      }
+
+      if (context?.previousQueue) {
+        queryClient.setQueryData<SessionQueue | undefined>(["session-queue", variables.id], context.previousQueue);
       }
 
       if (!isCancelledError) {
@@ -1775,8 +1963,15 @@ export function SessionWorkspaceWorkbench() {
     workflowQuery.data?.status !== "done" &&
     workflowQuery.data?.status !== "error";
   const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
-  const queuedGenerationCount = sessionQueueQuery.data?.queued_generations.length ?? 0;
-  const isGenerationActive = activeGeneration !== null || activeSession?.status === "running";
+  const queuedGenerationCount =
+    sessionQueueQuery.data?.queued_generation_count ??
+    sessionQueueQuery.data?.queued_generations.length ??
+    activeConversation?.queued_generation_count ??
+    0;
+  const isGenerationActive =
+    activeGeneration !== null ||
+    Boolean(sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id) ||
+    activeSession?.status === "running";
 
   function handleToggleSidebarCollapsed(): void {
     setIsSidebarCollapsed((currentValue) => !currentValue);
@@ -1949,8 +2144,17 @@ export function SessionWorkspaceWorkbench() {
                     generations={activeConversation.generations}
                     events={sessionEvents}
                     runtimeRuns={sessionRuns}
+                    activeGeneration={activeGeneration}
+                    queuedGenerations={sessionQueueQuery.data?.queued_generations ?? []}
                     activeBranchId={activeConversation.active_branch?.id ?? null}
                     messageActionBusyId={messageActionBusyId}
+                    cancelGenerationBusy={cancelGenerationMutation.isPending}
+                    onCancelGeneration={(generationId) => {
+                      void cancelGenerationMutation.mutateAsync({
+                        sessionId: activeSession.id,
+                        generationId,
+                      });
+                    }}
                     onEditMessage={(message) => {
                       const nextContent = window.prompt("编辑这条用户消息", message.content);
                       if (nextContent === null) {

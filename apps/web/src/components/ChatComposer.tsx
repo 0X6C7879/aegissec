@@ -27,8 +27,8 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
   };
 
   const isSubmitDisabled = useMemo(() => {
-    return disabled || isSending || draftContent.trim().length === 0;
-  }, [disabled, draftContent, isSending]);
+    return disabled || draftContent.trim().length === 0;
+  }, [disabled, draftContent]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -147,7 +147,7 @@ export function ChatComposer({ sessionId, disabled, isSending, onSend }: ChatCom
 
         <div className="button-row">
           <button className="button button-primary" type="submit" disabled={isSubmitDisabled}>
-            {isSending ? "Sending…" : "Send message"}
+            {isSending ? "Queue message" : "Send message"}
           </button>
         </div>
       </form>

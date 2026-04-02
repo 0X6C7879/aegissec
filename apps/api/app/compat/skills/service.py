@@ -114,7 +114,7 @@ class SkillService:
         skills = payload.get("skills", [])
         if not isinstance(skills, list) or not skills:
             return "No loaded skills are currently available."
-        lines = ["Loaded skills context:"]
+        lines = ["Loaded skills context (reference only; skill names are not callable tools):"]
         for item in skills:
             if not isinstance(item, dict):
                 continue
@@ -125,6 +125,12 @@ class SkillService:
                 lines.append(f"- {label}: {description} | parameters={parameter_schema}")
             else:
                 lines.append(f"- {label}: {description}")
+        lines.append(
+            "Never call a skill slug or skill name directly as a tool. "
+            "The only callable tool names are execute_kali_command, "
+            "list_available_skills, and read_skill_content. If you need a skill, call "
+            "read_skill_content with the skill slug, name, or id."
+        )
         return "\n".join(lines)
 
     def rescan_skills(self) -> list[SkillRecordRead]:

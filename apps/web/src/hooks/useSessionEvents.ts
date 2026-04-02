@@ -4,7 +4,8 @@ import { getSessionEventsUrl } from "../lib/api";
 import {
   buildEventSummary,
   isRecord,
-  mergeConversationReasoningEvent,
+  mergeConversationGenerationEvent,
+  mergeQueueState,
   mergeSessionMessage,
   shouldStoreRealtimeEvent,
   toSessionMessageEvent,
@@ -16,6 +17,7 @@ import type {
   SessionConversation,
   SessionDetail,
   SessionEventEnvelope,
+  SessionQueue,
   SessionSummary,
 } from "../types/sessions";
 
@@ -228,11 +230,21 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             );
           }
 
-          if (envelope.type === "assistant.summary" || envelope.type === "assistant.trace") {
+          if (
+            envelope.type === "assistant.summary" ||
+            envelope.type === "assistant.trace" ||
+            envelope.type === "generation.started" ||
+            envelope.type === "generation.cancelled" ||
+            envelope.type === "generation.failed" ||
+            envelope.type === "message.delta" ||
+            envelope.type === "message.completed" ||
+            envelope.type.startsWith("tool.call.") ||
+            envelope.type === "session.updated"
+          ) {
             queryClient.setQueryData<SessionConversation | undefined>(
               ["conversation", targetSessionId],
               (currentValue) =>
-                mergeConversationReasoningEvent(
+                mergeConversationGenerationEvent(
                   currentValue,
                   envelope.type,
                   envelope.data,
@@ -247,6 +259,10 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             envelope.type === "session.updated" ||
             envelope.type.startsWith("tool.call.")
           ) {
+            queryClient.setQueryData<SessionQueue | undefined>(
+              ["session-queue", targetSessionId],
+              (currentValue) => mergeQueueState(currentValue, envelope.type, envelope.data),
+            );
             void queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] });
           }
         } catch {

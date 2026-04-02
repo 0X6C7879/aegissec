@@ -238,6 +238,7 @@ def test_chat_persists_messages_and_attachments(client: TestClient) -> None:
         f"/api/sessions/{session_id}/chat",
         json={
             "content": "  investigate target scope  ",
+            "wait_for_completion": True,
             "attachments": [
                 {
                     "id": "file-1",
@@ -271,6 +272,79 @@ def test_chat_persists_messages_and_attachments(client: TestClient) -> None:
             "size_bytes": 12,
         }
     ]
+
+
+def test_chat_defaults_to_non_blocking_enqueue_and_persists_timeline(client: TestClient) -> None:
+    class SlowAcceptedChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+            await asyncio.sleep(0.05)
+            await callbacks.on_text_delta("queued ")
+            await asyncio.sleep(0.05)
+            await callbacks.on_text_delta("reply")
+            return f"queued reply for {content}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: SlowAcceptedChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Accepted Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "accepted prompt", "attachments": []},
+        )
+        assert chat_response.status_code == 200
+        chat_payload = api_data(chat_response)
+        assert chat_payload["assistant_message"]["content"] == ""
+        assert chat_payload["generation"]["status"] == "queued"
+        assert chat_payload["queue_position"] == 1
+        assert chat_payload["active_generation_id"] is None
+        assert chat_payload["queued_generation_count"] == 1
+        assert chat_payload["generation"]["steps"][0]["kind"] == "status"
+        assert chat_payload["generation"]["steps"][0]["state"] == "queued"
+
+        deadline = time.time() + 3
+        conversation_payload = None
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            conversation_payload = api_data(conversation_response)
+            generations = conversation_payload["generations"]
+            if generations and generations[0]["status"] == "completed":
+                break
+            time.sleep(0.05)
+
+        assert conversation_payload is not None
+        assert conversation_payload["active_generation_id"] is None
+        assert conversation_payload["queued_generation_count"] == 0
+        assert conversation_payload["generations"][0]["status"] == "completed"
+        steps = conversation_payload["generations"][0]["steps"]
+        assert [step["sequence"] for step in steps] == list(range(1, len(steps) + 1))
+        assert any(
+            step["kind"] == "output" and step["delta_text"] == "queued reply for accepted prompt"
+            for step in steps
+        )
+        assert any(step["kind"] == "status" and step["state"] == "completed" for step in steps)
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
 
 
 def test_chat_builds_multi_turn_context_and_exposes_conversation_reads(client: TestClient) -> None:
@@ -311,12 +385,12 @@ def test_chat_builds_multi_turn_context_and_exposes_conversation_reads(client: T
 
         first_response = client.post(
             f"/api/sessions/{session_id}/chat",
-            json={"content": "first question", "attachments": []},
+            json={"content": "first question", "attachments": [], "wait_for_completion": True},
         )
         assert first_response.status_code == 200
         second_response = client.post(
             f"/api/sessions/{session_id}/chat",
-            json={"content": "follow-up", "attachments": []},
+            json={"content": "follow-up", "attachments": [], "wait_for_completion": True},
         )
         assert second_response.status_code == 200
 
@@ -372,13 +446,13 @@ def test_edit_regenerate_fork_rollback_and_replay_endpoints(client: TestClient) 
         first_chat = api_data(
             client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "alpha", "attachments": []},
+                json={"content": "alpha", "attachments": [], "wait_for_completion": True},
             )
         )
         api_data(
             client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "beta", "attachments": []},
+                json={"content": "beta", "attachments": [], "wait_for_completion": True},
             )
         )
 
@@ -423,7 +497,7 @@ def test_edit_regenerate_fork_rollback_and_replay_endpoints(client: TestClient) 
         branch_chat = api_data(
             client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "fork prompt", "attachments": []},
+                json={"content": "fork prompt", "attachments": [], "wait_for_completion": True},
             )
         )
         assert branch_chat["assistant_message"]["content"] == "reply[fork prompt]"
@@ -489,7 +563,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
             first_response_box, first_worker = _post_chat_in_thread(
                 client,
                 session_id,
-                {"content": "first", "attachments": []},
+                {"content": "first", "attachments": [], "wait_for_completion": True},
             )
 
             second_response_box: dict[str, Response | None] | None = None
@@ -503,7 +577,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                     second_response_box, second_worker = _post_chat_in_thread(
                         client,
                         session_id,
-                        {"content": "second", "attachments": []},
+                        {"content": "second", "attachments": [], "wait_for_completion": True},
                     )
                     second_request_started.set()
                     break
@@ -523,6 +597,9 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
             assert queue_payload is not None
             assert queue_payload["active_generation"] is not None
             assert len(queue_payload["queued_generations"]) == 1
+            assert queue_payload["active_generation_id"] == queue_payload["active_generation"]["id"]
+            assert queue_payload["queued_generation_count"] == 1
+            assert queue_payload["queued_generations"][0]["queue_position"] == 1
             active_generation_id = queue_payload["active_generation"]["id"]
 
             cancel_response = client.post(
@@ -555,6 +632,8 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
         final_queue = api_data(client.get(f"/api/sessions/{session_id}/queue"))
         assert final_queue["active_generation"] is None
         assert final_queue["queued_generations"] == []
+        assert final_queue["active_generation_id"] is None
+        assert final_queue["queued_generation_count"] == 0
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -567,7 +646,7 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
         chat_response_box, worker = _post_chat_in_thread(
             client,
             session_id,
-            {"content": "hello websocket", "attachments": []},
+            {"content": "hello websocket", "attachments": [], "wait_for_completion": True},
         )
 
         events = []
@@ -629,7 +708,7 @@ def test_websocket_supports_replay_cursor(client: TestClient) -> None:
 
     chat_response = client.post(
         f"/api/sessions/{session_id}/chat",
-        json={"content": "seed replay", "attachments": []},
+        json={"content": "seed replay", "attachments": [], "wait_for_completion": True},
     )
     assert chat_response.status_code == 200
 
@@ -703,7 +782,7 @@ def test_cancel_session_interrupts_active_generation(client: TestClient) -> None
             chat_response_box, worker = _post_chat_in_thread(
                 client,
                 session_id,
-                {"content": "cancel me", "attachments": []},
+                {"content": "cancel me", "attachments": [], "wait_for_completion": True},
             )
 
             saw_partial_update = False
@@ -778,7 +857,7 @@ def test_chat_queues_follow_up_prompt_while_generation_is_active(client: TestCli
             first_response_box, first_worker = _post_chat_in_thread(
                 client,
                 session_id,
-                {"content": "first", "attachments": []},
+                {"content": "first", "attachments": [], "wait_for_completion": True},
             )
 
             first_generation_started = False
@@ -800,7 +879,7 @@ def test_chat_queues_follow_up_prompt_while_generation_is_active(client: TestCli
                     second_response_box, second_worker = _post_chat_in_thread(
                         client,
                         session_id,
-                        {"content": "second", "attachments": []},
+                        {"content": "second", "attachments": [], "wait_for_completion": True},
                     )
                     second_request_started.set()
                     continue
@@ -834,10 +913,7 @@ def test_chat_queues_follow_up_prompt_while_generation_is_active(client: TestCli
         assert len(generation_events) == 2
         assert generation_events[0]["payload"]["queued_prompt_count"] == 0
         assert generation_events[1]["payload"]["queued_prompt_count"] == 0
-        assert any(
-            event["type"] == "session.updated" and event["payload"].get("queued_prompt_count") == 1
-            for event in events
-        )
+        assert second_generation_started is True
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -919,7 +995,7 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
             chat_response = client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "请自动执行工具", "attachments": []},
+                json={"content": "请自动执行工具", "attachments": [], "wait_for_completion": True},
             )
 
             assert chat_response.status_code == 200
@@ -1005,6 +1081,13 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert (
             runtime_payload["recent_runs"][0]["artifacts"][0]["relative_path"] == "reports/auto.txt"
         )
+        steps = api_data(chat_response)["generation"]["steps"]
+        assert any(
+            step["kind"] == "tool" and step["tool_call_id"] == "tool-call-1" for step in steps
+        )
+        assert any(
+            step["kind"] == "output" and "工具执行完成" in step["delta_text"] for step in steps
+        )
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -1041,7 +1124,7 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
 
         chat_response = client.post(
             f"/api/sessions/{session_id}/chat",
-            json={"content": "hello failure", "attachments": []},
+            json={"content": "hello failure", "attachments": [], "wait_for_completion": True},
         )
 
         assert chat_response.status_code == 502
@@ -1091,7 +1174,7 @@ def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClien
             chat_response_box, worker = _post_chat_in_thread(
                 client,
                 session_id,
-                {"content": "break", "attachments": []},
+                {"content": "break", "attachments": [], "wait_for_completion": True},
             )
 
             events = []
@@ -1165,7 +1248,7 @@ def test_startup_recovery_requeues_abandoned_generations(client: TestClient) -> 
         assert recovered_generation.lease_expires_at is None
 
 
-def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: TestClient) -> None:
+def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: TestClient) -> None:
     class UnsafeReasoningChatRuntime:
         async def generate_reply(
             self,
@@ -1191,8 +1274,17 @@ def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: T
             await callbacks.on_summary("<think>private</think>分析中")
             await callbacks.on_text_delta("<thi")
             await callbacks.on_text_delta("nk>hidden</thi")
-            await callbacks.on_text_delta("nk>最终")
-            return "<think>very secret</think>最终答复"
+            await callbacks.on_text_delta("nk>")
+            await callbacks.on_text_delta("<mini")
+            await callbacks.on_text_delta(
+                'max:tool_call><invoke name="agent-browser">{"task":"demo"}'
+            )
+            await callbacks.on_text_delta("</inv")
+            await callbacks.on_text_delta("oke></minimax:tool_call>最终")
+            return (
+                '<minimax:tool_call><invoke name="agent-browser">{"task":"demo"}'
+                "</invoke></minimax:tool_call><think>very secret</think>最终答复"
+            )
 
     original_override = app.dependency_overrides[get_chat_runtime]
     app.dependency_overrides[get_chat_runtime] = lambda: UnsafeReasoningChatRuntime()
@@ -1204,7 +1296,7 @@ def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: T
         with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
             chat_response = client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "请给出结果", "attachments": []},
+                json={"content": "请给出结果", "attachments": [], "wait_for_completion": True},
             )
             assert chat_response.status_code == 200
             chat_payload = api_data(chat_response)
@@ -1230,8 +1322,12 @@ def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: T
         assert "".join(event["payload"]["delta"] for event in delta_events) == "最终答复"
         assert all("<" not in event["payload"]["delta"] for event in delta_events)
         assert all("hidden" not in event["payload"]["delta"] for event in delta_events)
+        assert all("invoke" not in event["payload"]["delta"] for event in delta_events)
+        assert all("tool_call" not in event["payload"]["delta"] for event in delta_events)
         assert completed_events
         assert "<think>" not in completed_events[-1]["payload"]["content"]
+        assert "invoke" not in completed_events[-1]["payload"]["content"]
+        assert "tool_call" not in completed_events[-1]["payload"]["content"]
         assert chat_payload["generation"] is not None
         persisted_trace = chat_payload["generation"]["reasoning_trace"]
         assert [entry["sequence"] for entry in persisted_trace] == list(
@@ -1248,6 +1344,32 @@ def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: T
         )
         assert summary_trace_entries[-1]["summary"] == "分析中"
         assert all("<think>" not in str(entry) for entry in persisted_trace)
+        steps = chat_payload["generation"]["steps"]
+        assert [step["sequence"] for step in steps] == list(range(1, len(steps) + 1))
+
+        def _step_string_values(value: object) -> list[str]:
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                values: list[str] = []
+                for item in value:
+                    values.extend(_step_string_values(item))
+                return values
+            if isinstance(value, dict):
+                values = []
+                for item in value.values():
+                    values.extend(_step_string_values(item))
+                return values
+            return []
+
+        step_values = [text for step in steps for text in _step_string_values(step)]
+        assert all("<think>" not in value for value in step_values)
+        assert all("invoke" not in value for value in step_values)
+        assert all("tool_call" not in value for value in step_values)
+        assert any(
+            step["kind"] == "reasoning" and step["safe_summary"] == "分析中" for step in steps
+        )
+        assert any(step["kind"] == "output" and step["delta_text"] == "最终答复" for step in steps)
 
         detail_response = client.get(f"/api/sessions/{session_id}")
         assert detail_response.status_code == 200
@@ -1257,6 +1379,8 @@ def test_chat_strips_think_blocks_before_persisting_or_emitting_events(client: T
         ]
         assert assistant_messages
         assert "<think>" not in assistant_messages[-1]["content"]
+        assert "invoke" not in assistant_messages[-1]["content"]
+        assert "tool_call" not in assistant_messages[-1]["content"]
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -1325,7 +1449,7 @@ Create and edit Word documents.
 
         chat_response = client.post(
             f"/api/sessions/{session_id}/chat",
-            json={"content": "列出所有 skill", "attachments": []},
+            json={"content": "列出所有 skill", "attachments": [], "wait_for_completion": True},
         )
 
         assert chat_response.status_code == 200
@@ -1398,7 +1522,7 @@ Use when performing Active Directory pentest orchestration without using ADscan 
 
         chat_response = client.post(
             f"/api/sessions/{session_id}/chat",
-            json={"content": "查看 adscan skill", "attachments": []},
+            json={"content": "查看 adscan skill", "attachments": [], "wait_for_completion": True},
         )
 
         assert chat_response.status_code == 200

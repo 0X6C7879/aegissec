@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -20,11 +21,14 @@ from app.compat.skills.service import (
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
 from app.db.models import (
     BranchForkRequest,
+    ChatGeneration,
     ChatGenerationRead,
     ChatRequest,
     ChatResponse,
     GenerationAction,
     GenerationStatus,
+    GenerationStep,
+    GenerationStepRead,
     Message,
     MessageEditRequest,
     MessageKind,
@@ -42,6 +46,7 @@ from app.db.models import (
     attachments_to_storage,
     to_chat_generation_read,
     to_conversation_branch_read,
+    to_generation_step_read,
     to_message_read,
     to_session_read,
     utc_now,
@@ -77,8 +82,36 @@ router = APIRouter(prefix="/api/sessions", tags=["chat"])
 
 SAFE_THINKING_SUMMARY = "Assistant is analyzing the request and preparing a response."
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-_THINK_OPEN_TAG = "<think>"
-_THINK_CLOSE_TAG = "</think>"
+_HIDDEN_STREAM_TAG_NAMES = {"think", "invoke", "tool_call"}
+_HIDDEN_STREAM_TAG_NAME_RE = re.compile(
+    r"^<\s*(/)?\s*(?:[\w-]+:)?([a-z_]+)",
+    re.IGNORECASE,
+)
+
+
+def _match_hidden_stream_tag(fragment: str) -> tuple[str, bool, bool, bool] | None:
+    match = _HIDDEN_STREAM_TAG_NAME_RE.match(fragment)
+    if match is None:
+        return None
+
+    tag_name = match.group(2).lower()
+    is_closing = bool(match.group(1))
+    is_complete = ">" in fragment
+    if is_complete:
+        if tag_name not in _HIDDEN_STREAM_TAG_NAMES:
+            return None
+    elif not any(hidden_name.startswith(tag_name) for hidden_name in _HIDDEN_STREAM_TAG_NAMES):
+        return None
+
+    is_self_closing = is_complete and fragment.rstrip().endswith("/>")
+    return tag_name, is_closing, is_complete, is_self_closing
+
+
+def _pop_hidden_stream_tag(hidden_stack: list[str], tag_name: str) -> None:
+    for index in range(len(hidden_stack) - 1, -1, -1):
+        if hidden_stack[index] == tag_name:
+            del hidden_stack[index:]
+            return
 
 
 def _get_session_or_404(repository: SessionRepository, session_id: str) -> Session:
@@ -254,6 +287,17 @@ async def _publish_assistant_summary(
         generation = repository.get_generation(assistant_message.generation_id)
         if generation is not None:
             repository.update_generation(generation, reasoning_summary=sanitized_summary)
+    _record_generation_step(
+        repository,
+        assistant_message=assistant_message,
+        kind="reasoning",
+        phase="planning",
+        status="completed",
+        state="summary.updated",
+        label="Reasoning summary",
+        safe_summary=sanitized_summary,
+        metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
+    )
     _persist_reasoning_trace_entry(
         repository,
         assistant_message=assistant_message,
@@ -295,6 +339,21 @@ async def _publish_assistant_trace(
         assistant_message=assistant_message,
         entry={"event": SessionEventType.ASSISTANT_TRACE.value, **sanitized_entry},
     )
+    _record_generation_step(
+        repository,
+        assistant_message=assistant_message,
+        kind="status",
+        phase=_infer_trace_phase(sanitized_entry),
+        status=_infer_trace_status(sanitized_entry),
+        state=(
+            str(sanitized_entry.get("state"))
+            if sanitized_entry.get("state") is not None
+            else "trace"
+        ),
+        label="Assistant trace",
+        safe_summary=_infer_trace_summary(sanitized_entry),
+        metadata_json={key: value for key, value in persisted_entry.items() if key != "summary"},
+    )
     payload = {"message_id": assistant_message.id, **persisted_entry}
     await event_broker.publish(
         SessionEvent(
@@ -308,35 +367,46 @@ async def _publish_assistant_trace(
 def _project_visible_stream_content(content: str) -> str:
     visible_parts: list[str] = []
     index = 0
-    inside_think_block = False
+    hidden_stack: list[str] = []
 
     while index < len(content):
-        remaining_content = content[index:]
-        remaining_lower = remaining_content.lower()
+        if content[index] == "<":
+            tag_end = content.find(">", index)
+            next_index = index + 1
+            if tag_end == -1 and next_index < len(content):
+                next_char = content[next_index]
+                if next_char in {"/", "!", "?"} or next_char.isalpha() or next_char == "_":
+                    break
+            tag_fragment = content[index:] if tag_end == -1 else content[index : tag_end + 1]
+            hidden_tag = _match_hidden_stream_tag(tag_fragment)
 
-        if inside_think_block:
-            if remaining_lower.startswith(_THINK_CLOSE_TAG):
-                inside_think_block = False
-                index += len(_THINK_CLOSE_TAG)
+            if hidden_tag is not None:
+                tag_name, is_closing, is_complete, is_self_closing = hidden_tag
+                if not is_complete:
+                    break
+
+                if is_closing:
+                    _pop_hidden_stream_tag(hidden_stack, tag_name)
+                elif not is_self_closing:
+                    hidden_stack.append(tag_name)
+
+                index += len(tag_fragment)
                 continue
-            if _THINK_CLOSE_TAG.startswith(remaining_lower):
-                break
+
+            if hidden_stack:
+                if tag_end == -1:
+                    break
+                index = tag_end + 1
+                continue
+
+        if hidden_stack:
             index += 1
             continue
-
-        if remaining_lower.startswith(_THINK_OPEN_TAG):
-            inside_think_block = True
-            index += len(_THINK_OPEN_TAG)
-            continue
-        if _THINK_OPEN_TAG.startswith(remaining_lower) or _THINK_CLOSE_TAG.startswith(
-            remaining_lower
-        ):
-            break
 
         visible_parts.append(content[index])
         index += 1
 
-    return "".join(visible_parts).strip()
+    return strip_think_blocks("".join(visible_parts))
 
 
 def _build_conversation_messages(messages: list[Message]) -> list[ConversationMessage]:
@@ -367,17 +437,200 @@ def _build_conversation_read(
     messages = repository.list_messages(
         session.id, branch_id=active_branch.id, include_superseded=False
     )
+    generations = [
+        generation
+        for generation in repository.list_generations(session.id)
+        if generation.branch_id == active_branch.id
+    ]
+    active_generation = repository.get_active_generation(session.id)
     return SessionConversationRead(
         session=to_session_read(session),
         active_branch=to_conversation_branch_read(active_branch),
         branches=[to_conversation_branch_read(branch) for branch in branches],
         messages=[to_message_read(message) for message in messages],
-        generations=[
-            to_chat_generation_read(generation)
-            for generation in repository.list_generations(session.id)
-            if generation.branch_id == active_branch.id
-        ],
+        generations=_build_generation_reads(repository, session.id, generations),
+        active_generation_id=active_generation.id if active_generation is not None else None,
+        queued_generation_count=repository.queue_size(session.id),
     )
+
+
+def _build_generation_reads(
+    repository: SessionRepository,
+    session_id: str,
+    generations: list[ChatGeneration],
+) -> list[ChatGenerationRead]:
+    generation_ids = [generation.id for generation in generations]
+    steps_by_generation_id: dict[str, list[GenerationStepRead]] = {}
+    for step in repository.list_generation_steps(generation_ids=generation_ids):
+        steps_by_generation_id.setdefault(step.generation_id, []).append(
+            to_generation_step_read(step)
+        )
+
+    queue_positions = {
+        generation.id: index
+        for index, generation in enumerate(
+            repository.list_generations(session_id, statuses={GenerationStatus.QUEUED}),
+            start=1,
+        )
+    }
+
+    reads: list[ChatGenerationRead] = []
+    for generation in generations:
+        generation_read = to_chat_generation_read(generation)
+        generation_read.steps = list(steps_by_generation_id.get(generation.id, []))
+        generation_read.queue_position = queue_positions.get(generation.id)
+        reads.append(generation_read)
+    return reads
+
+
+def _build_generation_read(
+    repository: SessionRepository,
+    generation: ChatGeneration,
+) -> ChatGenerationRead:
+    return _build_generation_reads(repository, generation.session_id, [generation])[0]
+
+
+def _build_queue_metadata(
+    repository: SessionRepository,
+    session_id: str,
+    generation_id: str | None = None,
+) -> tuple[str | None, int | None, int]:
+    active_generation = repository.get_active_generation(session_id)
+    queued_generation_count = repository.queue_size(session_id)
+    queue_position = (
+        repository.get_generation_queue_position(session_id, generation_id)
+        if generation_id is not None
+        else None
+    )
+    return (
+        active_generation.id if active_generation is not None else None,
+        queue_position,
+        queued_generation_count,
+    )
+
+
+def _record_generation_step(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    kind: str,
+    phase: str | None = None,
+    status: str,
+    state: str | None = None,
+    label: str | None = None,
+    safe_summary: str | None = None,
+    delta_text: str = "",
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    command: str | None = None,
+    metadata_json: dict[str, object] | None = None,
+    ended_at: datetime | None = None,
+) -> None:
+    if assistant_message.generation_id is None:
+        return
+    repository.create_generation_step(
+        generation_id=assistant_message.generation_id,
+        session_id=assistant_message.session_id,
+        message_id=assistant_message.id,
+        kind=kind,
+        phase=phase,
+        status=status,
+        state=state,
+        label=label,
+        safe_summary=safe_summary,
+        delta_text=delta_text,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        command=command,
+        metadata_json=metadata_json,
+        ended_at=ended_at,
+    )
+
+
+def _get_or_create_output_step(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+) -> GenerationStep | None:
+    if assistant_message.generation_id is None:
+        return None
+    output_step = repository.get_open_generation_step(
+        assistant_message.generation_id, kind="output"
+    )
+    if output_step is not None:
+        return output_step
+    return repository.create_generation_step(
+        generation_id=assistant_message.generation_id,
+        session_id=assistant_message.session_id,
+        message_id=assistant_message.id,
+        kind="output",
+        phase="synthesis",
+        status="running",
+        state="streaming",
+        label="Assistant response",
+    )
+
+
+def _infer_trace_phase(entry: dict[str, object]) -> str:
+    state = str(entry.get("state") or "")
+    if state in {"generation.completed", "summary.updated"}:
+        return "completed" if state == "generation.completed" else "planning"
+    if state == "generation.cancelled":
+        return "cancelled"
+    if state == "generation.failed":
+        return "failed"
+    if state == "generation.started":
+        return "planning"
+    if state == "tool.started":
+        return "tool_running"
+    if state in {"tool.finished", "tool.failed"}:
+        return "tool_result"
+    return "planning"
+
+
+def _infer_trace_status(entry: dict[str, object]) -> str:
+    state = str(entry.get("state") or "")
+    if state in {"generation.completed", "tool.finished", "summary.updated"}:
+        return "completed"
+    if state in {"generation.failed", "tool.failed"}:
+        return "failed"
+    if state == "generation.cancelled":
+        return "cancelled"
+    if state in {"generation.started", "tool.started"}:
+        return "running"
+    return "completed"
+
+
+def _infer_trace_summary(entry: dict[str, object]) -> str | None:
+    summary = entry.get("summary")
+    if isinstance(summary, str) and summary:
+        return summary
+    state = str(entry.get("state") or "")
+    tool_name = entry.get("tool")
+    tool_display = str(tool_name) if isinstance(tool_name, str) and tool_name else "tool"
+    if state == "generation.started":
+        return "Generation started."
+    if state == "generation.completed":
+        return "Generation completed."
+    if state == "generation.cancelled":
+        return "Generation cancelled."
+    if state == "generation.failed":
+        error_value = entry.get("error")
+        return (
+            str(error_value)
+            if isinstance(error_value, str) and error_value
+            else "Generation failed."
+        )
+    if state == "tool.started":
+        return f"Running {tool_display}."
+    if state == "tool.finished":
+        return f"Completed {tool_display}."
+    if state == "tool.failed":
+        error_value = entry.get("error")
+        if isinstance(error_value, str) and error_value:
+            return error_value
+        return f"{tool_display} failed."
+    return None
 
 
 def _find_sibling_version_group_id(
@@ -445,8 +698,43 @@ def _build_tool_executor(
                 payload=started_payload,
             )
         )
+        if assistant_message.generation_id is not None:
+            repository.create_generation_step(
+                generation_id=assistant_message.generation_id,
+                session_id=session.id,
+                message_id=assistant_message.id,
+                kind="tool",
+                phase="tool_running",
+                status="running",
+                state="started",
+                label=tool_request.tool_name,
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                command=(
+                    str(tool_request.arguments.get("command"))
+                    if isinstance(tool_request.arguments.get("command"), str)
+                    else None
+                ),
+                metadata_json={"arguments": dict(tool_request.arguments)},
+            )
 
         async def publish_tool_failed(error_message: str) -> None:
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="failed",
+                        state="failed",
+                        safe_summary=error_message,
+                        ended_at=utc_now(),
+                        metadata_json={**dict(tool_step.metadata_json), "error": error_message},
+                    )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -544,6 +832,27 @@ def _build_tool_executor(
                     },
                 )
             )
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="completed",
+                        state="finished",
+                        safe_summary=f"Tool finished with status {run.status.value}.",
+                        ended_at=utc_now(),
+                        metadata_json={
+                            **dict(tool_step.metadata_json),
+                            "result": command_result_payload,
+                            "run_id": run.id,
+                            "status": run.status.value,
+                        },
+                    )
             return ToolCallResult(tool_name=tool_request.tool_name, payload=command_result_payload)
 
         if tool_request.tool_name == "list_available_skills":
@@ -568,6 +877,25 @@ def _build_tool_executor(
                     payload={**started_payload, "result": skills_result_payload},
                 )
             )
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="completed",
+                        state="finished",
+                        safe_summary="Listed available skills.",
+                        ended_at=utc_now(),
+                        metadata_json={
+                            **dict(tool_step.metadata_json),
+                            "result": skills_result_payload,
+                        },
+                    )
             return ToolCallResult(tool_name=tool_request.tool_name, payload=skills_result_payload)
 
         if tool_request.tool_name == "read_skill_content":
@@ -603,6 +931,25 @@ def _build_tool_executor(
                     payload={**started_payload, "result": skill_result_payload},
                 )
             )
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="completed",
+                        state="finished",
+                        safe_summary=f"Read skill content for {skill_name_or_id}.",
+                        ended_at=utc_now(),
+                        metadata_json={
+                            **dict(tool_step.metadata_json),
+                            "result": skill_result_payload,
+                        },
+                    )
             return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_result_payload)
 
         error_message = f"Unsupported tool requested: {tool_request.tool_name}."
@@ -633,6 +980,19 @@ async def _mark_queued_generations_failed(
                     status=MessageStatus.FAILED,
                     error_message=error_message,
                 )
+                _record_generation_step(
+                    repository,
+                    assistant_message=assistant_message,
+                    kind="status",
+                    phase="failed",
+                    status="failed",
+                    state="failed",
+                    label="Generation failed",
+                    safe_summary=error_message,
+                    ended_at=utc_now(),
+                    metadata_json={"generation_id": generation.id, "error": error_message},
+                )
+            repository.close_open_generation_steps(generation.id, status="failed", state="failed")
 
 
 async def _process_generation(
@@ -708,6 +1068,17 @@ async def _process_generation(
                 assistant_message_id=assistant_message.id,
                 queued_prompt_count=repository.queue_size(session.id),
             )
+            _record_generation_step(
+                repository,
+                assistant_message=assistant_message,
+                kind="status",
+                phase="planning",
+                status="running",
+                state="started",
+                label="Generation started",
+                safe_summary="Generation started.",
+                metadata_json={"generation_id": generation.id},
+            )
             await _publish_assistant_summary(
                 repository,
                 event_broker,
@@ -746,6 +1117,12 @@ async def _process_generation(
                     content=streamed_content,
                     status=MessageStatus.STREAMING,
                 )
+                output_step = _get_or_create_output_step(
+                    repository,
+                    assistant_message=loaded_assistant_message,
+                )
+                if output_step is not None:
+                    repository.append_generation_step_delta(output_step, sanitized_delta)
                 await _publish_message_event(
                     event_broker,
                     event_type=SessionEventType.MESSAGE_DELTA,
@@ -825,6 +1202,20 @@ async def _process_generation(
                     session_id=session.id,
                     message=loaded_assistant_message,
                 )
+            output_step = _get_or_create_output_step(
+                repository,
+                assistant_message=loaded_assistant_message,
+            )
+            if output_step is not None:
+                if final_content != output_step.delta_text:
+                    repository.update_generation_step(output_step, delta_text=final_content)
+                repository.update_generation_step(
+                    output_step,
+                    phase="synthesis",
+                    status="completed",
+                    state="completed",
+                    ended_at=utc_now(),
+                )
             await _publish_message_event(
                 event_broker,
                 event_type=SessionEventType.MESSAGE_COMPLETED,
@@ -837,6 +1228,21 @@ async def _process_generation(
                 session_id=session.id,
                 assistant_message=loaded_assistant_message,
                 entry={"state": "generation.completed", "generation_id": generation.id},
+            )
+            _record_generation_step(
+                repository,
+                assistant_message=loaded_assistant_message,
+                kind="status",
+                phase="completed",
+                status="completed",
+                state="completed",
+                label="Generation completed",
+                safe_summary="Generation completed.",
+                ended_at=utc_now(),
+                metadata_json={"generation_id": generation.id},
+            )
+            repository.close_open_generation_steps(
+                generation.id, status="completed", state="completed"
             )
             return loaded_assistant_message.id
     except asyncio.CancelledError as exc:
@@ -861,6 +1267,21 @@ async def _process_generation(
                     session_id=session_id,
                     assistant_message=assistant_message,
                     entry={"state": "generation.cancelled", "generation_id": generation_id},
+                )
+                _record_generation_step(
+                    repository,
+                    assistant_message=assistant_message,
+                    kind="status",
+                    phase="cancelled",
+                    status="cancelled",
+                    state="cancelled",
+                    label="Generation cancelled",
+                    safe_summary="Generation cancelled.",
+                    ended_at=utc_now(),
+                    metadata_json={"generation_id": generation_id},
+                )
+                repository.close_open_generation_steps(
+                    generation_id, status="cancelled", state="cancelled"
                 )
                 await _publish_generation_cancelled(
                     event_broker,
@@ -893,6 +1314,21 @@ async def _process_generation(
                         "generation_id": generation_id,
                         "error": str(exc),
                     },
+                )
+                _record_generation_step(
+                    repository,
+                    assistant_message=assistant_message,
+                    kind="status",
+                    phase="failed",
+                    status="failed",
+                    state="failed",
+                    label="Generation failed",
+                    safe_summary=str(exc),
+                    ended_at=utc_now(),
+                    metadata_json={"generation_id": generation_id, "error": str(exc)},
+                )
+                repository.close_open_generation_steps(
+                    generation_id, status="failed", state="failed"
                 )
                 await _publish_generation_failed(
                     event_broker,
@@ -1130,6 +1566,18 @@ async def create_chat_message(
         },
     )
     repository.update_message(assistant_message, generation_id=generation.id)
+    repository.create_generation_step(
+        generation_id=generation.id,
+        session_id=session.id,
+        message_id=assistant_message.id,
+        kind="status",
+        phase="planning",
+        status="pending",
+        state="queued",
+        label="Generation queued",
+        safe_summary="Generation accepted and queued.",
+        metadata_json={"operation": "chat"},
+    )
 
     await _publish_message_event(
         event_broker,
@@ -1144,14 +1592,22 @@ async def create_chat_message(
         message=assistant_message,
     )
 
-    future = await generation_manager.register_future(session.id, generation.id)
-    queued_prompt_count = repository.queue_size(session.id)
+    active_generation_id, queue_position, queued_generation_count = _build_queue_metadata(
+        repository,
+        session.id,
+        generation.id,
+    )
+    future = (
+        await generation_manager.register_future(session.id, generation.id)
+        if payload.wait_for_completion
+        else None
+    )
     should_start_worker = await generation_manager.should_start_worker(session.id)
-    if not should_start_worker:
+    if active_generation_id is not None or not should_start_worker:
         await _publish_session_updated(
             event_broker,
             session,
-            queued_prompt_count=max(1, queued_prompt_count),
+            queued_prompt_count=max(1, queued_generation_count),
         )
     await _start_worker_if_needed(
         db_session=db_session,
@@ -1164,23 +1620,51 @@ async def create_chat_message(
         mcp_service=mcp_service,
     )
 
+    if not payload.wait_for_completion:
+        db_session.expire_all()
+        refreshed_session = _get_session_or_404(repository, session_id)
+        return ChatResponse(
+            session=to_session_read(refreshed_session),
+            user_message=to_message_read(user_message),
+            assistant_message=to_message_read(assistant_message),
+            generation=_build_generation_read(repository, generation),
+            branch=to_conversation_branch_read(branch),
+            queue_position=queue_position,
+            active_generation_id=active_generation_id,
+            queued_generation_count=queued_generation_count,
+        )
+
+    if future is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Generation future was not registered.",
+        )
     await _await_generation_result(
         session_id=session.id, generation_id=generation.id, future=future
     )
     db_session.expire_all()
     refreshed_session = _get_session_or_404(repository, session_id)
+    refreshed_generation = repository.get_generation(generation.id)
     refreshed_assistant_message = repository.get_message(assistant_message.id)
-    if refreshed_assistant_message is None:
+    if refreshed_generation is None or refreshed_assistant_message is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Assistant message was not persisted.",
         )
+    active_generation_id, queue_position, queued_generation_count = _build_queue_metadata(
+        repository,
+        session.id,
+        generation.id,
+    )
     return ChatResponse(
         session=to_session_read(refreshed_session),
         user_message=to_message_read(user_message),
         assistant_message=to_message_read(refreshed_assistant_message),
-        generation=to_chat_generation_read(generation),
+        generation=_build_generation_read(repository, refreshed_generation),
         branch=to_conversation_branch_read(branch),
+        queue_position=queue_position,
+        active_generation_id=active_generation_id,
+        queued_generation_count=queued_generation_count,
     )
 
 
@@ -1269,6 +1753,18 @@ async def edit_message(
         },
     )
     repository.update_message(assistant_message, generation_id=generation.id)
+    repository.create_generation_step(
+        generation_id=generation.id,
+        session_id=session.id,
+        message_id=assistant_message.id,
+        kind="status",
+        phase="planning",
+        status="pending",
+        state="queued",
+        label="Generation queued",
+        safe_summary="Generation accepted and queued.",
+        metadata_json={"operation": "edit"},
+    )
     session = repository.activate_branch(session, branch)
 
     await _publish_message_event(
@@ -1313,7 +1809,7 @@ async def edit_message(
         branch=to_conversation_branch_read(refreshed_branch),
         user_message=to_message_read(edited_message),
         assistant_message=to_message_read(refreshed_assistant),
-        generation=to_chat_generation_read(refreshed_generation),
+        generation=_build_generation_read(repository, refreshed_generation),
     )
 
 
@@ -1389,6 +1885,18 @@ async def regenerate_message(
         },
     )
     repository.update_message(assistant_message, generation_id=generation.id)
+    repository.create_generation_step(
+        generation_id=generation.id,
+        session_id=session.id,
+        message_id=assistant_message.id,
+        kind="status",
+        phase="planning",
+        status="pending",
+        state="queued",
+        label="Generation queued",
+        safe_summary="Generation accepted and queued.",
+        metadata_json={"operation": "regenerate"},
+    )
     session = repository.activate_branch(session, branch)
 
     await _publish_message_event(
@@ -1426,7 +1934,7 @@ async def regenerate_message(
         session=to_session_read(refreshed_session),
         branch=to_conversation_branch_read(refreshed_branch),
         assistant_message=to_message_read(refreshed_assistant),
-        generation=to_chat_generation_read(refreshed_generation),
+        generation=_build_generation_read(repository, refreshed_generation),
     )
 
 
@@ -1519,6 +2027,19 @@ async def cancel_generation(
                 status=MessageStatus.CANCELLED,
                 error_message="Queued generation was cancelled.",
             )
+            _record_generation_step(
+                repository,
+                assistant_message=assistant_message,
+                kind="status",
+                phase="cancelled",
+                status="cancelled",
+                state="cancelled",
+                label="Generation cancelled",
+                safe_summary="Queued generation was cancelled.",
+                ended_at=utc_now(),
+                metadata_json={"generation_id": generation.id},
+            )
+        repository.close_open_generation_steps(generation.id, status="cancelled", state="cancelled")
         await generation_manager.reject_future(
             session_id,
             generation.id,
@@ -1532,6 +2053,19 @@ async def cancel_generation(
                 status=MessageStatus.CANCELLED,
                 error_message="Active generation was cancelled.",
             )
+            _record_generation_step(
+                repository,
+                assistant_message=assistant_message,
+                kind="status",
+                phase="cancelled",
+                status="cancelled",
+                state="cancelled",
+                label="Generation cancelled",
+                safe_summary="Active generation was cancelled.",
+                ended_at=utc_now(),
+                metadata_json={"generation_id": generation.id},
+            )
+        repository.close_open_generation_steps(generation.id, status="cancelled", state="cancelled")
         await generation_manager.cancel_generation(session_id, generation.id)
     refreshed_generation = repository.get_generation(generation.id)
     if refreshed_generation is None:
@@ -1539,4 +2073,4 @@ async def cancel_generation(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Generation state was not persisted.",
         )
-    return to_chat_generation_read(refreshed_generation)
+    return _build_generation_read(repository, refreshed_generation)

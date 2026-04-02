@@ -209,3 +209,107 @@ def test_init_db_upgrades_legacy_chat_tables_for_existing_sqlite_db(
         assert all(message.branch_id == "session-1" for message in messages)
         assert all(message.version_group_id == message.id for message in messages)
         assert all(message.completed_at is not None for message in messages)
+
+
+def test_init_db_adds_generation_step_status_for_existing_sqlite_db(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-generation-step.db"
+    engine = create_engine(
+        f"sqlite:///{database_path.as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE session (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    deleted_at DATETIME NULL,
+                    active_branch_id TEXT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE message (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    attachments JSON NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    branch_id TEXT NULL,
+                    generation_id TEXT NULL,
+                    status TEXT NOT NULL DEFAULT 'COMPLETED',
+                    message_kind TEXT NOT NULL DEFAULT 'MESSAGE',
+                    sequence INTEGER NOT NULL DEFAULT 0,
+                    turn_index INTEGER NOT NULL DEFAULT 0,
+                    metadata JSON NOT NULL DEFAULT '{}'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE chat_generation (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    branch_id TEXT NOT NULL,
+                    user_message_id TEXT NULL,
+                    assistant_message_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    action TEXT NOT NULL DEFAULT 'REPLY',
+                    metadata JSON NOT NULL DEFAULT '{}',
+                    reasoning_trace JSON NOT NULL DEFAULT '[]',
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE generation_step (
+                    id TEXT PRIMARY KEY,
+                    generation_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    message_id TEXT NULL,
+                    sequence INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    phase TEXT NULL,
+                    state TEXT NULL,
+                    label TEXT NULL,
+                    safe_summary TEXT NULL,
+                    delta_text TEXT NOT NULL DEFAULT '',
+                    tool_name TEXT NULL,
+                    tool_call_id TEXT NULL,
+                    command TEXT NULL,
+                    metadata JSON NOT NULL DEFAULT '{}',
+                    started_at DATETIME NOT NULL,
+                    ended_at DATETIME NULL
+                )
+                """
+            )
+        )
+
+    monkeypatch.setattr(db_session_module, "engine", engine)
+
+    db_session_module.init_db()
+
+    inspector = inspect(engine)
+    generation_step_columns = {
+        column["name"] for column in inspector.get_columns("generation_step")
+    }
+
+    assert "status" in generation_step_columns

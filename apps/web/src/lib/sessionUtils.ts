@@ -1,11 +1,13 @@
 import type {
   AttachmentMetadata,
   ChatGeneration,
+  GenerationStep,
   GenerationReasoningTraceEntry,
   SessionConversation,
   SessionDetail,
   SessionEventEntry,
   SessionMessage,
+  SessionQueue,
   SessionSummary,
 } from "../types/sessions";
 
@@ -537,6 +539,664 @@ function compareSessionEventEntries(left: SessionEventEntry, right: SessionEvent
   }
 
   return left.id.localeCompare(right.id);
+}
+
+function compareGenerationSteps(left: GenerationStep, right: GenerationStep): number {
+  if (left.sequence !== right.sequence) {
+    return left.sequence - right.sequence;
+  }
+
+  const startedAtDifference = toTimestamp(left.started_at) - toTimestamp(right.started_at);
+  if (startedAtDifference !== 0) {
+    return startedAtDifference;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function compareGenerations(left: ChatGeneration, right: ChatGeneration): number {
+  const createdAtDifference = toTimestamp(left.created_at) - toTimestamp(right.created_at);
+  if (createdAtDifference !== 0) {
+    return createdAtDifference;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function nextGenerationStepSequence(generation: ChatGeneration): number {
+  return (generation.steps ?? []).reduce((currentMax, step) => Math.max(currentMax, step.sequence), 0) + 1;
+}
+
+function inferTracePhase(data: Record<string, unknown>): string | null {
+  if (typeof data.phase === "string" && data.phase.trim().length > 0) {
+    return data.phase;
+  }
+
+  const state = typeof data.state === "string" ? data.state : null;
+  switch (state) {
+    case "generation.started":
+      return "planning";
+    case "generation.completed":
+      return "completed";
+    case "generation.failed":
+      return "failed";
+    case "generation.cancelled":
+      return "cancelled";
+    case "tool.started":
+      return "tool_running";
+    case "tool.finished":
+    case "tool.failed":
+      return "tool_result";
+    default:
+      return "planning";
+  }
+}
+
+function inferTraceStatus(data: Record<string, unknown>): string {
+  if (typeof data.status === "string" && data.status.trim().length > 0) {
+    return data.status;
+  }
+
+  const state = typeof data.state === "string" ? data.state : null;
+  if (state === "generation.completed" || state === "tool.finished") {
+    return "completed";
+  }
+  if (state === "generation.failed" || state === "tool.failed") {
+    return "failed";
+  }
+  if (state === "generation.cancelled") {
+    return "cancelled";
+  }
+  if (state === "generation.started" || state === "tool.started") {
+    return "running";
+  }
+
+  return "running";
+}
+
+function inferGenerationStatusFromTrace(data: Record<string, unknown>): string | null {
+  const state = typeof data.state === "string" ? data.state : null;
+  switch (state) {
+    case "generation.started":
+      return "running";
+    case "generation.completed":
+      return "completed";
+    case "generation.failed":
+      return "failed";
+    case "generation.cancelled":
+      return "cancelled";
+    default:
+      return null;
+  }
+}
+
+function buildGenerationStepId(
+  type: string,
+  data: Record<string, unknown>,
+  createdAt: string,
+  cursor: number | null,
+): string {
+  if (typeof data.step_id === "string" && data.step_id.trim().length > 0) {
+    return data.step_id;
+  }
+
+  if (
+    (type === "message.delta" || type === "message.completed") &&
+    typeof data.generation_id === "string" &&
+    data.generation_id.length > 0
+  ) {
+    return `output:${data.generation_id}`;
+  }
+
+  if (
+    type.startsWith("tool.call.") &&
+    typeof data.tool_call_id === "string" &&
+    data.tool_call_id.length > 0
+  ) {
+    return `tool:${data.tool_call_id}`;
+  }
+
+  if (typeof cursor === "number" && Number.isFinite(cursor)) {
+    return `event:${type}:${cursor}`;
+  }
+
+  return `event:${type}:${createdAt}`;
+}
+
+function buildToolStepSummary(type: string, data: Record<string, unknown>): string | null {
+  const toolName = readFirstNonEmptyString(data, ["tool_name", "tool"]);
+  const command = readFirstNonEmptyString(data, ["command"]);
+  const error = readFirstNonEmptyString(data, ["error"]);
+  const summary = readFirstNonEmptyString(data, ["safe_summary", "summary", "message"]);
+  if (summary) {
+    return sanitizeSafeSummaryText(summary);
+  }
+
+  if (type === "tool.call.started") {
+    return command
+      ? `开始调用工具：${command}`
+      : toolName
+        ? `开始调用工具：${toolName}`
+        : "开始调用工具。";
+  }
+
+  if (type === "tool.call.finished") {
+    return command
+      ? `工具调用已完成：${command}`
+      : toolName
+        ? `工具调用已完成：${toolName}`
+        : "工具调用已完成。";
+  }
+
+  if (type === "tool.call.failed") {
+    if (command && error) {
+      return `工具调用失败：${command}，${sanitizeSafeSummaryText(error)}`;
+    }
+    if (command) {
+      return `工具调用失败：${command}`;
+    }
+    if (toolName && error) {
+      return `工具调用失败：${toolName}，${sanitizeSafeSummaryText(error)}`;
+    }
+    if (toolName) {
+      return `工具调用失败：${toolName}`;
+    }
+  }
+
+  return error ? sanitizeSafeSummaryText(error) : null;
+}
+
+function buildOutputStepSummary(data: Record<string, unknown>): string | null {
+  const delta = typeof data.delta === "string" ? stripHiddenThinkingBlocks(data.delta).trim() : "";
+  const content = typeof data.content === "string" ? stripHiddenThinkingBlocks(data.content).trim() : "";
+  const visibleText = delta || content;
+
+  if (!visibleText) {
+    return null;
+  }
+
+  return sanitizeSafeSummaryText(visibleText);
+}
+
+function buildLiveGenerationStep(
+  type: string,
+  data: Record<string, unknown>,
+  createdAt: string,
+  cursor: number | null,
+  generation: ChatGeneration | null,
+): GenerationStep | null {
+  const generationId =
+    readFirstNonEmptyString(data, ["generation_id"]) ?? generation?.id ?? null;
+  const messageId =
+    readFirstNonEmptyString(data, ["assistant_message_id", "message_id"]) ??
+    generation?.assistant_message_id ??
+    null;
+
+  if (!generationId) {
+    return null;
+  }
+
+  const sequence =
+    readFirstFiniteNumber(data, ["sequence"]) ??
+    (generation ? nextGenerationStepSequence(generation) : 1);
+
+  const baseStep = {
+    id: buildGenerationStepId(type, data, createdAt, cursor),
+    generation_id: generationId,
+    session_id: typeof data.session_id === "string" ? data.session_id : generation?.session_id ?? "",
+    message_id: messageId,
+    sequence,
+    tool_name: readFirstNonEmptyString(data, ["tool_name", "tool"]),
+    tool_call_id: readFirstNonEmptyString(data, ["tool_call_id"]),
+    command: readFirstNonEmptyString(data, ["command"]),
+    metadata: isRecord(data.metadata) ? data.metadata : undefined,
+    started_at: readFirstNonEmptyString(data, ["started_at", "created_at"]) ?? createdAt,
+    ended_at:
+      readFirstNonEmptyString(data, ["ended_at", "completed_at"]) ??
+      (type === "message.completed" ? createdAt : null),
+  } satisfies Omit<GenerationStep, "kind" | "status" | "delta_text"> & { metadata?: Record<string, unknown> };
+
+  if (type === "assistant.summary") {
+    const safeSummary = extractSafeSessionSummary(type, data)?.summary;
+    return {
+      ...baseStep,
+      kind: "reasoning",
+      phase: typeof data.phase === "string" ? data.phase : "planning",
+      status: typeof data.status === "string" ? data.status : "completed",
+      state: typeof data.state === "string" ? data.state : "summary.updated",
+      label: readFirstNonEmptyString(data, ["label", "title"]) ?? "思路摘要",
+      safe_summary: safeSummary ?? readFirstNonEmptyString(data, ["summary"]),
+      delta_text: "",
+    };
+  }
+
+  if (type === "assistant.trace") {
+    const safeSummary = extractSafeSessionSummary(type, data)?.summary;
+    return {
+      ...baseStep,
+      kind: "status",
+      phase: inferTracePhase(data),
+      status: inferTraceStatus(data),
+      state: typeof data.state === "string" ? data.state : "trace",
+      label: readFirstNonEmptyString(data, ["label", "title"]) ?? "思路进展",
+      safe_summary: safeSummary,
+      delta_text: "",
+    };
+  }
+
+  if (type.startsWith("tool.call.")) {
+    return {
+      ...baseStep,
+      kind: "tool",
+      phase: type === "tool.call.started" ? "tool_running" : "tool_result",
+      status:
+        typeof data.status === "string"
+          ? data.status
+          : type === "tool.call.failed"
+            ? "failed"
+            : type === "tool.call.finished"
+              ? "completed"
+              : "running",
+      state:
+        type === "tool.call.started"
+          ? "started"
+          : type === "tool.call.failed"
+            ? "failed"
+            : "finished",
+      label: readFirstNonEmptyString(data, ["label", "tool_name", "tool", "command"]),
+      safe_summary: buildToolStepSummary(type, data),
+      delta_text: "",
+      ended_at: type === "tool.call.started" ? null : baseStep.ended_at,
+    };
+  }
+
+  if (type === "message.delta" || type === "message.completed") {
+    return {
+      ...baseStep,
+      kind: "output",
+      phase: "synthesis",
+      status: type === "message.completed" ? "completed" : "running",
+      state: type === "message.completed" ? "completed" : "streaming",
+      label: "正文输出",
+      safe_summary: buildOutputStepSummary(data),
+      delta_text:
+        typeof data.delta === "string"
+          ? stripHiddenThinkingBlocks(data.delta)
+          : typeof data.content === "string"
+            ? stripHiddenThinkingBlocks(data.content)
+            : "",
+    };
+  }
+
+  if (type === "generation.started" || type === "generation.cancelled" || type === "generation.failed") {
+    return {
+      ...baseStep,
+      kind: "status",
+      phase:
+        type === "generation.started"
+          ? "planning"
+          : type === "generation.cancelled"
+            ? "cancelled"
+            : "failed",
+      status:
+        type === "generation.started"
+          ? "running"
+          : type === "generation.cancelled"
+            ? "cancelled"
+            : "failed",
+      state: type.replace("generation.", ""),
+      label: "Generation status",
+      safe_summary: extractSafeSessionSummary(type, data)?.summary,
+      delta_text: "",
+    };
+  }
+
+  return null;
+}
+
+function mergeGenerationStepList(
+  currentSteps: GenerationStep[] | undefined,
+  incomingStep: GenerationStep,
+): GenerationStep[] {
+  const steps = currentSteps ?? [];
+  const existingIndex = steps.findIndex((step) => {
+    if (step.id === incomingStep.id) {
+      return true;
+    }
+
+    if (
+      incomingStep.kind === "tool" &&
+      incomingStep.tool_call_id &&
+      step.kind === "tool" &&
+      step.tool_call_id === incomingStep.tool_call_id
+    ) {
+      return true;
+    }
+
+    return (
+      incomingStep.kind === "output" &&
+      step.kind === "output" &&
+      step.generation_id === incomingStep.generation_id &&
+      step.message_id === incomingStep.message_id
+    );
+  });
+
+  if (existingIndex < 0) {
+    return [...steps, incomingStep].sort(compareGenerationSteps);
+  }
+
+  const existingStep = steps[existingIndex];
+  const nextDeltaText =
+    incomingStep.kind === "output"
+      ? incomingStep.status === "completed" && incomingStep.delta_text.length >= existingStep.delta_text.length
+        ? incomingStep.delta_text
+        : incomingStep.delta_text && !existingStep.delta_text.endsWith(incomingStep.delta_text)
+          ? `${existingStep.delta_text}${incomingStep.delta_text}`
+          : existingStep.delta_text || incomingStep.delta_text
+      : incomingStep.delta_text || existingStep.delta_text;
+
+  const nextStep: GenerationStep = {
+    ...existingStep,
+    ...incomingStep,
+    delta_text: nextDeltaText,
+    safe_summary: incomingStep.safe_summary ?? existingStep.safe_summary,
+    metadata: incomingStep.metadata ?? existingStep.metadata,
+    ended_at: incomingStep.ended_at ?? existingStep.ended_at,
+  };
+
+  return steps
+    .map((step, index) => (index === existingIndex ? nextStep : step))
+    .sort(compareGenerationSteps);
+}
+
+function mergeGenerationState(generation: ChatGeneration, step: GenerationStep): ChatGeneration {
+  const inferredStatus =
+    step.kind === "status"
+      ? step.status
+      : step.kind === "output" && step.status === "running"
+        ? "running"
+        : step.kind === "output" && step.status === "completed"
+          ? generation.status === "queued"
+            ? "running"
+            : generation.status
+          : generation.status;
+
+  return {
+    ...generation,
+    status: inferredStatus as ChatGeneration["status"],
+    updated_at: step.ended_at ?? step.started_at,
+    started_at:
+      inferredStatus === "running"
+        ? generation.started_at ?? step.started_at
+        : generation.started_at,
+    ended_at:
+      inferredStatus === "completed" ||
+      inferredStatus === "failed" ||
+      inferredStatus === "cancelled"
+        ? step.ended_at ?? step.started_at
+        : generation.ended_at,
+    steps: mergeGenerationStepList(generation.steps, step),
+  };
+}
+
+function createLiveGeneration(
+  conversation: SessionConversation,
+  step: GenerationStep,
+  createdAt: string,
+): ChatGeneration {
+  return {
+    id: step.generation_id,
+    session_id: conversation.session.id,
+    branch_id: conversation.active_branch?.id ?? conversation.session.active_branch_id ?? "default-branch",
+    action: "reply",
+    assistant_message_id: step.message_id ?? "",
+    status:
+      step.status === "pending"
+        ? "queued"
+        : step.status === "running"
+          ? "running"
+          : step.status === "completed"
+            ? "completed"
+            : step.status === "failed"
+              ? "failed"
+              : "cancelled",
+    reasoning_trace: [],
+    steps: [step],
+    created_at: createdAt,
+    updated_at: createdAt,
+    started_at: step.status === "running" ? step.started_at : null,
+    ended_at:
+      step.status === "completed" || step.status === "failed" || step.status === "cancelled"
+        ? step.ended_at ?? step.started_at
+        : null,
+  };
+}
+
+export function mergeConversationGeneration(
+  conversation: SessionConversation | undefined,
+  generation: ChatGeneration,
+): SessionConversation | undefined {
+  if (!conversation || conversation.session.id !== generation.session_id) {
+    return conversation;
+  }
+
+  const existingGeneration = conversation.generations.find((item) => item.id === generation.id);
+  const mergedGeneration: ChatGeneration = existingGeneration
+    ? {
+        ...existingGeneration,
+        ...generation,
+        steps: (generation.steps ?? []).reduce(
+          (currentSteps, step) => mergeGenerationStepList(currentSteps, step),
+          existingGeneration.steps ?? [],
+        ),
+      }
+    : generation;
+
+  const nextGenerations = [
+    ...conversation.generations.filter((item) => item.id !== generation.id),
+    mergedGeneration,
+  ].sort(compareGenerations);
+
+  return {
+    ...conversation,
+    generations: nextGenerations,
+  };
+}
+
+export function mergeConversationGenerationStep(
+  conversation: SessionConversation | undefined,
+  step: GenerationStep,
+): SessionConversation | undefined {
+  if (!conversation || conversation.session.id !== step.session_id) {
+    return conversation;
+  }
+
+  const generationIndex = conversation.generations.findIndex(
+    (generation) => generation.id === step.generation_id,
+  );
+  const nextGenerations = [...conversation.generations];
+
+  if (generationIndex < 0) {
+    nextGenerations.push(createLiveGeneration(conversation, step, step.started_at));
+  } else {
+    nextGenerations[generationIndex] = mergeGenerationState(nextGenerations[generationIndex], step);
+  }
+
+  return {
+    ...conversation,
+    generations: nextGenerations.sort(compareGenerations),
+  };
+}
+
+function mergeConversationGenerationLifecycle(
+  conversation: SessionConversation,
+  generationId: string | null,
+  nextStatus: ChatGeneration["status"] | null,
+  createdAt: string,
+): SessionConversation {
+  if (!generationId || nextStatus === null) {
+    return conversation;
+  }
+
+  return {
+    ...conversation,
+    generations: conversation.generations.map((generation) =>
+      generation.id === generationId
+        ? {
+            ...generation,
+            status: nextStatus,
+            updated_at: createdAt,
+            started_at:
+              nextStatus === "running" ? generation.started_at ?? createdAt : generation.started_at,
+            ended_at:
+              nextStatus === "completed" || nextStatus === "failed" || nextStatus === "cancelled"
+                ? createdAt
+                : generation.ended_at,
+          }
+        : generation,
+    ),
+    active_generation_id:
+      nextStatus === "running"
+        ? generationId
+        : conversation.active_generation_id === generationId
+          ? null
+          : conversation.active_generation_id,
+  };
+}
+
+export function mergeConversationGenerationEvent(
+  conversation: SessionConversation | undefined,
+  type: string,
+  data: unknown,
+  createdAt: string,
+  cursor: number | null,
+): SessionConversation | undefined {
+  if (!conversation || !isRecord(data)) {
+    return conversation;
+  }
+
+  let nextConversation =
+    type === "assistant.summary" || type === "assistant.trace"
+      ? mergeConversationReasoningEvent(conversation, type, data, createdAt, cursor) ?? conversation
+      : conversation;
+
+  const generationId = readFirstNonEmptyString(data, ["generation_id"]);
+  const liveStep = buildLiveGenerationStep(
+    type,
+    data,
+    createdAt,
+    cursor,
+    nextConversation.generations.find((generation) => {
+      if (generationId && generation.id === generationId) {
+        return true;
+      }
+
+      const assistantMessageId = readFirstNonEmptyString(data, ["assistant_message_id", "message_id"]);
+      return assistantMessageId ? generation.assistant_message_id === assistantMessageId : false;
+    }) ?? null,
+  );
+
+  if (liveStep) {
+    nextConversation = mergeConversationGenerationStep(nextConversation, liveStep) ?? nextConversation;
+  }
+
+  if (type === "session.updated") {
+    const queuedPromptCount =
+      typeof data.queued_prompt_count === "number" && Number.isFinite(data.queued_prompt_count)
+        ? data.queued_prompt_count
+        : null;
+    if (queuedPromptCount !== null) {
+      nextConversation = {
+        ...nextConversation,
+        queued_generation_count: queuedPromptCount,
+      };
+    }
+    return nextConversation;
+  }
+
+  if (type === "generation.started") {
+    return {
+      ...mergeConversationGenerationLifecycle(nextConversation, generationId, "running", createdAt),
+      queued_generation_count:
+        typeof data.queued_prompt_count === "number" && Number.isFinite(data.queued_prompt_count)
+          ? data.queued_prompt_count
+          : nextConversation.queued_generation_count,
+    };
+  }
+
+  if (type === "generation.cancelled") {
+    return mergeConversationGenerationLifecycle(nextConversation, generationId, "cancelled", createdAt);
+  }
+
+  if (type === "generation.failed") {
+    return mergeConversationGenerationLifecycle(nextConversation, generationId, "failed", createdAt);
+  }
+
+  if (type === "assistant.trace") {
+    const inferredStatus = inferGenerationStatusFromTrace(data);
+    return mergeConversationGenerationLifecycle(nextConversation, generationId, inferredStatus as ChatGeneration["status"] | null, createdAt);
+  }
+
+  return nextConversation;
+}
+
+export function mergeQueueState(
+  queue: SessionQueue | undefined,
+  type: string,
+  data: unknown,
+): SessionQueue | undefined {
+  if (!queue || !isRecord(data)) {
+    return queue;
+  }
+
+  if (type === "session.updated") {
+    const queuedPromptCount =
+      typeof data.queued_prompt_count === "number" && Number.isFinite(data.queued_prompt_count)
+        ? data.queued_prompt_count
+        : null;
+    if (queuedPromptCount === null) {
+      return queue;
+    }
+
+    return {
+      ...queue,
+      queued_generation_count: queuedPromptCount,
+    };
+  }
+
+  const generationId = readFirstNonEmptyString(data, ["generation_id"]);
+  if (!generationId) {
+    return queue;
+  }
+
+  if (type === "generation.started") {
+    const activeGeneration =
+      queue.queued_generations.find((generation) => generation.id === generationId) ?? queue.active_generation;
+    return {
+      ...queue,
+      active_generation: activeGeneration && activeGeneration.id === generationId ? { ...activeGeneration, status: "running" } : queue.active_generation,
+      active_generation_id: generationId,
+      queued_generations: queue.queued_generations.filter((generation) => generation.id !== generationId),
+      queued_generation_count: Math.max(0, queue.queued_generations.filter((generation) => generation.id !== generationId).length),
+    };
+  }
+
+  if (type === "generation.cancelled" || type === "generation.failed") {
+    return {
+      ...queue,
+      active_generation:
+        queue.active_generation?.id === generationId ? null : queue.active_generation,
+      active_generation_id:
+        queue.active_generation_id === generationId ? null : queue.active_generation_id,
+      queued_generations: queue.queued_generations.filter((generation) => generation.id !== generationId),
+      queued_generation_count: Math.max(
+        0,
+        queue.queued_generations.filter((generation) => generation.id !== generationId).length,
+      ),
+    };
+  }
+
+  return queue;
 }
 
 export function mergeSessionEventEntries(

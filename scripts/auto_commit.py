@@ -7,10 +7,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXCLUDES = [
-    ":(exclude).env",
-    ":(exclude).env.local",
-    ":(exclude)apps/api/data/*.db",
-    ":(exclude)apps/api/data/runtime-workspace/**",
+    ".env",
+    ".env.local",
+    "apps/api/data/*.db",
+    "apps/api/data/runtime-workspace/",
 ]
 
 
@@ -29,6 +29,28 @@ def run_git(
 def get_status() -> str:
     result = run_git("status", "--short", capture_output=True)
     return result.stdout.strip()
+
+
+def get_staged_paths() -> list[str]:
+    result = run_git("diff", "--cached", "--name-only", "-z", capture_output=True)
+    return [path for path in result.stdout.split("\0") if path]
+
+
+def should_exclude(path: str) -> bool:
+    return path in {".env", ".env.local"} or (
+        path.startswith("apps/api/data/")
+        and (
+            path.endswith(".db") or path.startswith("apps/api/data/runtime-workspace/")
+        )
+    )
+
+
+def unstage_excluded_paths() -> None:
+    excluded_paths = [path for path in get_staged_paths() if should_exclude(path)]
+    if not excluded_paths:
+        return
+
+    run_git("restore", "--staged", "--source=HEAD", "--", *excluded_paths)
 
 
 def get_current_branch() -> str:
@@ -64,7 +86,8 @@ def main() -> int:
         return 0
 
     print("Staging changes...")
-    run_git("add", "-A", "--", ".", *DEFAULT_EXCLUDES)
+    run_git("add", "-A", "--", ".")
+    unstage_excluded_paths()
 
     print("Creating commit...")
     run_git("commit", "-m", args.message)

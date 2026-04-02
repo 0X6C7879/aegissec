@@ -4,7 +4,7 @@ import json
 from pytest import MonkeyPatch
 
 from app.core.settings import Settings
-from app.db.models import AttachmentMetadata, MessageRole
+from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
 from app.services.chat_runtime import (
     MAX_TOOL_STEPS,
     AnthropicChatRuntime,
@@ -34,6 +34,35 @@ def test_extract_message_content_strips_think_blocks_from_text_parts() -> None:
     result = OpenAICompatibleChatRuntime._extract_message_content(content)
 
     assert result == "最终答复"
+
+
+def test_extract_message_content_strips_tool_protocol_markup_from_string_payload() -> None:
+    content = (
+        '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
+        '{"task":"demo"}</invoke></minimax:tool_call>\n\n最终答复'
+    )
+
+    result = OpenAICompatibleChatRuntime._extract_message_content(content)
+
+    assert result == "最终答复"
+
+
+def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
+    message = {
+        "content": (
+            '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
+            '{"task":"demo"}</invoke></minimax:tool_call>最终答复'
+        ),
+        "tool_calls": [{"id": "call-1"}],
+    }
+
+    history_message = OpenAICompatibleChatRuntime._assistant_message_for_history(message)
+
+    assert history_message == {
+        "role": "assistant",
+        "content": "最终答复",
+        "tool_calls": [{"id": "call-1"}],
+    }
 
 
 def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
@@ -83,6 +112,39 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     }
     assert tool_calls[1].arguments == {}
     assert tool_calls[2].arguments == {"skill_name_or_id": "adscan"}
+
+
+def test_extract_tool_calls_coerces_loaded_skill_name_to_read_skill_content() -> None:
+    message: dict[str, object] = {
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {
+                    "name": "agent-browser",
+                    "arguments": {},
+                },
+            }
+        ]
+    }
+
+    tool_calls = OpenAICompatibleChatRuntime._extract_tool_calls(
+        message,
+        [
+            SkillAgentSummaryRead(
+                id="skill-1",
+                name="agent-browser",
+                directory_name="agent-browser",
+                description="Browser automation skill.",
+                compatibility=[],
+                entry_file="skills/agent-browser/SKILL.md",
+            )
+        ],
+    )
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0].tool_call_id == "call-1"
+    assert tool_calls[0].tool_name == "read_skill_content"
+    assert tool_calls[0].arguments == {"skill_name_or_id": "agent-browser"}
 
 
 def test_openai_build_initial_messages_uses_persisted_conversation_messages() -> None:
@@ -219,6 +281,33 @@ def test_anthropic_extract_tool_request_from_use() -> None:
     assert request.tool_call_id == "call-123"
     assert request.tool_name == "list_available_skills"
     assert request.arguments == {}
+
+
+def test_anthropic_extract_tool_request_from_use_coerces_loaded_skill_name() -> None:
+    tool_use: dict[str, object] = {
+        "type": "tool_use",
+        "id": "call-456",
+        "name": "agent-browser",
+        "input": {},
+    }
+
+    request = AnthropicChatRuntime._extract_tool_request_from_use(
+        tool_use,
+        [
+            SkillAgentSummaryRead(
+                id="skill-1",
+                name="agent-browser",
+                directory_name="agent-browser",
+                description="Browser automation skill.",
+                compatibility=[],
+                entry_file="skills/agent-browser/SKILL.md",
+            )
+        ],
+    )
+
+    assert request.tool_call_id == "call-456"
+    assert request.tool_name == "read_skill_content"
+    assert request.arguments == {"skill_name_or_id": "agent-browser"}
 
 
 def test_anthropic_build_messages_endpoint_uses_default_base_url() -> None:

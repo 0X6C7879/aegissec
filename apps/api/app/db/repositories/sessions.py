@@ -11,6 +11,7 @@ from app.db.models import (
     ConversationBranch,
     GenerationAction,
     GenerationStatus,
+    GenerationStep,
     Message,
     MessageKind,
     MessageRole,
@@ -519,6 +520,190 @@ class SessionRepository:
             self.db_session.refresh(generation)
         return generation
 
+    def get_generation_step(self, step_id: str) -> GenerationStep | None:
+        statement = select(GenerationStep).where(GenerationStep.id == step_id)
+        return self.db_session.exec(statement).first()
+
+    def list_generation_steps(
+        self,
+        *,
+        generation_id: str | None = None,
+        generation_ids: Iterable[str] | None = None,
+        session_id: str | None = None,
+    ) -> list[GenerationStep]:
+        statement = select(GenerationStep)
+        if generation_id is not None:
+            statement = statement.where(GenerationStep.generation_id == generation_id)
+        if generation_ids is not None:
+            generation_id_values = list(generation_ids)
+            if not generation_id_values:
+                return []
+            statement = statement.where(col(GenerationStep.generation_id).in_(generation_id_values))
+        if session_id is not None:
+            statement = statement.where(GenerationStep.session_id == session_id)
+        statement = statement.order_by(
+            col(GenerationStep.generation_id).asc(),
+            col(GenerationStep.sequence).asc(),
+            col(GenerationStep.started_at).asc(),
+        )
+        return list(self.db_session.exec(statement).all())
+
+    def get_next_generation_step_sequence(self, generation_id: str) -> int:
+        steps = self.list_generation_steps(generation_id=generation_id)
+        if not steps:
+            return 1
+        return max(step.sequence for step in steps) + 1
+
+    def create_generation_step(
+        self,
+        *,
+        generation_id: str,
+        session_id: str,
+        message_id: str | None,
+        kind: str,
+        phase: str | None = None,
+        status: str,
+        state: str | None = None,
+        label: str | None = None,
+        safe_summary: str | None = None,
+        delta_text: str = "",
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+        command: str | None = None,
+        metadata_json: dict[str, object] | None = None,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        sequence: int | None = None,
+        commit: bool = True,
+    ) -> GenerationStep:
+        step = GenerationStep(
+            generation_id=generation_id,
+            session_id=session_id,
+            message_id=message_id,
+            sequence=sequence or self.get_next_generation_step_sequence(generation_id),
+            kind=kind,
+            phase=phase,
+            status=status,
+            state=state,
+            label=label,
+            safe_summary=safe_summary,
+            delta_text=delta_text,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            command=command,
+            started_at=started_at or utc_now(),
+            ended_at=ended_at,
+            metadata_json=dict(metadata_json or {}),
+        )
+        self.db_session.add(step)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(step)
+        return step
+
+    def update_generation_step(
+        self,
+        step: GenerationStep,
+        *,
+        phase: str | None = None,
+        status: str | None = None,
+        state: str | None = None,
+        label: str | None = None,
+        safe_summary: str | None = None,
+        delta_text: str | None = None,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
+        command: str | None = None,
+        metadata_json: dict[str, object] | None = None,
+        ended_at: datetime | None = None,
+        commit: bool = True,
+    ) -> GenerationStep:
+        if phase is not None:
+            step.phase = phase
+        if status is not None:
+            step.status = status
+        if state is not None:
+            step.state = state
+        if label is not None:
+            step.label = label
+        if safe_summary is not None:
+            step.safe_summary = safe_summary
+        if delta_text is not None:
+            step.delta_text = delta_text
+        if tool_name is not None:
+            step.tool_name = tool_name
+        if tool_call_id is not None:
+            step.tool_call_id = tool_call_id
+        if command is not None:
+            step.command = command
+        if metadata_json is not None:
+            step.metadata_json = dict(metadata_json)
+        if ended_at is not None:
+            step.ended_at = ended_at
+        self.db_session.add(step)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(step)
+        return step
+
+    def append_generation_step_delta(
+        self,
+        step: GenerationStep,
+        delta_text: str,
+        *,
+        commit: bool = True,
+    ) -> GenerationStep:
+        step.delta_text = f"{step.delta_text}{delta_text}"
+        self.db_session.add(step)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(step)
+        return step
+
+    def get_open_generation_step(
+        self,
+        generation_id: str,
+        *,
+        kind: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> GenerationStep | None:
+        statement = select(GenerationStep).where(GenerationStep.generation_id == generation_id)
+        statement = statement.where(col(GenerationStep.ended_at).is_(None))
+        if kind is not None:
+            statement = statement.where(GenerationStep.kind == kind)
+        if tool_call_id is not None:
+            statement = statement.where(GenerationStep.tool_call_id == tool_call_id)
+        statement = statement.order_by(col(GenerationStep.sequence).desc())
+        return self.db_session.exec(statement).first()
+
+    def close_open_generation_steps(
+        self,
+        generation_id: str,
+        *,
+        status: str,
+        state: str | None = None,
+        commit: bool = True,
+    ) -> list[GenerationStep]:
+        statement = (
+            select(GenerationStep)
+            .where(GenerationStep.generation_id == generation_id)
+            .where(col(GenerationStep.ended_at).is_(None))
+            .order_by(col(GenerationStep.sequence).asc())
+        )
+        steps = list(self.db_session.exec(statement).all())
+        now = utc_now()
+        for step in steps:
+            step.status = status
+            if state is not None:
+                step.state = state
+            step.ended_at = now
+            self.db_session.add(step)
+        if steps and commit:
+            self.db_session.commit()
+            for step in steps:
+                self.db_session.refresh(step)
+        return steps
+
     def create_session_event(
         self,
         *,
@@ -727,6 +912,13 @@ class SessionRepository:
 
     def queue_size(self, session_id: str) -> int:
         return len(self.list_generations(session_id, statuses={GenerationStatus.QUEUED}))
+
+    def get_generation_queue_position(self, session_id: str, generation_id: str) -> int | None:
+        queued_generations = self.list_generations(session_id, statuses={GenerationStatus.QUEUED})
+        for index, generation in enumerate(queued_generations, start=1):
+            if generation.id == generation_id:
+                return index
+        return None
 
     def clone_branch_path_to_message(
         self,

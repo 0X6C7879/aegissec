@@ -87,6 +87,9 @@ _SQLITE_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "lease_expires_at": "DATETIME",
         "attempt_count": "INTEGER NOT NULL DEFAULT 0",
     },
+    "generation_step": {
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+    },
     "skill_record": {
         "parameter_schema": "JSON NOT NULL DEFAULT '{}'",
         "enabled": "BOOLEAN NOT NULL DEFAULT 1",
@@ -124,6 +127,17 @@ _SQLITE_INDEX_STATEMENTS = (
         "CREATE INDEX IF NOT EXISTS ix_chat_generation_lease_expires_at "
         "ON chat_generation (lease_expires_at)"
     ),
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_generation_id ON generation_step (generation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_session_id ON generation_step (session_id)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_message_id ON generation_step (message_id)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_sequence ON generation_step (sequence)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_kind ON generation_step (kind)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_phase ON generation_step (phase)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_status ON generation_step (status)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_state ON generation_step (state)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_tool_name ON generation_step (tool_name)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_tool_call_id ON generation_step (tool_call_id)",
+    "CREATE INDEX IF NOT EXISTS ix_generation_step_started_at ON generation_step (started_at)",
     "CREATE INDEX IF NOT EXISTS ix_session_event_log_session_id ON session_event_log (session_id)",
     "CREATE INDEX IF NOT EXISTS ix_session_event_log_event_type ON session_event_log (event_type)",
     "CREATE INDEX IF NOT EXISTS ix_session_event_log_timestamp ON session_event_log (timestamp)",

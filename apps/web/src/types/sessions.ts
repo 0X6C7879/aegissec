@@ -29,6 +29,32 @@ export type GenerationStatus =
   | "cancelled"
   | (string & {});
 
+export type GenerationStepKind =
+  | "reasoning"
+  | "tool"
+  | "output"
+  | "status"
+  | (string & {});
+
+export type GenerationStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | (string & {});
+
+export type GenerationStepPhase =
+  | "planning"
+  | "tool_selection"
+  | "tool_running"
+  | "tool_result"
+  | "synthesis"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | (string & {});
+
 export type GenerationAction =
   | "reply"
   | "edit"
@@ -110,6 +136,7 @@ export type ChatGeneration = {
   status: GenerationStatus;
   reasoning_summary?: string | null;
   reasoning_trace?: GenerationReasoningTraceEntry[];
+  steps?: GenerationStep[];
   metadata?: Record<string, unknown>;
   error_message?: string | null;
   created_at: string;
@@ -117,6 +144,28 @@ export type ChatGeneration = {
   started_at?: string | null;
   ended_at?: string | null;
   cancel_requested_at?: string | null;
+  queue_position?: number | null;
+};
+
+export type GenerationStep = {
+  id: string;
+  generation_id: string;
+  session_id: string;
+  message_id?: string | null;
+  sequence: number;
+  kind: GenerationStepKind;
+  phase?: GenerationStepPhase | null;
+  status: GenerationStepStatus;
+  state?: string | null;
+  label?: string | null;
+  safe_summary?: string | null;
+  delta_text: string;
+  tool_name?: string | null;
+  tool_call_id?: string | null;
+  command?: string | null;
+  metadata?: Record<string, unknown>;
+  started_at: string;
+  ended_at?: string | null;
 };
 
 export type SessionMessage = {
@@ -150,12 +199,16 @@ export type SessionConversation = {
   branches: ConversationBranch[];
   messages: SessionMessage[];
   generations: ChatGeneration[];
+  active_generation_id?: string | null;
+  queued_generation_count?: number;
 };
 
 export type SessionQueue = {
   session: SessionSummary;
   active_generation: ChatGeneration | null;
   queued_generations: ChatGeneration[];
+  active_generation_id?: string | null;
+  queued_generation_count?: number;
 };
 
 export type SessionReplay = {
@@ -171,6 +224,9 @@ export type ChatResponse = {
   assistant_message: SessionMessage;
   generation?: ChatGeneration | null;
   branch?: ConversationBranch | null;
+  queue_position?: number | null;
+  active_generation_id?: string | null;
+  queued_generation_count?: number;
 };
 
 export type SessionEventEnvelope = {

@@ -285,6 +285,34 @@ class ChatGeneration(SQLModel, table=True):
     attempt_count: int = Field(default=0, nullable=False, ge=0)
 
 
+class GenerationStep(SQLModel, table=True):
+    __tablename__ = "generation_step"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    generation_id: str = Field(foreign_key="chat_generation.id", index=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    message_id: str | None = Field(
+        default=None, foreign_key="message.id", nullable=True, index=True
+    )
+    sequence: int = Field(nullable=False, ge=1, index=True)
+    kind: str = Field(nullable=False, max_length=64, index=True)
+    phase: str | None = Field(default=None, max_length=64, index=True)
+    status: str = Field(nullable=False, max_length=32, index=True)
+    state: str | None = Field(default=None, max_length=64, index=True)
+    label: str | None = Field(default=None, max_length=200)
+    safe_summary: str | None = Field(default=None, max_length=4000)
+    delta_text: str = Field(default="", nullable=False)
+    tool_name: str | None = Field(default=None, max_length=200, index=True)
+    tool_call_id: str | None = Field(default=None, max_length=200, index=True)
+    command: str | None = Field(default=None)
+    started_at: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+    ended_at: datetime | None = Field(default=None, nullable=True)
+    metadata_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False),
+    )
+
+
 class SessionEventLog(SQLModel, table=True):
     __tablename__ = "session_event_log"
 
@@ -644,6 +672,7 @@ class ChatGenerationRead(SQLModel):
     status: GenerationStatus
     reasoning_summary: str | None = None
     reasoning_trace: list[dict[str, object]] = Field(default_factory=list)
+    steps: list[GenerationStepRead] = Field(default_factory=list)
     error_message: str | None = None
     metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
     created_at: datetime
@@ -651,10 +680,32 @@ class ChatGenerationRead(SQLModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     cancel_requested_at: datetime | None = None
+    queue_position: int | None = None
 
 
 class SessionDetail(SessionRead):
     messages: list[MessageRead] = Field(default_factory=list)
+
+
+class GenerationStepRead(SQLModel):
+    id: str
+    generation_id: str
+    session_id: str
+    message_id: str | None = None
+    sequence: int
+    kind: str
+    phase: str | None = None
+    status: str
+    state: str | None = None
+    label: str | None = None
+    safe_summary: str | None = None
+    delta_text: str = ""
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    command: str | None = None
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    started_at: datetime
+    ended_at: datetime | None = None
 
 
 class SessionConversationRead(SQLModel):
@@ -663,12 +714,16 @@ class SessionConversationRead(SQLModel):
     branches: list[ConversationBranchRead] = Field(default_factory=list)
     messages: list[MessageRead] = Field(default_factory=list)
     generations: list[ChatGenerationRead] = Field(default_factory=list)
+    active_generation_id: str | None = None
+    queued_generation_count: int = 0
 
 
 class SessionQueueRead(SQLModel):
     session: SessionRead
     active_generation: ChatGenerationRead | None = None
     queued_generations: list[ChatGenerationRead] = Field(default_factory=list)
+    active_generation_id: str | None = None
+    queued_generation_count: int = 0
 
 
 class SessionReplayRead(SQLModel):
@@ -697,6 +752,7 @@ class ChatRequest(SQLModel):
     branch_id: str | None = None
     parent_message_id: str | None = None
     token_budget: int | None = Field(default=None, gt=0)
+    wait_for_completion: bool = False
 
 
 class ChatResponse(SQLModel):
@@ -705,6 +761,9 @@ class ChatResponse(SQLModel):
     assistant_message: MessageRead
     generation: ChatGenerationRead | None = None
     branch: ConversationBranchRead | None = None
+    queue_position: int | None = None
+    active_generation_id: str | None = None
+    queued_generation_count: int = 0
 
 
 class MessageEditRequest(SQLModel):
@@ -1033,6 +1092,7 @@ def to_chat_generation_read(generation: ChatGeneration) -> ChatGenerationRead:
         status=generation.status,
         reasoning_summary=generation.reasoning_summary,
         reasoning_trace=list(generation.reasoning_trace_json),
+        steps=[],
         error_message=generation.error_message,
         **{"metadata": dict(generation.metadata_json)},
         created_at=generation.created_at,
@@ -1040,6 +1100,30 @@ def to_chat_generation_read(generation: ChatGeneration) -> ChatGenerationRead:
         started_at=generation.started_at,
         ended_at=generation.ended_at,
         cancel_requested_at=generation.cancel_requested_at,
+        queue_position=None,
+    )
+
+
+def to_generation_step_read(step: GenerationStep) -> GenerationStepRead:
+    return GenerationStepRead(
+        id=step.id,
+        generation_id=step.generation_id,
+        session_id=step.session_id,
+        message_id=step.message_id,
+        sequence=step.sequence,
+        kind=step.kind,
+        phase=step.phase,
+        status=step.status,
+        state=step.state,
+        label=step.label,
+        safe_summary=step.safe_summary,
+        delta_text=step.delta_text,
+        tool_name=step.tool_name,
+        tool_call_id=step.tool_call_id,
+        command=step.command,
+        **{"metadata": dict(step.metadata_json)},
+        started_at=step.started_at,
+        ended_at=step.ended_at,
     )
 
 

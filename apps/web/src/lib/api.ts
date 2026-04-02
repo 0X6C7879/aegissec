@@ -73,6 +73,7 @@ type ChatRequestPayload = {
   branch_id?: string | null;
   parent_message_id?: string | null;
   token_budget?: number | null;
+  wait_for_completion?: boolean;
 };
 
 type MessageEditPayload = {
@@ -80,11 +81,13 @@ type MessageEditPayload = {
   attachments?: AttachmentMetadata[];
   branch_id?: string | null;
   token_budget?: number | null;
+  wait_for_completion?: boolean;
 };
 
 type MessageRegeneratePayload = {
   branch_id?: string | null;
   token_budget?: number | null;
+  wait_for_completion?: boolean;
 };
 
 type BranchForkPayload = {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractSafeSessionSummary,
+  mergeConversationGenerationEvent,
   mergeConversationReasoningEvent,
   mergeSessionEventEntries,
   shouldStoreRealtimeEvent,
@@ -127,6 +128,116 @@ describe("sessionUtils realtime summaries", () => {
         cursor: 21,
         sequence: 1,
         summary: "新的可见摘要",
+      },
+    ]);
+  });
+
+  it("aggregates tool and output events into one generation timeline", () => {
+    const baseConversation = {
+      session: {
+        id: "session-1",
+        title: "当前对话",
+        status: "running",
+        project_id: null,
+        goal: null,
+        scenario_type: null,
+        current_phase: null,
+        runtime_policy_json: null,
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+        deleted_at: null,
+      },
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [
+        {
+          id: "generation-1",
+          session_id: "session-1",
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "running",
+          reasoning_trace: [],
+          steps: [],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 0,
+    };
+
+    const withToolStart = mergeConversationGenerationEvent(
+      baseConversation,
+      "tool.call.started",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-1",
+        command: "nmap 127.0.0.1",
+      },
+      "2026-04-01T10:00:01.000Z",
+      11,
+    );
+    const withToolFinished = mergeConversationGenerationEvent(
+      withToolStart,
+      "tool.call.finished",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-1",
+        command: "nmap 127.0.0.1",
+        status: "completed",
+      },
+      "2026-04-01T10:00:02.000Z",
+      12,
+    );
+    const withDelta = mergeConversationGenerationEvent(
+      withToolFinished,
+      "message.delta",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        role: "assistant",
+        content: "partial reply",
+        delta: "partial reply",
+      },
+      "2026-04-01T10:00:03.000Z",
+      13,
+    );
+    const withCompleted = mergeConversationGenerationEvent(
+      withDelta,
+      "assistant.trace",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        state: "generation.completed",
+      },
+      "2026-04-01T10:00:04.000Z",
+      14,
+    );
+
+    expect(withCompleted?.generations[0]?.status).toBe("completed");
+    expect(withCompleted?.generations[0]?.steps).toMatchObject([
+      {
+        kind: "tool",
+        tool_call_id: "tool-1",
+        status: "completed",
+        phase: "tool_result",
+      },
+      {
+        kind: "output",
+        status: "running",
+        phase: "synthesis",
+        delta_text: "partial reply",
+      },
+      {
+        kind: "status",
+        status: "completed",
+        state: "generation.completed",
       },
     ]);
   });

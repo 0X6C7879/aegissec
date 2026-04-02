@@ -237,6 +237,109 @@ describe("useSessionEvents", () => {
       queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]
         ?.reasoning_trace,
     ).toHaveLength(205);
+    expect(
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]?.steps,
+    ).toHaveLength(205);
+
+    unmount();
+  });
+
+  it("merges tool and output websocket events into generation steps", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const session = createSessionSummary();
+    const sessionConversation: SessionConversation = {
+      session,
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [
+        {
+          id: "generation-1",
+          session_id: session.id,
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "running",
+          reasoning_trace: [],
+          steps: [],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 0,
+    };
+
+    queryClient.setQueryData(["conversation", session.id], sessionConversation);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const socket = MockWebSocket.instances[0]!;
+    act(() => {
+      socket.emitOpen();
+      socket.emitMessage({
+        type: "tool.call.started",
+        cursor: 1,
+        created_at: "2026-04-01T10:00:01.000Z",
+        data: {
+          generation_id: "generation-1",
+          message_id: "assistant-message-1",
+          tool: "execute_kali_command",
+          tool_call_id: "tool-1",
+          command: "nmap 127.0.0.1",
+        },
+      });
+      socket.emitMessage({
+        type: "message.delta",
+        cursor: 2,
+        created_at: "2026-04-01T10:00:02.000Z",
+        data: {
+          id: "assistant-message-1",
+          session_id: session.id,
+          generation_id: "generation-1",
+          role: "assistant",
+          content: "阶段性输出",
+          attachments: [],
+          delta: "阶段性输出",
+        },
+      });
+      socket.emitMessage({
+        type: "assistant.trace",
+        cursor: 3,
+        created_at: "2026-04-01T10:00:03.000Z",
+        data: {
+          generation_id: "generation-1",
+          message_id: "assistant-message-1",
+          state: "generation.completed",
+        },
+      });
+    });
+
+    expect(
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]?.steps,
+    ).toMatchObject([
+      {
+        kind: "tool",
+        tool_call_id: "tool-1",
+        status: "running",
+      },
+      {
+        kind: "output",
+        delta_text: "阶段性输出",
+        status: "running",
+      },
+      {
+        kind: "status",
+        state: "generation.completed",
+        status: "completed",
+      },
+    ]);
 
     unmount();
   });

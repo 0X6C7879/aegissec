@@ -17,7 +17,10 @@ from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
 from app.core.settings import Settings, get_settings
 from app.db.models import (
+    ChatGeneration,
+    ChatGenerationRead,
     GenerationStatus,
+    GenerationStepRead,
     MessageStatus,
     Session,
     SessionConversationRead,
@@ -30,6 +33,7 @@ from app.db.models import (
     SessionUpdate,
     to_chat_generation_read,
     to_conversation_branch_read,
+    to_generation_step_read,
     to_message_read,
     to_run_log_read,
     to_runtime_artifact_read,
@@ -89,17 +93,50 @@ def _build_conversation_read(
     messages = repository.list_messages(
         session.id, branch_id=active_branch.id, include_superseded=False
     )
+    generations = [
+        generation
+        for generation in repository.list_generations(session.id)
+        if generation.branch_id == active_branch.id
+    ]
+    active_generation = repository.get_active_generation(session.id)
     return SessionConversationRead(
         session=to_session_read(session),
         active_branch=to_conversation_branch_read(active_branch),
         branches=[to_conversation_branch_read(branch) for branch in branches],
         messages=[to_message_read(message) for message in messages],
-        generations=[
-            to_chat_generation_read(generation)
-            for generation in repository.list_generations(session.id)
-            if generation.branch_id == active_branch.id
-        ],
+        generations=_build_generation_reads(repository, session.id, generations),
+        active_generation_id=active_generation.id if active_generation is not None else None,
+        queued_generation_count=repository.queue_size(session.id),
     )
+
+
+def _build_generation_reads(
+    repository: SessionRepository,
+    session_id: str,
+    generations: list[ChatGeneration],
+) -> list[ChatGenerationRead]:
+    generation_ids = [generation.id for generation in generations]
+    steps_by_generation_id: dict[str, list[GenerationStepRead]] = {}
+    for step in repository.list_generation_steps(generation_ids=generation_ids):
+        steps_by_generation_id.setdefault(step.generation_id, []).append(
+            to_generation_step_read(step)
+        )
+
+    queue_positions = {
+        generation.id: index
+        for index, generation in enumerate(
+            repository.list_generations(session_id, statuses={GenerationStatus.QUEUED}),
+            start=1,
+        )
+    }
+
+    reads: list[ChatGenerationRead] = []
+    for generation in generations:
+        generation_read = to_chat_generation_read(generation)
+        generation_read.steps = list(steps_by_generation_id.get(generation.id, []))
+        generation_read.queue_position = queue_positions.get(generation.id)
+        reads.append(generation_read)
+    return reads
 
 
 @router.get(
@@ -314,6 +351,9 @@ async def cancel_session(
                 status=MessageStatus.CANCELLED,
                 error_message="Active generation was cancelled.",
             )
+        repository.close_open_generation_steps(
+            active_generation.id, status="cancelled", state="cancelled"
+        )
         await generation_manager.cancel_generation(session_id, active_generation.id)
         await generation_manager.reject_future(
             session_id,
@@ -333,6 +373,9 @@ async def cancel_session(
                 status=MessageStatus.CANCELLED,
                 error_message="Queued generation was cancelled.",
             )
+        repository.close_open_generation_steps(
+            queued_generation.id, status="cancelled", state="cancelled"
+        )
     await generation_manager.reject_pending(
         session_id,
         GenerationCancelledError("Session generation queue was cancelled."),
@@ -424,11 +467,13 @@ async def get_session_queue(
     payload = SessionQueueRead(
         session=to_session_read(session),
         active_generation=(
-            to_chat_generation_read(active_generation) if active_generation is not None else None
+            _build_generation_reads(repository, session.id, [active_generation])[0]
+            if active_generation is not None
+            else None
         ),
-        queued_generations=[
-            to_chat_generation_read(generation) for generation in queued_generations
-        ],
+        queued_generations=_build_generation_reads(repository, session.id, queued_generations),
+        active_generation_id=active_generation.id if active_generation is not None else None,
+        queued_generation_count=len(queued_generations),
     )
     return ok_response(payload.model_dump(mode="json"))
 
@@ -451,10 +496,11 @@ async def get_session_replay(
             to_conversation_branch_read(branch) for branch in repository.list_branches(session.id)
         ],
         messages=[to_message_read(message) for message in repository.list_all_messages(session.id)],
-        generations=[
-            to_chat_generation_read(generation)
-            for generation in repository.list_generations(session.id)
-        ],
+        generations=_build_generation_reads(
+            repository,
+            session.id,
+            repository.list_generations(session.id),
+        ),
     )
     return ok_response(payload.model_dump(mode="json"))
 

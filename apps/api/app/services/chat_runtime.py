@@ -18,7 +18,10 @@ SYSTEM_PROMPT = (
     "user's stated scope. The system exposes a dynamic Skills catalog for the current project. "
     "When the user asks which skills are available, asks what a skill does, or asks you to use "
     "a skill, call list_available_skills or read_skill_content before asking generic "
-    "clarifying questions, and do not guess skill contents. Use execute_kali_command only when "
+    "clarifying questions, and do not guess skill contents. Skills are reference documents, "
+    "not callable tool names, so never emit a tool call using a skill slug such as "
+    "agent-browser directly. The only callable tool names are execute_kali_command, "
+    "list_available_skills, and read_skill_content. Use execute_kali_command only when "
     "shell-based verification or command output would materially improve accuracy. Prefer "
     "batching adjacent low-risk reconnaissance checks into a single command instead of many "
     "small commands, and avoid redundant tool calls once you have enough evidence. After tool "
@@ -33,11 +36,27 @@ TOOL_BUDGET_EXHAUSTED_PROMPT = (
     "state that the automatic tool budget was reached if the task is still incomplete."
 )
 THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+INVOKE_BLOCK_PATTERN = re.compile(r"<invoke\b[^>]*>.*?</invoke>", re.IGNORECASE | re.DOTALL)
+TOOL_CALL_BLOCK_PATTERN = re.compile(
+    r"<(?:[\w-]+:)?tool_call\b[^>]*>.*?</(?:[\w-]+:)?tool_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+TOOL_CALL_TAG_PATTERN = re.compile(r"</?(?:[\w-]+:)?tool_call\b[^>]*>", re.IGNORECASE)
+INVOKE_TAG_PATTERN = re.compile(r"</?invoke\b[^>]*>", re.IGNORECASE)
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 
 
 def strip_think_blocks(content: str) -> str:
-    return THINK_BLOCK_PATTERN.sub("", content).strip()
+    cleaned_content = content
+    for pattern in (
+        THINK_BLOCK_PATTERN,
+        TOOL_CALL_BLOCK_PATTERN,
+        INVOKE_BLOCK_PATTERN,
+        TOOL_CALL_TAG_PATTERN,
+        INVOKE_TAG_PATTERN,
+    ):
+        cleaned_content = pattern.sub("", cleaned_content)
+    return cleaned_content.strip()
 
 
 class ChatRuntimeError(Exception):
@@ -150,7 +169,7 @@ class OpenAICompatibleChatRuntime:
                 response_payload = await self._request_completion(endpoint, headers, payload)
             assistant_message = self._extract_message_payload(response_payload)
             text_content = self._extract_message_content(assistant_message.get("content"))
-            tool_calls = self._extract_tool_calls(assistant_message)
+            tool_calls = self._extract_tool_calls(assistant_message, available_skills)
 
             if tool_calls:
                 if execute_tool is None:
@@ -536,9 +555,12 @@ class OpenAICompatibleChatRuntime:
 
     @staticmethod
     def _assistant_message_for_history(message: dict[str, object]) -> dict[str, object]:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            content = OpenAICompatibleChatRuntime._sanitize_assistant_content(content)
         return {
             "role": "assistant",
-            "content": message.get("content", ""),
+            "content": content,
             "tool_calls": message.get("tool_calls", []),
         }
 
@@ -595,16 +617,59 @@ class OpenAICompatibleChatRuntime:
 
         lines.append(
             "If the user asks to list skills, explain a skill, or use a skill, "
-            "call the skills tools before asking broad clarification questions."
+            "call the skills tools before asking broad clarification questions. "
+            "Skill names in this catalog are reference entries, not callable tools. "
+            "The only callable tool names are execute_kali_command, list_available_skills, "
+            "and read_skill_content."
         )
         return "\n".join(lines)
 
     @staticmethod
-    def _extract_tool_calls(message: dict[str, object]) -> list[ToolCallRequest]:
+    def _find_skill_identifier(
+        tool_name: str,
+        available_skills: list[SkillAgentSummaryRead],
+    ) -> str | None:
+        normalized_tool_name = tool_name.strip().casefold()
+        if not normalized_tool_name:
+            return None
+
+        for skill in available_skills:
+            for candidate in (skill.id, skill.directory_name, skill.name):
+                if (
+                    isinstance(candidate, str)
+                    and candidate.strip().casefold() == normalized_tool_name
+                ):
+                    return skill.directory_name or skill.name or skill.id
+        return None
+
+    @staticmethod
+    def _coerce_skill_tool_call(
+        *,
+        tool_call_id: str,
+        function_name: str,
+        available_skills: list[SkillAgentSummaryRead],
+    ) -> ToolCallRequest | None:
+        skill_identifier = OpenAICompatibleChatRuntime._find_skill_identifier(
+            function_name, available_skills
+        )
+        if skill_identifier is None:
+            return None
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="read_skill_content",
+            arguments={"skill_name_or_id": skill_identifier},
+        )
+
+    @staticmethod
+    def _extract_tool_calls(
+        message: dict[str, object],
+        available_skills: list[SkillAgentSummaryRead] | None = None,
+    ) -> list[ToolCallRequest]:
         raw_tool_calls = message.get("tool_calls")
         if not isinstance(raw_tool_calls, list):
             return []
 
+        normalized_available_skills = available_skills or []
         tool_calls: list[ToolCallRequest] = []
         for raw_tool_call in raw_tool_calls:
             if not isinstance(raw_tool_call, dict):
@@ -657,6 +722,15 @@ class OpenAICompatibleChatRuntime:
                         arguments={"skill_name_or_id": raw_identifier.strip()},
                     )
                 )
+                continue
+
+            skill_tool_call = OpenAICompatibleChatRuntime._coerce_skill_tool_call(
+                tool_call_id=tool_call_id,
+                function_name=function_name,
+                available_skills=normalized_available_skills,
+            )
+            if skill_tool_call is not None:
+                tool_calls.append(skill_tool_call)
                 continue
 
             raise ChatRuntimeError(f"LLM requested an unsupported tool: {function_name}.")
@@ -774,7 +848,7 @@ class AnthropicChatRuntime:
                 )
                 tool_results: list[dict[str, object]] = []
                 for tool_use in tool_uses:
-                    tool_request = self._extract_tool_request_from_use(tool_use)
+                    tool_request = self._extract_tool_request_from_use(tool_use, available_skills)
                     tool_result = await execute_tool(tool_request)
                     tool_results.append(
                         {
@@ -1160,7 +1234,10 @@ class AnthropicChatRuntime:
         return ""
 
     @staticmethod
-    def _extract_tool_request_from_use(tool_use: dict[str, object]) -> ToolCallRequest:
+    def _extract_tool_request_from_use(
+        tool_use: dict[str, object],
+        available_skills: list[SkillAgentSummaryRead] | None = None,
+    ) -> ToolCallRequest:
         tool_use_id = tool_use.get("id")
         tool_name = tool_use.get("name")
         input_data = tool_use.get("input")
@@ -1196,6 +1273,13 @@ class AnthropicChatRuntime:
                 arguments={"skill_name_or_id": raw_identifier.strip()},
             )
         else:
+            skill_tool_call = OpenAICompatibleChatRuntime._coerce_skill_tool_call(
+                tool_call_id=tool_use_id,
+                function_name=tool_name,
+                available_skills=available_skills or [],
+            )
+            if skill_tool_call is not None:
+                return skill_tool_call
             raise ChatRuntimeError(f"LLM requested an unsupported tool: {tool_name}.")
 
     @staticmethod
@@ -1271,7 +1355,10 @@ class AnthropicChatRuntime:
 
         lines.append(
             "If the user asks to list skills, explain a skill, or use a skill, "
-            "call the skills tools before asking broad clarification questions."
+            "call the skills tools before asking broad clarification questions. "
+            "Skill names in this catalog are reference entries, not callable tools. "
+            "The only callable tool names are execute_kali_command, list_available_skills, "
+            "and read_skill_content."
         )
         return "\n".join(lines)
 
