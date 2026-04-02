@@ -4350,9 +4350,9 @@ a {
 
 .workbench-chat-input {
   width: 100%;
-  min-height: 3rem;
+  min-height: 2.5rem;
   max-height: 7.5rem;
-  padding: 0.8rem 0.95rem;
+  padding: 0.68rem 0.9rem;
   resize: none;
   overflow-y: auto;
   border: 1px solid transparent;
@@ -7504,7 +7504,7 @@ a {
 }
 
 .workbench-chat-input {
-  min-height: 96px;
+  min-height: 72px;
 }
 
 @media (max-width: 1100px) {
