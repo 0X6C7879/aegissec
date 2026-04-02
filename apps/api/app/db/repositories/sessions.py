@@ -7,6 +7,7 @@ from sqlmodel import Session as DBSession
 from sqlmodel import col, or_, select
 
 from app.db.models import (
+    AssistantTranscriptSegment,
     ChatGeneration,
     ConversationBranch,
     GenerationAction,
@@ -19,6 +20,8 @@ from app.db.models import (
     Session,
     SessionEventLog,
     SessionStatus,
+    assistant_transcript_to_storage,
+    resolve_message_assistant_transcript,
     utc_now,
 )
 
@@ -295,6 +298,7 @@ class SessionRepository:
         edited_from_message_id: str | None = None,
         version_group_id: str | None = None,
         metadata_json: dict[str, object] | None = None,
+        assistant_transcript_json: list[dict[str, object]] | None = None,
         error_message: str | None = None,
         commit: bool = True,
     ) -> Message:
@@ -312,6 +316,7 @@ class SessionRepository:
             version_group_id=version_group_id,
             content=content,
             metadata_json=dict(metadata_json or {}),
+            assistant_transcript_json=list(assistant_transcript_json or []),
             error_message=error_message,
             attachments_json=list(attachments),
         )
@@ -338,6 +343,7 @@ class SessionRepository:
         status: MessageStatus | None = None,
         generation_id: str | None = None,
         metadata_json: dict[str, object] | None = None,
+        assistant_transcript_json: list[dict[str, object]] | None = None,
         error_message: str | None = None,
         attachments_json: list[dict[str, str | int | None]] | None = None,
         commit: bool = True,
@@ -354,6 +360,12 @@ class SessionRepository:
             has_changes = True
         if metadata_json is not None and metadata_json != message.metadata_json:
             message.metadata_json = dict(metadata_json)
+            has_changes = True
+        if (
+            assistant_transcript_json is not None
+            and assistant_transcript_json != message.assistant_transcript_json
+        ):
+            message.assistant_transcript_json = list(assistant_transcript_json)
             has_changes = True
         if error_message is not None and error_message != message.error_message:
             message.error_message = error_message
@@ -377,6 +389,52 @@ class SessionRepository:
         metadata["trace"] = trace_entries
         self.update_message(message, metadata_json=metadata)
         return message
+
+    def get_message_transcript(self, message: Message) -> list[AssistantTranscriptSegment]:
+        return resolve_message_assistant_transcript(message)
+
+    def replace_message_transcript(
+        self,
+        message: Message,
+        segments: list[AssistantTranscriptSegment],
+        *,
+        commit: bool = True,
+    ) -> Message:
+        return self.update_message(
+            message,
+            assistant_transcript_json=assistant_transcript_to_storage(segments),
+            commit=commit,
+        )
+
+    def append_message_transcript_segment(
+        self,
+        message: Message,
+        segment: AssistantTranscriptSegment,
+        *,
+        commit: bool = True,
+    ) -> Message:
+        segments = self.get_message_transcript(message)
+        segments.append(segment)
+        return self.replace_message_transcript(message, segments, commit=commit)
+
+    def update_message_transcript_segment(
+        self,
+        message: Message,
+        segment: AssistantTranscriptSegment,
+        *,
+        commit: bool = True,
+    ) -> Message:
+        segments = self.get_message_transcript(message)
+        updated = False
+        for index, existing in enumerate(segments):
+            if existing.id == segment.id:
+                segments[index] = segment
+                updated = True
+                break
+        if not updated:
+            segments.append(segment)
+        segments.sort(key=lambda item: (item.sequence, item.recorded_at, item.id))
+        return self.replace_message_transcript(message, segments, commit=commit)
 
     def update_message_summary(self, message: Message, summary: str) -> Message:
         metadata = dict(message.metadata_json)

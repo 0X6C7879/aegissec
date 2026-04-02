@@ -231,6 +231,7 @@ function buildOptimisticUserMessage(sessionId: string, content: string): Session
     session_id: sessionId,
     role: "user" as const,
     content,
+    assistant_transcript: [],
     attachments: [],
     created_at: new Date().toISOString(),
   };
@@ -241,6 +242,7 @@ function buildOptimisticAssistantMessage(
   branchId: string | null,
   generationId: string,
   createdAt: string,
+  queuePosition: number,
 ): SessionMessage {
   return {
     id: `optimistic-assistant-${crypto.randomUUID()}`,
@@ -251,6 +253,18 @@ function buildOptimisticAssistantMessage(
     status: "queued",
     message_kind: "message",
     content: "",
+    assistant_transcript: [
+      {
+        id: `optimistic-transcript-${crypto.randomUUID()}`,
+        sequence: 1,
+        kind: "status",
+        status: "queued",
+        title: queuePosition > 1 ? `排队 #${queuePosition}` : "等待开始",
+        text: queuePosition > 1 ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。` : "已进入队列，等待开始。",
+        recorded_at: createdAt,
+        updated_at: createdAt,
+      },
+    ],
     attachments: [],
     created_at: createdAt,
   };
@@ -309,10 +323,6 @@ function downloadJson(fileName: string, payload: unknown): void {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(objectUrl);
-}
-
-function getCurrentTaskNode(graph: SessionGraph | undefined): SessionGraphNode | null {
-  return graph?.nodes.find((node) => readBoolean(node.data.current)) ?? null;
 }
 
 function getNodeStatus(node: SessionGraphNode): string | null {
@@ -1510,6 +1520,7 @@ export function SessionWorkspaceWorkbench() {
         branchId,
         optimisticGeneration.id,
         createdAt,
+        queuedGenerationCount + 1,
       );
       optimisticGeneration.assistant_message_id = optimisticAssistantMessage.id;
       optimisticGeneration.steps = (optimisticGeneration.steps ?? []).map((step) => ({
@@ -1903,7 +1914,6 @@ export function SessionWorkspaceWorkbench() {
   const workflowNeedsApproval =
     workflowQuery.data?.status === "needs_approval" ||
     workflowQuery.data?.state.approval?.required === true;
-  const currentTaskNode = getCurrentTaskNode(taskGraph);
   const selectedGraphNode = getSelectedGraphNode(
     selectedNode,
     taskGraph,

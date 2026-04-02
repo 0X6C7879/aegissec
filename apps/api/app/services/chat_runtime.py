@@ -46,10 +46,9 @@ INVOKE_TAG_PATTERN = re.compile(r"</?invoke\b[^>]*>", re.IGNORECASE)
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 
 
-def strip_think_blocks(content: str) -> str:
+def strip_tool_protocol_markup(content: str) -> str:
     cleaned_content = content
     for pattern in (
-        THINK_BLOCK_PATTERN,
         TOOL_CALL_BLOCK_PATTERN,
         INVOKE_BLOCK_PATTERN,
         TOOL_CALL_TAG_PATTERN,
@@ -57,6 +56,27 @@ def strip_think_blocks(content: str) -> str:
     ):
         cleaned_content = pattern.sub("", cleaned_content)
     return cleaned_content.strip()
+
+
+def strip_think_blocks(content: str) -> str:
+    cleaned_content = THINK_BLOCK_PATTERN.sub("", content)
+    cleaned_content = strip_tool_protocol_markup(cleaned_content)
+    return cleaned_content.strip()
+
+
+def sanitize_assistant_content(
+    content: str,
+    *,
+    strip_thinking: bool = False,
+    fallback_text: str = "",
+) -> str:
+    cleaned_content = strip_tool_protocol_markup(content)
+    if strip_thinking:
+        cleaned_content = THINK_BLOCK_PATTERN.sub("", cleaned_content)
+    cleaned_content = cleaned_content.strip()
+    if cleaned_content:
+        return cleaned_content
+    return fallback_text
 
 
 class ChatRuntimeError(Exception):
@@ -589,11 +609,11 @@ class OpenAICompatibleChatRuntime:
 
     @staticmethod
     def _sanitize_assistant_content(content: str) -> str:
-        cleaned_content = strip_think_blocks(content)
-        if cleaned_content:
-            return cleaned_content
-
-        return "模型已完成分析，但没有返回可展示的最终答复。"
+        return sanitize_assistant_content(
+            content,
+            strip_thinking=False,
+            fallback_text="模型已完成分析，但没有返回可展示的最终答复。",
+        )
 
     @staticmethod
     def _build_skill_catalog_context(
@@ -1228,10 +1248,7 @@ class AnthropicChatRuntime:
 
     @staticmethod
     def _sanitize_assistant_content(content: str) -> str:
-        cleaned_content = strip_think_blocks(content)
-        if cleaned_content:
-            return cleaned_content
-        return ""
+        return sanitize_assistant_content(content, strip_thinking=False, fallback_text="")
 
     @staticmethod
     def _extract_tool_request_from_use(

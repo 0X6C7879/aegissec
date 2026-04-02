@@ -73,6 +73,7 @@ _SQLITE_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "edited_from_message_id": "TEXT",
         "version_group_id": "TEXT",
         "metadata": "JSON NOT NULL DEFAULT '{}'",
+        "assistant_transcript": "JSON NOT NULL DEFAULT '[]'",
         "error_message": "TEXT",
         "completed_at": "DATETIME",
     },

@@ -45,6 +45,15 @@ class MessageKind(str, Enum):
     EVENT_NOTE = "event_note"
 
 
+class AssistantTranscriptSegmentKind(str, Enum):
+    REASONING = "reasoning"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    OUTPUT = "output"
+    ERROR = "error"
+    STATUS = "status"
+
+
 class GenerationStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -188,6 +197,20 @@ class AttachmentMetadata(SQLModel):
     size_bytes: int | None = None
 
 
+class AssistantTranscriptSegment(SQLModel):
+    id: str
+    sequence: int = Field(ge=1)
+    kind: AssistantTranscriptSegmentKind
+    status: str | None = None
+    title: str | None = None
+    text: str | None = None
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    recorded_at: datetime
+    updated_at: datetime
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+
+
 class SessionBase(SQLModel):
     title: str = Field(default="New Session", max_length=200)
     status: SessionStatus = Field(default=SessionStatus.IDLE)
@@ -243,6 +266,10 @@ class Message(SQLModel, table=True):
     metadata_json: dict[str, object] = Field(
         default_factory=dict,
         sa_column=Column("metadata", JSON, nullable=False),
+    )
+    assistant_transcript_json: list[dict[str, object]] = Field(
+        default_factory=list,
+        sa_column=Column("assistant_transcript", JSON, nullable=False),
     )
     error_message: str | None = Field(default=None, nullable=True)
     attachments_json: list[dict[str, str | int | None]] = Field(
@@ -645,6 +672,7 @@ class MessageRead(SQLModel):
     version_group_id: str | None = None
     content: str
     metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    assistant_transcript: list[AssistantTranscriptSegment] = Field(default_factory=list)
     error_message: str | None = None
     attachments: list[AttachmentMetadata] = Field(default_factory=list)
     created_at: datetime
@@ -1045,6 +1073,159 @@ def attachments_from_storage(
     return [AttachmentMetadata.model_validate(attachment) for attachment in attachments]
 
 
+def assistant_transcript_to_storage(
+    segments: list[AssistantTranscriptSegment],
+) -> list[dict[str, object]]:
+    return [segment.model_dump(mode="json", by_alias=True) for segment in segments]
+
+
+def assistant_transcript_from_storage(
+    segments: list[dict[str, object]],
+) -> list[AssistantTranscriptSegment]:
+    parsed_segments: list[AssistantTranscriptSegment] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        parsed_segments.append(AssistantTranscriptSegment.model_validate(segment))
+    parsed_segments.sort(key=lambda item: (item.sequence, item.recorded_at, item.id))
+    return parsed_segments
+
+
+def _infer_legacy_transcript_kind(entry: dict[str, object]) -> AssistantTranscriptSegmentKind:
+    state = str(entry.get("state") or "")
+    if state == "summary.updated":
+        return AssistantTranscriptSegmentKind.REASONING
+    if state == "tool.started":
+        return AssistantTranscriptSegmentKind.TOOL_CALL
+    if state == "tool.finished":
+        return AssistantTranscriptSegmentKind.TOOL_RESULT
+    if state in {"tool.failed", "generation.failed"}:
+        return AssistantTranscriptSegmentKind.ERROR
+    return AssistantTranscriptSegmentKind.STATUS
+
+
+def _infer_legacy_transcript_status(entry: dict[str, object]) -> str | None:
+    status = entry.get("status")
+    if isinstance(status, str) and status:
+        return status
+
+    state = str(entry.get("state") or "")
+    if state in {"generation.started", "tool.started"}:
+        return "running"
+    if state in {"generation.completed", "tool.finished", "summary.updated"}:
+        return "completed"
+    if state in {"generation.failed", "tool.failed"}:
+        return "failed"
+    if state == "generation.cancelled":
+        return "cancelled"
+    return None
+
+
+def _legacy_transcript_text(entry: dict[str, object]) -> str | None:
+    for key in ("text", "summary", "error"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def build_legacy_assistant_transcript(message: Message) -> list[AssistantTranscriptSegment]:
+    if message.role != MessageRole.ASSISTANT or message.message_kind != MessageKind.MESSAGE:
+        return []
+
+    metadata = dict(message.metadata_json)
+    raw_trace = metadata.get("trace")
+    trace_entries = (
+        [entry for entry in raw_trace if isinstance(entry, dict)]
+        if isinstance(raw_trace, list)
+        else []
+    )
+    segments: list[AssistantTranscriptSegment] = []
+    next_sequence = 1
+
+    if not trace_entries:
+        summary = metadata.get("summary")
+        if isinstance(summary, str) and summary:
+            timestamp = message.created_at
+            segments.append(
+                AssistantTranscriptSegment(
+                    id=f"legacy-{message.id}-reasoning-1",
+                    sequence=next_sequence,
+                    kind=AssistantTranscriptSegmentKind.REASONING,
+                    status="completed",
+                    title="Reasoning summary",
+                    text=summary,
+                    recorded_at=timestamp,
+                    updated_at=timestamp,
+                    metadata={},
+                )
+            )
+            next_sequence += 1
+
+    for index, entry in enumerate(trace_entries, start=1):
+        raw_sequence = entry.get("sequence")
+        sequence = (
+            raw_sequence if isinstance(raw_sequence, int) and raw_sequence > 0 else next_sequence
+        )
+        next_sequence = max(next_sequence, sequence + 1)
+        raw_recorded_at = entry.get("recorded_at")
+        recorded_at = (
+            raw_recorded_at if isinstance(raw_recorded_at, str) else message.created_at.isoformat()
+        )
+        parsed_recorded_at = datetime.fromisoformat(recorded_at)
+        metadata_payload = dict(entry)
+        metadata_payload.pop("sequence", None)
+        metadata_payload.pop("recorded_at", None)
+        segments.append(
+            AssistantTranscriptSegment(
+                id=f"legacy-{message.id}-{sequence}-{index}",
+                sequence=sequence,
+                kind=_infer_legacy_transcript_kind(entry),
+                status=_infer_legacy_transcript_status(entry),
+                title=str(entry.get("event")) if isinstance(entry.get("event"), str) else None,
+                text=_legacy_transcript_text(entry),
+                tool_name=str(entry.get("tool")) if isinstance(entry.get("tool"), str) else None,
+                tool_call_id=(
+                    str(entry.get("tool_call_id"))
+                    if isinstance(entry.get("tool_call_id"), str)
+                    else None
+                ),
+                recorded_at=parsed_recorded_at,
+                updated_at=parsed_recorded_at,
+                metadata=metadata_payload,
+            )
+        )
+
+    if message.content.strip():
+        status_value = (
+            message.status.value.lower()
+            if isinstance(message.status.value, str)
+            else str(message.status)
+        )
+        segments.append(
+            AssistantTranscriptSegment(
+                id=f"legacy-{message.id}-output-{next_sequence}",
+                sequence=next_sequence,
+                kind=AssistantTranscriptSegmentKind.OUTPUT,
+                status=status_value,
+                title="Assistant response",
+                text=message.content,
+                recorded_at=message.completed_at or message.created_at,
+                updated_at=message.completed_at or message.created_at,
+                metadata={},
+            )
+        )
+
+    segments.sort(key=lambda item: (item.sequence, item.recorded_at, item.id))
+    return segments
+
+
+def resolve_message_assistant_transcript(message: Message) -> list[AssistantTranscriptSegment]:
+    if message.assistant_transcript_json:
+        return assistant_transcript_from_storage(message.assistant_transcript_json)
+    return build_legacy_assistant_transcript(message)
+
+
 def to_message_read(message: Message) -> MessageRead:
     return MessageRead(
         id=message.id,
@@ -1061,6 +1242,7 @@ def to_message_read(message: Message) -> MessageRead:
         version_group_id=message.version_group_id,
         content=message.content,
         **{"metadata": dict(message.metadata_json)},
+        assistant_transcript=resolve_message_assistant_transcript(message),
         error_message=message.error_message,
         attachments=attachments_from_storage(message.attachments_json),
         created_at=message.created_at,

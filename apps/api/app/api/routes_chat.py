@@ -19,7 +19,10 @@ from app.compat.skills.service import (
     get_skill_service,
 )
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
+from app.core.settings import get_settings
 from app.db.models import (
+    AssistantTranscriptSegment,
+    AssistantTranscriptSegmentKind,
     BranchForkRequest,
     ChatGeneration,
     ChatGenerationRead,
@@ -63,6 +66,7 @@ from app.services.chat_runtime import (
     ToolCallRequest,
     ToolCallResult,
     get_chat_runtime,
+    sanitize_assistant_content,
     strip_think_blocks,
 )
 from app.services.runtime import (
@@ -87,6 +91,7 @@ _HIDDEN_STREAM_TAG_NAME_RE = re.compile(
     r"^<\s*(/)?\s*(?:[\w-]+:)?([a-z_]+)",
     re.IGNORECASE,
 )
+CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
 def _match_hidden_stream_tag(fragment: str) -> tuple[str, bool, bool, bool] | None:
@@ -97,10 +102,11 @@ def _match_hidden_stream_tag(fragment: str) -> tuple[str, bool, bool, bool] | No
     tag_name = match.group(2).lower()
     is_closing = bool(match.group(1))
     is_complete = ">" in fragment
+    hidden_names = _hidden_stream_tag_names()
     if is_complete:
-        if tag_name not in _HIDDEN_STREAM_TAG_NAMES:
+        if tag_name not in hidden_names:
             return None
-    elif not any(hidden_name.startswith(tag_name) for hidden_name in _HIDDEN_STREAM_TAG_NAMES):
+    elif not any(hidden_name.startswith(tag_name) for hidden_name in hidden_names):
         return None
 
     is_self_closing = is_complete and fragment.rstrip().endswith("/>")
@@ -138,6 +144,164 @@ def _message_trace_entries(message: Message) -> list[dict[str, object]]:
     if not isinstance(raw_trace, list):
         return []
     return [dict(entry) for entry in raw_trace if isinstance(entry, dict)]
+
+
+def _hidden_stream_tag_names() -> set[str]:
+    if CHAT_EXPOSE_THINKING:
+        return {"invoke", "tool_call"}
+    return set(_HIDDEN_STREAM_TAG_NAMES)
+
+
+def _sanitize_persisted_assistant_text(content: str, *, fallback: str = "") -> str:
+    return sanitize_assistant_content(
+        content,
+        strip_thinking=not CHAT_EXPOSE_THINKING,
+        fallback_text=fallback,
+    )
+
+
+def _message_transcript_segments(
+    repository: SessionRepository, assistant_message: Message
+) -> list[AssistantTranscriptSegment]:
+    return repository.get_message_transcript(assistant_message)
+
+
+def _find_transcript_segment(
+    segments: list[AssistantTranscriptSegment],
+    *,
+    kind: AssistantTranscriptSegmentKind | None = None,
+    tool_call_id: str | None = None,
+) -> AssistantTranscriptSegment | None:
+    for segment in reversed(segments):
+        if kind is not None and segment.kind != kind:
+            continue
+        if tool_call_id is not None and segment.tool_call_id != tool_call_id:
+            continue
+        return segment
+    return None
+
+
+def _latest_transcript_segment(
+    segments: list[AssistantTranscriptSegment],
+) -> AssistantTranscriptSegment | None:
+    if not segments:
+        return None
+    return max(segments, key=lambda segment: (segment.sequence, segment.recorded_at, segment.id))
+
+
+def _append_transcript_segment(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    kind: AssistantTranscriptSegmentKind,
+    status: str | None = None,
+    title: str | None = None,
+    text: str | None = None,
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    metadata_json: dict[str, object] | None = None,
+) -> AssistantTranscriptSegment:
+    segments = _message_transcript_segments(repository, assistant_message)
+    next_sequence = max((segment.sequence for segment in segments), default=0) + 1
+    now = utc_now()
+    segment = AssistantTranscriptSegment(
+        id=str(uuid4()),
+        sequence=next_sequence,
+        kind=kind,
+        status=status,
+        title=title,
+        text=text,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        recorded_at=now,
+        updated_at=now,
+        metadata=metadata_json or {},
+    )
+    repository.append_message_transcript_segment(assistant_message, segment)
+    return segment
+
+
+def _update_transcript_segment(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    segment: AssistantTranscriptSegment,
+    status: str | None = None,
+    title: str | None = None,
+    text: str | None = None,
+    metadata_json: dict[str, object] | None = None,
+) -> AssistantTranscriptSegment:
+    merged_metadata = dict(segment.metadata_payload)
+    if metadata_json is not None:
+        merged_metadata.update(metadata_json)
+    updated_segment = segment.model_copy(
+        update={
+            "status": status if status is not None else segment.status,
+            "title": title if title is not None else segment.title,
+            "text": text if text is not None else segment.text,
+            "updated_at": utc_now(),
+            "metadata_payload": merged_metadata,
+        }
+    )
+    repository.update_message_transcript_segment(assistant_message, updated_segment)
+    return updated_segment
+
+
+def _append_output_transcript_delta(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    delta_text: str,
+    status: str,
+    append_to_current: bool,
+) -> AssistantTranscriptSegment | None:
+    transcript_segments = _message_transcript_segments(repository, assistant_message)
+    latest_segment = _latest_transcript_segment(transcript_segments)
+    if append_to_current and latest_segment is not None:
+        if latest_segment.kind != AssistantTranscriptSegmentKind.OUTPUT:
+            if not delta_text:
+                return None
+            return _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.OUTPUT,
+                status=status,
+                title="Assistant response",
+                text=delta_text,
+            )
+
+        next_text = (
+            f"{latest_segment.text or ''}{delta_text}" if delta_text else latest_segment.text
+        )
+        return _update_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            segment=latest_segment,
+            status=status,
+            text=next_text,
+        )
+
+    if not delta_text:
+        if (
+            latest_segment is not None
+            and latest_segment.kind == AssistantTranscriptSegmentKind.OUTPUT
+        ):
+            return _update_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                segment=latest_segment,
+                status=status,
+            )
+        return None
+
+    return _append_transcript_segment(
+        repository,
+        assistant_message=assistant_message,
+        kind=AssistantTranscriptSegmentKind.OUTPUT,
+        status=status,
+        title="Assistant response",
+        text=delta_text,
+    )
 
 
 def _persist_reasoning_trace_entry(
@@ -279,10 +443,34 @@ async def _publish_assistant_summary(
     assistant_message: Message,
     summary: str,
 ) -> None:
-    sanitized_summary = strip_think_blocks(summary)
+    sanitized_summary = _sanitize_persisted_assistant_text(summary)
     if not sanitized_summary:
         sanitized_summary = SAFE_THINKING_SUMMARY
     repository.update_message_summary(assistant_message, sanitized_summary)
+    transcript_segments = _message_transcript_segments(repository, assistant_message)
+    reasoning_segment = _find_transcript_segment(
+        transcript_segments, kind=AssistantTranscriptSegmentKind.REASONING
+    )
+    if reasoning_segment is None:
+        _append_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            kind=AssistantTranscriptSegmentKind.REASONING,
+            status="completed",
+            title="Reasoning summary",
+            text=sanitized_summary,
+            metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
+        )
+    else:
+        _update_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            segment=reasoning_segment,
+            status="completed",
+            title="Reasoning summary",
+            text=sanitized_summary,
+            metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
+        )
     if assistant_message.generation_id is not None:
         generation = repository.get_generation(assistant_message.generation_id)
         if generation is not None:
@@ -314,6 +502,12 @@ async def _publish_assistant_summary(
             payload={"message_id": assistant_message.id, "summary": sanitized_summary},
         )
     )
+    await _publish_message_event(
+        event_broker,
+        event_type=SessionEventType.MESSAGE_UPDATED,
+        session_id=session_id,
+        message=assistant_message,
+    )
 
 
 async def _publish_assistant_trace(
@@ -327,7 +521,7 @@ async def _publish_assistant_trace(
     sanitized_entry: dict[str, object] = {}
     for key, value in entry.items():
         if isinstance(value, str):
-            sanitized_value = strip_think_blocks(value)
+            sanitized_value = _sanitize_persisted_assistant_text(value)
             if THINK_BLOCK_RE.search(value) and not sanitized_value:
                 continue
             sanitized_entry[key] = sanitized_value
@@ -354,6 +548,22 @@ async def _publish_assistant_trace(
         safe_summary=_infer_trace_summary(sanitized_entry),
         metadata_json={key: value for key, value in persisted_entry.items() if key != "summary"},
     )
+    trace_state = str(sanitized_entry.get("state") or "")
+    if trace_state.startswith("generation."):
+        transcript_kind = (
+            AssistantTranscriptSegmentKind.ERROR
+            if trace_state == "generation.failed"
+            else AssistantTranscriptSegmentKind.STATUS
+        )
+        _append_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            kind=transcript_kind,
+            status=_infer_trace_status(sanitized_entry),
+            title="Assistant trace",
+            text=_infer_trace_summary(sanitized_entry),
+            metadata_json={key: value for key, value in persisted_entry.items()},
+        )
     payload = {"message_id": assistant_message.id, **persisted_entry}
     await event_broker.publish(
         SessionEvent(
@@ -362,6 +572,13 @@ async def _publish_assistant_trace(
             payload=payload,
         )
     )
+    if trace_state.startswith("generation."):
+        await _publish_message_event(
+            event_broker,
+            event_type=SessionEventType.MESSAGE_UPDATED,
+            session_id=session_id,
+            message=assistant_message,
+        )
 
 
 def _project_visible_stream_content(content: str) -> str:
@@ -406,7 +623,7 @@ def _project_visible_stream_content(content: str) -> str:
         visible_parts.append(content[index])
         index += 1
 
-    return strip_think_blocks("".join(visible_parts))
+    return _sanitize_persisted_assistant_text("".join(visible_parts))
 
 
 def _build_conversation_messages(messages: list[Message]) -> list[ConversationMessage]:
@@ -418,10 +635,13 @@ def _build_conversation_messages(messages: list[Message]) -> list[ConversationMe
             continue
         if message.role == MessageRole.ASSISTANT and not message.content.strip():
             continue
+        conversation_content = message.content
+        if message.role == MessageRole.ASSISTANT:
+            conversation_content = _sanitize_persisted_assistant_text(message.content)
         conversation_messages.append(
             ConversationMessage(
                 role=message.role,
-                content=message.content,
+                content=conversation_content,
                 attachments=attachments_from_storage(message.attachments_json),
             )
         )
@@ -691,6 +911,27 @@ def _build_tool_executor(
                 "tool_call_id": tool_request.tool_call_id,
             },
         )
+        _append_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+            status="running",
+            title=tool_request.tool_name,
+            text=(
+                str(tool_request.arguments.get("command"))
+                if isinstance(tool_request.arguments.get("command"), str)
+                else None
+            ),
+            tool_name=tool_request.tool_name,
+            tool_call_id=tool_request.tool_call_id,
+            metadata_json={"arguments": dict(tool_request.arguments)},
+        )
+        await _publish_message_event(
+            event_broker,
+            event_type=SessionEventType.MESSAGE_UPDATED,
+            session_id=session.id,
+            message=assistant_message,
+        )
         await event_broker.publish(
             SessionEvent(
                 type=SessionEventType.TOOL_CALL_STARTED,
@@ -735,6 +976,31 @@ def _build_tool_executor(
                         ended_at=utc_now(),
                         metadata_json={**dict(tool_step.metadata_json), "error": error_message},
                     )
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="failed",
+                    metadata_json={"error": error_message},
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.ERROR,
+                status="failed",
+                title=tool_request.tool_name,
+                text=error_message,
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={"arguments": dict(tool_request.arguments), "error": error_message},
+            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -753,6 +1019,12 @@ def _build_tool_executor(
                     session_id=session.id,
                     payload={**started_payload, "error": error_message},
                 )
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
             )
 
         if tool_request.tool_name == "execute_kali_command":
@@ -799,6 +1071,39 @@ def _build_tool_executor(
                 "stderr": run.stderr,
                 "artifacts": [artifact.relative_path for artifact in run.artifacts],
             }
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="completed",
+                    metadata_json={"status": run.status.value, "run_id": run.id},
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status=run.status.value,
+                title=tool_request.tool_name,
+                text=f"Tool finished with status {run.status.value}.",
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={
+                    "arguments": dict(tool_request.arguments),
+                    "result": command_result_payload,
+                    "run_id": run.id,
+                    "command": run.command,
+                    "stdout": run.stdout,
+                    "stderr": run.stderr,
+                    "artifacts": [artifact.relative_path for artifact in run.artifacts],
+                },
+            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -832,6 +1137,12 @@ def _build_tool_executor(
                     },
                 )
             )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
+            )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
                     assistant_message.generation_id,
@@ -859,6 +1170,30 @@ def _build_tool_executor(
             skills_result_payload: dict[str, Any] = {
                 "skills": [skill.model_dump(mode="json") for skill in available_skills],
             }
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="completed",
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status="completed",
+                title=tool_request.tool_name,
+                text="Listed available skills.",
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={"result": skills_result_payload},
+            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -876,6 +1211,12 @@ def _build_tool_executor(
                     session_id=session.id,
                     payload={**started_payload, "result": skills_result_payload},
                 )
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
             )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
@@ -913,6 +1254,30 @@ def _build_tool_executor(
                 raise ChatRuntimeError(str(exc)) from exc
 
             skill_result_payload: dict[str, Any] = {"skill": skill_content.model_dump(mode="json")}
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="completed",
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status="completed",
+                title=tool_request.tool_name,
+                text=f"Read skill content for {skill_name_or_id}.",
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={"result": skill_result_payload},
+            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -930,6 +1295,12 @@ def _build_tool_executor(
                     session_id=session.id,
                     payload={**started_payload, "result": skill_result_payload},
                 )
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
             )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
@@ -1111,11 +1482,19 @@ async def _process_generation(
                     if next_streamed_content.startswith(streamed_content)
                     else next_streamed_content
                 )
+                is_incremental_output = next_streamed_content.startswith(streamed_content)
                 streamed_content = next_streamed_content
                 repository.update_message(
                     loaded_assistant_message,
                     content=streamed_content,
                     status=MessageStatus.STREAMING,
+                )
+                _append_output_transcript_delta(
+                    repository,
+                    assistant_message=loaded_assistant_message,
+                    delta_text=sanitized_delta,
+                    status="running",
+                    append_to_current=is_incremental_output,
                 )
                 output_step = _get_or_create_output_step(
                     repository,
@@ -1168,7 +1547,7 @@ async def _process_generation(
                     is_cancelled=cancel_event.is_set,
                 ),
             )
-            final_content = strip_think_blocks(final_content) or (
+            final_content = _sanitize_persisted_assistant_text(final_content) or (
                 "模型已完成分析，但没有返回可展示的最终答复。"
             )
 
@@ -1181,20 +1560,28 @@ async def _process_generation(
                 status=MessageStatus.COMPLETED,
                 error_message="",
             )
+            final_delta = (
+                final_content[len(streamed_content) :]
+                if final_content.startswith(streamed_content)
+                else final_content
+            )
+            final_is_incremental = final_content.startswith(streamed_content)
+            _append_output_transcript_delta(
+                repository,
+                assistant_message=loaded_assistant_message,
+                delta_text=final_delta,
+                status="completed",
+                append_to_current=final_is_incremental,
+            )
             repository.mark_generation_completed(generation)
             if final_content != streamed_content:
-                delta = (
-                    final_content[len(streamed_content) :]
-                    if final_content.startswith(streamed_content)
-                    else final_content
-                )
-                if delta:
+                if final_delta:
                     await _publish_message_event(
                         event_broker,
                         event_type=SessionEventType.MESSAGE_DELTA,
                         session_id=session.id,
                         message=loaded_assistant_message,
-                        delta=delta,
+                        delta=final_delta,
                     )
                 await _publish_message_event(
                     event_broker,
@@ -1216,18 +1603,18 @@ async def _process_generation(
                     state="completed",
                     ended_at=utc_now(),
                 )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_COMPLETED,
-                session_id=session.id,
-                message=loaded_assistant_message,
-            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
                 session_id=session.id,
                 assistant_message=loaded_assistant_message,
                 entry={"state": "generation.completed", "generation_id": generation.id},
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_COMPLETED,
+                session_id=session.id,
+                message=loaded_assistant_message,
             )
             _record_generation_step(
                 repository,
@@ -1261,6 +1648,17 @@ async def _process_generation(
                     status=MessageStatus.CANCELLED,
                     error_message="Active generation was cancelled.",
                 )
+                transcript_segments = _message_transcript_segments(repository, assistant_message)
+                output_segment = _find_transcript_segment(
+                    transcript_segments, kind=AssistantTranscriptSegmentKind.OUTPUT
+                )
+                if output_segment is not None:
+                    _update_transcript_segment(
+                        repository,
+                        assistant_message=assistant_message,
+                        segment=output_segment,
+                        status="cancelled",
+                    )
                 await _publish_assistant_trace(
                     repository,
                     event_broker,
@@ -1304,6 +1702,17 @@ async def _process_generation(
                     status=MessageStatus.FAILED,
                     error_message=str(exc),
                 )
+                transcript_segments = _message_transcript_segments(repository, assistant_message)
+                output_segment = _find_transcript_segment(
+                    transcript_segments, kind=AssistantTranscriptSegmentKind.OUTPUT
+                )
+                if output_segment is not None:
+                    _update_transcript_segment(
+                        repository,
+                        assistant_message=assistant_message,
+                        segment=output_segment,
+                        status="failed",
+                    )
                 await _publish_assistant_trace(
                     repository,
                     event_broker,

@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     anthropic_api_base_url: str | None = Field(default=None, alias="ANTHROPIC_API_BASE_URL")
     anthropic_model: str | None = Field(default=None, alias="ANTHROPIC_MODEL")
+    chat_expose_thinking: bool = Field(default=True, alias="AEGISSEC_CHAT_EXPOSE_THINKING")
 
 
 @lru_cache(maxsize=1)

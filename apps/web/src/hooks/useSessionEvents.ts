@@ -236,8 +236,6 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             envelope.type === "generation.started" ||
             envelope.type === "generation.cancelled" ||
             envelope.type === "generation.failed" ||
-            envelope.type === "message.delta" ||
-            envelope.type === "message.completed" ||
             envelope.type.startsWith("tool.call.") ||
             envelope.type === "session.updated"
           ) {

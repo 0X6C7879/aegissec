@@ -63,11 +63,34 @@ export type GenerationAction =
   | "rollback"
   | (string & {});
 
+export type AssistantTranscriptSegmentKind =
+  | "reasoning"
+  | "tool_call"
+  | "tool_result"
+  | "output"
+  | "error"
+  | "status"
+  | (string & {});
+
 export type AttachmentMetadata = {
   id: string;
   name: string;
   content_type: string;
   size_bytes: number;
+};
+
+export type AssistantTranscriptSegment = {
+  id: string;
+  sequence: number;
+  kind: AssistantTranscriptSegmentKind;
+  status?: string | null;
+  title?: string | null;
+  text?: string | null;
+  tool_name?: string | null;
+  tool_call_id?: string | null;
+  recorded_at: string;
+  updated_at: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type RuntimePolicy = Record<string, unknown>;
@@ -183,6 +206,7 @@ export type SessionMessage = {
   version_group_id?: string | null;
   content: string;
   metadata?: Record<string, unknown>;
+  assistant_transcript: AssistantTranscriptSegment[];
   error_message?: string | null;
   attachments: AttachmentMetadata[];
   created_at: string;

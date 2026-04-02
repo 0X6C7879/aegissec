@@ -700,6 +700,12 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
         events[completed_index]["payload"]["content"]
         == "Test assistant reply: hello websocket (0 attachments)"
     )
+    assert isinstance(events[completed_index]["payload"]["assistant_transcript"], list)
+    assert any(
+        isinstance(event["payload"].get("assistant_transcript"), list)
+        for event in events
+        if event["type"] == "message.updated"
+    )
 
 
 def test_websocket_supports_replay_cursor(client: TestClient) -> None:
@@ -1073,6 +1079,21 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             events[last_message_update_index]["payload"]["content"]
             == "工具执行完成，状态：success。"
         )
+        tool_update_payloads = [
+            event["payload"]
+            for event in events
+            if event["type"] == "message.updated"
+            and isinstance(event["payload"].get("assistant_transcript"), list)
+        ]
+        assert tool_update_payloads
+        assert any(
+            any(segment["kind"] == "tool_call" for segment in payload["assistant_transcript"])
+            for payload in tool_update_payloads
+        )
+        assert any(
+            any(segment["kind"] == "tool_result" for segment in payload["assistant_transcript"])
+            for payload in tool_update_payloads
+        )
 
         runtime_status_response = client.get("/api/runtime/status")
         assert runtime_status_response.status_code == 200
@@ -1088,6 +1109,33 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert any(
             step["kind"] == "output" and "工具执行完成" in step["delta_text"] for step in steps
         )
+        transcript = api_data(chat_response)["assistant_message"]["assistant_transcript"]
+        assert [segment["sequence"] for segment in transcript] == list(
+            range(1, len(transcript) + 1)
+        )
+        tool_call_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_call" and segment["tool_call_id"] == "tool-call-1"
+        )
+        tool_result_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_result" and segment["tool_call_id"] == "tool-call-1"
+        )
+        output_segment = next(segment for segment in transcript if segment["kind"] == "output")
+        assert tool_call_segment["status"] == "completed"
+        assert tool_result_segment["metadata"]["stdout"] == "runtime command completed"
+        assert tool_result_segment["metadata"]["stderr"] == ""
+        assert tool_result_segment["metadata"]["artifacts"] == ["reports/auto.txt"]
+        assert tool_result_segment["metadata"]["result"] == {
+            "status": "success",
+            "exit_code": 0,
+            "stdout": "runtime command completed",
+            "stderr": "",
+            "artifacts": ["reports/auto.txt"],
+        }
+        assert output_segment["text"] == "工具执行完成，状态：success。"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -1248,7 +1296,9 @@ def test_startup_recovery_requeues_abandoned_generations(client: TestClient) -> 
         assert recovered_generation.lease_expires_at is None
 
 
-def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: TestClient) -> None:
+def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_default(
+    client: TestClient,
+) -> None:
     class UnsafeReasoningChatRuntime:
         async def generate_reply(
             self,
@@ -1312,22 +1362,33 @@ def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: 
         trace_events = [event for event in events if event["type"] == "assistant.trace"]
         delta_events = [event for event in events if event["type"] == "message.delta"]
         completed_events = [event for event in events if event["type"] == "message.completed"]
+        update_events = [event for event in events if event["type"] == "message.updated"]
 
         assert summary_events
-        assert "<think>" not in summary_events[-1]["payload"]["summary"]
+        assert summary_events[-1]["payload"]["summary"] == "<think>private</think>分析中"
         assert trace_events
         assert all(isinstance(event["payload"].get("sequence"), int) for event in trace_events)
         assert all(isinstance(event["payload"].get("recorded_at"), str) for event in trace_events)
         assert delta_events
-        assert "".join(event["payload"]["delta"] for event in delta_events) == "最终答复"
-        assert all("<" not in event["payload"]["delta"] for event in delta_events)
-        assert all("hidden" not in event["payload"]["delta"] for event in delta_events)
+        combined_delta = "".join(event["payload"]["delta"] for event in delta_events)
+        assert "<think>hidden</think>" in combined_delta
+        assert "<think>very secret</think>最终答复" in combined_delta
+        assert any("<think>" in event["payload"]["delta"] for event in delta_events)
         assert all("invoke" not in event["payload"]["delta"] for event in delta_events)
         assert all("tool_call" not in event["payload"]["delta"] for event in delta_events)
         assert completed_events
-        assert "<think>" not in completed_events[-1]["payload"]["content"]
+        assert completed_events[-1]["payload"]["content"] == "<think>very secret</think>最终答复"
         assert "invoke" not in completed_events[-1]["payload"]["content"]
         assert "tool_call" not in completed_events[-1]["payload"]["content"]
+        assert update_events
+        assert any(
+            any(
+                segment["kind"] == "reasoning"
+                for segment in event["payload"]["assistant_transcript"]
+            )
+            for event in update_events
+            if isinstance(event["payload"].get("assistant_transcript"), list)
+        )
         assert chat_payload["generation"] is not None
         persisted_trace = chat_payload["generation"]["reasoning_trace"]
         assert [entry["sequence"] for entry in persisted_trace] == list(
@@ -1342,8 +1403,7 @@ def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: 
         assert summary_trace_entries[0]["summary"] == (
             "Assistant is analyzing the request and preparing a response."
         )
-        assert summary_trace_entries[-1]["summary"] == "分析中"
-        assert all("<think>" not in str(entry) for entry in persisted_trace)
+        assert summary_trace_entries[-1]["summary"] == "<think>private</think>分析中"
         steps = chat_payload["generation"]["steps"]
         assert [step["sequence"] for step in steps] == list(range(1, len(steps) + 1))
 
@@ -1363,13 +1423,30 @@ def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: 
             return []
 
         step_values = [text for step in steps for text in _step_string_values(step)]
-        assert all("<think>" not in value for value in step_values)
+        assert any("<think>private</think>分析中" in value for value in step_values)
         assert all("invoke" not in value for value in step_values)
         assert all("tool_call" not in value for value in step_values)
         assert any(
-            step["kind"] == "reasoning" and step["safe_summary"] == "分析中" for step in steps
+            step["kind"] == "reasoning" and step["safe_summary"] == "<think>private</think>分析中"
+            for step in steps
         )
-        assert any(step["kind"] == "output" and step["delta_text"] == "最终答复" for step in steps)
+        assert any(
+            step["kind"] == "output" and step["delta_text"] == "<think>very secret</think>最终答复"
+            for step in steps
+        )
+
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        assert [segment["sequence"] for segment in transcript] == list(
+            range(1, len(transcript) + 1)
+        )
+        reasoning_segments = [segment for segment in transcript if segment["kind"] == "reasoning"]
+        status_segments = [segment for segment in transcript if segment["kind"] == "status"]
+        output_segments = [segment for segment in transcript if segment["kind"] == "output"]
+        assert reasoning_segments
+        assert status_segments
+        assert output_segments
+        assert reasoning_segments[-1]["text"] == "<think>private</think>分析中"
+        assert output_segments[-1]["text"] == "<think>very secret</think>最终答复"
 
         detail_response = client.get(f"/api/sessions/{session_id}")
         assert detail_response.status_code == 200
@@ -1378,9 +1455,151 @@ def test_chat_strips_hidden_markup_before_persisting_or_emitting_events(client: 
             message for message in detail_payload["messages"] if message["role"] == "assistant"
         ]
         assert assistant_messages
-        assert "<think>" not in assistant_messages[-1]["content"]
+        assert assistant_messages[-1]["content"] == "<think>very secret</think>最终答复"
         assert "invoke" not in assistant_messages[-1]["content"]
         assert "tool_call" not in assistant_messages[-1]["content"]
+        detail_transcript = assistant_messages[-1]["assistant_transcript"]
+        assert [segment["kind"] for segment in detail_transcript] == [
+            segment["kind"] for segment in transcript
+        ]
+        assert [segment["text"] for segment in detail_transcript] == [
+            segment["text"] for segment in transcript
+        ]
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_preserves_think_blocks_in_assistant_history_for_follow_up_turns(
+    client: TestClient,
+) -> None:
+    class HistoryAwareChatRuntime:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del attachments, available_skills, skill_context_prompt, execute_tool, callbacks
+            self.call_count += 1
+            if self.call_count == 1:
+                assert content == "第一轮提示"
+                return "<think>remember me</think>首轮答复"
+
+            assert conversation_messages is not None
+            assistant_messages = [
+                message
+                for message in conversation_messages
+                if getattr(message, "role", None) == MessageRole.ASSISTANT
+            ]
+            assert assistant_messages
+            assert getattr(assistant_messages[-1], "content", None) == (
+                "<think>remember me</think>首轮答复"
+            )
+            return "第二轮答复"
+
+    runtime = HistoryAwareChatRuntime()
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: runtime
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "History Think Session"})
+        session_id = api_data(session_response)["id"]
+
+        first_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "第一轮提示", "attachments": [], "wait_for_completion": True},
+        )
+        assert first_response.status_code == 200
+        assert api_data(first_response)["assistant_message"]["content"] == (
+            "<think>remember me</think>首轮答复"
+        )
+
+        second_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "第二轮提示", "attachments": [], "wait_for_completion": True},
+        )
+        assert second_response.status_code == 200
+        assert api_data(second_response)["assistant_message"]["content"] == "第二轮答复"
+        assert runtime.call_count == 2
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_preserves_interleaved_output_segments_around_tool_events(
+    client: TestClient,
+) -> None:
+    class InterleavedToolChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del content, attachments, conversation_messages, available_skills, skill_context_prompt
+            assert execute_tool is not None
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+
+            await callbacks.on_text_delta("前置分析")
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="tool-call-1",
+                    tool_name="execute_kali_command",
+                    arguments={
+                        "command": "printf 'auto tool' > reports/interleaved.txt",
+                        "timeout_seconds": 10,
+                        "artifact_paths": ["reports/interleaved.txt"],
+                    },
+                )
+            )
+            await callbacks.on_text_delta("后续结论")
+            return "前置分析后续结论"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: InterleavedToolChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Interleaved Transcript"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "请按阶段处理", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 200
+        transcript = api_data(chat_response)["assistant_message"]["assistant_transcript"]
+        ordered_segments = [
+            segment
+            for segment in transcript
+            if segment["kind"] in {"output", "tool_call", "tool_result"}
+        ]
+
+        assert [segment["kind"] for segment in ordered_segments] == [
+            "output",
+            "tool_call",
+            "tool_result",
+            "output",
+        ]
+        assert [
+            segment.get("text") for segment in ordered_segments if segment["kind"] == "output"
+        ] == [
+            "前置分析",
+            "后续结论",
+        ]
+        assert ordered_segments[1]["tool_call_id"] == "tool-call-1"
+        assert ordered_segments[2]["metadata"]["stdout"] == "runtime command completed"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

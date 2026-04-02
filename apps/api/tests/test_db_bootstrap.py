@@ -308,8 +308,10 @@ def test_init_db_adds_generation_step_status_for_existing_sqlite_db(
     db_session_module.init_db()
 
     inspector = inspect(engine)
+    message_columns = {column["name"] for column in inspector.get_columns("message")}
     generation_step_columns = {
         column["name"] for column in inspector.get_columns("generation_step")
     }
 
+    assert "assistant_transcript" in message_columns
     assert "status" in generation_step_columns

@@ -1,4 +1,5 @@
 import type {
+  AssistantTranscriptSegment,
   AttachmentMetadata,
   ChatGeneration,
   GenerationStep,
@@ -74,15 +75,32 @@ export function mergeSessionMessage(
     return detail;
   }
 
+  const existingMessage = detail.messages.find((item) => item.id === message.id) ?? null;
+  const nextMessage = existingMessage
+    ? {
+        ...existingMessage,
+        ...message,
+        metadata: message.metadata ?? existingMessage.metadata,
+        attachments:
+          message.attachments.length > 0 || existingMessage.attachments.length === 0
+            ? message.attachments
+            : existingMessage.attachments,
+        assistant_transcript:
+          message.assistant_transcript.length > 0 || existingMessage.assistant_transcript.length === 0
+            ? message.assistant_transcript
+            : existingMessage.assistant_transcript,
+      }
+    : message;
+
   const remainingMessages = detail.messages.filter((item) => item.id !== message.id);
   const reconciledMessages =
-    message.role === "user" && !isOptimisticUserMessage(message)
+    nextMessage.role === "user" && !isOptimisticUserMessage(nextMessage)
       ? remainingMessages.filter(
           (item) =>
-            !(isOptimisticUserMessage(item) && item.content.trim() === message.content.trim()),
+            !(isOptimisticUserMessage(item) && item.content.trim() === nextMessage.content.trim()),
         )
       : remainingMessages;
-  const nextMessages = [...reconciledMessages, message].sort((left, right) => {
+  const nextMessages = [...reconciledMessages, nextMessage].sort((left, right) => {
     const [leftSequence, leftCreatedAt] = getMessageSortKey(left);
     const [rightSequence, rightCreatedAt] = getMessageSortKey(right);
     return leftSequence - rightSequence || leftCreatedAt - rightCreatedAt;
@@ -123,7 +141,7 @@ function readFirstNonEmptyString(
 }
 
 function sanitizeSafeSummaryText(value: string): string {
-  const cleaned = stripHiddenThinkingBlocks(value).replace(/\s+/g, " ").trim();
+  const cleaned = value.replace(/\s+/g, " ").trim();
   if (cleaned.length <= MAX_SAFE_SUMMARY_LENGTH) {
     return cleaned;
   }
@@ -707,8 +725,8 @@ function buildToolStepSummary(type: string, data: Record<string, unknown>): stri
 }
 
 function buildOutputStepSummary(data: Record<string, unknown>): string | null {
-  const delta = typeof data.delta === "string" ? stripHiddenThinkingBlocks(data.delta).trim() : "";
-  const content = typeof data.content === "string" ? stripHiddenThinkingBlocks(data.content).trim() : "";
+  const delta = typeof data.delta === "string" ? data.delta.trim() : "";
+  const content = typeof data.content === "string" ? data.content.trim() : "";
   const visibleText = delta || content;
 
   if (!visibleText) {
@@ -820,11 +838,7 @@ function buildLiveGenerationStep(
       label: "正文输出",
       safe_summary: buildOutputStepSummary(data),
       delta_text:
-        typeof data.delta === "string"
-          ? stripHiddenThinkingBlocks(data.delta)
-          : typeof data.content === "string"
-            ? stripHiddenThinkingBlocks(data.content)
-            : "",
+        typeof data.delta === "string" ? data.delta : typeof data.content === "string" ? data.content : "",
     };
   }
 
@@ -1606,6 +1620,7 @@ export function toSessionMessageEvent(
       : isRecord(value.metadata_payload)
         ? value.metadata_payload
         : undefined,
+    assistant_transcript: toAssistantTranscriptSegmentList(value.assistant_transcript, createdAt),
     error_message:
       typeof value.error_message === "string" || value.error_message === null
         ? value.error_message
@@ -1659,7 +1674,7 @@ export function buildEventSummary(type: string, data: unknown): string {
 
   if (type === "message.created" && isRecord(data)) {
     const role = typeof data.role === "string" ? data.role : "message";
-    const content = typeof data.content === "string" ? stripHiddenThinkingBlocks(data.content) : "";
+    const content = typeof data.content === "string" ? data.content : "";
     const preview = content.trim().replace(/\s+/g, " ").slice(0, 72);
     if (role === "assistant") {
       return `模型已回复${preview ? `：${preview}` : "。"}`;
@@ -1689,4 +1704,57 @@ export function buildEventSummary(type: string, data: unknown): string {
   }
 
   return "收到新的实时事件。";
+}
+
+function toAssistantTranscriptSegmentList(
+  value: unknown,
+  fallbackTimestamp: string,
+): AssistantTranscriptSegment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .flatMap((entry, index) => {
+      if (!isRecord(entry)) {
+        return [];
+      }
+
+      const recordedAt = typeof entry.recorded_at === "string" ? entry.recorded_at : fallbackTimestamp;
+      const updatedAt = typeof entry.updated_at === "string" ? entry.updated_at : recordedAt;
+
+      return [
+        {
+          id: typeof entry.id === "string" ? entry.id : `assistant-transcript-${index + 1}`,
+          sequence: typeof entry.sequence === "number" ? entry.sequence : index + 1,
+          kind: typeof entry.kind === "string" ? entry.kind : "status",
+          status:
+            typeof entry.status === "string" || entry.status === null ? entry.status : null,
+          title: typeof entry.title === "string" || entry.title === null ? entry.title : null,
+          text: typeof entry.text === "string" || entry.text === null ? entry.text : null,
+          tool_name:
+            typeof entry.tool_name === "string" || entry.tool_name === null
+              ? entry.tool_name
+              : null,
+          tool_call_id:
+            typeof entry.tool_call_id === "string" || entry.tool_call_id === null
+              ? entry.tool_call_id
+              : null,
+          recorded_at: recordedAt,
+          updated_at: updatedAt,
+          metadata: isRecord(entry.metadata)
+            ? entry.metadata
+            : isRecord(entry.metadata_payload)
+              ? entry.metadata_payload
+              : undefined,
+        } satisfies AssistantTranscriptSegment,
+      ];
+    })
+    .sort((left, right) => {
+      if (left.sequence !== right.sequence) {
+        return left.sequence - right.sequence;
+      }
+
+      return toTimestamp(left.recorded_at) - toTimestamp(right.recorded_at);
+    });
 }

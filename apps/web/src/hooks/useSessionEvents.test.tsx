@@ -244,7 +244,7 @@ describe("useSessionEvents", () => {
     unmount();
   });
 
-  it("merges tool and output websocket events into generation steps", () => {
+  it("stores assistant transcripts on message payloads and keeps generation steps secondary", () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -296,7 +296,7 @@ describe("useSessionEvents", () => {
         },
       });
       socket.emitMessage({
-        type: "message.delta",
+        type: "message.updated",
         cursor: 2,
         created_at: "2026-04-01T10:00:02.000Z",
         data: {
@@ -306,7 +306,30 @@ describe("useSessionEvents", () => {
           role: "assistant",
           content: "阶段性输出",
           attachments: [],
-          delta: "阶段性输出",
+          assistant_transcript: [
+            {
+              id: "segment-1",
+              sequence: 1,
+              kind: "tool_call",
+              status: "running",
+              title: "开始调用工具",
+              text: "准备执行 nmap 127.0.0.1",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-1",
+              recorded_at: "2026-04-01T10:00:01.000Z",
+              updated_at: "2026-04-01T10:00:01.000Z",
+            },
+            {
+              id: "segment-2",
+              sequence: 2,
+              kind: "output",
+              status: "running",
+              title: "正文输出",
+              text: "阶段性输出",
+              recorded_at: "2026-04-01T10:00:02.000Z",
+              updated_at: "2026-04-01T10:00:02.000Z",
+            },
+          ],
         },
       });
       socket.emitMessage({
@@ -322,6 +345,24 @@ describe("useSessionEvents", () => {
     });
 
     expect(
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.messages,
+    ).toMatchObject([
+      {
+        id: "assistant-message-1",
+        content: "阶段性输出",
+        assistant_transcript: [
+          {
+            kind: "tool_call",
+            tool_call_id: "tool-1",
+          },
+          {
+            kind: "output",
+            text: "阶段性输出",
+          },
+        ],
+      },
+    ]);
+    expect(
       queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]?.steps,
     ).toMatchObject([
       {
@@ -330,16 +371,16 @@ describe("useSessionEvents", () => {
         status: "running",
       },
       {
-        kind: "output",
-        delta_text: "阶段性输出",
-        status: "running",
-      },
-      {
         kind: "status",
         state: "generation.completed",
         status: "completed",
       },
     ]);
+    expect(
+      queryClient
+        .getQueryData<SessionConversation>(["conversation", session.id])
+        ?.generations[0]?.steps?.some((step) => step.kind === "output"),
+    ).toBe(false);
 
     unmount();
   });

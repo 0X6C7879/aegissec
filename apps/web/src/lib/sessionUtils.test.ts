@@ -5,6 +5,7 @@ import {
   mergeConversationReasoningEvent,
   mergeSessionEventEntries,
   shouldStoreRealtimeEvent,
+  toSessionMessageEvent,
 } from "./sessionUtils";
 
 describe("sessionUtils realtime summaries", () => {
@@ -66,7 +67,7 @@ describe("sessionUtils realtime summaries", () => {
     });
   });
 
-  it("strips dangling think tags in visible summaries", () => {
+  it("preserves think tags in visible summaries", () => {
     expect(
       extractSafeSessionSummary("assistant.summary", {
         summary: "<think>private reasoning 正在整理可展示摘要。",
@@ -74,8 +75,54 @@ describe("sessionUtils realtime summaries", () => {
       }),
     ).toEqual({
       label: "思路摘要",
-      summary: "private reasoning 正在整理可展示摘要。",
+      summary: "<think>private reasoning 正在整理可展示摘要。",
       tone: "connected",
+    });
+  });
+
+  it("parses assistant transcripts from message payloads", () => {
+    expect(
+      toSessionMessageEvent(
+        {
+          id: "assistant-message-1",
+          session_id: "session-1",
+          role: "assistant",
+          content: "最终答复",
+          attachments: [],
+          assistant_transcript: [
+            {
+              id: "segment-1",
+              sequence: 1,
+              kind: "tool_result",
+              status: "completed",
+              title: "工具执行结果",
+              text: "工具执行完成，状态：success。",
+              tool_name: "bash",
+              tool_call_id: "tool-1",
+              recorded_at: "2026-04-01T10:00:01.000Z",
+              updated_at: "2026-04-01T10:00:02.000Z",
+              metadata: {
+                stdout: "runtime command completed",
+                artifacts: ["reports/auto.txt"],
+              },
+            },
+          ],
+        },
+        "session-1",
+        "2026-04-01T10:00:02.000Z",
+      ),
+    ).toMatchObject({
+      id: "assistant-message-1",
+      assistant_transcript: [
+        {
+          kind: "tool_result",
+          tool_name: "bash",
+          metadata: {
+            stdout: "runtime command completed",
+            artifacts: ["reports/auto.txt"],
+          },
+        },
+      ],
     });
   });
 

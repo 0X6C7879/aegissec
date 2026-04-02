@@ -4258,6 +4258,223 @@ a {
   animation-delay: 0.28s;
 }
 
+.chat-bubble-meta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chat-bubble-assistant-transcript {
+  gap: var(--space-3);
+}
+
+.assistant-transcript {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.assistant-transcript-segment {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0.92rem 1rem;
+  border: 1px solid rgba(57, 84, 72, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.assistant-transcript-segment-reasoning {
+  background: rgba(248, 246, 238, 0.88);
+}
+
+.assistant-transcript-segment-tool_call {
+  background: rgba(244, 247, 244, 0.9);
+}
+
+.assistant-transcript-segment-tool_result {
+  background: rgba(239, 245, 241, 0.94);
+}
+
+.assistant-transcript-segment-output {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.assistant-transcript-segment-error {
+  background: rgba(253, 239, 239, 0.96);
+  border-color: rgba(167, 72, 72, 0.2);
+}
+
+.assistant-transcript-segment-status {
+  background: rgba(248, 245, 236, 0.92);
+  border-color: rgba(154, 114, 39, 0.18);
+}
+
+.assistant-transcript-header,
+.assistant-transcript-title-group,
+.assistant-transcript-side,
+.assistant-transcript-detail-block,
+.chat-bubble-action-shell {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.assistant-transcript-header,
+.chat-bubble-action-shell {
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.assistant-transcript-title-group,
+.assistant-transcript-side,
+.assistant-transcript-detail-block {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.assistant-transcript-title-group {
+  min-width: 0;
+}
+
+.assistant-transcript-kind,
+.assistant-transcript-detail-label {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.assistant-transcript-title {
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: 0.9rem;
+}
+
+.assistant-transcript-side {
+  justify-content: flex-end;
+}
+
+.assistant-transcript-details {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.assistant-transcript-detail-block {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.assistant-transcript-pre {
+  width: 100%;
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  overflow: auto;
+  border-radius: 14px;
+  background: rgba(19, 26, 22, 0.92);
+  color: rgba(244, 241, 234, 0.96);
+  font-family: "IBM Plex Mono", "Fira Code", Consolas, monospace;
+  font-size: 0.79rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.assistant-transcript-artifacts {
+  gap: var(--space-2);
+}
+
+.chat-bubble-action-shell {
+  position: relative;
+  justify-content: flex-end;
+}
+
+.chat-bubble-rollback-button,
+.chat-bubble-overflow-button,
+.chat-bubble-cancel-button {
+  border: 0;
+  border-radius: 999px;
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.chat-bubble-rollback-button,
+.chat-bubble-cancel-button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.chat-bubble-rollback-button {
+  opacity: 0;
+  pointer-events: none;
+  background: rgba(23, 33, 27, 0.06);
+  color: var(--text-secondary);
+}
+
+.chat-bubble:hover .chat-bubble-rollback-button,
+.chat-bubble:focus-within .chat-bubble-rollback-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-bubble-overflow-shell {
+  position: relative;
+}
+
+.chat-bubble-overflow-button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  color: #7b837a;
+  font-size: 1rem;
+}
+
+.chat-bubble-overflow-button:hover,
+.chat-bubble-rollback-button:hover,
+.chat-bubble-cancel-button:hover {
+  background: rgba(23, 33, 27, 0.08);
+}
+
+.chat-bubble-overflow-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 12;
+  min-width: 132px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(23, 33, 27, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 251, 0.98);
+  box-shadow: 0 16px 28px rgba(20, 26, 22, 0.08);
+}
+
+.chat-bubble-overflow-menu button {
+  text-align: left;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 9px 10px;
+  color: #334038;
+}
+
+.chat-bubble-overflow-menu button:hover {
+  background: rgba(23, 33, 27, 0.06);
+}
+
+.chat-bubble-cancel-button {
+  background: rgba(154, 114, 39, 0.12);
+  color: #7c5d1b;
+}
+
 @keyframes chat-stream-pulse {
   0%,
   80%,
@@ -4282,8 +4499,8 @@ a {
   z-index: 2;
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
-  border-top: 1px solid var(--panel-border);
+  padding: var(--space-2) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+  border-top: none;
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0) 0%,
@@ -4341,7 +4558,7 @@ a {
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: end;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: 0.75rem;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-card);
   background: var(--panel-background-strong);
@@ -4350,11 +4567,11 @@ a {
 
 .workbench-chat-input {
   width: 100%;
-  min-height: 2.5rem;
+  min-height: 2.25rem;
   max-height: 7.5rem;
-  padding: 0.68rem 0.9rem;
+  padding: 0.5rem 0.8rem;
   resize: none;
-  overflow-y: auto;
+  overflow-y: hidden;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   background: var(--surface-subtle);
@@ -4399,7 +4616,7 @@ a {
 
 .workbench-primary-action {
   min-width: 72px;
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 14px;
 }
 
@@ -6475,6 +6692,7 @@ a {
 
 :root[data-theme="dark"] .conversation-item-card,
 :root[data-theme="dark"] .conversation-item-dropdown,
+:root[data-theme="dark"] .chat-bubble-overflow-menu,
 :root[data-theme="dark"] .workbench-chat-input,
 :root[data-theme="dark"] .workbench-composer-shell,
 :root[data-theme="dark"] .conversation-empty-state,
@@ -6484,6 +6702,7 @@ a {
 }
 
 :root[data-theme="dark"] .conversation-item-dropdown button,
+:root[data-theme="dark"] .chat-bubble-overflow-menu button,
 :root[data-theme="dark"] .conversation-link-title,
 :root[data-theme="dark"] .conversation-title,
 :root[data-theme="dark"] .panel-title,
@@ -6501,6 +6720,28 @@ a {
 
 :root[data-theme="dark"] .workspace-node-drawer-backdrop {
   background: rgba(2, 6, 5, 0.48);
+}
+
+:root[data-theme="dark"] .assistant-transcript-segment {
+  background: rgba(16, 22, 19, 0.88);
+  border-color: rgba(121, 145, 131, 0.16);
+}
+
+:root[data-theme="dark"] .assistant-transcript-segment-tool_result {
+  background: rgba(17, 28, 22, 0.92);
+}
+
+:root[data-theme="dark"] .assistant-transcript-segment-status {
+  background: rgba(30, 27, 16, 0.92);
+}
+
+:root[data-theme="dark"] .assistant-transcript-segment-error {
+  background: rgba(40, 20, 20, 0.94);
+}
+
+:root[data-theme="dark"] .chat-bubble-rollback-button,
+:root[data-theme="dark"] .chat-bubble-overflow-button {
+  color: var(--text-secondary);
 }
 
 :root[data-theme="dark"] .workspace-node-drawer-panel {
@@ -7490,8 +7731,8 @@ a {
 }
 
 .workbench-composer-shell {
-  padding: 16px 18px 18px;
-  gap: 12px;
+  padding: 8px 18px 18px;
+  gap: 8px;
 }
 
 .workbench-composer-status-row {
@@ -7504,7 +7745,7 @@ a {
 }
 
 .workbench-chat-input {
-  min-height: 72px;
+  min-height: 44px;
 }
 
 @media (max-width: 1100px) {
