@@ -89,6 +89,10 @@ def main() -> int:
     run_git("add", "-A", "--", ".")
     unstage_excluded_paths()
 
+    if not get_staged_paths():
+        print("No committable changes after exclusions.")
+        return 0
+
     print("Creating commit...")
     run_git("commit", "-m", args.message)
 
