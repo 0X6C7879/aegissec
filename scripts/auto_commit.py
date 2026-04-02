@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,46 @@ def run_git(
         text=True,
         capture_output=capture_output,
     )
+
+
+def get_head_commit() -> str:
+    result = run_git("rev-parse", "--short", "HEAD", capture_output=True)
+    return result.stdout.strip()
+
+
+def push_with_retry(*args: str, attempts: int = 3, delay_seconds: int = 5) -> None:
+    last_error: subprocess.CalledProcessError | None = None
+
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.returncode == 0:
+            return
+
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        last_error = subprocess.CalledProcessError(
+            result.returncode,
+            ["git", *args],
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+        if attempt < attempts:
+            print(
+                f"Push attempt {attempt} failed. Retrying in {delay_seconds} seconds...",
+                file=sys.stderr,
+            )
+            time.sleep(delay_seconds)
+
+    assert last_error is not None
+    raise last_error
 
 
 def get_status() -> str:
@@ -101,12 +142,20 @@ def main() -> int:
         return 0
 
     branch = get_current_branch()
-    if has_upstream():
-        print("Pushing to tracked upstream...")
-        run_git("push")
-    else:
-        print(f"Pushing branch '{branch}' to origin with upstream tracking...")
-        run_git("push", "-u", "origin", branch)
+    try:
+        if has_upstream():
+            print("Pushing to tracked upstream...")
+            push_with_retry("push")
+        else:
+            print(f"Pushing branch '{branch}' to origin with upstream tracking...")
+            push_with_retry("push", "-u", "origin", branch)
+    except subprocess.CalledProcessError:
+        print(
+            f"Push failed after retries. Local commit {get_head_commit()} was created but not pushed.",
+            file=sys.stderr,
+        )
+        print("Retry with: git push", file=sys.stderr)
+        return 1
 
     print("Push complete.")
     return 0
