@@ -27,12 +27,13 @@ class FakeChatRuntime:
         self,
         content: str,
         attachments: list[object],
+        conversation_messages: list[object] | None = None,
         available_skills: list[object] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: object | None = None,
         callbacks: GenerationCallbacks | None = None,
     ) -> str:
-        del available_skills, skill_context_prompt, execute_tool
+        del conversation_messages, available_skills, skill_context_prompt, execute_tool
         normalized_content = " ".join(content.split())
         reply = f"Test assistant reply: {normalized_content} ({len(attachments)} attachments)"
         if callbacks is not None and callbacks.on_text_delta is not None:

@@ -15,6 +15,12 @@ type ConversationFeedProps = {
   messages: SessionMessage[];
   events: SessionEventEntry[];
   runtimeRuns: RuntimeExecutionRun[];
+  activeBranchId?: string | null;
+  messageActionBusyId?: string | null;
+  onEditMessage?: (message: SessionMessage) => void;
+  onRegenerateMessage?: (message: SessionMessage) => void;
+  onForkMessage?: (message: SessionMessage) => void;
+  onRollbackMessage?: (message: SessionMessage) => void;
 };
 
 type ToolArtifactChip = {
@@ -651,7 +657,17 @@ function buildTurns(
   };
 }
 
-export function ConversationFeed({ messages, events, runtimeRuns }: ConversationFeedProps) {
+export function ConversationFeed({
+  messages,
+  events,
+  runtimeRuns,
+  activeBranchId,
+  messageActionBusyId,
+  onEditMessage,
+  onRegenerateMessage,
+  onForkMessage,
+  onRollbackMessage,
+}: ConversationFeedProps) {
   const feedRef = useRef<HTMLElement | null>(null);
   const previousLastItemSignature = useRef<string | null>(null);
   const [expandedToolGroupIds, setExpandedToolGroupIds] = useState<string[]>([]);
@@ -821,9 +837,23 @@ export function ConversationFeed({ messages, events, runtimeRuns }: Conversation
       message.role === "assistant" || message.role === "system"
         ? parseAssistantContent(message.content)
         : null;
+    const isBusy = messageActionBusyId === message.id;
+    const canEdit = message.role === "user" && typeof onEditMessage === "function";
+    const canRegenerate = message.role === "assistant" && typeof onRegenerateMessage === "function";
+    const canFork = typeof onForkMessage === "function";
+    const canRollback = typeof onRollbackMessage === "function";
 
     return (
       <article key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
+        <div className="assistant-tool-run-heading">
+          <strong className="assistant-tool-run-label">{message.role}</strong>
+          <div className="assistant-tool-run-side">
+            {message.branch_id && activeBranchId && message.branch_id !== activeBranchId ? (
+              <span className="management-token-chip">分支消息</span>
+            ) : null}
+            {message.status && message.status !== "completed" ? <StatusBadge status={message.status} /> : null}
+          </div>
+        </div>
         {message.role === "user"
           ? renderUserMessage(message.content)
           : renderAssistantMessage(assistantContent?.visibleContent ?? message.content)}
@@ -834,6 +864,50 @@ export function ConversationFeed({ messages, events, runtimeRuns }: Conversation
                 {attachment.name} · {attachment.content_type} · {formatBytes(attachment.size_bytes)}
               </span>
             ))}
+          </div>
+        ) : null}
+        {canEdit || canRegenerate || canFork || canRollback ? (
+          <div className="management-action-row">
+            {canEdit ? (
+              <button
+                className="inline-button"
+                type="button"
+                disabled={isBusy}
+                onClick={() => onEditMessage?.(message)}
+              >
+                编辑
+              </button>
+            ) : null}
+            {canRegenerate ? (
+              <button
+                className="inline-button"
+                type="button"
+                disabled={isBusy}
+                onClick={() => onRegenerateMessage?.(message)}
+              >
+                重试
+              </button>
+            ) : null}
+            {canFork ? (
+              <button
+                className="inline-button"
+                type="button"
+                disabled={isBusy}
+                onClick={() => onForkMessage?.(message)}
+              >
+                分叉
+              </button>
+            ) : null}
+            {canRollback ? (
+              <button
+                className="inline-button"
+                type="button"
+                disabled={isBusy}
+                onClick={() => onRollbackMessage?.(message)}
+              >
+                回溯到此
+              </button>
+            ) : null}
           </div>
         ) : null}
       </article>

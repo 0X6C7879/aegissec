@@ -2,9 +2,10 @@ from pathlib import Path
 
 from pytest import MonkeyPatch
 from sqlalchemy import inspect, text
-from sqlmodel import create_engine
+from sqlmodel import Session, create_engine
 
 from app.db import session as db_session_module
+from app.db.repositories.sessions import SessionRepository
 
 
 def test_init_db_adds_missing_columns_for_existing_sqlite_tables(
@@ -101,3 +102,110 @@ def test_init_db_adds_missing_columns_for_existing_sqlite_tables(
     assert {"health_status", "health_latency_ms", "health_error", "health_checked_at"}.issubset(
         mcp_columns
     )
+
+
+def test_init_db_upgrades_legacy_chat_tables_for_existing_sqlite_db(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-chat.db"
+    engine = create_engine(
+        f"sqlite:///{database_path.as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE session (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    deleted_at DATETIME NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE message (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    attachments JSON NOT NULL,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO session (id, title, status, created_at, updated_at, deleted_at)
+                VALUES (
+                    'session-1',
+                    'Legacy Session',
+                    'IDLE',
+                    '2026-04-02T00:00:00+00:00',
+                    '2026-04-02T00:00:00+00:00',
+                    NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO message (id, session_id, role, content, attachments, created_at)
+                VALUES
+                    ('message-1', 'session-1', 'USER', 'hello', '[]', '2026-04-02T00:00:01+00:00'),
+                    ('message-2', 'session-1', 'ASSISTANT', 'hi', '[]', '2026-04-02T00:00:02+00:00')
+                """
+            )
+        )
+
+    monkeypatch.setattr(db_session_module, "engine", engine)
+
+    db_session_module.init_db()
+
+    inspector = inspect(engine)
+    assert {"conversation_branch", "chat_generation"}.issubset(set(inspector.get_table_names()))
+    assert "active_branch_id" in {column["name"] for column in inspector.get_columns("session")}
+    assert {
+        "parent_message_id",
+        "branch_id",
+        "generation_id",
+        "status",
+        "message_kind",
+        "sequence",
+        "turn_index",
+        "version_group_id",
+        "metadata",
+        "completed_at",
+    }.issubset({column["name"] for column in inspector.get_columns("message")})
+
+    with Session(engine) as db_session:
+        repository = SessionRepository(db_session)
+
+        sessions = repository.list_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].active_branch_id == "session-1"
+
+        branches = repository.list_branches("session-1")
+        assert len(branches) == 1
+        assert branches[0].id == "session-1"
+
+        messages = repository.list_messages("session-1", branch_id="session-1")
+        assert [message.id for message in messages] == ["message-1", "message-2"]
+        assert [message.sequence for message in messages] == [1, 2]
+        assert [message.turn_index for message in messages] == [1, 1]
+        assert messages[0].parent_message_id is None
+        assert messages[1].parent_message_id == "message-1"
+        assert all(message.branch_id == "session-1" for message in messages)
+        assert all(message.version_group_id == message.id for message in messages)
+        assert all(message.completed_at is not None for message in messages)

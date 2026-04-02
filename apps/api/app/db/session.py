@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Request, WebSocket
@@ -52,6 +53,35 @@ _SQLITE_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "current_phase": "TEXT",
         "runtime_policy_json": "JSON",
         "runtime_profile_name": "TEXT",
+        "active_branch_id": "TEXT",
+    },
+    "conversation_branch": {
+        "parent_branch_id": "TEXT",
+        "forked_from_message_id": "TEXT",
+        "name": "TEXT NOT NULL DEFAULT 'Main'",
+        "created_at": "DATETIME",
+        "updated_at": "DATETIME",
+    },
+    "message": {
+        "parent_message_id": "TEXT",
+        "branch_id": "TEXT",
+        "generation_id": "TEXT",
+        "status": "TEXT NOT NULL DEFAULT 'COMPLETED'",
+        "message_kind": "TEXT NOT NULL DEFAULT 'MESSAGE'",
+        "sequence": "INTEGER NOT NULL DEFAULT 0",
+        "turn_index": "INTEGER NOT NULL DEFAULT 0",
+        "edited_from_message_id": "TEXT",
+        "version_group_id": "TEXT",
+        "metadata": "JSON NOT NULL DEFAULT '{}'",
+        "error_message": "TEXT",
+        "completed_at": "DATETIME",
+    },
+    "chat_generation": {
+        "action": "TEXT NOT NULL DEFAULT 'REPLY'",
+        "target_message_id": "TEXT",
+        "reasoning_summary": "TEXT",
+        "reasoning_trace": "JSON NOT NULL DEFAULT '[]'",
+        "cancel_requested_at": "DATETIME",
     },
     "skill_record": {
         "parameter_schema": "JSON NOT NULL DEFAULT '{}'",
@@ -64,6 +94,28 @@ _SQLITE_ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "health_checked_at": "DATETIME",
     },
 }
+_SQLITE_INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS ix_session_active_branch_id ON session (active_branch_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_conversation_branch_session_id "
+        "ON conversation_branch (session_id)"
+    ),
+    "CREATE INDEX IF NOT EXISTS ix_message_branch_id ON message (branch_id)",
+    "CREATE INDEX IF NOT EXISTS ix_message_generation_id ON message (generation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_message_status ON message (status)",
+    "CREATE INDEX IF NOT EXISTS ix_message_message_kind ON message (message_kind)",
+    "CREATE INDEX IF NOT EXISTS ix_message_sequence ON message (sequence)",
+    "CREATE INDEX IF NOT EXISTS ix_message_turn_index ON message (turn_index)",
+    "CREATE INDEX IF NOT EXISTS ix_message_version_group_id ON message (version_group_id)",
+    "CREATE INDEX IF NOT EXISTS ix_chat_generation_session_id ON chat_generation (session_id)",
+    "CREATE INDEX IF NOT EXISTS ix_chat_generation_branch_id ON chat_generation (branch_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chat_generation_assistant_message_id "
+        "ON chat_generation (assistant_message_id)"
+    ),
+    "CREATE INDEX IF NOT EXISTS ix_chat_generation_status ON chat_generation (status)",
+    "CREATE INDEX IF NOT EXISTS ix_chat_generation_created_at ON chat_generation (created_at)",
+)
 
 
 def _is_sqlite_engine() -> bool:
@@ -103,12 +155,162 @@ def _ensure_sqlite_additive_columns() -> None:
                 )
 
 
+def _ensure_sqlite_indexes() -> None:
+    with engine.begin() as connection:
+        for statement in _SQLITE_INDEX_STATEMENTS:
+            connection.execute(text(statement))
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _backfill_sqlite_chat_core_state() -> None:
+    inspector = inspect(engine)
+    required_tables = {"session", "message", "conversation_branch"}
+    if not required_tables.issubset(set(inspector.get_table_names())):
+        return
+
+    session_columns = {column["name"] for column in inspector.get_columns("session")}
+    message_columns = {column["name"] for column in inspector.get_columns("message")}
+    if "active_branch_id" not in session_columns or "branch_id" not in message_columns:
+        return
+
+    with engine.begin() as connection:
+        session_rows = connection.execute(
+            text("SELECT id, created_at, updated_at, active_branch_id FROM session")
+        ).mappings()
+
+        for session_row in session_rows:
+            session_id = str(session_row["id"])
+            created_at = session_row["created_at"] or _utc_now()
+            updated_at = session_row["updated_at"] or created_at
+            active_branch_id = session_row["active_branch_id"]
+
+            branch_exists = connection.execute(
+                text("SELECT 1 FROM conversation_branch WHERE id = :branch_id LIMIT 1"),
+                {"branch_id": session_id},
+            ).first()
+            if branch_exists is None:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO conversation_branch (
+                            id,
+                            session_id,
+                            parent_branch_id,
+                            forked_from_message_id,
+                            name,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (
+                            :id,
+                            :session_id,
+                            NULL,
+                            NULL,
+                            'Main',
+                            :created_at,
+                            :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        "id": session_id,
+                        "session_id": session_id,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    },
+                )
+
+            active_branch_exists = (
+                connection.execute(
+                    text("SELECT 1 FROM conversation_branch WHERE id = :branch_id LIMIT 1"),
+                    {"branch_id": active_branch_id},
+                ).first()
+                if active_branch_id is not None
+                else None
+            )
+            if active_branch_id is None or active_branch_exists is None:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE session
+                        SET active_branch_id = :branch_id,
+                            updated_at = :updated_at
+                        WHERE id = :session_id
+                        """
+                    ),
+                    {
+                        "branch_id": session_id,
+                        "updated_at": updated_at,
+                        "session_id": session_id,
+                    },
+                )
+
+            message_rows = (
+                connection.execute(
+                    text(
+                        """
+                    SELECT id, role, created_at, branch_id
+                    FROM message
+                    WHERE session_id = :session_id
+                    ORDER BY created_at ASC, id ASC
+                    """
+                    ),
+                    {"session_id": session_id},
+                )
+                .mappings()
+                .all()
+            )
+            if not message_rows or all(row["branch_id"] is not None for row in message_rows):
+                continue
+
+            parent_message_id: str | None = None
+            turn_index = 0
+            for sequence, message_row in enumerate(message_rows, start=1):
+                role = str(message_row["role"]).lower()
+                if role == "user":
+                    turn_index += 1
+                elif turn_index == 0:
+                    turn_index = 1
+
+                connection.execute(
+                    text(
+                        """
+                        UPDATE message
+                        SET parent_message_id = :parent_message_id,
+                            branch_id = :branch_id,
+                            status = COALESCE(status, 'COMPLETED'),
+                            message_kind = COALESCE(message_kind, 'MESSAGE'),
+                            sequence = :sequence,
+                            turn_index = :turn_index,
+                            version_group_id = COALESCE(version_group_id, :version_group_id),
+                            metadata = COALESCE(metadata, '{}'),
+                            completed_at = COALESCE(completed_at, created_at)
+                        WHERE id = :message_id
+                        """
+                    ),
+                    {
+                        "parent_message_id": parent_message_id,
+                        "branch_id": session_id,
+                        "sequence": sequence,
+                        "turn_index": turn_index,
+                        "version_group_id": str(message_row["id"]),
+                        "message_id": str(message_row["id"]),
+                    },
+                )
+                parent_message_id = str(message_row["id"])
+
+
 def init_db() -> None:
     if _is_sqlite_engine() and _phase6_schema_requires_rebuild():
         _rebuild_phase6_sqlite_tables()
     SQLModel.metadata.create_all(engine)
     if _is_sqlite_engine():
         _ensure_sqlite_additive_columns()
+        _ensure_sqlite_indexes()
+        _backfill_sqlite_chat_core_state()
 
 
 def persist_request_log(session: Session, request: Request) -> None:

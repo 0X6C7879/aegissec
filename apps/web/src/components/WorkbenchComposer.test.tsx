@@ -16,14 +16,15 @@ describe("WorkbenchComposer", () => {
     useUiStore.getState().setDraftContent("session-send", "继续分析当前结果");
 
     render(
-      <WorkbenchComposer
-        sessionId="session-send"
-        disabled={false}
-        isGenerating={false}
-        isInterrupting={false}
-        onSend={onSend}
-        onInterrupt={vi.fn().mockResolvedValue(undefined)}
-      />,
+        <WorkbenchComposer
+          sessionId="session-send"
+          disabled={false}
+          isGenerating={false}
+          isInterrupting={false}
+          queuedCount={0}
+          onSend={onSend}
+          onInterrupt={vi.fn().mockResolvedValue(undefined)}
+        />,
     );
 
     await user.click(screen.getByRole("button", { name: "发送" }));
@@ -32,9 +33,10 @@ describe("WorkbenchComposer", () => {
     expect(useUiStore.getState().draftsBySession["session-send"]?.content ?? "").toBe("");
   });
 
-  it("keeps the composer in interrupt mode while generation is active", async () => {
+  it("allows queueing follow-up messages while generation is active", async () => {
     const user = userEvent.setup();
     const onInterrupt = vi.fn().mockResolvedValue(undefined);
+    const onSend = vi.fn().mockResolvedValue(undefined);
 
     render(
       <WorkbenchComposer
@@ -42,18 +44,24 @@ describe("WorkbenchComposer", () => {
         disabled={false}
         isGenerating={true}
         isInterrupting={false}
-        onSend={vi.fn().mockResolvedValue(undefined)}
+        queuedCount={1}
+        onSend={onSend}
         onInterrupt={onInterrupt}
       />,
     );
 
     await user.type(screen.getByRole("textbox"), "生成结束后继续验证入口");
 
-    expect(screen.getByRole("button", { name: "等待当前回复" })).toBeDisabled();
-    expect(screen.getByText("助手正在回复；如需发送新问题，请先停止当前回复。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入队列" })).toBeEnabled();
+    expect(
+      screen.getByText("助手正在回复；新消息会排入队列，当前已有 1 条等待。"),
+    ).toBeInTheDocument();
     expect(useUiStore.getState().draftsBySession["session-running"]?.content).toBe(
       "生成结束后继续验证入口",
     );
+
+    await user.click(screen.getByRole("button", { name: "加入队列" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("生成结束后继续验证入口"));
 
     await user.click(screen.getByRole("button", { name: "中断" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
@@ -64,14 +72,15 @@ describe("WorkbenchComposer", () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
 
     render(
-      <WorkbenchComposer
-        sessionId="session-enter"
-        disabled={false}
-        isGenerating={false}
-        isInterrupting={false}
-        onSend={onSend}
-        onInterrupt={vi.fn().mockResolvedValue(undefined)}
-      />,
+        <WorkbenchComposer
+          sessionId="session-enter"
+          disabled={false}
+          isGenerating={false}
+          isInterrupting={false}
+          queuedCount={0}
+          onSend={onSend}
+          onInterrupt={vi.fn().mockResolvedValue(undefined)}
+        />,
     );
 
     await user.type(screen.getByRole("textbox"), "第一行");

@@ -10,7 +10,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.settings import Settings, get_settings
-from app.db.models import AttachmentMetadata, SkillAgentSummaryRead
+from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
 
 SYSTEM_PROMPT = (
     "You are assisting an authorized defensive security research workflow. "
@@ -57,6 +57,13 @@ class ToolCallResult:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class ConversationMessage:
+    role: MessageRole
+    content: str
+    attachments: list[AttachmentMetadata] = field(default_factory=list)
+
+
 ToolExecutor = Callable[[ToolCallRequest], Awaitable[ToolCallResult]]
 TextDeltaHandler = Callable[[str], Awaitable[None]]
 SummaryHandler = Callable[[str], Awaitable[None]]
@@ -87,6 +94,7 @@ class ChatRuntime(Protocol):
         self,
         content: str,
         attachments: list[AttachmentMetadata],
+        conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
@@ -103,6 +111,7 @@ class OpenAICompatibleChatRuntime:
         self,
         content: str,
         attachments: list[AttachmentMetadata],
+        conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
@@ -119,6 +128,7 @@ class OpenAICompatibleChatRuntime:
             attachments,
             available_skills or [],
             skill_context_prompt=skill_context_prompt,
+            conversation_messages=conversation_messages,
         )
 
         for _ in range(MAX_TOOL_STEPS + 1):
@@ -358,23 +368,8 @@ class OpenAICompatibleChatRuntime:
         available_skills: list[SkillAgentSummaryRead],
         *,
         skill_context_prompt: str | None,
+        conversation_messages: list[ConversationMessage] | None,
     ) -> list[dict[str, object]]:
-        user_content = content.strip()
-        if attachments:
-            attachment_lines = []
-            for attachment in attachments:
-                name = attachment.name or "unnamed"
-                content_type = attachment.content_type or "unknown"
-                size_bytes = (
-                    attachment.size_bytes if attachment.size_bytes is not None else "unknown"
-                )
-                attachment_lines.append(f"- {name} ({content_type}, {size_bytes} bytes)")
-
-            user_content = (
-                f"{user_content}\n\n"
-                "Attachment metadata provided with this message:\n" + "\n".join(attachment_lines)
-            )
-
         messages: list[dict[str, object]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         skill_catalog_context = OpenAICompatibleChatRuntime._build_skill_catalog_context(
             available_skills
@@ -383,8 +378,47 @@ class OpenAICompatibleChatRuntime:
             messages.append({"role": "system", "content": skill_catalog_context})
         if isinstance(skill_context_prompt, str) and skill_context_prompt.strip():
             messages.append({"role": "system", "content": skill_context_prompt.strip()})
-        messages.append({"role": "user", "content": user_content})
+
+        if conversation_messages:
+            for message in conversation_messages:
+                messages.append(
+                    {
+                        "role": message.role.value,
+                        "content": OpenAICompatibleChatRuntime._format_message_content(
+                            message.content,
+                            message.attachments,
+                        ),
+                    }
+                )
+            return messages
+
+        messages.append(
+            {
+                "role": "user",
+                "content": OpenAICompatibleChatRuntime._format_message_content(
+                    content, attachments
+                ),
+            }
+        )
         return messages
+
+    @staticmethod
+    def _format_message_content(content: str, attachments: list[AttachmentMetadata]) -> str:
+        formatted_content = content.strip()
+        if not attachments:
+            return formatted_content
+
+        attachment_lines = []
+        for attachment in attachments:
+            name = attachment.name or "unnamed"
+            content_type = attachment.content_type or "unknown"
+            size_bytes = attachment.size_bytes if attachment.size_bytes is not None else "unknown"
+            attachment_lines.append(f"- {name} ({content_type}, {size_bytes} bytes)")
+
+        return (
+            f"{formatted_content}\n\n"
+            "Attachment metadata provided with this message:\n" + "\n".join(attachment_lines)
+        )
 
     @staticmethod
     def _tool_definitions() -> list[dict[str, object]]:
@@ -686,6 +720,7 @@ class AnthropicChatRuntime:
         self,
         content: str,
         attachments: list[AttachmentMetadata],
+        conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
@@ -703,6 +738,7 @@ class AnthropicChatRuntime:
             attachments,
             available_skills or [],
             skill_context_prompt=skill_context_prompt,
+            conversation_messages=conversation_messages,
         )
 
         for _ in range(MAX_TOOL_STEPS + 1):
@@ -931,30 +967,31 @@ class AnthropicChatRuntime:
         available_skills: list[SkillAgentSummaryRead],
         *,
         skill_context_prompt: str | None,
+        conversation_messages: list[ConversationMessage] | None,
     ) -> list[dict[str, object]]:
-        user_content = content.strip()
-        if attachments:
-            attachment_lines = []
-            for attachment in attachments:
-                name = attachment.name or "unnamed"
-                content_type = attachment.content_type or "unknown"
-                size_bytes = (
-                    attachment.size_bytes if attachment.size_bytes is not None else "unknown"
-                )
-                attachment_lines.append(f"- {name} ({content_type}, {size_bytes} bytes)")
-
-            user_content = (
-                f"{user_content}\n\n"
-                "Attachment metadata provided with this message:\n" + "\n".join(attachment_lines)
-            )
-
         messages: list[dict[str, object]] = []
         skill_catalog_context = AnthropicChatRuntime._build_skill_catalog_context(available_skills)
+        prefix_parts: list[str] = []
         if skill_catalog_context is not None:
-            user_content = f"{skill_catalog_context}\n\n{user_content}"
+            prefix_parts.append(skill_catalog_context)
         if isinstance(skill_context_prompt, str) and skill_context_prompt.strip():
-            user_content = f"{skill_context_prompt.strip()}\n\n{user_content}"
+            prefix_parts.append(skill_context_prompt.strip())
+        prefix = "\n\n".join(prefix_parts)
 
+        if conversation_messages:
+            for index, message in enumerate(conversation_messages):
+                message_content = OpenAICompatibleChatRuntime._format_message_content(
+                    message.content,
+                    message.attachments,
+                )
+                if index == 0 and prefix:
+                    message_content = f"{prefix}\n\n{message_content}"
+                messages.append({"role": message.role.value, "content": message_content})
+            return messages
+
+        user_content = OpenAICompatibleChatRuntime._format_message_content(content, attachments)
+        if prefix:
+            user_content = f"{prefix}\n\n{user_content}"
         messages.append({"role": "user", "content": user_content})
         return messages
 

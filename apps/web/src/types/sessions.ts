@@ -7,7 +7,35 @@ export type SessionStatus =
   | "done"
   | (string & {});
 
-export type MessageRole = "user" | "assistant" | "system" | (string & {});
+export type MessageRole = "user" | "assistant" | "system" | "tool" | (string & {});
+
+export type MessageStatus =
+  | "pending"
+  | "queued"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "superseded"
+  | (string & {});
+
+export type MessageKind = "message" | "summary" | "trace" | "event_note" | (string & {});
+
+export type GenerationStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | (string & {});
+
+export type GenerationAction =
+  | "reply"
+  | "edit"
+  | "regenerate"
+  | "fork"
+  | "rollback"
+  | (string & {});
 
 export type AttachmentMetadata = {
   id: string;
@@ -23,32 +51,99 @@ export type SessionSummary = {
   title: string;
   status: SessionStatus;
   project_id: string | null;
+  active_branch_id?: string | null;
   goal: string | null;
   scenario_type: string | null;
   current_phase: string | null;
   runtime_policy_json: RuntimePolicy | null;
+  runtime_profile_name?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
 };
 
+export type ConversationBranch = {
+  id: string;
+  session_id: string;
+  parent_branch_id?: string | null;
+  forked_from_message_id?: string | null;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatGeneration = {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  action: GenerationAction;
+  user_message_id?: string | null;
+  assistant_message_id: string;
+  target_message_id?: string | null;
+  status: GenerationStatus;
+  reasoning_summary?: string | null;
+  reasoning_trace?: Record<string, unknown>[];
+  metadata?: Record<string, unknown>;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  cancel_requested_at?: string | null;
+};
+
 export type SessionMessage = {
   id: string;
   session_id: string;
+  parent_message_id?: string | null;
+  branch_id?: string | null;
+  generation_id?: string | null;
   role: MessageRole;
+  status?: MessageStatus;
+  message_kind?: MessageKind;
+  sequence?: number;
+  turn_index?: number;
+  edited_from_message_id?: string | null;
+  version_group_id?: string | null;
   content: string;
+  metadata?: Record<string, unknown>;
+  error_message?: string | null;
   attachments: AttachmentMetadata[];
   created_at: string;
+  completed_at?: string | null;
 };
 
 export type SessionDetail = SessionSummary & {
   messages: SessionMessage[];
 };
 
+export type SessionConversation = {
+  session: SessionSummary;
+  active_branch: ConversationBranch | null;
+  branches: ConversationBranch[];
+  messages: SessionMessage[];
+  generations: ChatGeneration[];
+};
+
+export type SessionQueue = {
+  session: SessionSummary;
+  active_generation: ChatGeneration | null;
+  queued_generations: ChatGeneration[];
+};
+
+export type SessionReplay = {
+  session: SessionSummary;
+  branches: ConversationBranch[];
+  messages: SessionMessage[];
+  generations: ChatGeneration[];
+};
+
 export type ChatResponse = {
   session: SessionSummary;
   user_message: SessionMessage;
   assistant_message: SessionMessage;
+  generation?: ChatGeneration | null;
+  branch?: ConversationBranch | null;
 };
 
 export type SessionEventEnvelope = {

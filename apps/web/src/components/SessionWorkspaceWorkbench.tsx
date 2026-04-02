@@ -3,22 +3,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   advanceWorkflow,
+  cancelGeneration,
   cancelSession,
   createSession,
   deleteSession,
+  editSessionMessage,
   getCausalGraph,
   getCausalGraphForRun,
   getEvidenceGraph,
   getEvidenceGraphForRun,
   getRuntimeStatus,
-  getSession,
+  getSessionConversation,
+  getSessionQueue,
   getTaskGraph,
   getTaskGraphForRun,
   getWorkflow,
   getWorkflowExport,
   getWorkflowReplay,
+  forkSessionMessage,
   listSessions,
   listWorkflowTemplates,
+  regenerateSessionMessage,
+  rollbackSessionMessage,
   startWorkflow,
   updateSession,
   sendChatMessage,
@@ -28,7 +34,7 @@ import { useSessionEvents } from "../hooks/useSessionEvents";
 import { mergeSessionMessages, sortSessions, upsertSession } from "../lib/sessionUtils";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraph, SessionGraphEdge, SessionGraphNode } from "../types/graphs";
-import type { SessionDetail, SessionSummary } from "../types/sessions";
+import type { SessionConversation, SessionSummary } from "../types/sessions";
 import type {
   WorkflowRunDetail,
   WorkflowRunExport,
@@ -1048,6 +1054,7 @@ export function SessionWorkspaceWorkbench() {
   });
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [policyDraft, setPolicyDraft] = useState<Record<string, unknown>>({});
+  const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
 
   const lastVisitedSessionId = useUiStore((state) => state.lastVisitedSessionId);
   const setLastVisitedSessionId = useUiStore((state) => state.setLastVisitedSessionId);
@@ -1124,11 +1131,25 @@ export function SessionWorkspaceWorkbench() {
   const shouldLoadEvidenceGraph = isInsightsOpen && selectedDrawerTab === "evidence";
   const shouldLoadReplayArtifacts = isReplayPanelOpen;
 
-  const sessionDetailQuery = useQuery({
+  const conversationQuery = useQuery({
     enabled: Boolean(activeSessionId),
-    queryKey: ["session", activeSessionId],
-    queryFn: ({ signal }) => getSession(activeSessionId!, signal),
+    queryKey: ["conversation", activeSessionId],
+    queryFn: ({ signal }) => getSessionConversation(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
+  });
+
+  const sessionQueueQuery = useQuery({
+    enabled: Boolean(activeSessionId),
+    queryKey: ["session-queue", activeSessionId],
+    queryFn: ({ signal }) => getSessionQueue(activeSessionId!, signal),
+    placeholderData: (previousValue) => previousValue,
+    refetchInterval: (query) => {
+      const value = query.state.data;
+      if (!value) {
+        return false;
+      }
+      return value.active_generation || value.queued_generations.length > 0 ? 1500 : false;
+    },
   });
 
   const sessionTaskGraphQuery = useQuery({
@@ -1291,9 +1312,9 @@ export function SessionWorkspaceWorkbench() {
   const renameSessionMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => updateSession(id, { title }),
     onSuccess: (updatedSession) => {
-      queryClient.setQueryData<SessionDetail | undefined>(
-        ["session", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, ...updatedSession } : currentValue),
+      queryClient.setQueryData<SessionConversation | undefined>(
+        ["conversation", updatedSession.id],
+        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
       );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, updatedSession),
@@ -1319,7 +1340,7 @@ export function SessionWorkspaceWorkbench() {
     },
     onError: async (_error, restoredId) => {
       await restoreSessionMutation.reset();
-      await queryClient.invalidateQueries({ queryKey: ["session", restoredId] });
+      await queryClient.invalidateQueries({ queryKey: ["conversation", restoredId] });
     },
   });
 
@@ -1348,9 +1369,9 @@ export function SessionWorkspaceWorkbench() {
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, updatedSession),
       );
-      queryClient.setQueryData<SessionDetail | undefined>(
-        ["session", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, ...updatedSession } : currentValue),
+      queryClient.setQueryData<SessionConversation | undefined>(
+        ["conversation", updatedSession.id],
+        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
       );
     },
   });
@@ -1370,10 +1391,11 @@ export function SessionWorkspaceWorkbench() {
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, updatedSession),
       );
-      queryClient.setQueryData<SessionDetail | undefined>(
-        ["session", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, ...updatedSession } : currentValue),
+      queryClient.setQueryData<SessionConversation | undefined>(
+        ["conversation", updatedSession.id],
+        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
       );
+      void queryClient.invalidateQueries({ queryKey: ["session-queue", updatedSession.id] });
     },
     onError: (error, variables) => {
       appendEvent(variables.id, {
@@ -1389,25 +1411,37 @@ export function SessionWorkspaceWorkbench() {
 
   const sendChatMutation = useMutation({
     mutationFn: ({ id, content }: { id: string; content: string }) =>
-      sendChatMessage(id, { content, attachments: [] }),
+      sendChatMessage(id, {
+        content,
+        attachments: [],
+        branch_id: activeConversation?.active_branch?.id ?? null,
+      }),
     onMutate: async ({ id, content }) => {
-      await queryClient.cancelQueries({ queryKey: ["session", id] });
-      const previousDetail = queryClient.getQueryData<SessionDetail | undefined>(["session", id]);
+      await queryClient.cancelQueries({ queryKey: ["conversation", id] });
+      const previousDetail = queryClient.getQueryData<SessionConversation | undefined>([
+        "conversation",
+        id,
+      ]);
       const optimisticMessage = buildOptimisticUserMessage(id, content);
 
-      queryClient.setQueryData<SessionDetail | undefined>(["session", id], (currentValue) => {
+      queryClient.setQueryData<SessionConversation | undefined>(["conversation", id], (currentValue) => {
         const targetDetail = currentValue ?? previousDetail;
         if (!targetDetail) {
           return targetDetail;
         }
-        return mergeSessionMessages(
-          {
-            ...targetDetail,
+        return {
+          ...targetDetail,
+          session: {
+            ...targetDetail.session,
             status: "running",
             updated_at: optimisticMessage.created_at,
           },
-          [optimisticMessage],
-        );
+          messages:
+            mergeSessionMessages(
+              { ...targetDetail.session, messages: targetDetail.messages },
+              [optimisticMessage],
+            )?.messages ?? targetDetail.messages,
+        };
       });
 
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) => {
@@ -1423,33 +1457,53 @@ export function SessionWorkspaceWorkbench() {
         });
       });
 
+      void queryClient.invalidateQueries({ queryKey: ["session-queue", id] });
+
       return { previousDetail, optimisticMessageId: optimisticMessage.id };
     },
     onSuccess: async (response, _variables, context) => {
-      queryClient.setQueryData<SessionDetail | undefined>(
-        ["session", response.session.id],
+      queryClient.setQueryData<SessionConversation | undefined>(
+        ["conversation", response.session.id],
         (currentValue) => {
           const baseMessages = (currentValue?.messages ?? []).filter(
             (message) => message.id !== context?.optimisticMessageId,
           );
           const nextMessages = [response.user_message, response.assistant_message];
           const updatedDetail = currentValue
-            ? { ...currentValue, ...response.session, messages: baseMessages }
+            ? { ...currentValue, session: response.session, messages: baseMessages }
             : undefined;
-          return mergeSessionMessages(updatedDetail, nextMessages);
+          if (!updatedDetail) {
+            return updatedDetail;
+          }
+          return {
+            ...updatedDetail,
+            active_branch: response.branch ?? updatedDetail.active_branch,
+            generations: response.generation
+              ? [
+                  ...updatedDetail.generations.filter((generation) => generation.id !== response.generation?.id),
+                  response.generation,
+                ]
+              : updatedDetail.generations,
+            messages:
+              mergeSessionMessages(
+                { ...updatedDetail.session, messages: updatedDetail.messages },
+                nextMessages,
+              )?.messages ?? updatedDetail.messages,
+          };
         },
       );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, response.session),
       );
+      await queryClient.invalidateQueries({ queryKey: ["session-queue", response.session.id] });
       await queryClient.invalidateQueries({ queryKey: ["runtime-status"] });
     },
     onError: (error, variables, context) => {
       const isCancelledError =
         error instanceof Error && /cancelled|stopped current generation/i.test(error.message);
       const previousDetail = context?.previousDetail;
-      const currentDetail = queryClient.getQueryData<SessionDetail | undefined>([
-        "session",
+      const currentDetail = queryClient.getQueryData<SessionConversation | undefined>([
+        "conversation",
         variables.id,
       ]);
       const hasPersistedUserMessage = (currentDetail?.messages ?? []).some(
@@ -1460,7 +1514,7 @@ export function SessionWorkspaceWorkbench() {
       );
 
       if (hasPersistedUserMessage && context?.optimisticMessageId) {
-        queryClient.setQueryData<SessionDetail | undefined>(["session", variables.id], (detail) =>
+        queryClient.setQueryData<SessionConversation | undefined>(["conversation", variables.id], (detail) =>
           detail
             ? {
                 ...detail,
@@ -1471,12 +1525,12 @@ export function SessionWorkspaceWorkbench() {
             : detail,
         );
       } else if (previousDetail) {
-        queryClient.setQueryData<SessionDetail | undefined>(
-          ["session", variables.id],
+        queryClient.setQueryData<SessionConversation | undefined>(
+          ["conversation", variables.id],
           previousDetail,
         );
         queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
-          upsertSession(currentValue, previousDetail),
+          upsertSession(currentValue, previousDetail.session),
         );
       }
 
@@ -1491,15 +1545,99 @@ export function SessionWorkspaceWorkbench() {
         });
       }
 
-      void queryClient.invalidateQueries({ queryKey: ["session", variables.id] });
+      void queryClient.invalidateQueries({ queryKey: ["conversation", variables.id] });
+      void queryClient.invalidateQueries({ queryKey: ["session-queue", variables.id] });
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
+  const cancelGenerationMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, generationId }: { sessionId: string; generationId: string }) =>
+      cancelGeneration(targetSessionId, generationId),
+    onSuccess: async (_generation, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+    },
+  });
+
+  const editMessageMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, messageId, content }: { sessionId: string; messageId: string; content: string }) =>
+      editSessionMessage(targetSessionId, messageId, {
+        content,
+        attachments: [],
+        branch_id: activeConversation?.active_branch?.id ?? null,
+      }),
+    onSuccess: async (_response, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+    },
+  });
+
+  const regenerateMessageMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, messageId }: { sessionId: string; messageId: string }) =>
+      regenerateSessionMessage(targetSessionId, messageId, {
+        branch_id: activeConversation?.active_branch?.id ?? null,
+      }),
+    onSuccess: async (_response, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+    },
+  });
+
+  const forkMessageMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, messageId, name }: { sessionId: string; messageId: string; name?: string | null }) =>
+      forkSessionMessage(targetSessionId, messageId, { name: name ?? null }),
+    onSuccess: async (response, variables) => {
+      queryClient.setQueryData(["conversation", variables.sessionId], response);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+    },
+  });
+
+  const rollbackMessageMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, messageId }: { sessionId: string; messageId: string }) =>
+      rollbackSessionMessage(targetSessionId, messageId, {
+        branch_id: activeConversation?.active_branch?.id ?? null,
+      }),
+    onSuccess: async (response, variables) => {
+      queryClient.setQueryData(["conversation", variables.sessionId], response);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+    },
+  });
+
+  const switchBranchMutation = useMutation({
+    mutationFn: ({ sessionId: targetSessionId, branchId }: { sessionId: string; branchId: string }) =>
+      updateSession(targetSessionId, { active_branch_id: branchId }),
+    onSuccess: async (updatedSession) => {
+      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
+        upsertSession(currentValue, updatedSession),
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["conversation", updatedSession.id] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", updatedSession.id] }),
+      ]);
     },
   });
 
   const invalidateWorkflowViews = useCallback(
     async (targetSessionId: string, targetRunId: string | null): Promise<void> => {
       const invalidations = [
-        queryClient.invalidateQueries({ queryKey: ["session", targetSessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["conversation", targetSessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["sessions"] }),
         queryClient.invalidateQueries({ queryKey: ["session", targetSessionId, "graph", "task"] }),
       ];
@@ -1594,7 +1732,7 @@ export function SessionWorkspaceWorkbench() {
   const taskGraph = runTaskGraphQuery.data ?? sessionTaskGraphQuery.data;
   const evidenceGraph = runEvidenceGraphQuery.data ?? sessionEvidenceGraphQuery.data;
   const causalGraph = runCausalGraphQuery.data ?? sessionCausalGraphQuery.data;
-  const activeDetail = sessionDetailQuery.data ?? null;
+  const activeConversation = conversationQuery.data ?? null;
 
   const workflowNeedsApproval =
     workflowQuery.data?.status === "needs_approval" ||
@@ -1636,7 +1774,9 @@ export function SessionWorkspaceWorkbench() {
     Boolean(workflowRunId) &&
     workflowQuery.data?.status !== "done" &&
     workflowQuery.data?.status !== "error";
-  const isGenerationActive = activeSession?.status === "running";
+  const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
+  const queuedGenerationCount = sessionQueueQuery.data?.queued_generations.length ?? 0;
+  const isGenerationActive = activeGeneration !== null || activeSession?.status === "running";
 
   function handleToggleSidebarCollapsed(): void {
     setIsSidebarCollapsed((currentValue) => !currentValue);
@@ -1738,12 +1878,12 @@ export function SessionWorkspaceWorkbench() {
               </button>
             </div>
           </section>
-        ) : activeSession && sessionDetailQuery.isLoading && !activeDetail ? (
+        ) : activeSession && conversationQuery.isLoading && !activeConversation ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">正在打开对话</p>
             <p className="conversation-empty-state-copy">消息与工作流状态正在同步。</p>
           </section>
-        ) : activeSession && activeDetail ? (
+        ) : activeSession && activeConversation ? (
           <>
             <header className="conversation-header workspace-session-header">
               <div className="conversation-header-copy">
@@ -1751,6 +1891,31 @@ export function SessionWorkspaceWorkbench() {
                   {getSessionDisplayTitle(activeSession.title)}
                 </h2>
                 <p className="management-unified-description">当前阶段：{currentStageLabel}</p>
+                {activeConversation.branches.length > 0 ? (
+                  <label className="field-label workspace-inline-field">
+                    对话分支
+                    <select
+                      className="field-inline-input"
+                      value={activeConversation.active_branch?.id ?? ""}
+                      onChange={(event) => {
+                        const branchId = event.target.value;
+                        if (!branchId || branchId === activeConversation.active_branch?.id) {
+                          return;
+                        }
+                        void switchBranchMutation.mutateAsync({
+                          sessionId: activeSession.id,
+                          branchId,
+                        });
+                      }}
+                    >
+                      {activeConversation.branches.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
 
               <div className="conversation-header-actions workspace-session-header-actions">
@@ -1780,19 +1945,70 @@ export function SessionWorkspaceWorkbench() {
               <section className="workspace-session-center-column">
                 <section className="workspace-message-panel">
                   <ConversationFeed
-                    messages={activeDetail.messages}
+                    messages={activeConversation.messages}
                     events={sessionEvents}
                     runtimeRuns={sessionRuns}
+                    activeBranchId={activeConversation.active_branch?.id ?? null}
+                    messageActionBusyId={messageActionBusyId}
+                    onEditMessage={(message) => {
+                      const nextContent = window.prompt("编辑这条用户消息", message.content);
+                      if (nextContent === null) {
+                        return;
+                      }
+                      const trimmed = nextContent.trim();
+                      if (!trimmed || trimmed === message.content.trim()) {
+                        return;
+                      }
+                      setMessageActionBusyId(message.id);
+                      void editMessageMutation
+                        .mutateAsync({
+                          sessionId: activeSession.id,
+                          messageId: message.id,
+                          content: trimmed,
+                        })
+                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
+                    }}
+                    onRegenerateMessage={(message) => {
+                      setMessageActionBusyId(message.id);
+                      void regenerateMessageMutation
+                        .mutateAsync({ sessionId: activeSession.id, messageId: message.id })
+                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
+                    }}
+                    onForkMessage={(message) => {
+                      const branchName = window.prompt("新分支名称", `Branch from ${message.id.slice(0, 8)}`);
+                      setMessageActionBusyId(message.id);
+                      void forkMessageMutation
+                        .mutateAsync({
+                          sessionId: activeSession.id,
+                          messageId: message.id,
+                          name: branchName,
+                        })
+                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
+                    }}
+                    onRollbackMessage={(message) => {
+                      setMessageActionBusyId(message.id);
+                      void rollbackMessageMutation
+                        .mutateAsync({ sessionId: activeSession.id, messageId: message.id })
+                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
+                    }}
                   />
                   <WorkbenchComposer
                     sessionId={activeSession.id}
                     disabled={activeSession.deleted_at !== null}
                     isGenerating={isGenerationActive}
-                    isInterrupting={cancelSessionMutation.isPending}
+                    isInterrupting={cancelGenerationMutation.isPending || cancelSessionMutation.isPending}
+                    queuedCount={queuedGenerationCount}
                     onSend={async (content) => {
                       await sendChatMutation.mutateAsync({ id: activeSession.id, content });
                     }}
                     onInterrupt={async () => {
+                      if (activeGeneration) {
+                        await cancelGenerationMutation.mutateAsync({
+                          sessionId: activeSession.id,
+                          generationId: activeGeneration.id,
+                        });
+                        return;
+                      }
                       await cancelSessionMutation.mutateAsync({ id: activeSession.id });
                     }}
                   />
@@ -2065,10 +2281,10 @@ export function SessionWorkspaceWorkbench() {
               </div>
             ) : null}
           </>
-        ) : sessionDetailQuery.isError ? (
+        ) : conversationQuery.isError ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">对话详情暂不可用</p>
-            <p className="conversation-empty-state-copy">{sessionDetailQuery.error.message}</p>
+            <p className="conversation-empty-state-copy">{conversationQuery.error.message}</p>
           </section>
         ) : null}
       </section>

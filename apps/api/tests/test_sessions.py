@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
@@ -263,6 +264,292 @@ def test_chat_persists_messages_and_attachments(client: TestClient) -> None:
     ]
 
 
+def test_chat_builds_multi_turn_context_and_exposes_conversation_reads(client: TestClient) -> None:
+    class RecordingChatRuntime:
+        def __init__(self) -> None:
+            self.histories: list[list[str]] = []
+
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+                callbacks,
+            )
+            assert conversation_messages is not None
+            history = [str(getattr(message, "content")) for message in conversation_messages]
+            self.histories.append(history)
+            return "history => " + " | ".join(history)
+
+    runtime = RecordingChatRuntime()
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: runtime
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Context Session"})
+        session_id = api_data(session_response)["id"]
+
+        first_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "first question", "attachments": []},
+        )
+        assert first_response.status_code == 200
+        second_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "follow-up", "attachments": []},
+        )
+        assert second_response.status_code == 200
+
+        assert runtime.histories == [
+            ["first question"],
+            ["first question", "history => first question", "follow-up"],
+        ]
+
+        conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+        assert conversation_response.status_code == 200
+        conversation_payload = api_data(conversation_response)
+        assert conversation_payload["active_branch"]["id"] == session_id
+        assert [message["content"] for message in conversation_payload["messages"]] == [
+            "first question",
+            "history => first question",
+            "follow-up",
+            "history => first question | history => first question | follow-up",
+        ]
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_edit_regenerate_fork_rollback_and_replay_endpoints(client: TestClient) -> None:
+    class BranchingChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+                callbacks,
+            )
+            assert conversation_messages is not None and conversation_messages
+            return f"reply[{getattr(conversation_messages[-1], 'content')}]"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: BranchingChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Branch Session"})
+        session_id = api_data(session_response)["id"]
+
+        first_chat = api_data(
+            client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"content": "alpha", "attachments": []},
+            )
+        )
+        api_data(
+            client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"content": "beta", "attachments": []},
+            )
+        )
+
+        edit_response = client.post(
+            f"/api/sessions/{session_id}/messages/{first_chat['user_message']['id']}/edit",
+            json={"content": "alpha edited", "attachments": []},
+        )
+        assert edit_response.status_code == 200
+        edit_payload = api_data(edit_response)
+        assert edit_payload["user_message"]["content"] == "alpha edited"
+        assert edit_payload["assistant_message"]["content"] == "reply[alpha edited]"
+
+        conversation_after_edit = api_data(client.get(f"/api/sessions/{session_id}/conversation"))
+        assert [message["content"] for message in conversation_after_edit["messages"]] == [
+            "alpha edited",
+            "reply[alpha edited]",
+        ]
+
+        regenerate_response = client.post(
+            f"/api/sessions/{session_id}/messages/{edit_payload['assistant_message']['id']}/regenerate"
+        )
+        assert regenerate_response.status_code == 200
+        regenerate_payload = api_data(regenerate_response)
+        assert (
+            regenerate_payload["assistant_message"]["id"] != edit_payload["assistant_message"]["id"]
+        )
+        assert (
+            regenerate_payload["assistant_message"]["version_group_id"]
+            == edit_payload["assistant_message"]["version_group_id"]
+        )
+
+        fork_response = client.post(
+            f"/api/sessions/{session_id}/messages/{edit_payload['user_message']['id']}/fork",
+            json={"name": "alt-branch"},
+        )
+        assert fork_response.status_code == 200
+        fork_payload = api_data(fork_response)
+        assert fork_payload["active_branch"]["id"] != session_id
+        assert fork_payload["active_branch"]["name"] == "alt-branch"
+        assert [message["content"] for message in fork_payload["messages"]] == ["alpha edited"]
+
+        branch_chat = api_data(
+            client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"content": "fork prompt", "attachments": []},
+            )
+        )
+        assert branch_chat["assistant_message"]["content"] == "reply[fork prompt]"
+
+        rollback_target_id = fork_payload["messages"][0]["id"]
+        rollback_response = client.post(
+            f"/api/sessions/{session_id}/messages/{rollback_target_id}/rollback"
+        )
+        assert rollback_response.status_code == 200
+        rollback_payload = api_data(rollback_response)
+        assert [message["content"] for message in rollback_payload["messages"]] == ["alpha edited"]
+
+        replay_response = client.get(f"/api/sessions/{session_id}/replay")
+        assert replay_response.status_code == 200
+        replay_payload = api_data(replay_response)
+        assert len(replay_payload["branches"]) >= 2
+        assert any(message["status"] == "superseded" for message in replay_payload["messages"])
+        assert len(replay_payload["generations"]) >= 4
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
+    second_request_started = threading.Event()
+
+    class SlowQueueChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+            for chunk in [f"{content}-1 ", f"{content}-2 ", f"{content}-3"]:
+                if content == "first":
+                    second_request_started.wait(timeout=1)
+                if callbacks.is_cancelled is not None and callbacks.is_cancelled():
+                    raise asyncio.CancelledError
+                await callbacks.on_text_delta(chunk)
+                await asyncio.sleep(0.05)
+            return f"{content}-done"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: SlowQueueChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Queue Cancel Session"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            first_response_box, first_worker = _post_chat_in_thread(
+                client,
+                session_id,
+                {"content": "first", "attachments": []},
+            )
+
+            second_response_box: dict[str, Response | None] | None = None
+            second_worker = None
+            active_generation_id: str | None = None
+
+            while True:
+                event = websocket.receive_json()
+                if event["type"] == "generation.started" and active_generation_id is None:
+                    active_generation_id = event["payload"]["generation_id"]
+                    second_response_box, second_worker = _post_chat_in_thread(
+                        client,
+                        session_id,
+                        {"content": "second", "attachments": []},
+                    )
+                    second_request_started.set()
+                    break
+
+            deadline = time.time() + 2
+            queue_payload = None
+            while time.time() < deadline:
+                queue_response = client.get(f"/api/sessions/{session_id}/queue")
+                queue_payload = api_data(queue_response)
+                if (
+                    queue_payload["active_generation"] is not None
+                    and len(queue_payload["queued_generations"]) == 1
+                ):
+                    break
+                time.sleep(0.05)
+
+            assert queue_payload is not None
+            assert queue_payload["active_generation"] is not None
+            assert len(queue_payload["queued_generations"]) == 1
+            active_generation_id = queue_payload["active_generation"]["id"]
+
+            cancel_response = client.post(
+                f"/api/sessions/{session_id}/generations/{active_generation_id}/cancel"
+            )
+            assert cancel_response.status_code == 200
+            assert api_data(cancel_response)["status"] == "cancelled"
+
+            saw_cancelled = False
+            while True:
+                event = websocket.receive_json()
+                if event["type"] == "generation.cancelled":
+                    saw_cancelled = True
+                if (
+                    saw_cancelled
+                    and event["type"] == "session.updated"
+                    and event["payload"].get("status") == "done"
+                ):
+                    break
+
+        first_worker.join(timeout=5)
+        assert first_response_box["value"] is not None
+        assert first_response_box["value"].status_code == 409
+
+        assert second_worker is not None and second_response_box is not None
+        second_worker.join(timeout=5)
+        assert second_response_box["value"] is not None
+        assert second_response_box["value"].status_code == 200
+
+        final_queue = api_data(client.get(f"/api/sessions/{session_id}/queue"))
+        assert final_queue["active_generation"] is None
+        assert final_queue["queued_generations"] == []
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
 def test_websocket_streams_session_events(client: TestClient) -> None:
     session_response = client.post("/api/sessions", json={"title": "Streaming Session"})
     session_id = api_data(session_response)["id"]
@@ -303,7 +590,10 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
         "assistant.summary",
     ]
     assert event_types[-1] == "session.updated"
+    assert "message.delta" in event_types
     assert "message.updated" in event_types
+    assert "message.completed" in event_types
+    assert "assistant.trace" in event_types
     assert saw_partial_update is True
     assert [events[1]["payload"].get("role"), events[2]["payload"].get("role")] == [
         "user",
@@ -317,8 +607,10 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
         "message_id": events[2]["payload"]["message_id"],
         "summary": "Assistant is analyzing the request and preparing a response.",
     }
+    completed_index = event_types.index("message.completed")
     assert (
-        events[-2]["payload"]["content"] == "Test assistant reply: hello websocket (0 attachments)"
+        events[completed_index]["payload"]["content"]
+        == "Test assistant reply: hello websocket (0 attachments)"
     )
 
 
@@ -328,12 +620,19 @@ def test_cancel_session_interrupts_active_generation(client: TestClient) -> None
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
             callbacks: GenerationCallbacks | None = None,
         ) -> str:
-            del attachments, available_skills, skill_context_prompt, execute_tool
+            del (
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
             assert callbacks is not None
             assert callbacks.on_text_delta is not None
             for chunk in ["partial ", "response ", f"for {content}"]:
@@ -396,12 +695,19 @@ def test_chat_queues_follow_up_prompt_while_generation_is_active(client: TestCli
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
             callbacks: GenerationCallbacks | None = None,
         ) -> str:
-            del attachments, available_skills, skill_context_prompt, execute_tool
+            del (
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
             assert callbacks is not None
             assert callbacks.on_text_delta is not None
             for chunk in [f"reply[{content}]", " done"]:
@@ -525,12 +831,20 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
             callbacks: GenerationCallbacks | None = None,
         ) -> str:
-            del content, attachments, available_skills, skill_context_prompt, callbacks
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
             assert execute_tool is not None
             tool_result = await execute_tool(
                 ToolCallRequest(
@@ -581,9 +895,12 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             "assistant.summary",
         ]
         assert event_types[-1] == "session.updated"
+        assert "assistant.trace" in event_types
         assert "tool.call.started" in event_types
         assert "tool.call.finished" in event_types
+        assert "message.delta" in event_types
         assert "message.updated" in event_types
+        assert "message.completed" in event_types
 
         started_index = event_types.index("tool.call.started")
         finished_index = event_types.index("tool.call.finished")
@@ -648,6 +965,7 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
@@ -656,6 +974,7 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
             del (
                 content,
                 attachments,
+                conversation_messages,
                 available_skills,
                 skill_context_prompt,
                 execute_tool,
@@ -684,6 +1003,61 @@ def test_chat_failure_marks_session_error(client: TestClient) -> None:
         assert detail_payload["status"] == "error"
         assert [message["role"] for message in detail_payload["messages"]] == ["user", "assistant"]
         assert detail_payload["messages"][1]["content"] == ""
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClient) -> None:
+    class FailingChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+                callbacks,
+            )
+            raise ChatRuntimeError("synthetic failure")
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: FailingChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Failure Event Session"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response_box, worker = _post_chat_in_thread(
+                client,
+                session_id,
+                {"content": "break", "attachments": []},
+            )
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "error":
+                    break
+
+        worker.join(timeout=5)
+        assert chat_response_box["value"] is not None
+        assert chat_response_box["value"].status_code == 502
+
+        event_types = [event["type"] for event in events]
+        assert "generation.failed" in event_types
+        assert "assistant.trace" in event_types
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -723,12 +1097,13 @@ Create and edit Word documents.
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
             callbacks: GenerationCallbacks | None = None,
         ) -> str:
-            del content, attachments, skill_context_prompt, callbacks
+            del content, attachments, conversation_messages, skill_context_prompt, callbacks
             assert available_skills is not None
             assert execute_tool is not None
 
@@ -789,12 +1164,20 @@ Use when performing Active Directory pentest orchestration without using ADscan 
             self,
             content: str,
             attachments: list[object],
+            conversation_messages: list[object] | None = None,
             available_skills: list[object] | None = None,
             skill_context_prompt: str | None = None,
             execute_tool: ToolExecutor | None = None,
             callbacks: GenerationCallbacks | None = None,
         ) -> str:
-            del content, attachments, available_skills, skill_context_prompt, callbacks
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
             assert execute_tool is not None
 
             tool_result = await execute_tool(

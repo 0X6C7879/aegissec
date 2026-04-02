@@ -18,6 +18,11 @@ function toTimestamp(value: string): number {
   return new Date(value).getTime();
 }
 
+function getMessageSortKey(message: SessionMessage): [number, number] {
+  const sequence = typeof message.sequence === "number" ? message.sequence : Number.MAX_SAFE_INTEGER;
+  return [sequence, toTimestamp(message.created_at)];
+}
+
 function isOptimisticUserMessage(message: SessionMessage): boolean {
   return message.role === "user" && message.id.startsWith("optimistic-user-");
 }
@@ -53,9 +58,11 @@ export function mergeSessionMessage(
             !(isOptimisticUserMessage(item) && item.content.trim() === message.content.trim()),
         )
       : remainingMessages;
-  const nextMessages = [...reconciledMessages, message].sort(
-    (left, right) => toTimestamp(left.created_at) - toTimestamp(right.created_at),
-  );
+  const nextMessages = [...reconciledMessages, message].sort((left, right) => {
+    const [leftSequence, leftCreatedAt] = getMessageSortKey(left);
+    const [rightSequence, rightCreatedAt] = getMessageSortKey(right);
+    return leftSequence - rightSequence || leftCreatedAt - rightCreatedAt;
+  });
 
   return {
     ...detail,
@@ -188,6 +195,15 @@ export function extractSafeSessionSummary(
     };
   }
 
+  if (type === "generation.failed") {
+    const errorMessage = readFirstNonEmptyString(data, ["error", "message"]);
+    return {
+      label: "模型进度",
+      summary: errorMessage ? `生成失败：${sanitizeSafeSummaryText(errorMessage)}` : "生成失败。",
+      tone: "error",
+    };
+  }
+
   if (type === "session.updated") {
     const queuedPromptCount =
       typeof data.queued_prompt_count === "number" && data.queued_prompt_count > 0
@@ -248,7 +264,12 @@ export function extractSafeSessionSummary(
 }
 
 export function shouldStoreRealtimeEvent(type: string, data: unknown): boolean {
-  if (type === "message.created" || type === "message.updated") {
+  if (
+    type === "message.created" ||
+    type === "message.updated" ||
+    type === "message.delta" ||
+    type === "message.completed"
+  ) {
     return false;
   }
 
@@ -317,6 +338,10 @@ export function toSessionSummaryUpdate(
     ...currentSession,
     title: typeof value.title === "string" ? value.title : currentSession.title,
     status: typeof value.status === "string" ? value.status : currentSession.status,
+    active_branch_id:
+      typeof value.active_branch_id === "string" || value.active_branch_id === null
+        ? value.active_branch_id
+        : currentSession.active_branch_id,
     deleted_at:
       typeof value.deleted_at === "string" || value.deleted_at === null
         ? value.deleted_at
@@ -348,10 +373,45 @@ export function toSessionMessageEvent(
   return {
     id: messageId,
     session_id: typeof value.session_id === "string" ? value.session_id : sessionId,
+    parent_message_id:
+      typeof value.parent_message_id === "string" || value.parent_message_id === null
+        ? value.parent_message_id
+        : null,
+    branch_id:
+      typeof value.branch_id === "string" || value.branch_id === null ? value.branch_id : null,
+    generation_id:
+      typeof value.generation_id === "string" || value.generation_id === null
+        ? value.generation_id
+        : null,
     role: value.role,
+    status: typeof value.status === "string" ? value.status : undefined,
+    message_kind: typeof value.message_kind === "string" ? value.message_kind : undefined,
+    sequence: typeof value.sequence === "number" ? value.sequence : undefined,
+    turn_index: typeof value.turn_index === "number" ? value.turn_index : undefined,
+    edited_from_message_id:
+      typeof value.edited_from_message_id === "string" || value.edited_from_message_id === null
+        ? value.edited_from_message_id
+        : null,
+    version_group_id:
+      typeof value.version_group_id === "string" || value.version_group_id === null
+        ? value.version_group_id
+        : null,
     content: value.content,
+    metadata: isRecord(value.metadata)
+      ? value.metadata
+      : isRecord(value.metadata_payload)
+        ? value.metadata_payload
+        : undefined,
+    error_message:
+      typeof value.error_message === "string" || value.error_message === null
+        ? value.error_message
+        : null,
     attachments: toAttachmentMetadataList(value.attachments),
     created_at: typeof value.created_at === "string" ? value.created_at : createdAt,
+    completed_at:
+      typeof value.completed_at === "string" || value.completed_at === null
+        ? value.completed_at
+        : null,
   };
 }
 
@@ -412,6 +472,16 @@ export function buildEventSummary(type: string, data: unknown): string {
       return "模型回复正在更新。";
     }
     return "消息内容已更新。";
+  }
+
+  if (type === "message.completed" && isRecord(data)) {
+    const role = typeof data.role === "string" ? data.role : "message";
+    return role === "assistant" ? "模型回复已完成。" : "消息处理已完成。";
+  }
+
+  if (type === "generation.failed" && isRecord(data)) {
+    const error = typeof data.error === "string" ? data.error : "未知错误";
+    return `生成失败：${error}`;
   }
 
   return "收到新的实时事件。";

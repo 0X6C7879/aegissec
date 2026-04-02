@@ -1,7 +1,12 @@
 import type {
   AttachmentMetadata,
+  ChatGeneration,
   ChatResponse,
+  ConversationBranch,
+  SessionConversation,
   SessionDetail,
+  SessionQueue,
+  SessionReplay,
   SessionSummary,
 } from "../types/sessions";
 import type {
@@ -27,6 +32,7 @@ import type {
   RuntimeExecutionRun,
   RuntimeHealth,
   RuntimeProfile,
+  RuntimeRunsClearResult,
   RuntimeState,
   RuntimeStatusResponse,
 } from "../types/runtime";
@@ -64,6 +70,29 @@ type ApiEnvelope<T> = {
 type ChatRequestPayload = {
   content: string;
   attachments?: AttachmentMetadata[];
+  branch_id?: string | null;
+  parent_message_id?: string | null;
+  token_budget?: number | null;
+};
+
+type MessageEditPayload = {
+  content: string;
+  attachments?: AttachmentMetadata[];
+  branch_id?: string | null;
+  token_budget?: number | null;
+};
+
+type MessageRegeneratePayload = {
+  branch_id?: string | null;
+  token_budget?: number | null;
+};
+
+type BranchForkPayload = {
+  name?: string | null;
+};
+
+type MessageRollbackPayload = {
+  branch_id?: string | null;
 };
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -248,6 +277,27 @@ export async function getSession(sessionId: string, signal?: AbortSignal): Promi
   return apiRequest<SessionDetail>(`/api/sessions/${sessionId}`, { signal });
 }
 
+export async function getSessionConversation(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionConversation> {
+  return apiRequest<SessionConversation>(`/api/sessions/${sessionId}/conversation`, { signal });
+}
+
+export async function getSessionQueue(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionQueue> {
+  return apiRequest<SessionQueue>(`/api/sessions/${sessionId}/queue`, { signal });
+}
+
+export async function getSessionReplay(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionReplay> {
+  return apiRequest<SessionReplay>(`/api/sessions/${sessionId}/replay`, { signal });
+}
+
 export async function getTaskGraph(sessionId: string, signal?: AbortSignal): Promise<SessionGraph> {
   return apiRequest<SessionGraph>(`/api/sessions/${sessionId}/graphs/task`, { signal });
 }
@@ -348,7 +398,13 @@ export async function updateSession(
   payload: Partial<
     Pick<
       SessionSummary,
-      "title" | "status" | "project_id" | "goal" | "scenario_type" | "current_phase"
+      | "title"
+      | "status"
+      | "project_id"
+      | "active_branch_id"
+      | "goal"
+      | "scenario_type"
+      | "current_phase"
     > & {
       runtime_policy_json: SessionSummary["runtime_policy_json"];
     }
@@ -385,6 +441,72 @@ export async function sendChatMessage(
   return apiRequest<ChatResponse>(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function editSessionMessage(
+  sessionId: string,
+  messageId: string,
+  payload: MessageEditPayload,
+): Promise<{
+  session: SessionSummary;
+  branch: ConversationBranch;
+  user_message?: NonNullable<ChatResponse["user_message"]> | null;
+  assistant_message?: NonNullable<ChatResponse["assistant_message"]> | null;
+  generation?: ChatGeneration | null;
+}> {
+  return apiRequest(`/api/sessions/${sessionId}/messages/${messageId}/edit`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function regenerateSessionMessage(
+  sessionId: string,
+  messageId: string,
+  payload: MessageRegeneratePayload = {},
+): Promise<{
+  session: SessionSummary;
+  branch: ConversationBranch;
+  user_message?: NonNullable<ChatResponse["user_message"]> | null;
+  assistant_message?: NonNullable<ChatResponse["assistant_message"]> | null;
+  generation?: ChatGeneration | null;
+}> {
+  return apiRequest(`/api/sessions/${sessionId}/messages/${messageId}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function forkSessionMessage(
+  sessionId: string,
+  messageId: string,
+  payload: BranchForkPayload = {},
+): Promise<SessionConversation> {
+  return apiRequest(`/api/sessions/${sessionId}/messages/${messageId}/fork`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function rollbackSessionMessage(
+  sessionId: string,
+  messageId: string,
+  payload: MessageRollbackPayload = {},
+): Promise<SessionConversation> {
+  return apiRequest(`/api/sessions/${sessionId}/messages/${messageId}/rollback`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function cancelGeneration(
+  sessionId: string,
+  generationId: string,
+): Promise<ChatGeneration> {
+  return apiRequest(`/api/sessions/${sessionId}/generations/${generationId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
@@ -546,6 +668,12 @@ export async function downloadRuntimeArtifact(path: string): Promise<Blob> {
 
 export async function cleanupRuntimeArtifacts(): Promise<RuntimeArtifactsCleanupResult> {
   return apiRequest<RuntimeArtifactsCleanupResult>("/api/runtime/artifacts/cleanup", {
+    method: "POST",
+  });
+}
+
+export async function clearRuntimeRuns(): Promise<RuntimeRunsClearResult> {
+  return apiRequest<RuntimeRunsClearResult>("/api/runtime/runs/clear", {
     method: "POST",
   });
 }

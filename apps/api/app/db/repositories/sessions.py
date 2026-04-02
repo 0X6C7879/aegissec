@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from datetime import datetime
+
 from sqlmodel import Session as DBSession
 from sqlmodel import col, or_, select
 
-from app.db.models import Message, MessageRole, Session, SessionStatus, utc_now
+from app.db.models import (
+    ChatGeneration,
+    ConversationBranch,
+    GenerationAction,
+    GenerationStatus,
+    Message,
+    MessageKind,
+    MessageRole,
+    MessageStatus,
+    Session,
+    SessionStatus,
+    utc_now,
+)
 
 
 class SessionRepository:
@@ -30,6 +45,14 @@ class SessionRepository:
             runtime_policy_json=runtime_policy_json,
             runtime_profile_name=runtime_profile_name,
         )
+        self.db_session.add(session)
+        self.db_session.commit()
+        self.db_session.refresh(session)
+
+        branch = ConversationBranch(id=session.id, session_id=session.id, name="Main")
+        session.active_branch_id = branch.id
+        session.updated_at = utc_now()
+        self.db_session.add(branch)
         self.db_session.add(session)
         self.db_session.commit()
         self.db_session.refresh(session)
@@ -118,6 +141,7 @@ class SessionRepository:
         current_phase: str | None = None,
         runtime_policy_json: dict[str, object] | None = None,
         runtime_profile_name: str | None = None,
+        active_branch_id: str | None = None,
     ) -> Session:
         has_changes = False
 
@@ -131,6 +155,10 @@ class SessionRepository:
 
         if project_id is not None and project_id != session.project_id:
             session.project_id = project_id
+            has_changes = True
+
+        if active_branch_id is not None and active_branch_id != session.active_branch_id:
+            session.active_branch_id = active_branch_id
             has_changes = True
 
         if goal is not None and goal != session.goal:
@@ -181,6 +209,73 @@ class SessionRepository:
         self.db_session.refresh(session)
         return session
 
+    def get_branch(self, branch_id: str) -> ConversationBranch | None:
+        statement = select(ConversationBranch).where(ConversationBranch.id == branch_id)
+        return self.db_session.exec(statement).first()
+
+    def list_branches(self, session_id: str) -> list[ConversationBranch]:
+        statement = (
+            select(ConversationBranch)
+            .where(ConversationBranch.session_id == session_id)
+            .order_by(col(ConversationBranch.created_at).asc(), col(ConversationBranch.id).asc())
+        )
+        return list(self.db_session.exec(statement).all())
+
+    def ensure_active_branch(self, session: Session) -> ConversationBranch:
+        branch = self.get_active_branch(session)
+        if branch is not None:
+            return branch
+
+        branch = ConversationBranch(id=session.id, session_id=session.id, name="Main")
+        session.active_branch_id = branch.id
+        session.updated_at = utc_now()
+        self.db_session.add(branch)
+        self.db_session.add(session)
+        self.db_session.commit()
+        self.db_session.refresh(branch)
+        self.db_session.refresh(session)
+        return branch
+
+    def get_active_branch(self, session: Session) -> ConversationBranch | None:
+        if session.active_branch_id is not None:
+            branch = self.get_branch(session.active_branch_id)
+            if branch is not None:
+                return branch
+        default_branch = self.get_branch(session.id)
+        if default_branch is not None:
+            return default_branch
+        return None
+
+    def create_branch(
+        self,
+        *,
+        session: Session,
+        parent_branch_id: str | None,
+        forked_from_message_id: str | None,
+        name: str | None,
+    ) -> ConversationBranch:
+        branch = ConversationBranch(
+            session_id=session.id,
+            parent_branch_id=parent_branch_id,
+            forked_from_message_id=forked_from_message_id,
+            name=name or f"Branch {len(self.list_branches(session.id)) + 1}",
+        )
+        self.db_session.add(branch)
+        self.db_session.commit()
+        self.db_session.refresh(branch)
+        return branch
+
+    def activate_branch(self, session: Session, branch: ConversationBranch) -> Session:
+        session.active_branch_id = branch.id
+        session.updated_at = utc_now()
+        branch.updated_at = utc_now()
+        self.db_session.add(branch)
+        self.db_session.add(session)
+        self.db_session.commit()
+        self.db_session.refresh(branch)
+        self.db_session.refresh(session)
+        return session
+
     def create_message(
         self,
         *,
@@ -188,39 +283,403 @@ class SessionRepository:
         role: MessageRole,
         content: str,
         attachments: list[dict[str, str | int | None]],
+        parent_message_id: str | None = None,
+        branch_id: str | None = None,
+        generation_id: str | None = None,
+        status: MessageStatus = MessageStatus.COMPLETED,
+        message_kind: MessageKind = MessageKind.MESSAGE,
+        sequence: int = 0,
+        turn_index: int = 0,
+        edited_from_message_id: str | None = None,
+        version_group_id: str | None = None,
+        metadata_json: dict[str, object] | None = None,
+        error_message: str | None = None,
+        commit: bool = True,
     ) -> Message:
         message = Message(
             session_id=session.id,
+            parent_message_id=parent_message_id,
+            branch_id=branch_id,
+            generation_id=generation_id,
             role=role,
+            status=status,
+            message_kind=message_kind,
+            sequence=sequence,
+            turn_index=turn_index,
+            edited_from_message_id=edited_from_message_id,
+            version_group_id=version_group_id,
             content=content,
-            attachments_json=attachments,
+            metadata_json=dict(metadata_json or {}),
+            error_message=error_message,
+            attachments_json=list(attachments),
         )
+        if message.version_group_id is None:
+            message.version_group_id = message.id
         session.updated_at = utc_now()
         self.db_session.add(message)
         self.db_session.add(session)
-        self.db_session.commit()
-        self.db_session.refresh(message)
-        self.db_session.refresh(session)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(message)
+            self.db_session.refresh(session)
         return message
 
     def get_message(self, message_id: str) -> Message | None:
         statement = select(Message).where(Message.id == message_id)
         return self.db_session.exec(statement).first()
 
-    def update_message_content(self, message: Message, content: str) -> Message:
-        if content == message.content:
+    def update_message(
+        self,
+        message: Message,
+        *,
+        content: str | None = None,
+        status: MessageStatus | None = None,
+        generation_id: str | None = None,
+        metadata_json: dict[str, object] | None = None,
+        error_message: str | None = None,
+        attachments_json: list[dict[str, str | int | None]] | None = None,
+        commit: bool = True,
+    ) -> Message:
+        has_changes = False
+        if content is not None and content != message.content:
+            message.content = content
+            has_changes = True
+        if status is not None and status != message.status:
+            message.status = status
+            has_changes = True
+        if generation_id is not None and generation_id != message.generation_id:
+            message.generation_id = generation_id
+            has_changes = True
+        if metadata_json is not None and metadata_json != message.metadata_json:
+            message.metadata_json = dict(metadata_json)
+            has_changes = True
+        if error_message is not None and error_message != message.error_message:
+            message.error_message = error_message
+            has_changes = True
+        if attachments_json is not None and attachments_json != message.attachments_json:
+            message.attachments_json = list(attachments_json)
+            has_changes = True
+        if not has_changes:
             return message
-
-        message.content = content
         self.db_session.add(message)
-        self.db_session.commit()
-        self.db_session.refresh(message)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(message)
         return message
 
-    def list_messages(self, session_id: str) -> list[Message]:
+    def append_message_trace(self, message: Message, entry: dict[str, object]) -> Message:
+        metadata = dict(message.metadata_json)
+        raw_trace = metadata.get("trace")
+        trace_entries = list(raw_trace) if isinstance(raw_trace, list) else []
+        trace_entries.append(dict(entry))
+        metadata["trace"] = trace_entries
+        self.update_message(message, metadata_json=metadata)
+        return message
+
+    def update_message_summary(self, message: Message, summary: str) -> Message:
+        metadata = dict(message.metadata_json)
+        metadata["summary"] = summary
+        self.update_message(message, metadata_json=metadata)
+        return message
+
+    def list_messages(
+        self,
+        session_id: str,
+        *,
+        branch_id: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[Message]:
+        session = self.get_session(session_id, include_deleted=True)
+        resolved_branch_id = branch_id or (
+            session.active_branch_id if session is not None else None
+        )
+        statement = select(Message).where(Message.session_id == session_id)
+        if resolved_branch_id is not None:
+            statement = statement.where(Message.branch_id == resolved_branch_id)
+        if not include_superseded:
+            statement = statement.where(Message.status != MessageStatus.SUPERSEDED)
+        statement = statement.order_by(col(Message.sequence).asc(), col(Message.created_at).asc())
+        return list(self.db_session.exec(statement).all())
+
+    def list_all_messages(self, session_id: str) -> list[Message]:
         statement = (
             select(Message)
             .where(Message.session_id == session_id)
-            .order_by(col(Message.created_at).asc(), col(Message.id).asc())
+            .order_by(
+                col(Message.branch_id).asc(),
+                col(Message.sequence).asc(),
+                col(Message.created_at).asc(),
+            )
         )
         return list(self.db_session.exec(statement).all())
+
+    def get_latest_visible_message(self, branch_id: str) -> Message | None:
+        statement = (
+            select(Message)
+            .where(Message.branch_id == branch_id)
+            .where(Message.status != MessageStatus.SUPERSEDED)
+            .order_by(col(Message.sequence).desc(), col(Message.created_at).desc())
+        )
+        return self.db_session.exec(statement).first()
+
+    def get_next_message_slot(self, branch_id: str) -> tuple[int, int]:
+        latest_message = self.get_latest_visible_message(branch_id)
+        if latest_message is None:
+            return 1, 1
+        return latest_message.sequence + 1, latest_message.turn_index + 1
+
+    def build_conversation_context(
+        self,
+        *,
+        session_id: str,
+        branch_id: str,
+        max_messages: int = 24,
+        rough_token_budget: int = 12_000,
+    ) -> list[Message]:
+        visible_messages = self.list_messages(
+            session_id, branch_id=branch_id, include_superseded=False
+        )
+        eligible_messages = [
+            message
+            for message in visible_messages
+            if message.message_kind == MessageKind.MESSAGE
+            and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+            and message.status
+            in {MessageStatus.COMPLETED, MessageStatus.STREAMING, MessageStatus.FAILED}
+            and (message.role == MessageRole.USER or bool(message.content.strip()))
+        ]
+        truncated: list[Message] = []
+        consumed_tokens = 0
+        for message in reversed(eligible_messages):
+            rough_tokens = max(1, len(message.content) // 4) + (len(message.attachments_json) * 16)
+            if truncated and (
+                len(truncated) >= max_messages
+                or consumed_tokens + rough_tokens > rough_token_budget
+            ):
+                break
+            truncated.append(message)
+            consumed_tokens += rough_tokens
+        truncated.reverse()
+        return truncated
+
+    def supersede_branch_descendants(
+        self,
+        *,
+        branch_id: str,
+        sequence: int,
+        inclusive: bool,
+        exclude_message_ids: Iterable[str] = (),
+    ) -> list[Message]:
+        excluded_ids = set(exclude_message_ids)
+        statement = select(Message).where(Message.branch_id == branch_id)
+        if inclusive:
+            statement = statement.where(Message.sequence >= sequence)
+        else:
+            statement = statement.where(Message.sequence > sequence)
+        statement = statement.where(Message.status != MessageStatus.SUPERSEDED)
+        messages = list(self.db_session.exec(statement).all())
+        for message in messages:
+            if message.id in excluded_ids:
+                continue
+            message.status = MessageStatus.SUPERSEDED
+            self.db_session.add(message)
+        if messages:
+            self.db_session.commit()
+            for message in messages:
+                self.db_session.refresh(message)
+        return messages
+
+    def create_generation(
+        self,
+        *,
+        session_id: str,
+        branch_id: str,
+        assistant_message_id: str,
+        user_message_id: str | None = None,
+        action: GenerationAction = GenerationAction.REPLY,
+        target_message_id: str | None = None,
+        reasoning_summary: str | None = None,
+        metadata_json: dict[str, object] | None = None,
+        commit: bool = True,
+    ) -> ChatGeneration:
+        generation = ChatGeneration(
+            session_id=session_id,
+            branch_id=branch_id,
+            action=action,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id,
+            target_message_id=target_message_id,
+            reasoning_summary=reasoning_summary,
+            metadata_json=dict(metadata_json or {}),
+        )
+        self.db_session.add(generation)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(generation)
+        return generation
+
+    def get_generation(self, generation_id: str) -> ChatGeneration | None:
+        statement = select(ChatGeneration).where(ChatGeneration.id == generation_id)
+        return self.db_session.exec(statement).first()
+
+    def list_generations(
+        self,
+        session_id: str,
+        *,
+        statuses: set[GenerationStatus] | None = None,
+    ) -> list[ChatGeneration]:
+        statement = select(ChatGeneration).where(ChatGeneration.session_id == session_id)
+        if statuses:
+            statement = statement.where(col(ChatGeneration.status).in_(statuses))
+        statement = statement.order_by(
+            col(ChatGeneration.created_at).asc(), col(ChatGeneration.id).asc()
+        )
+        return list(self.db_session.exec(statement).all())
+
+    def get_active_generation(self, session_id: str) -> ChatGeneration | None:
+        statement = (
+            select(ChatGeneration)
+            .where(ChatGeneration.session_id == session_id)
+            .where(ChatGeneration.status == GenerationStatus.RUNNING)
+            .order_by(col(ChatGeneration.created_at).asc())
+        )
+        return self.db_session.exec(statement).first()
+
+    def claim_next_generation(self, session_id: str) -> ChatGeneration | None:
+        statement = (
+            select(ChatGeneration)
+            .where(ChatGeneration.session_id == session_id)
+            .where(ChatGeneration.status == GenerationStatus.QUEUED)
+            .order_by(col(ChatGeneration.created_at).asc(), col(ChatGeneration.id).asc())
+        )
+        generation = self.db_session.exec(statement).first()
+        if generation is None:
+            return None
+        now = utc_now()
+        generation.status = GenerationStatus.RUNNING
+        generation.updated_at = now
+        generation.started_at = now
+        self.db_session.add(generation)
+        self.db_session.commit()
+        self.db_session.refresh(generation)
+        return generation
+
+    def update_generation(
+        self,
+        generation: ChatGeneration,
+        *,
+        status: GenerationStatus | None = None,
+        error_message: str | None = None,
+        reasoning_summary: str | None = None,
+        reasoning_trace_json: list[dict[str, object]] | None = None,
+        metadata_json: dict[str, object] | None = None,
+        cancel_requested_at: datetime | None = None,
+        commit: bool = True,
+    ) -> ChatGeneration:
+        if status is not None:
+            generation.status = status
+            generation.updated_at = utc_now()
+            if status in {
+                GenerationStatus.COMPLETED,
+                GenerationStatus.FAILED,
+                GenerationStatus.CANCELLED,
+            }:
+                generation.ended_at = utc_now()
+        if error_message is not None:
+            generation.error_message = error_message
+        if reasoning_summary is not None:
+            generation.reasoning_summary = reasoning_summary
+        if reasoning_trace_json is not None:
+            generation.reasoning_trace_json = list(reasoning_trace_json)
+        if metadata_json is not None:
+            generation.metadata_json = dict(metadata_json)
+        if cancel_requested_at is not None:
+            generation.cancel_requested_at = cancel_requested_at
+        self.db_session.add(generation)
+        if commit:
+            self.db_session.commit()
+            self.db_session.refresh(generation)
+        return generation
+
+    def mark_generation_completed(self, generation: ChatGeneration) -> ChatGeneration:
+        return self.update_generation(generation, status=GenerationStatus.COMPLETED)
+
+    def mark_generation_failed(
+        self, generation: ChatGeneration, error_message: str
+    ) -> ChatGeneration:
+        return self.update_generation(
+            generation,
+            status=GenerationStatus.FAILED,
+            error_message=error_message,
+        )
+
+    def cancel_generation(
+        self, generation: ChatGeneration, *, error_message: str
+    ) -> ChatGeneration:
+        return self.update_generation(
+            generation,
+            status=GenerationStatus.CANCELLED,
+            error_message=error_message,
+            cancel_requested_at=utc_now(),
+        )
+
+    def cancel_queued_generations(
+        self, session_id: str, *, error_message: str
+    ) -> list[ChatGeneration]:
+        generations = self.list_generations(session_id, statuses={GenerationStatus.QUEUED})
+        for generation in generations:
+            generation.status = GenerationStatus.CANCELLED
+            generation.error_message = error_message
+            generation.updated_at = utc_now()
+            generation.ended_at = utc_now()
+            self.db_session.add(generation)
+        if generations:
+            self.db_session.commit()
+            for generation in generations:
+                self.db_session.refresh(generation)
+        return generations
+
+    def queue_size(self, session_id: str) -> int:
+        return len(self.list_generations(session_id, statuses={GenerationStatus.QUEUED}))
+
+    def clone_branch_path_to_message(
+        self,
+        *,
+        session: Session,
+        source_branch_id: str,
+        target_message: Message,
+        new_branch: ConversationBranch,
+    ) -> list[Message]:
+        source_messages = self.list_messages(
+            session.id, branch_id=source_branch_id, include_superseded=False
+        )
+        cloned_messages: list[Message] = []
+        id_map: dict[str, str] = {}
+        for source_message in source_messages:
+            if source_message.sequence > target_message.sequence:
+                break
+            cloned_message = self.create_message(
+                session=session,
+                role=source_message.role,
+                content=source_message.content,
+                attachments=source_message.attachments_json,
+                parent_message_id=id_map.get(source_message.parent_message_id or ""),
+                branch_id=new_branch.id,
+                generation_id=None,
+                status=source_message.status,
+                message_kind=source_message.message_kind,
+                sequence=source_message.sequence,
+                turn_index=source_message.turn_index,
+                edited_from_message_id=None,
+                version_group_id=source_message.version_group_id,
+                metadata_json=source_message.metadata_json,
+                error_message=source_message.error_message,
+                commit=False,
+            )
+            cloned_messages.append(cloned_message)
+            id_map[source_message.id] = cloned_message.id
+            self.db_session.add(cloned_message)
+        self.db_session.commit()
+        for message in cloned_messages:
+            self.db_session.refresh(message)
+        return cloned_messages

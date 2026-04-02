@@ -22,11 +22,42 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
         "project",
         "project_settings",
         "session",
+        "conversation_branch",
+        "chat_generation",
+        "message",
         "runtime_artifact",
         "runtime_execution_run",
         "run_log",
     }.issubset(table_names)
     session_columns = {column["name"] for column in inspector.get_columns("session")}
-    assert {"project_id", "goal", "scenario_type", "current_phase", "runtime_policy_json"}.issubset(
-        session_columns
-    )
+    assert {
+        "project_id",
+        "goal",
+        "scenario_type",
+        "current_phase",
+        "runtime_policy_json",
+        "active_branch_id",
+    }.issubset(session_columns)
+    message_columns = {column["name"] for column in inspector.get_columns("message")}
+    assert {
+        "parent_message_id",
+        "branch_id",
+        "generation_id",
+        "status",
+        "message_kind",
+        "sequence",
+        "turn_index",
+        "edited_from_message_id",
+        "version_group_id",
+        "metadata",
+        "error_message",
+        "completed_at",
+    }.issubset(message_columns)
+    generation_columns = {column["name"] for column in inspector.get_columns("chat_generation")}
+    assert {
+        "action",
+        "target_message_id",
+        "reasoning_summary",
+        "reasoning_trace",
+        "cancel_requested_at",
+    }.issubset(generation_columns)

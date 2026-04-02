@@ -6,6 +6,7 @@ type WorkbenchComposerProps = {
   disabled: boolean;
   isGenerating: boolean;
   isInterrupting: boolean;
+  queuedCount: number;
   onSend: (content: string) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
@@ -15,6 +16,7 @@ export function WorkbenchComposer({
   disabled,
   isGenerating,
   isInterrupting,
+  queuedCount,
   onSend,
   onInterrupt,
 }: WorkbenchComposerProps) {
@@ -29,8 +31,7 @@ export function WorkbenchComposer({
   const effectiveDraftContent = isLocallySending ? inputValue : draftContent;
   const isEmptyDraft = effectiveDraftContent.length === 0;
   const trimmedDraftContent = effectiveDraftContent.trim();
-  const isPrimaryDisabled =
-    disabled || isGenerating || isLocallySending || trimmedDraftContent.length === 0;
+  const isPrimaryDisabled = disabled || isLocallySending || trimmedDraftContent.length === 0;
 
   useEffect(() => {
     if (isLocallySending) {
@@ -43,7 +44,7 @@ export function WorkbenchComposer({
   async function handleSendMessage(): Promise<void> {
     const trimmed = effectiveDraftContent.trim();
 
-    if (!trimmed || isGenerating || isLocallySending || disabled || sendLockRef.current) {
+    if (!trimmed || isLocallySending || disabled || sendLockRef.current) {
       return;
     }
 
@@ -85,9 +86,11 @@ export function WorkbenchComposer({
     void handleSendMessage();
   }
 
-  const primaryActionLabel = isGenerating ? "等待当前回复" : isLocallySending ? "发送中" : "发送";
+  const primaryActionLabel = isGenerating ? "加入队列" : isLocallySending ? "发送中" : "发送";
   const composerHint = isGenerating
-    ? "助手正在回复；如需发送新问题，请先停止当前回复。"
+    ? queuedCount > 0
+      ? `助手正在回复；新消息会排入队列，当前已有 ${queuedCount} 条等待。`
+      : "助手正在回复；现在发送的新消息会自动进入队列。"
     : "可直接发送，Shift + Enter 换行。";
 
   return (
@@ -129,10 +132,10 @@ export function WorkbenchComposer({
               {isInterrupting ? "停止中" : "中断"}
             </button>
           ) : null}
-          <button
-            className={`workbench-primary-action${isLocallySending ? " workbench-primary-action-running" : ""}`}
-            type="submit"
-            disabled={isPrimaryDisabled}
+            <button
+              className={`workbench-primary-action${isLocallySending ? " workbench-primary-action-running" : ""}`}
+              type="submit"
+              disabled={isPrimaryDisabled}
             aria-label={primaryActionLabel}
           >
             {isLocallySending ? (

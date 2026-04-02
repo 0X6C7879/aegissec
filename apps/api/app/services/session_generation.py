@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from dataclasses import dataclass, field
-
-from app.db.models import AttachmentMetadata
 
 
 class GenerationCancelledError(Exception):
@@ -12,22 +9,13 @@ class GenerationCancelledError(Exception):
 
 
 @dataclass(slots=True)
-class QueuedPrompt:
-    content: str
-    attachments: list[AttachmentMetadata]
-    user_message_id: str
-    assistant_message_id: str
-    response_future: asyncio.Future[str]
-
-
-@dataclass(slots=True)
 class SessionGenerationState:
-    queue: deque[QueuedPrompt] = field(default_factory=deque)
     worker_task: asyncio.Task[None] | None = None
     current_generation_id: str | None = None
     current_assistant_message_id: str | None = None
     cancel_requested: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    response_futures: dict[str, asyncio.Future[str]] = field(default_factory=dict)
 
 
 class SessionGenerationManager:
@@ -35,33 +23,63 @@ class SessionGenerationManager:
         self._states: dict[str, SessionGenerationState] = {}
         self._lock = asyncio.Lock()
 
-    async def ensure_session(self, session_id: str) -> bool:
+    async def should_start_worker(self, session_id: str) -> bool:
         async with self._lock:
-            if session_id in self._states:
-                return False
-            self._states[session_id] = SessionGenerationState()
-            return True
+            state = self._states.setdefault(session_id, SessionGenerationState())
+            return state.worker_task is None or state.worker_task.done()
 
     async def attach_worker(self, session_id: str, worker_task: asyncio.Task[None]) -> None:
         async with self._lock:
-            state = self._states.get(session_id)
-            if state is None:
-                state = SessionGenerationState()
-                self._states[session_id] = state
+            state = self._states.setdefault(session_id, SessionGenerationState())
             state.worker_task = worker_task
 
-    async def enqueue_prompt(self, session_id: str, prompt: QueuedPrompt) -> int:
+    async def register_future(self, session_id: str, generation_id: str) -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
         async with self._lock:
             state = self._states.setdefault(session_id, SessionGenerationState())
-            state.queue.append(prompt)
-            return len(state.queue)
+            state.response_futures[generation_id] = future
+        return future
 
-    async def pop_next_prompt(self, session_id: str) -> QueuedPrompt | None:
+    async def resolve_future(self, session_id: str, generation_id: str, value: str) -> None:
         async with self._lock:
             state = self._states.get(session_id)
-            if state is None or not state.queue:
-                return None
-            return state.queue.popleft()
+            future = None if state is None else state.response_futures.pop(generation_id, None)
+        if future is not None and not future.done():
+            future.set_result(value)
+
+    async def reject_future(self, session_id: str, generation_id: str, error: Exception) -> None:
+        async with self._lock:
+            state = self._states.get(session_id)
+            future = None if state is None else state.response_futures.pop(generation_id, None)
+        if future is not None and not future.done():
+            future.set_exception(error)
+
+    async def reject_pending(
+        self,
+        session_id: str,
+        error: Exception,
+        *,
+        exclude_generation_ids: set[str] | None = None,
+    ) -> None:
+        async with self._lock:
+            state = self._states.get(session_id)
+            if state is None:
+                return
+            excluded = exclude_generation_ids or set()
+            futures = [
+                (generation_id, future)
+                for generation_id, future in state.response_futures.items()
+                if generation_id not in excluded
+            ]
+            state.response_futures = {
+                generation_id: future
+                for generation_id, future in state.response_futures.items()
+                if generation_id in excluded
+            }
+        for _, future in futures:
+            if not future.done():
+                future.set_exception(error)
 
     async def begin_generation(
         self,
@@ -69,14 +87,13 @@ class SessionGenerationManager:
         *,
         generation_id: str,
         assistant_message_id: str,
-    ) -> int:
+    ) -> None:
         async with self._lock:
             state = self._states.setdefault(session_id, SessionGenerationState())
             state.current_generation_id = generation_id
             state.current_assistant_message_id = assistant_message_id
             state.cancel_requested = False
             state.cancel_event.clear()
-            return len(state.queue)
 
     async def clear_current_generation(self, session_id: str, generation_id: str) -> None:
         async with self._lock:
@@ -95,35 +112,29 @@ class SessionGenerationManager:
                 return False
             return state.current_generation_id == generation_id and state.cancel_requested
 
-    async def cancel_session(self, session_id: str) -> tuple[str | None, str | None, int]:
+    async def cancel_generation(
+        self,
+        session_id: str,
+        generation_id: str | None,
+    ) -> tuple[str | None, str | None]:
         async with self._lock:
             state = self._states.get(session_id)
             if state is None:
-                return None, None, 0
+                return None, None
+
+            current_generation_id = state.current_generation_id
+            if generation_id is not None and current_generation_id != generation_id:
+                return None, None
 
             state.cancel_requested = True
             state.cancel_event.set()
             worker_task = state.worker_task
-            queue_size = len(state.queue)
-            generation_id = state.current_generation_id
-            message_id = state.current_assistant_message_id
+            assistant_message_id = state.current_assistant_message_id
 
         if worker_task is not None:
             worker_task.cancel()
 
-        return generation_id, message_id, queue_size
-
-    async def fail_pending(self, session_id: str, error: Exception) -> None:
-        async with self._lock:
-            state = self._states.get(session_id)
-            if state is None:
-                return
-            pending_prompts = list(state.queue)
-            state.queue.clear()
-
-        for prompt in pending_prompts:
-            if not prompt.response_future.done():
-                prompt.response_future.set_exception(error)
+        return current_generation_id, assistant_message_id
 
     async def get_cancel_event(self, session_id: str) -> asyncio.Event:
         async with self._lock:
@@ -132,17 +143,12 @@ class SessionGenerationManager:
                 return asyncio.Event()
             return state.cancel_event
 
-    async def finish_if_idle(self, session_id: str, worker_task: asyncio.Task[None]) -> bool:
+    async def worker_finished(self, session_id: str, worker_task: asyncio.Task[None]) -> None:
         async with self._lock:
             state = self._states.get(session_id)
-            if state is None:
-                return True
-            if state.worker_task is not worker_task:
-                return False
-            if state.queue or state.current_generation_id is not None:
-                return False
-            self._states.pop(session_id, None)
-            return True
+            if state is None or state.worker_task is not worker_task:
+                return
+            state.worker_task = None
 
 
 generation_manager = SessionGenerationManager()

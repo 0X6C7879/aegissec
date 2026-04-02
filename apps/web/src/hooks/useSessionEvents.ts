@@ -11,7 +11,12 @@ import {
   upsertSession,
 } from "../lib/sessionUtils";
 import { useUiStore } from "../store/uiStore";
-import type { SessionDetail, SessionEventEnvelope, SessionSummary } from "../types/sessions";
+import type {
+  SessionConversation,
+  SessionDetail,
+  SessionEventEnvelope,
+  SessionSummary,
+} from "../types/sessions";
 
 type ConnectionState = "connecting" | "open" | "closed" | "error";
 
@@ -111,6 +116,18 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             },
           );
 
+          queryClient.setQueryData<SessionConversation | undefined>(
+            ["conversation", sessionId],
+            (currentValue) => {
+              if (!currentValue) {
+                return currentValue;
+              }
+
+              const updatedSession = toSessionSummaryUpdate(currentValue.session, envelope.data, createdAt);
+              return updatedSession ? { ...currentValue, session: updatedSession } : currentValue;
+            },
+          );
+
           queryClient.setQueriesData<SessionSummary[]>(
             { queryKey: ["sessions"] },
             (currentValue) => {
@@ -132,7 +149,12 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
           );
         }
 
-        if (envelope.type === "message.created" || envelope.type === "message.updated") {
+        if (
+          envelope.type === "message.created" ||
+          envelope.type === "message.updated" ||
+          envelope.type === "message.delta" ||
+          envelope.type === "message.completed"
+        ) {
           const createdMessage = toSessionMessageEvent(envelope.data, sessionId, createdAt);
 
           if (!createdMessage) {
@@ -143,6 +165,30 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             ["session", sessionId],
             (currentValue) => mergeSessionMessage(currentValue, createdMessage),
           );
+
+          queryClient.setQueryData<SessionConversation | undefined>(
+            ["conversation", sessionId],
+            (currentValue) => {
+              if (!currentValue) {
+                return currentValue;
+              }
+              return {
+                ...currentValue,
+                messages: mergeSessionMessage(
+                  { ...currentValue.session, messages: currentValue.messages },
+                  createdMessage,
+                )?.messages ?? currentValue.messages,
+              };
+            },
+          );
+        }
+
+        if (
+          envelope.type.startsWith("generation.") ||
+          envelope.type === "session.updated" ||
+          envelope.type.startsWith("tool.call.")
+        ) {
+          void queryClient.invalidateQueries({ queryKey: ["session-queue", sessionId] });
         }
       } catch {
         appendEvent(sessionId, {

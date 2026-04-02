@@ -17,12 +17,20 @@ from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
 from app.core.settings import Settings, get_settings
 from app.db.models import (
+    GenerationStatus,
+    MessageStatus,
     Session,
+    SessionConversationRead,
     SessionCreate,
     SessionDetail,
+    SessionQueueRead,
     SessionRead,
+    SessionReplayRead,
     SessionStatus,
     SessionUpdate,
+    to_chat_generation_read,
+    to_conversation_branch_read,
+    to_message_read,
     to_run_log_read,
     to_runtime_artifact_read,
     to_session_detail,
@@ -35,7 +43,11 @@ from app.db.repositories import (
     SessionRepository,
 )
 from app.db.session import get_db_session, get_websocket_db_session
-from app.services.session_generation import SessionGenerationManager, get_generation_manager
+from app.services.session_generation import (
+    GenerationCancelledError,
+    SessionGenerationManager,
+    get_generation_manager,
+)
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -67,6 +79,27 @@ def _validate_runtime_profile_name(settings: Settings, profile_name: str | None)
             detail=f"Unknown runtime profile '{profile_name}'.",
         )
     return profile_name
+
+
+def _build_conversation_read(
+    repository: SessionRepository, session: Session
+) -> SessionConversationRead:
+    active_branch = repository.ensure_active_branch(session)
+    branches = repository.list_branches(session.id)
+    messages = repository.list_messages(
+        session.id, branch_id=active_branch.id, include_superseded=False
+    )
+    return SessionConversationRead(
+        session=to_session_read(session),
+        active_branch=to_conversation_branch_read(active_branch),
+        branches=[to_conversation_branch_read(branch) for branch in branches],
+        messages=[to_message_read(message) for message in messages],
+        generations=[
+            to_chat_generation_read(generation)
+            for generation in repository.list_generations(session.id)
+            if generation.branch_id == active_branch.id
+        ],
+    )
 
 
 @router.get(
@@ -202,6 +235,7 @@ async def update_session(
         title=payload.title,
         status=payload.status,
         project_id=payload.project_id,
+        active_branch_id=payload.active_branch_id,
         goal=payload.goal,
         scenario_type=payload.scenario_type,
         current_phase=payload.current_phase,
@@ -213,7 +247,7 @@ async def update_session(
         SessionEvent(
             type=SessionEventType.SESSION_UPDATED,
             session_id=updated_session.id,
-            payload={"title": updated_session.title, "status": updated_session.status.value},
+            payload=session_read.model_dump(mode="json"),
         )
     )
     return ok_response(session_read.model_dump(mode="json"))
@@ -268,14 +302,49 @@ async def cancel_session(
 ) -> object:
     repository = SessionRepository(db_session)
     session = _get_existing_session(repository, session_id)
-    await generation_manager.cancel_session(session_id)
+    active_generation = repository.get_active_generation(session_id)
+    if active_generation is not None:
+        repository.cancel_generation(
+            active_generation, error_message="Active generation was cancelled."
+        )
+        assistant_message = repository.get_message(active_generation.assistant_message_id)
+        if assistant_message is not None:
+            repository.update_message(
+                assistant_message,
+                status=MessageStatus.CANCELLED,
+                error_message="Active generation was cancelled.",
+            )
+        await generation_manager.cancel_generation(session_id, active_generation.id)
+        await generation_manager.reject_future(
+            session_id,
+            active_generation.id,
+            GenerationCancelledError("Active generation was cancelled."),
+        )
+
+    queued_generations = repository.cancel_queued_generations(
+        session_id,
+        error_message="Queued generation was cancelled.",
+    )
+    for queued_generation in queued_generations:
+        assistant_message = repository.get_message(queued_generation.assistant_message_id)
+        if assistant_message is not None:
+            repository.update_message(
+                assistant_message,
+                status=MessageStatus.CANCELLED,
+                error_message="Queued generation was cancelled.",
+            )
+    await generation_manager.reject_pending(
+        session_id,
+        GenerationCancelledError("Session generation queue was cancelled."),
+        exclude_generation_ids={active_generation.id} if active_generation is not None else None,
+    )
     updated_session = repository.update_session(session, status=SessionStatus.CANCELLED)
     session_read = to_session_read(updated_session)
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.SESSION_UPDATED,
             session_id=updated_session.id,
-            payload={"title": updated_session.title, "status": updated_session.status.value},
+            payload={**session_read.model_dump(mode="json"), "queued_prompt_count": 0},
         )
     )
     return ok_response(session_read.model_dump(mode="json"))
@@ -318,6 +387,76 @@ async def restore_session(
         )
     )
     return ok_response(session_read.model_dump(mode="json"))
+
+
+@router.get(
+    "/{session_id}/conversation",
+    response_model=SessionConversationRead,
+    summary="Get session conversation",
+    description="Return the active branch conversation, branch metadata, and visible messages.",
+)
+async def get_session_conversation(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    return ok_response(_build_conversation_read(repository, session).model_dump(mode="json"))
+
+
+@router.get(
+    "/{session_id}/queue",
+    response_model=SessionQueueRead,
+    summary="Get generation queue",
+    description="Return the active generation and queued durable chat generations for the session.",
+)
+async def get_session_queue(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    active_generation = repository.get_active_generation(session.id)
+    queued_generations = repository.list_generations(
+        session.id,
+        statuses={GenerationStatus.QUEUED},
+    )
+    payload = SessionQueueRead(
+        session=to_session_read(session),
+        active_generation=(
+            to_chat_generation_read(active_generation) if active_generation is not None else None
+        ),
+        queued_generations=[
+            to_chat_generation_read(generation) for generation in queued_generations
+        ],
+    )
+    return ok_response(payload.model_dump(mode="json"))
+
+
+@router.get(
+    "/{session_id}/replay",
+    response_model=SessionReplayRead,
+    summary="Get session replay",
+    description="Return all branches, messages, and generation records for replay/history tooling.",
+)
+async def get_session_replay(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    payload = SessionReplayRead(
+        session=to_session_read(session),
+        branches=[
+            to_conversation_branch_read(branch) for branch in repository.list_branches(session.id)
+        ],
+        messages=[to_message_read(message) for message in repository.list_all_messages(session.id)],
+        generations=[
+            to_chat_generation_read(generation)
+            for generation in repository.list_generations(session.id)
+        ],
+    )
+    return ok_response(payload.model_dump(mode="json"))
 
 
 @router.get(

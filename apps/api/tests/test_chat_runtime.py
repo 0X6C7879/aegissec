@@ -1,10 +1,14 @@
 import asyncio
 import json
 
+from pytest import MonkeyPatch
+
 from app.core.settings import Settings
+from app.db.models import AttachmentMetadata, MessageRole
 from app.services.chat_runtime import (
     MAX_TOOL_STEPS,
     AnthropicChatRuntime,
+    ConversationMessage,
     OpenAICompatibleChatRuntime,
     ToolCallRequest,
     ToolCallResult,
@@ -78,6 +82,32 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     }
     assert tool_calls[1].arguments == {}
     assert tool_calls[2].arguments == {"skill_name_or_id": "adscan"}
+
+
+def test_openai_build_initial_messages_uses_persisted_conversation_messages() -> None:
+    messages = OpenAICompatibleChatRuntime._build_initial_messages(
+        "ignored latest prompt",
+        [],
+        [],
+        skill_context_prompt=None,
+        conversation_messages=[
+            ConversationMessage(
+                role=MessageRole.USER,
+                content="first question",
+                attachments=[
+                    AttachmentMetadata(name="scope.txt", content_type="text/plain", size_bytes=12)
+                ],
+            ),
+            ConversationMessage(role=MessageRole.ASSISTANT, content="first answer"),
+            ConversationMessage(role=MessageRole.USER, content="follow-up"),
+        ],
+    )
+
+    assert messages[0]["role"] == "system"
+    assert [message["role"] for message in messages[1:]] == ["user", "assistant", "user"]
+    assert "first question" in str(messages[1]["content"])
+    assert "scope.txt" in str(messages[1]["content"])
+    assert messages[-1]["content"] == "follow-up"
 
 
 def _build_openai_tool_response(call_id: int, command: str) -> dict[str, object]:
@@ -219,7 +249,7 @@ def test_anthropic_build_messages_endpoint_normalizes_legacy_messages_path() -> 
 
 
 def test_openai_runtime_supports_more_than_three_tool_rounds() -> None:
-    settings = Settings(
+    settings = Settings.model_construct(
         llm_api_key="test-key",
         llm_api_base_url="https://example.test",
         llm_default_model="demo-model",
@@ -228,7 +258,7 @@ def test_openai_runtime_supports_more_than_three_tool_rounds() -> None:
     class StubRuntime(OpenAICompatibleChatRuntime):
         def __init__(self) -> None:
             super().__init__(settings=settings)
-            self._responses = [
+            self._responses: list[dict[str, object]] = [
                 {
                     "choices": [
                         {
@@ -319,7 +349,7 @@ def test_openai_runtime_supports_more_than_three_tool_rounds() -> None:
                 },
             ]
 
-        async def _request_completion(  # type: ignore[override]
+        async def _request_completion(
             self,
             endpoint: str,
             headers: dict[str, str],
@@ -352,7 +382,7 @@ def test_openai_runtime_supports_more_than_three_tool_rounds() -> None:
 
 
 def test_anthropic_runtime_supports_more_than_three_tool_rounds() -> None:
-    settings = Settings(
+    settings = Settings.model_construct(
         anthropic_api_key="test-key",
         anthropic_api_base_url="https://example.test",
         anthropic_model="claude-demo",
@@ -361,7 +391,7 @@ def test_anthropic_runtime_supports_more_than_three_tool_rounds() -> None:
     class StubRuntime(AnthropicChatRuntime):
         def __init__(self) -> None:
             super().__init__(settings=settings)
-            self._responses = [
+            self._responses: list[dict[str, object]] = [
                 {
                     "content": [
                         {
@@ -405,7 +435,7 @@ def test_anthropic_runtime_supports_more_than_three_tool_rounds() -> None:
                 {"content": [{"type": "text", "text": "Final answer"}]},
             ]
 
-        async def _request_completion(  # type: ignore[override]
+        async def _request_completion(
             self,
             endpoint: str,
             headers: dict[str, str],
@@ -438,7 +468,7 @@ def test_anthropic_runtime_supports_more_than_three_tool_rounds() -> None:
 
 
 def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
-    settings = Settings(
+    settings = Settings.model_construct(
         llm_api_key="test-key",
         llm_api_base_url="https://example.test",
         llm_default_model="demo-model",
@@ -448,12 +478,12 @@ def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
         def __init__(self) -> None:
             super().__init__(settings=settings)
             self.payloads: list[dict[str, object]] = []
-            self._responses = [
+            self._responses: list[dict[str, object]] = [
                 _build_openai_tool_response(index + 1, f"cmd-{index + 1}")
                 for index in range(MAX_TOOL_STEPS + 1)
             ]
 
-        async def _request_completion(  # type: ignore[override]
+        async def _request_completion(
             self,
             endpoint: str,
             headers: dict[str, str],
@@ -484,7 +514,9 @@ def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
             payload={"status": "completed", "stdout": "ok", "stderr": "", "artifacts": []},
         )
 
-    result = asyncio.run(runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool))
+    result = asyncio.run(
+        runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool)
+    )
 
     assert result == "Budget summary"
     assert executed_commands == [f"cmd-{index + 1}" for index in range(MAX_TOOL_STEPS + 1)]
@@ -492,7 +524,7 @@ def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
 
 
 def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
-    settings = Settings(
+    settings = Settings.model_construct(
         anthropic_api_key="test-key",
         anthropic_api_base_url="https://example.test",
         anthropic_model="claude-demo",
@@ -502,12 +534,12 @@ def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> No
         def __init__(self) -> None:
             super().__init__(settings=settings)
             self.payloads: list[dict[str, object]] = []
-            self._responses = [
+            self._responses: list[dict[str, object]] = [
                 _build_anthropic_tool_response(index + 1, f"cmd-{index + 1}")
                 for index in range(MAX_TOOL_STEPS + 1)
             ]
 
-        async def _request_completion(  # type: ignore[override]
+        async def _request_completion(
             self,
             endpoint: str,
             headers: dict[str, str],
@@ -529,14 +561,16 @@ def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> No
             payload={"status": "completed", "stdout": "ok", "stderr": "", "artifacts": []},
         )
 
-    result = asyncio.run(runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool))
+    result = asyncio.run(
+        runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool)
+    )
 
     assert result == "Budget summary"
     assert executed_commands == [f"cmd-{index + 1}" for index in range(MAX_TOOL_STEPS + 1)]
     assert "tools" not in runtime.payloads[-1]
 
 
-def test_get_chat_runtime_applies_configured_timeout_for_openai(monkeypatch) -> None:
+def test_get_chat_runtime_applies_configured_timeout_for_openai(monkeypatch: MonkeyPatch) -> None:
     settings = Settings.model_construct(
         llm_provider="openai",
         llm_api_key="test-key",
@@ -553,7 +587,9 @@ def test_get_chat_runtime_applies_configured_timeout_for_openai(monkeypatch) -> 
     assert runtime._timeout_seconds == 75  # noqa: SLF001
 
 
-def test_get_chat_runtime_applies_configured_timeout_for_anthropic(monkeypatch) -> None:
+def test_get_chat_runtime_applies_configured_timeout_for_anthropic(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = Settings.model_construct(
         llm_provider="anthropic",
         anthropic_api_key="test-key",

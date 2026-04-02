@@ -24,6 +24,41 @@ class SessionStatus(str, Enum):
 class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL = "tool"
+
+
+class MessageStatus(str, Enum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    STREAMING = "streaming"
+    COMPLETED = "completed"
+    SUPERSEDED = "superseded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class MessageKind(str, Enum):
+    MESSAGE = "message"
+    SUMMARY = "summary"
+    TRACE = "trace"
+    EVENT_NOTE = "event_note"
+
+
+class GenerationStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class GenerationAction(str, Enum):
+    REPLY = "reply"
+    EDIT = "edit"
+    REGENERATE = "regenerate"
+    FORK = "fork"
+    ROLLBACK = "rollback"
 
 
 class RuntimeContainerStatus(str, Enum):
@@ -157,6 +192,7 @@ class SessionBase(SQLModel):
     title: str = Field(default="New Session", max_length=200)
     status: SessionStatus = Field(default=SessionStatus.IDLE)
     project_id: str | None = Field(default=None, foreign_key="project.id")
+    active_branch_id: str | None = Field(default=None)
     goal: str | None = Field(default=None, max_length=4000)
     scenario_type: str | None = Field(default=None, max_length=200)
     current_phase: str | None = Field(default=None, max_length=200)
@@ -174,16 +210,75 @@ class Session(SessionBase, table=True):
     deleted_at: datetime | None = Field(default=None, nullable=True)
 
 
+class ConversationBranch(SQLModel, table=True):
+    __tablename__ = "conversation_branch"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    parent_branch_id: str | None = Field(
+        default=None, foreign_key="conversation_branch.id", nullable=True
+    )
+    forked_from_message_id: str | None = Field(default=None, nullable=True)
+    name: str = Field(default="Main", max_length=200)
+    created_at: datetime = Field(default_factory=utc_now, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
+
+
 class Message(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
+    parent_message_id: str | None = Field(default=None, foreign_key="message.id", nullable=True)
+    branch_id: str | None = Field(default=None, foreign_key="conversation_branch.id", index=True)
+    generation_id: str | None = Field(default=None, index=True)
     role: MessageRole
+    status: MessageStatus = Field(default=MessageStatus.COMPLETED, index=True)
+    message_kind: MessageKind = Field(default=MessageKind.MESSAGE, index=True)
+    sequence: int = Field(default=0, ge=0, index=True)
+    turn_index: int = Field(default=0, ge=0, index=True)
+    edited_from_message_id: str | None = Field(
+        default=None, foreign_key="message.id", nullable=True
+    )
+    version_group_id: str | None = Field(default=None, index=True)
     content: str
+    metadata_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False),
+    )
+    error_message: str | None = Field(default=None, nullable=True)
     attachments_json: list[dict[str, str | int | None]] = Field(
         default_factory=list,
         sa_column=Column("attachments", JSON, nullable=False),
     )
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
+    completed_at: datetime | None = Field(default=None, nullable=True)
+
+
+class ChatGeneration(SQLModel, table=True):
+    __tablename__ = "chat_generation"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    branch_id: str = Field(foreign_key="conversation_branch.id", index=True)
+    action: GenerationAction = Field(default=GenerationAction.REPLY, nullable=False, index=True)
+    user_message_id: str | None = Field(default=None, foreign_key="message.id", nullable=True)
+    assistant_message_id: str = Field(foreign_key="message.id", index=True)
+    target_message_id: str | None = Field(default=None, foreign_key="message.id", nullable=True)
+    status: GenerationStatus = Field(default=GenerationStatus.QUEUED, nullable=False, index=True)
+    reasoning_summary: str | None = Field(default=None, max_length=4000)
+    reasoning_trace_json: list[dict[str, object]] = Field(
+        default_factory=list,
+        sa_column=Column("reasoning_trace", JSON, nullable=False),
+    )
+    error_message: str | None = Field(default=None, nullable=True)
+    metadata_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
+    started_at: datetime | None = Field(default=None, nullable=True)
+    ended_at: datetime | None = Field(default=None, nullable=True)
+    cancel_requested_at: datetime | None = Field(default=None, nullable=True)
 
 
 class RuntimeExecutionRun(SQLModel, table=True):
@@ -440,6 +535,7 @@ class SessionUpdate(SQLModel):
     title: str | None = Field(default=None, max_length=200)
     status: SessionStatus | None = None
     project_id: str | None = None
+    active_branch_id: str | None = None
     goal: str | None = Field(default=None, max_length=4000)
     scenario_type: str | None = Field(default=None, max_length=200)
     current_phase: str | None = Field(default=None, max_length=200)
@@ -492,25 +588,125 @@ class ProjectDetail(ProjectRead):
 class MessageRead(SQLModel):
     id: str
     session_id: str
+    parent_message_id: str | None = None
+    branch_id: str | None = None
+    generation_id: str | None = None
     role: MessageRole
+    status: MessageStatus
+    message_kind: MessageKind
+    sequence: int
+    turn_index: int
+    edited_from_message_id: str | None = None
+    version_group_id: str | None = None
     content: str
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    error_message: str | None = None
     attachments: list[AttachmentMetadata] = Field(default_factory=list)
     created_at: datetime
+    completed_at: datetime | None = None
+
+
+class ConversationBranchRead(SQLModel):
+    id: str
+    session_id: str
+    parent_branch_id: str | None = None
+    forked_from_message_id: str | None = None
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatGenerationRead(SQLModel):
+    id: str
+    session_id: str
+    branch_id: str
+    action: GenerationAction
+    user_message_id: str | None = None
+    assistant_message_id: str
+    target_message_id: str | None = None
+    status: GenerationStatus
+    reasoning_summary: str | None = None
+    reasoning_trace: list[dict[str, object]] = Field(default_factory=list)
+    error_message: str | None = None
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    cancel_requested_at: datetime | None = None
 
 
 class SessionDetail(SessionRead):
     messages: list[MessageRead] = Field(default_factory=list)
 
 
+class SessionConversationRead(SQLModel):
+    session: SessionRead
+    active_branch: ConversationBranchRead | None = None
+    branches: list[ConversationBranchRead] = Field(default_factory=list)
+    messages: list[MessageRead] = Field(default_factory=list)
+    generations: list[ChatGenerationRead] = Field(default_factory=list)
+
+
+class SessionQueueRead(SQLModel):
+    session: SessionRead
+    active_generation: ChatGenerationRead | None = None
+    queued_generations: list[ChatGenerationRead] = Field(default_factory=list)
+
+
+class SessionReplayRead(SQLModel):
+    session: SessionRead
+    branches: list[ConversationBranchRead] = Field(default_factory=list)
+    messages: list[MessageRead] = Field(default_factory=list)
+    generations: list[ChatGenerationRead] = Field(default_factory=list)
+
+
+class MessageRegenerateRequest(SQLModel):
+    branch_id: str | None = None
+    token_budget: int | None = Field(default=None, gt=0)
+
+
+class MessageRollbackRequest(SQLModel):
+    branch_id: str | None = None
+
+
+class GenerationCancelRequest(SQLModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class ChatRequest(SQLModel):
     content: str = Field(min_length=1)
     attachments: list[AttachmentMetadata] = Field(default_factory=list)
+    branch_id: str | None = None
+    parent_message_id: str | None = None
+    token_budget: int | None = Field(default=None, gt=0)
 
 
 class ChatResponse(SQLModel):
     session: SessionRead
     user_message: MessageRead
     assistant_message: MessageRead
+    generation: ChatGenerationRead | None = None
+    branch: ConversationBranchRead | None = None
+
+
+class MessageEditRequest(SQLModel):
+    content: str = Field(min_length=1)
+    attachments: list[AttachmentMetadata] = Field(default_factory=list)
+    branch_id: str | None = None
+    token_budget: int | None = Field(default=None, gt=0)
+
+
+class BranchForkRequest(SQLModel):
+    name: str | None = Field(default=None, max_length=200)
+
+
+class MessageMutationResponse(SQLModel):
+    session: SessionRead
+    branch: ConversationBranchRead
+    user_message: MessageRead | None = None
+    assistant_message: MessageRead | None = None
+    generation: ChatGenerationRead | None = None
 
 
 class RuntimeArtifactRead(SQLModel):
@@ -777,10 +973,56 @@ def to_message_read(message: Message) -> MessageRead:
     return MessageRead(
         id=message.id,
         session_id=message.session_id,
+        parent_message_id=message.parent_message_id,
+        branch_id=message.branch_id,
+        generation_id=message.generation_id,
         role=message.role,
+        status=message.status,
+        message_kind=message.message_kind,
+        sequence=message.sequence,
+        turn_index=message.turn_index,
+        edited_from_message_id=message.edited_from_message_id,
+        version_group_id=message.version_group_id,
         content=message.content,
+        **{"metadata": dict(message.metadata_json)},
+        error_message=message.error_message,
         attachments=attachments_from_storage(message.attachments_json),
         created_at=message.created_at,
+        completed_at=message.completed_at,
+    )
+
+
+def to_conversation_branch_read(branch: ConversationBranch) -> ConversationBranchRead:
+    return ConversationBranchRead(
+        id=branch.id,
+        session_id=branch.session_id,
+        parent_branch_id=branch.parent_branch_id,
+        forked_from_message_id=branch.forked_from_message_id,
+        name=branch.name,
+        created_at=branch.created_at,
+        updated_at=branch.updated_at,
+    )
+
+
+def to_chat_generation_read(generation: ChatGeneration) -> ChatGenerationRead:
+    return ChatGenerationRead(
+        id=generation.id,
+        session_id=generation.session_id,
+        branch_id=generation.branch_id,
+        action=generation.action,
+        user_message_id=generation.user_message_id,
+        assistant_message_id=generation.assistant_message_id,
+        target_message_id=generation.target_message_id,
+        status=generation.status,
+        reasoning_summary=generation.reasoning_summary,
+        reasoning_trace=list(generation.reasoning_trace_json),
+        error_message=generation.error_message,
+        **{"metadata": dict(generation.metadata_json)},
+        created_at=generation.created_at,
+        updated_at=generation.updated_at,
+        started_at=generation.started_at,
+        ended_at=generation.ended_at,
+        cancel_requested_at=generation.cancel_requested_at,
     )
 
 
@@ -790,6 +1032,7 @@ def to_session_read(session: Session) -> SessionRead:
         title=session.title,
         status=session.status,
         project_id=session.project_id,
+        active_branch_id=session.active_branch_id,
         goal=session.goal,
         scenario_type=session.scenario_type,
         current_phase=session.current_phase,
