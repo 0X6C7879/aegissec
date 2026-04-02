@@ -133,7 +133,7 @@ function buildMessages(overrides: {
 
 describe("ConversationFeed", () => {
   it("renders the persisted assistant transcript inside one bubble and keeps think blocks visible", () => {
-    render(
+    const { container } = render(
       <ConversationFeed
         messages={buildMessages()}
         generations={[buildGeneration()]}
@@ -145,11 +145,89 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("本轮运行")).not.toBeInTheDocument();
     expect(screen.queryByText("运行时间线")).not.toBeInTheDocument();
     expect(screen.queryByText("生成队列")).not.toBeInTheDocument();
-    expect(screen.getByText("<think>private</think>分析中")).toBeInTheDocument();
+    expect(screen.queryByText("思路进展")).not.toBeInTheDocument();
+    expect(screen.queryByText("工具调用")).not.toBeInTheDocument();
+    expect(screen.queryByText("工具结果")).not.toBeInTheDocument();
+    expect(screen.queryByText("正文输出")).not.toBeInTheDocument();
+    expect(screen.queryByText("运行状态")).not.toBeInTheDocument();
+    expect(screen.getByText("展开")).toBeInTheDocument();
+    expect(container.querySelector("details.assistant-reasoning-stream")).not.toHaveAttribute("open");
+    expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("<think>private</think>分析中").length).toBeGreaterThan(0);
     expect(screen.getByText("<think>very secret</think>最终答复")).toBeInTheDocument();
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
     expect(screen.getByText("reports/auto.txt")).toBeInTheDocument();
     expect(screen.getByText(/"status": "success"/)).toBeInTheDocument();
+  });
+
+  it("naturalizes skill blocks and renders inline errors without debug-section headers", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-skill-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "read_skill_content",
+                tool_call_id: "tool-skill-1",
+                text: "movement_tmux",
+                metadata: {
+                  arguments: {
+                    skill_name_or_id: "movement_tmux",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-skill-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "read_skill_content",
+                tool_call_id: "tool-skill-1",
+                text: "已读取 movement_tmux 的技能内容。",
+                metadata: {
+                  result: {
+                    skill: {
+                      title: "movement_tmux",
+                      description: "Use tmux to move laterally.",
+                      content: "# movement_tmux\nDetailed instructions",
+                    },
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-error",
+                kind: "error",
+                sequence: 3,
+                status: "failed",
+                text: "连接目标失败。",
+                metadata: {
+                  detail: "socket timeout",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-output-final",
+                kind: "output",
+                sequence: 4,
+                text: "最终建议在下一跳前重新确认权限。",
+              }),
+            ],
+            content: "最终建议在下一跳前重新确认权限。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("Movement Tmux")).toBeInTheDocument();
+    expect(screen.getAllByText("Use tmux to move laterally.").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Read skill content for movement_tmux.")).not.toBeInTheDocument();
+    expect(screen.getByText("执行失败")).toBeInTheDocument();
+    expect(screen.getByText("连接目标失败。")).toBeInTheDocument();
+    expect(screen.getByText("最终建议在下一跳前重新确认权限。")).toBeInTheDocument();
   });
 
   it("keeps rollback primary and moves edit or retry actions into the overflow menu", () => {
@@ -231,7 +309,7 @@ describe("ConversationFeed", () => {
 
     expect(screen.queryByText("生成队列")).not.toBeInTheDocument();
     expect(screen.getByText("排队 #2")).toBeInTheDocument();
-    expect(screen.getByText("已进入队列，前方还有 1 条等待。")).toBeInTheDocument();
+    expect(screen.getAllByText("已进入队列，前方还有 1 条等待。").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(onCancelGeneration).toHaveBeenCalledWith("generation-queued");

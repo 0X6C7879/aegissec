@@ -266,7 +266,7 @@ def _append_output_transcript_delta(
                 assistant_message=assistant_message,
                 kind=AssistantTranscriptSegmentKind.OUTPUT,
                 status=status,
-                title="Assistant response",
+                title=None,
                 text=delta_text,
             )
 
@@ -299,7 +299,7 @@ def _append_output_transcript_delta(
         assistant_message=assistant_message,
         kind=AssistantTranscriptSegmentKind.OUTPUT,
         status=status,
-        title="Assistant response",
+        title=None,
         text=delta_text,
     )
 
@@ -457,7 +457,7 @@ async def _publish_assistant_summary(
             assistant_message=assistant_message,
             kind=AssistantTranscriptSegmentKind.REASONING,
             status="completed",
-            title="Reasoning summary",
+            title=None,
             text=sanitized_summary,
             metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
         )
@@ -467,7 +467,7 @@ async def _publish_assistant_summary(
             assistant_message=assistant_message,
             segment=reasoning_segment,
             status="completed",
-            title="Reasoning summary",
+            title=None,
             text=sanitized_summary,
             metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
         )
@@ -482,7 +482,7 @@ async def _publish_assistant_summary(
         phase="planning",
         status="completed",
         state="summary.updated",
-        label="Reasoning summary",
+        label="推理摘要",
         safe_summary=sanitized_summary,
         metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
     )
@@ -544,7 +544,7 @@ async def _publish_assistant_trace(
             if sanitized_entry.get("state") is not None
             else "trace"
         ),
-        label="Assistant trace",
+        label="过程更新",
         safe_summary=_infer_trace_summary(sanitized_entry),
         metadata_json={key: value for key, value in persisted_entry.items() if key != "summary"},
     )
@@ -560,7 +560,7 @@ async def _publish_assistant_trace(
             assistant_message=assistant_message,
             kind=transcript_kind,
             status=_infer_trace_status(sanitized_entry),
-            title="Assistant trace",
+            title=None,
             text=_infer_trace_summary(sanitized_entry),
             metadata_json={key: value for key, value in persisted_entry.items()},
         )
@@ -787,7 +787,7 @@ def _get_or_create_output_step(
         phase="synthesis",
         status="running",
         state="streaming",
-        label="Assistant response",
+        label="正文输出",
     )
 
 
@@ -1091,7 +1091,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status=run.status.value,
                 title=tool_request.tool_name,
-                text=f"Tool finished with status {run.status.value}.",
+                text=f"命令已完成，状态：{run.status.value}。",
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={
@@ -1155,7 +1155,7 @@ def _build_tool_executor(
                         phase="tool_result",
                         status="completed",
                         state="finished",
-                        safe_summary=f"Tool finished with status {run.status.value}.",
+                        safe_summary=f"命令已完成，状态：{run.status.value}。",
                         ended_at=utc_now(),
                         metadata_json={
                             **dict(tool_step.metadata_json),
@@ -1189,7 +1189,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status="completed",
                 title=tool_request.tool_name,
-                text="Listed available skills.",
+                text="已列出当前可用技能。",
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={"result": skills_result_payload},
@@ -1230,7 +1230,7 @@ def _build_tool_executor(
                         phase="tool_result",
                         status="completed",
                         state="finished",
-                        safe_summary="Listed available skills.",
+                        safe_summary="已列出当前可用技能。",
                         ended_at=utc_now(),
                         metadata_json={
                             **dict(tool_step.metadata_json),
@@ -1273,7 +1273,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status="completed",
                 title=tool_request.tool_name,
-                text=f"Read skill content for {skill_name_or_id}.",
+                text=f"已读取 {skill_name_or_id} 的技能内容。",
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={"result": skill_result_payload},
@@ -1314,7 +1314,7 @@ def _build_tool_executor(
                         phase="tool_result",
                         status="completed",
                         state="finished",
-                        safe_summary=f"Read skill content for {skill_name_or_id}.",
+                        safe_summary=f"已读取 {skill_name_or_id} 的技能内容。",
                         ended_at=utc_now(),
                         metadata_json={
                             **dict(tool_step.metadata_json),

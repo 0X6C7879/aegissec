@@ -196,6 +196,34 @@ def test_workflow_execution_records_and_graph_snapshots_are_persisted(client: Te
     assert len(cast(list[Any], causal_payload["nodes"])) > 0
 
 
+def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_state(
+    client: TestClient,
+) -> None:
+    session_id = _create_session(client, goal="Persist typed loop cycle state")
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    assert advance.status_code == 200
+    payload = cast(dict[str, Any], api_data(advance))
+    state = cast(dict[str, Any], payload["state"])
+    batch_state = cast(dict[str, Any], state["batch"])
+    loop_state = cast(dict[str, Any], state["loop"])
+    cycles = cast(list[dict[str, Any]], loop_state["cycles"])
+
+    assert cycles
+    latest_cycle = cycles[-1]
+    assert isinstance(latest_cycle["cycle_id"], str) and latest_cycle["cycle_id"]
+    assert latest_cycle["batch_cycle"] == batch_state["cycle"]
+    assert isinstance(latest_cycle["selected_tasks"], list)
+    assert isinstance(latest_cycle["retrieval_summary"], str)
+    assert isinstance(latest_cycle["tool_results"], list)
+    assert isinstance(latest_cycle["reflection_summary"], str)
+    assert isinstance(latest_cycle["memory_writes"], list)
+    assert isinstance(latest_cycle["compaction_summary"], dict)
+    assert latest_cycle["next_action"] in {"continue", "complete", "await_approval", "idle"}
+
+
 def test_start_workflow_publishes_graph_events_for_task_evidence_and_causal(
     client: TestClient,
 ) -> None:

@@ -12,7 +12,6 @@ import type {
   SessionSummary,
 } from "../types/sessions";
 
-const HIDDEN_THINK_BLOCK_PATTERN = /<think>[\s\S]*?<\/think>/gi;
 const MAX_SAFE_SUMMARY_LENGTH = 280;
 const MAX_TIMELINE_EVENTS = 200;
 
@@ -147,14 +146,6 @@ function sanitizeSafeSummaryText(value: string): string {
   }
 
   return `${cleaned.slice(0, MAX_SAFE_SUMMARY_LENGTH - 1).trimEnd()}…`;
-}
-
-export function stripHiddenThinkingBlocks(content: string): string {
-  return content
-    .replace(HIDDEN_THINK_BLOCK_PATTERN, " ")
-    .replace(/<\/?think>/gi, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 export function buildReasoningDedupeKey({

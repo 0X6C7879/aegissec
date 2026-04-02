@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 
 from app.agent.executor import ExecutionResult, Executor
 from app.agent.graph_manager import GraphManager
+from app.agent.loop_engine import WorkflowLoopEngine
+from app.agent.loop_models import WorkflowLoopState
 from app.agent.planner import PlannedWorkflow, Planner
 from app.agent.reflector import ReflectionResult, Reflector
-from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
+from app.agent.workflow import WorkflowGraphRuntime
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.workflows.template_loader import WorkflowTemplate
 
@@ -47,6 +49,12 @@ class Coordinator:
         self._executor = executor
         self._reflector = reflector
         self._graph_manager = graph_manager
+        self._loop_engine = WorkflowLoopEngine(
+            executor=executor,
+            reflector=reflector,
+            max_active_execution_records=self.MAX_ACTIVE_EXECUTION_RECORDS,
+            max_active_messages=self.MAX_ACTIVE_MESSAGES,
+        )
 
     def initialize_workflow(
         self,
@@ -133,173 +141,81 @@ class Coordinator:
                 "ended_at": None,
             },
         }
+        WorkflowLoopState.empty().apply_to_state(state)
         return CoordinatorStartResult(plan=plan, state=state, current_stage=current_stage)
 
     def advance_workflow(
         self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
     ) -> CoordinatorStepResult:
-        mutable_state = dict(run.state_json)
-        self._ensure_batch_contract(mutable_state)
-        runtime = WorkflowGraphRuntime()
-        runtime.materialize_ready_tasks(tasks)
-
-        blocked_approval_tasks = runtime.blocked_for_approval(tasks)
-        if blocked_approval_tasks and not approve:
-            pending_task = blocked_approval_tasks[0]
-            current_stage = runtime.task_stage(pending_task)
-            mutable_state["approval"] = {"required": True, "pending_task_id": pending_task.id}
-            mutable_state["current_stage"] = current_stage
-            self._update_batch_state(
-                mutable_state,
-                status="waiting_approval",
-                selected_task_ids=[],
-                executed_task_ids=[],
-            )
-            return CoordinatorStepResult(
-                status=WorkflowRunStatus.NEEDS_APPROVAL,
-                current_stage=current_stage,
-                state=mutable_state,
-                last_error=None,
-                ended_at=None,
-                approval_required=True,
-                executed_task_id=None,
-                executed_task_ids=[],
-            )
-
-        if blocked_approval_tasks and approve:
-            blocked_approval_tasks[0].status = TaskNodeStatus.READY
-            runtime.sync_execution_state(blocked_approval_tasks[0])
-
-        batch_size = runtime.resolve_batch_size(mutable_state)
-        runnable_tasks = runtime.pick_runnable_batch(tasks, limit=batch_size)
-        if not runnable_tasks:
-            resolved_status = runtime.resolve_run_status(tasks)
-            ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
-            mutable_state["approval"] = {"required": False, "pending_task_id": None}
-            self._update_batch_state(
-                mutable_state,
-                status="idle",
-                selected_task_ids=[],
-                executed_task_ids=[],
-            )
-            return CoordinatorStepResult(
-                status=resolved_status,
-                current_stage=run.current_stage,
-                state=mutable_state,
-                last_error=run.last_error,
-                ended_at=ended_at,
-                approval_required=False,
-                executed_task_id=None,
-                executed_task_ids=[],
-            )
-
-        self._start_batch_cycle(
-            mutable_state, selected_task_ids=[task.id for task in runnable_tasks]
+        step_result = self._loop_engine.advance(run=run, tasks=tasks, approve=approve)
+        executed_task_ids = list(step_result.executed_task_ids)
+        active_records = step_result.state.get("execution_records")
+        archived_records = step_result.state.get("archived_execution_records")
+        records = [
+            *(
+                [item for item in archived_records if isinstance(item, dict)]
+                if isinstance(archived_records, list)
+                else []
+            ),
+            *(
+                [item for item in active_records if isinstance(item, dict)]
+                if isinstance(active_records, list)
+                else []
+            ),
+        ]
+        batch_state = step_result.state.get("batch")
+        batch_cycle = (
+            batch_state.get("cycle")
+            if isinstance(batch_state, dict) and isinstance(batch_state.get("cycle"), int)
+            else None
         )
-        executed_task_ids: list[str] = []
-        last_executed_task: TaskNode | None = None
-        last_failure_reason: str | None = None
-        selected_task_ids = [task.id for task in runnable_tasks]
-        for runnable_task in runnable_tasks:
-            if runtime.approval_required(runnable_task) and not approve:
-                runnable_task.status = TaskNodeStatus.BLOCKED
-                runtime.sync_execution_state(runnable_task)
-                stage_key = runtime.task_stage(runnable_task)
-                mutable_state["approval"] = {"required": True, "pending_task_id": runnable_task.id}
-                mutable_state["current_stage"] = stage_key
-                self._update_batch_state(
-                    mutable_state,
-                    status="waiting_approval",
-                    selected_task_ids=selected_task_ids,
-                    executed_task_ids=executed_task_ids,
-                )
-                self._graph_manager.sync_task_graph(run=run, tasks=tasks)
-                return CoordinatorStepResult(
-                    status=WorkflowRunStatus.NEEDS_APPROVAL,
-                    current_stage=stage_key,
-                    state=mutable_state,
-                    last_error=None,
-                    ended_at=None,
-                    approval_required=True,
-                    executed_task_id=(executed_task_ids[-1] if executed_task_ids else None),
-                    executed_task_ids=executed_task_ids,
-                )
-
-            runnable_task.status = TaskNodeStatus.IN_PROGRESS
-            runtime.sync_execution_state(runnable_task)
-            execution_context = WorkflowExecutionContext(
-                session_id=run.session_id,
-                workflow_run_id=run.id,
-                goal=str(mutable_state.get("goal") or "authorized assessment"),
-                template_name=run.template_name,
-                current_stage=runtime.task_stage(runnable_task),
-                runtime_policy=(
-                    dict(policy)
-                    if isinstance((policy := mutable_state.get("runtime_policy")), dict)
+        record_index = {
+            record.get("task_node_id"): record
+            for record in records
+            if isinstance(record, dict)
+            and isinstance(record.get("task_node_id"), str)
+            and (batch_cycle is None or record.get("batch_cycle") == batch_cycle)
+        }
+        for task in tasks:
+            if task.id not in executed_task_ids:
+                continue
+            record = record_index.get(task.id)
+            if not isinstance(record, dict):
+                continue
+            execution = ExecutionResult(
+                trace_id=str(record.get("id") or ""),
+                source_type=str(record.get("source_type") or "runtime"),
+                source_name=str(record.get("source_name") or "workflow-engine"),
+                command_or_action=str(record.get("command_or_action") or f"execute:{task.name}"),
+                input_payload=(
+                    dict(payload) if isinstance((payload := record.get("input_json")), dict) else {}
+                ),
+                output_payload=(
+                    dict(payload)
+                    if isinstance((payload := record.get("output_json")), dict)
                     else {}
                 ),
+                status=task.status,
+                started_at=datetime.fromisoformat(str(record.get("started_at"))),
+                ended_at=datetime.fromisoformat(str(record.get("ended_at"))),
             )
-            execution_result = self._executor.execute(context=execution_context, task=runnable_task)
-            reflection_result = self._reflector.review(
-                task=runnable_task, execution=execution_result
-            )
-            self._apply_execution_result(
-                run=run,
-                task=runnable_task,
-                execution=execution_result,
-                reflection=reflection_result,
-                mutable_state=mutable_state,
-                tasks=tasks,
-            )
-            if reflection_result.replanning_suggestion is not None:
-                last_failure_reason = reflection_result.failure_reason
-                self._append_replan_record(
-                    mutable_state,
-                    task=runnable_task,
-                    execution=execution_result,
-                    reflection=reflection_result,
-                )
+            reflection = self._reflector.review(task=task, execution=execution)
             self._graph_manager.record_execution(
                 run=run,
-                task=runnable_task,
-                execution=execution_result,
-                reflection=reflection_result,
+                task=task,
+                execution=execution,
+                reflection=reflection,
             )
-            executed_task_ids.append(runnable_task.id)
-            last_executed_task = runnable_task
-
-            retry_limit = self._retry_limit(runnable_task)
-            retry_count = self._retry_count(runnable_task)
-            if runnable_task.status is TaskNodeStatus.FAILED and retry_count < retry_limit:
-                runnable_task.metadata_json = {
-                    **dict(runnable_task.metadata_json),
-                    "retry_count": retry_count + 1,
-                    "retry_scheduled": True,
-                }
-                runnable_task.status = TaskNodeStatus.READY
-                runtime.sync_execution_state(runnable_task)
-
         self._graph_manager.sync_task_graph(run=run, tasks=tasks)
-
-        resolved_status = runtime.resolve_run_status(tasks)
-        ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
-        current_stage = (
-            runtime.task_stage(last_executed_task) if last_executed_task else run.current_stage
-        )
-        mutable_state["current_stage"] = current_stage
-        mutable_state["approval"] = {"required": False, "pending_task_id": None}
-        self._finish_batch_cycle(mutable_state, executed_task_ids=executed_task_ids)
-        last_error = last_failure_reason if resolved_status is WorkflowRunStatus.ERROR else None
-        executed_task_id = executed_task_ids[-1] if executed_task_ids else None
         return CoordinatorStepResult(
-            status=resolved_status,
-            current_stage=current_stage,
-            state=mutable_state,
-            last_error=last_error,
-            ended_at=ended_at,
-            approval_required=False,
-            executed_task_id=executed_task_id,
-            executed_task_ids=executed_task_ids,
+            status=step_result.status,
+            current_stage=step_result.current_stage,
+            state=step_result.state,
+            last_error=step_result.last_error,
+            ended_at=step_result.ended_at,
+            approval_required=step_result.approval_required,
+            executed_task_id=step_result.executed_task_id,
+            executed_task_ids=step_result.executed_task_ids,
         )
 
     def sync_graph_snapshots(self, *, run: WorkflowRun, tasks: list[TaskNode]) -> None:

@@ -4272,117 +4272,198 @@ a {
 
 .assistant-transcript {
   display: grid;
-  gap: var(--space-3);
-}
-
-.assistant-transcript-segment {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0.92rem 1rem;
-  border: 1px solid rgba(57, 84, 72, 0.12);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
-}
-
-.assistant-transcript-segment-reasoning {
-  background: rgba(248, 246, 238, 0.88);
-}
-
-.assistant-transcript-segment-tool_call {
-  background: rgba(244, 247, 244, 0.9);
-}
-
-.assistant-transcript-segment-tool_result {
-  background: rgba(239, 245, 241, 0.94);
-}
-
-.assistant-transcript-segment-output {
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.assistant-transcript-segment-error {
-  background: rgba(253, 239, 239, 0.96);
-  border-color: rgba(167, 72, 72, 0.2);
-}
-
-.assistant-transcript-segment-status {
-  background: rgba(248, 245, 236, 0.92);
-  border-color: rgba(154, 114, 39, 0.18);
-}
-
-.assistant-transcript-header,
-.assistant-transcript-title-group,
-.assistant-transcript-side,
-.assistant-transcript-detail-block,
-.chat-bubble-action-shell {
-  display: flex;
   gap: var(--space-2);
 }
 
-.assistant-transcript-header,
+.assistant-reasoning-stream,
+.assistant-tool-block,
+.assistant-error-block,
+.assistant-output-block,
 .chat-bubble-action-shell {
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-
-.assistant-transcript-title-group,
-.assistant-transcript-side,
-.assistant-transcript-detail-block {
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.assistant-transcript-title-group {
   min-width: 0;
 }
 
-.assistant-transcript-kind,
-.assistant-transcript-detail-label {
-  font-size: 0.74rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+.assistant-reasoning-stream {
+  border: 0;
 }
 
-.assistant-transcript-title {
+.assistant-reasoning-toggle,
+.assistant-tool-summary,
+.assistant-error-summary {
+  list-style: none;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.assistant-reasoning-toggle::-webkit-details-marker,
+.assistant-tool-summary::-webkit-details-marker,
+.assistant-error-summary::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-reasoning-preview {
+  min-width: 0;
+  color: rgba(58, 66, 60, 0.68);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-reasoning-toggle-label {
+  color: rgba(58, 66, 60, 0.54);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.assistant-reasoning-body {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: 6px;
+  padding-left: 0.1rem;
+}
+
+.assistant-reasoning-line,
+.assistant-reasoning-line .chat-bubble-markdown {
+  color: rgba(58, 66, 60, 0.72);
+  font-size: 0.86rem;
+}
+
+.assistant-tool-block,
+.assistant-error-block {
+  border: 1px solid rgba(57, 84, 72, 0.1);
+  border-radius: 16px;
+  background: rgba(250, 249, 245, 0.8);
+  overflow: hidden;
+}
+
+.assistant-tool-summary,
+.assistant-error-summary {
+  padding: 0.72rem 0.88rem;
+}
+
+.assistant-tool-summary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.assistant-tool-summary-side {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.assistant-tool-eyebrow,
+.assistant-tool-detail-label {
+  color: rgba(58, 66, 60, 0.52);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.assistant-tool-title {
   min-width: 0;
   color: var(--text-strong);
   font-size: 0.9rem;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.assistant-transcript-side {
-  justify-content: flex-end;
+.assistant-tool-summary-text,
+.assistant-tool-inline-meta,
+.assistant-tool-inline-copy {
+  color: rgba(58, 66, 60, 0.68);
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
-.assistant-transcript-details {
+.assistant-tool-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-tool-body {
   display: grid;
   gap: var(--space-2);
+  padding: 0 0.88rem 0.88rem;
 }
 
-.assistant-transcript-detail-block {
-  align-items: flex-start;
-  flex-direction: column;
+.assistant-tool-detail-group {
+  display: grid;
+  gap: 6px;
 }
 
-.assistant-transcript-pre {
+.assistant-terminal-output {
   width: 100%;
   margin: 0;
-  padding: 0.85rem 0.95rem;
+  padding: 0.8rem 0.9rem;
   overflow: auto;
-  border-radius: 14px;
-  background: rgba(19, 26, 22, 0.92);
+  border-radius: 12px;
+  background: rgba(19, 26, 22, 0.94);
   color: rgba(244, 241, 234, 0.96);
   font-family: "IBM Plex Mono", "Fira Code", Consolas, monospace;
-  font-size: 0.79rem;
+  font-size: 0.78rem;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.assistant-terminal-output-error {
+  border: 1px solid rgba(182, 79, 63, 0.22);
+}
+
 .assistant-transcript-artifacts {
   gap: var(--space-2);
+}
+
+.assistant-tool-error-copy,
+.assistant-error-copy {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.assistant-error-block {
+  border-color: rgba(167, 72, 72, 0.18);
+  background: rgba(252, 243, 243, 0.96);
+}
+
+.assistant-error-summary {
+  justify-content: space-between;
+}
+
+.assistant-error-title {
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
+.assistant-output-block {
+  padding-top: 2px;
+}
+
+.assistant-output-block .chat-bubble-markdown {
+  color: rgba(25, 31, 27, 0.92);
+}
+
+.assistant-output-block-final .chat-bubble-markdown {
+  color: rgba(18, 23, 20, 0.98);
+}
+
+.assistant-output-block-final .chat-bubble-markdown p,
+.assistant-output-block-final .chat-bubble-markdown li,
+.assistant-output-block-final .chat-bubble-markdown blockquote {
+  color: rgba(18, 23, 20, 0.98);
 }
 
 .chat-bubble-action-shell {

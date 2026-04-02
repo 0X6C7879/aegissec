@@ -11,6 +11,38 @@ import type {
 } from "../types/sessions";
 import { StatusBadge } from "./StatusBadge";
 
+type TranscriptToolBlock = {
+  type: "tool";
+  key: string;
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+};
+
+type TranscriptReasoningBlock = {
+  type: "reasoning";
+  key: string;
+  segments: AssistantTranscriptSegment[];
+};
+
+type TranscriptOutputBlock = {
+  type: "output";
+  key: string;
+  segment: AssistantTranscriptSegment;
+};
+
+type TranscriptErrorBlock = {
+  type: "error";
+  key: string;
+  segment: AssistantTranscriptSegment;
+};
+
+type TranscriptRenderableBlock =
+  | TranscriptToolBlock
+  | TranscriptReasoningBlock
+  | TranscriptOutputBlock
+  | TranscriptErrorBlock;
+
 type ConversationFeedProps = {
   messages: SessionMessage[];
   generations: ChatGeneration[];
@@ -283,51 +315,228 @@ function formatMessageRole(role: string): string {
   }
 }
 
-function getTranscriptKindLabel(kind: AssistantTranscriptSegment["kind"]): string {
-  switch (kind) {
-    case "reasoning":
-      return "思路";
-    case "tool_call":
-      return "工具调用";
-    case "tool_result":
-      return "工具结果";
-    case "output":
-      return "回复";
-    case "error":
-      return "异常";
-    case "status":
-      return "状态";
-    default:
-      return kind.replace(/[_-]+/g, " ");
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function getTranscriptSegmentTitle(segment: AssistantTranscriptSegment): string {
-  if (segment.title?.trim()) {
-    return segment.title;
+function readFirstString(
+  value: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): string | null {
+  if (!value) {
+    return null;
   }
 
-  if (segment.kind === "tool_call") {
-    return segment.tool_name?.trim() || "开始调用工具";
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
   }
 
-  if (segment.kind === "tool_result") {
-    return segment.tool_name?.trim() || "工具执行结果";
+  return null;
+}
+
+function readNestedRecord(
+  value: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  const candidate = value?.[key];
+  return isRecord(candidate) ? candidate : undefined;
+}
+
+function humanizeIdentifier(value: string): string {
+  return value
+    .split(/[/_\-\s.]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function truncateCommand(value: string, maxLength = 64): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
+}
+
+function readSegmentCommand(segment: AssistantTranscriptSegment): string | null {
+  const metadata = segment.metadata;
+  const argumentsRecord = readNestedRecord(metadata, "arguments");
+  const shellLikeTool =
+    segment.tool_name === "execute_kali_command" ||
+    segment.tool_name === "bash" ||
+    segment.tool_name === "sh" ||
+    segment.tool_name === "zsh";
+  return (
+    readFirstString(metadata, ["command"]) ??
+    readFirstString(argumentsRecord, ["command"]) ??
+    (shellLikeTool && segment.kind === "tool_call" && segment.text?.trim()
+      ? segment.text.trim()
+      : null)
+  );
+}
+
+function readSkillPayload(segment: AssistantTranscriptSegment): Record<string, unknown> | null {
+  const metadata = segment.metadata;
+  const result = readNestedRecord(metadata, "result");
+  const skill = readNestedRecord(result, "skill");
+  return skill ?? null;
+}
+
+function inferSkillTitle(segment: AssistantTranscriptSegment): string | null {
+  const skill = readSkillPayload(segment);
+  const metadata = segment.metadata;
+  const argumentsRecord = readNestedRecord(metadata, "arguments");
+  const rawName =
+    readFirstString(skill ?? undefined, ["title", "name", "directory_name", "id"]) ??
+    readFirstString(argumentsRecord, ["skill_name_or_id"]);
+  return rawName ? humanizeIdentifier(rawName) : null;
+}
+
+function inferToolBlockTitle(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): { eyebrow: string; title: string; summary: string | null } {
+  const reference = result ?? error ?? call;
+  const toolName = reference?.tool_name ?? "";
+  const commandSource = call ?? reference;
+  const command = commandSource ? readSegmentCommand(commandSource) : null;
+  const skillTitle = reference ? inferSkillTitle(reference) : null;
+  const skillPayload = reference ? readSkillPayload(reference) : null;
+  const skillSummary =
+    readFirstString(skillPayload ?? undefined, ["description"]) ??
+    (result?.text?.trim() && !/^Read skill content/i.test(result.text) ? result.text.trim() : null);
+
+  if (toolName === "execute_kali_command" || command) {
+    return {
+      eyebrow: "Shell",
+      title: command ?? "Shell",
+      summary:
+        result?.status && result.status !== "running"
+          ? `状态：${result.status}`
+          : error?.text?.trim() ?? null,
+    };
   }
 
-  if (segment.kind === "reasoning") {
-    return "思路进展";
+  if (toolName === "read_skill_content") {
+    return {
+      eyebrow: "技能",
+      title: skillTitle ?? "Skill",
+      summary: skillSummary,
+    };
   }
 
-  if (segment.kind === "output") {
-    return "正文输出";
+  if (toolName === "list_available_skills") {
+    return {
+      eyebrow: "技能",
+      title: "技能目录",
+      summary: result?.text?.trim() ?? null,
+    };
   }
 
-  if (segment.kind === "error") {
-    return "执行异常";
+  return {
+    eyebrow: "工具",
+    title: skillTitle ?? (toolName ? humanizeIdentifier(toolName) : "Tool"),
+    summary: result?.text?.trim() ?? error?.text?.trim() ?? null,
+  };
+}
+
+function buildTranscriptBlocks(segments: AssistantTranscriptSegment[]): TranscriptRenderableBlock[] {
+  const ordered = [...segments].sort(compareTranscriptSegments);
+  const blocks: TranscriptRenderableBlock[] = [];
+
+  for (let index = 0; index < ordered.length; index += 1) {
+    const segment = ordered[index]!;
+
+    if (segment.kind === "reasoning" || segment.kind === "status") {
+      const reasoningSegments: AssistantTranscriptSegment[] = [];
+      let cursor = index;
+      while (
+        cursor < ordered.length &&
+        (ordered[cursor]!.kind === "reasoning" || ordered[cursor]!.kind === "status")
+      ) {
+        if (ordered[cursor]!.text?.trim()) {
+          reasoningSegments.push(ordered[cursor]!);
+        }
+        cursor += 1;
+      }
+      if (reasoningSegments.length > 0) {
+        blocks.push({
+          type: "reasoning",
+          key: reasoningSegments.map((item) => item.id).join(":"),
+          segments: reasoningSegments,
+        });
+      }
+      index = cursor - 1;
+      continue;
+    }
+
+    if (segment.kind === "tool_call") {
+      let result: AssistantTranscriptSegment | null = null;
+      let error: AssistantTranscriptSegment | null = null;
+      let cursor = index + 1;
+
+      while (cursor < ordered.length) {
+        const nextSegment = ordered[cursor]!;
+        if (nextSegment.tool_call_id !== segment.tool_call_id) {
+          break;
+        }
+        if (nextSegment.kind === "tool_result" && result === null) {
+          result = nextSegment;
+          cursor += 1;
+          continue;
+        }
+        if (nextSegment.kind === "error" && error === null) {
+          error = nextSegment;
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+
+      blocks.push({
+        type: "tool",
+        key: `tool:${segment.tool_call_id ?? segment.id}`,
+        call: segment,
+        result,
+        error,
+      });
+      index = cursor - 1;
+      continue;
+    }
+
+    if (segment.kind === "tool_result") {
+      blocks.push({
+        type: "tool",
+        key: `tool-result:${segment.tool_call_id ?? segment.id}`,
+        call: null,
+        result: segment,
+        error: null,
+      });
+      continue;
+    }
+
+    if (segment.kind === "error" && segment.tool_call_id) {
+      blocks.push({
+        type: "tool",
+        key: `tool-error:${segment.tool_call_id}`,
+        call: null,
+        result: null,
+        error: segment,
+      });
+      continue;
+    }
+
+    if (segment.kind === "output") {
+      blocks.push({ type: "output", key: segment.id, segment });
+      continue;
+    }
+
+    if (segment.kind === "error") {
+      blocks.push({ type: "error", key: segment.id, segment });
+    }
   }
 
-  return "运行状态";
+  return blocks;
 }
 
 function buildGenerationStatusText(generation: ChatGeneration): string {
@@ -550,6 +759,221 @@ function hasStructuredMetadata(value: Record<string, unknown> | undefined): bool
   return Boolean(value && Object.keys(value).length > 0);
 }
 
+function AssistantReasoningStream({
+  segments,
+}: {
+  segments: AssistantTranscriptSegment[];
+}) {
+  const preview = segments
+    .map((segment) => segment.text?.trim() ?? "")
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" · ");
+
+  return (
+    <details className="assistant-reasoning-stream">
+      <summary className="assistant-reasoning-toggle">
+        <span className="assistant-reasoning-preview">{preview || "查看思路"}</span>
+        <span className="assistant-reasoning-toggle-label">展开</span>
+      </summary>
+      <div className="assistant-reasoning-body">
+        {segments.map((segment) => (
+          <div key={segment.id} className="assistant-reasoning-line">
+            {segment.text?.trim() ? renderMarkdownMessage(segment.text) : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function AssistantShellBlock({
+  call,
+  result,
+  error,
+}: {
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+}) {
+  const reference = result ?? error ?? call;
+  if (!reference) {
+    return null;
+  }
+
+  const metadata = reference.metadata;
+  const command = readSegmentCommand(reference) ?? "Shell";
+  const stdout = readFirstString(metadata, ["stdout"]);
+  const stderr = readFirstString(metadata, ["stderr"]);
+  const exitCode = metadata?.exit_code ?? readNestedRecord(metadata, "result")?.exit_code ?? null;
+  const artifacts = readArtifactLabels(metadata?.artifacts);
+  const resultPayload = isRecord(metadata?.result) ? metadata.result : null;
+  const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+
+  return (
+    <details className="assistant-tool-block assistant-shell-block">
+      <summary className="assistant-tool-summary">
+        <div className="assistant-tool-summary-copy">
+          <span className="assistant-tool-eyebrow">Shell</span>
+          <strong className="assistant-tool-title" title={command}>
+            {truncateCommand(command, 72)}
+          </strong>
+        </div>
+        <div className="assistant-tool-summary-side">
+          {status ? <StatusBadge status={status} /> : null}
+        </div>
+      </summary>
+      <div className="assistant-tool-body">
+        <div className="assistant-tool-detail-group">
+          <span className="assistant-tool-detail-label">command</span>
+          <pre className="assistant-terminal-output">{command}</pre>
+        </div>
+        {stdout !== null ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">stdout</span>
+            <pre className="assistant-terminal-output">{stdout || "(empty)"}</pre>
+          </div>
+        ) : null}
+        {stderr !== null ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">stderr</span>
+            <pre className="assistant-terminal-output assistant-terminal-output-error">
+              {stderr || "(empty)"}
+            </pre>
+          </div>
+        ) : null}
+        {exitCode !== null ? (
+          <p className="assistant-tool-inline-meta">exit_code: {String(exitCode)}</p>
+        ) : null}
+        {resultPayload ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">result</span>
+            <pre className="assistant-terminal-output">{JSON.stringify(resultPayload, null, 2)}</pre>
+          </div>
+        ) : null}
+        {artifacts.length > 0 ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">artifacts</span>
+            <div className="chat-bubble-artifacts assistant-transcript-artifacts">
+              {artifacts.map((artifact) => (
+                <span key={`${reference.id}:${artifact}`} className="chat-artifact-chip">
+                  {artifact}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {error?.text?.trim() ? <p className="assistant-tool-error-copy">{error.text.trim()}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function AssistantSkillBlock({
+  call,
+  result,
+  error,
+}: {
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+}) {
+  const reference = result ?? error ?? call;
+  if (!reference) {
+    return null;
+  }
+
+  const { eyebrow, title, summary } = inferToolBlockTitle(call, result, error);
+  const skillPayload = readSkillPayload(reference);
+  const skillContent = readFirstString(skillPayload ?? undefined, ["content"]);
+  const skillDescription = readFirstString(skillPayload ?? undefined, ["description"]);
+  const metadata = reference.metadata;
+
+  return (
+    <details className="assistant-tool-block assistant-skill-block">
+      <summary className="assistant-tool-summary">
+        <div className="assistant-tool-summary-copy">
+          <span className="assistant-tool-eyebrow">{eyebrow}</span>
+          <strong className="assistant-tool-title">{title}</strong>
+          {summary ? <span className="assistant-tool-summary-text">{summary}</span> : null}
+        </div>
+        <div className="assistant-tool-summary-side">
+          {reference.status ? <StatusBadge status={reference.status} /> : null}
+        </div>
+      </summary>
+      <div className="assistant-tool-body">
+        {skillDescription ? <p className="assistant-tool-inline-copy">{skillDescription}</p> : null}
+        {skillContent ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">skill</span>
+            <pre className="assistant-terminal-output">{skillContent}</pre>
+          </div>
+        ) : null}
+        {!skillContent && hasStructuredMetadata(metadata) ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">details</span>
+            <pre className="assistant-terminal-output">{JSON.stringify(metadata, null, 2)}</pre>
+          </div>
+        ) : null}
+        {error?.text?.trim() ? <p className="assistant-tool-error-copy">{error.text.trim()}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function AssistantErrorBlock({ segment }: { segment: AssistantTranscriptSegment }) {
+  return (
+    <details className="assistant-error-block" open>
+      <summary className="assistant-error-summary">
+        <strong className="assistant-error-title">执行失败</strong>
+        {segment.status ? <StatusBadge status={segment.status} /> : null}
+      </summary>
+      {segment.text?.trim() ? <p className="assistant-error-copy">{segment.text.trim()}</p> : null}
+      {hasStructuredMetadata(segment.metadata) ? (
+        <pre className="assistant-terminal-output assistant-terminal-output-error">
+          {JSON.stringify(segment.metadata, null, 2)}
+        </pre>
+      ) : null}
+    </details>
+  );
+}
+
+function AssistantPrimaryOutput({
+  segment,
+  isFinal,
+}: {
+  segment: AssistantTranscriptSegment;
+  isFinal: boolean;
+}) {
+  return (
+    <div className={`assistant-output-block${isFinal ? " assistant-output-block-final" : ""}`}>
+      {segment.text?.trim() ? renderMarkdownMessage(segment.text) : renderMarkdownMessage("")}
+    </div>
+  );
+}
+
+function AssistantToolInvocationBlock({
+  call,
+  result,
+  error,
+}: {
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+}) {
+  const reference = result ?? error ?? call;
+  if (!reference) {
+    return null;
+  }
+
+  const command = call ? readSegmentCommand(call) : readSegmentCommand(reference);
+  if (reference.tool_name === "execute_kali_command" || command) {
+    return <AssistantShellBlock call={call} result={result} error={error} />;
+  }
+
+  return <AssistantSkillBlock call={call} result={result} error={error} />;
+}
+
 export function ConversationFeed(props: ConversationFeedProps) {
   const {
     messages,
@@ -622,92 +1046,51 @@ export function ConversationFeed(props: ConversationFeedProps) {
     previousLastItemSignature.current = lastItemSignature;
   }, [lastItemSignature]);
 
-  function renderTranscriptDetails(segment: AssistantTranscriptSegment) {
-    const metadata = segment.metadata;
-    if (!hasStructuredMetadata(metadata)) {
-      return null;
-    }
-
-    const stdout = typeof metadata?.stdout === "string" ? metadata.stdout : null;
-    const stderr = typeof metadata?.stderr === "string" ? metadata.stderr : null;
-    const result = metadata?.result;
-    const artifacts = readArtifactLabels(metadata?.artifacts);
-    const hasExplicitDetails =
-      stdout !== null || stderr !== null || result !== undefined || artifacts.length > 0;
-
-    return (
-      <div className="assistant-transcript-details">
-        {stdout !== null ? (
-          <div className="assistant-transcript-detail-block">
-            <span className="assistant-transcript-detail-label">stdout</span>
-            <pre className="assistant-transcript-pre">{stdout || "(empty)"}</pre>
-          </div>
-        ) : null}
-        {stderr !== null ? (
-          <div className="assistant-transcript-detail-block">
-            <span className="assistant-transcript-detail-label">stderr</span>
-            <pre className="assistant-transcript-pre">{stderr || "(empty)"}</pre>
-          </div>
-        ) : null}
-        {result !== undefined ? (
-          <div className="assistant-transcript-detail-block">
-            <span className="assistant-transcript-detail-label">result</span>
-            <pre className="assistant-transcript-pre">{JSON.stringify(result, null, 2)}</pre>
-          </div>
-        ) : null}
-        {artifacts.length > 0 ? (
-          <div className="assistant-transcript-detail-block">
-            <span className="assistant-transcript-detail-label">产物</span>
-            <div className="chat-bubble-artifacts assistant-transcript-artifacts">
-              {artifacts.map((artifact) => (
-                <span key={`${segment.id}:${artifact}`} className="chat-artifact-chip">
-                  {artifact}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {!hasExplicitDetails ? (
-          <div className="assistant-transcript-detail-block">
-            <span className="assistant-transcript-detail-label">metadata</span>
-            <pre className="assistant-transcript-pre">{JSON.stringify(metadata, null, 2)}</pre>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   function renderTranscriptSegments(segments: AssistantTranscriptSegment[]) {
     if (segments.length === 0) {
       return renderMarkdownMessage("");
     }
 
+    const blocks = buildTranscriptBlocks(segments);
+    const lastOutputBlockIndex = (() => {
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        if (blocks[index]?.type === "output") {
+          return index;
+        }
+      }
+      return -1;
+    })();
+
     return (
       <div className="assistant-transcript">
-        {segments.map((segment) => (
-          <section
-            key={segment.id}
-            className={`assistant-transcript-segment assistant-transcript-segment-${segment.kind}`}
-          >
-            <div className="assistant-transcript-header">
-              <div className="assistant-transcript-title-group">
-                <span className="assistant-transcript-kind">{getTranscriptKindLabel(segment.kind)}</span>
-                <strong className="assistant-transcript-title">{getTranscriptSegmentTitle(segment)}</strong>
-              </div>
-              <div className="assistant-transcript-side">
-                {segment.tool_name ? (
-                  <span className="management-token-chip">{segment.tool_name}</span>
-                ) : null}
-                {segment.tool_call_id ? (
-                  <span className="management-token-chip">{segment.tool_call_id}</span>
-                ) : null}
-                {segment.status ? <StatusBadge status={segment.status} /> : null}
-              </div>
-            </div>
-            {segment.text?.trim() ? renderMarkdownMessage(segment.text) : null}
-            {renderTranscriptDetails(segment)}
-          </section>
-        ))}
+        {blocks.map((block, index) => {
+          if (block.type === "reasoning") {
+            return <AssistantReasoningStream key={block.key} segments={block.segments} />;
+          }
+
+          if (block.type === "tool") {
+            return (
+              <AssistantToolInvocationBlock
+                key={block.key}
+                call={block.call}
+                result={block.result}
+                error={block.error}
+              />
+            );
+          }
+
+          if (block.type === "error") {
+            return <AssistantErrorBlock key={block.key} segment={block.segment} />;
+          }
+
+          return (
+            <AssistantPrimaryOutput
+              key={block.key}
+              segment={block.segment}
+              isFinal={index === lastOutputBlockIndex}
+            />
+          );
+        })}
       </div>
     );
   }
