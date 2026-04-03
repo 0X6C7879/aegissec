@@ -20,7 +20,6 @@ from app.compat.skills.service import (
     get_skill_service,
 )
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
-from app.core.settings import get_settings
 from app.db.models import (
     AssistantTranscriptSegment,
     AssistantTranscriptSegmentKind,
@@ -86,7 +85,7 @@ router = APIRouter(prefix="/api/sessions", tags=["chat"])
 
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
-_HIDDEN_STREAM_TAG_NAMES = {"think", "invoke", "tool_call"}
+_HIDDEN_STREAM_TAG_NAMES = {"invoke", "tool_call"}
 _HIDDEN_STREAM_TAG_NAME_RE = re.compile(
     r"^<\s*(/)?\s*(?:[\w-]+:)?([a-z_]+)",
     re.IGNORECASE,
@@ -123,7 +122,6 @@ _SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS = {
 _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE = 70
 _SKILL_AUTOROUTE_MARGIN = 10
 _SKILL_AUTOROUTE_CONTEXT_WINDOW = 6
-CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
 def _match_hidden_stream_tag(fragment: str) -> tuple[str, bool, bool, bool] | None:
@@ -179,15 +177,13 @@ def _message_trace_entries(message: Message) -> list[dict[str, object]]:
 
 
 def _hidden_stream_tag_names() -> set[str]:
-    if CHAT_EXPOSE_THINKING:
-        return {"invoke", "tool_call"}
     return set(_HIDDEN_STREAM_TAG_NAMES)
 
 
 def _sanitize_persisted_assistant_text(content: str, *, fallback: str = "") -> str:
     return sanitize_assistant_content(
         content,
-        strip_thinking=not CHAT_EXPOSE_THINKING,
+        strip_thinking=False,
         fallback_text=fallback,
     )
 

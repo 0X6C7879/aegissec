@@ -187,6 +187,131 @@ describe("useSessionEvents", () => {
     unmount();
   });
 
+  it("preserves visible think transcript blocks across reconnect replayed message updates", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const session = createSessionSummary();
+    const sessionDetail: SessionDetail = { ...session, messages: [] };
+    const sessionConversation: SessionConversation = {
+      session,
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [],
+    };
+
+    queryClient.setQueryData(["session", session.id], sessionDetail);
+    queryClient.setQueryData(["conversation", session.id], sessionConversation);
+    queryClient.setQueryData(["sessions", false], [session]);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const firstSocket = MockWebSocket.instances[0]!;
+    act(() => {
+      firstSocket.emitOpen();
+      firstSocket.emitMessage({
+        type: "message.updated",
+        cursor: 21,
+        created_at: "2026-04-01T10:00:05.000Z",
+        data: {
+          id: "assistant-message-think-1",
+          session_id: session.id,
+          role: "assistant",
+          content: "<think>very secret</think>最终答复",
+          attachments: [],
+          assistant_transcript: [
+            {
+              id: "segment-reasoning-1",
+              sequence: 1,
+              kind: "reasoning",
+              status: "running",
+              text: "<think>private</think>分析中",
+              recorded_at: "2026-04-01T10:00:04.000Z",
+              updated_at: "2026-04-01T10:00:04.000Z",
+            },
+            {
+              id: "segment-output-1",
+              sequence: 2,
+              kind: "output",
+              status: "completed",
+              text: "<think>very secret</think>最终答复",
+              recorded_at: "2026-04-01T10:00:05.000Z",
+              updated_at: "2026-04-01T10:00:05.000Z",
+            },
+          ],
+        },
+      });
+    });
+
+    act(() => {
+      firstSocket.emitClose();
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = MockWebSocket.instances[1]!;
+    expect(secondSocket.url).toBe("ws://127.0.0.1:8000/api/sessions/session-1/events?cursor=21");
+
+    act(() => {
+      secondSocket.emitOpen();
+      secondSocket.emitMessage({
+        type: "message.updated",
+        cursor: 21,
+        created_at: "2026-04-01T10:00:06.000Z",
+        data: {
+          id: "assistant-message-think-1",
+          session_id: session.id,
+          role: "assistant",
+          content: "replayed content should be ignored",
+          attachments: [],
+          assistant_transcript: [
+            {
+              id: "segment-output-replay",
+              sequence: 1,
+              kind: "output",
+              status: "completed",
+              text: "replayed content should be ignored",
+              recorded_at: "2026-04-01T10:00:06.000Z",
+              updated_at: "2026-04-01T10:00:06.000Z",
+            },
+          ],
+        },
+      });
+    });
+
+    expect(
+      queryClient.getQueryData<SessionDetail>(["session", session.id])?.messages,
+    ).toMatchObject([
+      {
+        id: "assistant-message-think-1",
+        content: "<think>very secret</think>最终答复",
+        assistant_transcript: [
+          { kind: "reasoning", text: "<think>private</think>分析中" },
+          { kind: "output", text: "<think>very secret</think>最终答复" },
+        ],
+      },
+    ]);
+    expect(
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.messages,
+    ).toMatchObject([
+      {
+        id: "assistant-message-think-1",
+        content: "<think>very secret</think>最终答复",
+        assistant_transcript: [
+          { kind: "reasoning", text: "<think>private</think>分析中" },
+          { kind: "output", text: "<think>very secret</think>最终答复" },
+        ],
+      },
+    ]);
+    expect(useUiStore.getState().lastServerCursorBySession[session.id]).toBe(21);
+
+    unmount();
+  });
+
   it("keeps long live reasoning history in conversation generations", () => {
     const queryClient = new QueryClient({
       defaultOptions: {

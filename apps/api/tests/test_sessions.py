@@ -13,6 +13,11 @@ from pytest import MonkeyPatch
 from sqlmodel import Session as DBSession
 from starlette.testclient import WebSocketDenialResponse
 
+from app.api.routes_chat import (
+    _hidden_stream_tag_names,
+    _project_visible_stream_content,
+    _sanitize_persisted_assistant_text,
+)
 from app.compat.skills.models import SkillScanRoot
 from app.compat.skills.service import SkillContentReadError
 from app.db.models import (
@@ -34,6 +39,37 @@ from app.services.chat_runtime import (
 )
 from app.services.session_generation import recover_abandoned_generations
 from tests.utils import api_data
+
+
+def test_chat_hidden_stream_tag_names_always_keep_think_visible() -> None:
+    assert _hidden_stream_tag_names() == {"invoke", "tool_call"}
+
+
+def test_chat_sanitize_persisted_assistant_text_keeps_think_and_strips_protocol() -> None:
+    content = (
+        '<minimax:tool_call><invoke name="agent-browser">{"task":"demo"}'
+        "</invoke></minimax:tool_call><think>private</think>最终答复"
+    )
+
+    sanitized = _sanitize_persisted_assistant_text(content)
+
+    assert sanitized == "<think>private</think>最终答复"
+    assert "invoke" not in sanitized
+    assert "tool_call" not in sanitized
+
+
+def test_chat_project_visible_stream_content_keeps_think_and_hides_tool_protocol() -> None:
+    raw_streamed_content = (
+        "<think>hidden</think>"
+        '<minimax:tool_call><invoke name="agent-browser">{"task":"demo"}'
+        "</invoke></minimax:tool_call>最终"
+    )
+
+    projected = _project_visible_stream_content(raw_streamed_content)
+
+    assert projected == "<think>hidden</think>最终"
+    assert "invoke" not in projected
+    assert "tool_call" not in projected
 
 
 def test_session_lifecycle_and_history(client: TestClient) -> None:
@@ -1474,6 +1510,27 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         assert [segment["text"] for segment in detail_transcript] == [
             segment["text"] for segment in transcript
         ]
+
+        with TestClient(app) as fresh_client:
+            refreshed_detail_response = fresh_client.get(f"/api/sessions/{session_id}")
+            assert refreshed_detail_response.status_code == 200
+            refreshed_payload = api_data(refreshed_detail_response)
+            refreshed_assistant_messages = [
+                message
+                for message in refreshed_payload["messages"]
+                if message["role"] == "assistant"
+            ]
+            assert refreshed_assistant_messages
+            assert refreshed_assistant_messages[-1]["content"] == (
+                "<think>very secret</think>最终答复"
+            )
+            refreshed_transcript = refreshed_assistant_messages[-1]["assistant_transcript"]
+            assert [segment["kind"] for segment in refreshed_transcript] == [
+                segment["kind"] for segment in transcript
+            ]
+            assert [segment["text"] for segment in refreshed_transcript] == [
+                segment["text"] for segment in transcript
+            ]
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

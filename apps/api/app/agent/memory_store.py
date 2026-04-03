@@ -59,9 +59,11 @@ class MemoryManifestEntry:
             entry_id=normalized_entry_id,
             title=normalized_title,
             summary=normalized_summary,
-            tags=tuple(item for item in tags_raw if isinstance(item, str))
-            if isinstance(tags_raw, list)
-            else (),
+            tags=(
+                tuple(item for item in tags_raw if isinstance(item, str))
+                if isinstance(tags_raw, list)
+                else ()
+            ),
             updated_at=normalized_updated_at,
             filename=normalized_filename,
             source_labels=(

@@ -36,17 +36,21 @@ class PostCompactReinjectionService:
         summary = "\n".join(
             part
             for part in [
-                f"Compact boundary: {boundary_marker}"
-                if compact_applied and boundary_marker
-                else "",
+                (
+                    f"Compact boundary: {boundary_marker}"
+                    if compact_applied and boundary_marker
+                    else ""
+                ),
                 fragments["task_stage_marker"],
                 f"Retrieval continuity: {retrieval_summary}",
                 f"Session memory continuity: {session_memory_summary}",
                 f"Active tool availability summary: {active_tool_summary}",
                 f"Capability prompt continuity: {capability_prompt_fragment}",
-                f"Compact summary: {compact_summary}"
-                if compact_applied and compact_summary
-                else "",
+                (
+                    f"Compact summary: {compact_summary}"
+                    if compact_applied and compact_summary
+                    else ""
+                ),
             ]
             if part
         )
