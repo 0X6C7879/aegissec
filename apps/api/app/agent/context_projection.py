@@ -63,7 +63,8 @@ class ContextProjectionBuilder:
             summary=(
                 f"Session retrieval cites {retrieval.session_local.citation_count} sources; "
                 f"session memory stores {len(memory.session.distilled_entries)} distilled entries; "
-                f"project memory stores {len(memory.project.distilled_entries)} distilled entries."
+                f"project memory stores {len(memory.project.distilled_entries)} distilled entries; "
+                "projection remains an input source across compact runtime boundaries."
             ),
             kind="operator_brief",
             citations=[
@@ -75,7 +76,11 @@ class ContextProjectionBuilder:
                 )
                 for citation in entry.citations[:1]
             ],
-            metadata={"active_level": active_level},
+            metadata={
+                "active_level": active_level,
+                "context_source": "projection",
+                "source_level_count": 5,
+            },
         )
         level_five = ProjectionLevel(
             level=5,
@@ -89,7 +94,8 @@ class ContextProjectionBuilder:
             active_level=active_level,
             summary=(
                 f"Built five projection levels; active level {active_level} selected from "
-                f"{total_records} execution record(s)."
+                f"{total_records} execution record(s). Projection remains a compact-runtime "
+                "source before and after reinjection."
             ),
             levels=levels,
         )

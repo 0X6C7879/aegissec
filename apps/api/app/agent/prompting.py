@@ -36,6 +36,7 @@ SAFETY_SCOPE_PROMPT = (
     "execution, summarize what happened clearly."
 )
 SYSTEM_PROMPT = f"{CORE_IMMUTABLE_PROMPT} {SAFETY_SCOPE_PROMPT}"
+AUTOROUTED_SKILL_PROMPT_HEADER = "## Auto-selected skill:"
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,29 @@ def build_chat_capability_prompt(
     if prompt_text:
         parts.append(prompt_text)
     return "\n\n".join(part for part in parts if part)
+
+
+def split_skill_context_prompt(
+    skill_context_prompt: str | None,
+) -> tuple[str, str | None]:
+    if skill_context_prompt is None:
+        return "", None
+
+    normalized_prompt = skill_context_prompt.strip()
+    if not normalized_prompt:
+        return "", None
+
+    if normalized_prompt.startswith(AUTOROUTED_SKILL_PROMPT_HEADER):
+        return "", normalized_prompt
+
+    marker = f"\n\n{AUTOROUTED_SKILL_PROMPT_HEADER}"
+    if marker not in normalized_prompt:
+        return normalized_prompt, None
+
+    capability_prompt, autorouted_fragment = normalized_prompt.split(marker, maxsplit=1)
+    capability_prompt = capability_prompt.strip()
+    autorouted_fragment = f"{AUTOROUTED_SKILL_PROMPT_HEADER}{autorouted_fragment}".strip()
+    return capability_prompt, autorouted_fragment or None
 
 
 def build_chat_prompt_budget(
@@ -281,10 +305,14 @@ def build_openai_prompt_assembly(
         history_text=history_text,
     )
     prompt_tokens = budget.component_tokens.get("capability_prompt", 0)
-    capability_prompt_text = truncate_text_to_token_budget(
-        skill_context_prompt or "", prompt_tokens
+    capability_prompt_source, autorouted_skill_prompt_source = split_skill_context_prompt(
+        skill_context_prompt
     )
-    fragments = [
+    capability_prompt_text = truncate_text_to_token_budget(capability_prompt_source, prompt_tokens)
+    autorouted_skill_prompt_text = truncate_text_to_token_budget(
+        autorouted_skill_prompt_source or "", prompt_tokens
+    )
+    fragments: list[PromptFragment] = [
         PromptFragment(
             name="core_immutable",
             role="system",
@@ -321,7 +349,20 @@ def build_openai_prompt_assembly(
                 source="capability_facade",
             )
         )
-        messages.append({"role": "system", "content": capability_prompt_text})
+    if autorouted_skill_prompt_text:
+        fragments.append(
+            PromptFragment(
+                name="autorouted_skill_context",
+                role="system",
+                content=autorouted_skill_prompt_text,
+                source="autorouted_skill_router",
+            )
+        )
+    combined_prompt_text = "\n\n".join(
+        part for part in [capability_prompt_text, autorouted_skill_prompt_text] if part.strip()
+    )
+    if combined_prompt_text:
+        messages.append({"role": "system", "content": combined_prompt_text})
     if conversation_messages:
         history_messages = _trim_history_messages(
             conversation_messages[:-1],
@@ -377,14 +418,23 @@ def build_anthropic_prompt_assembly(
     prefix_parts: list[str] = []
     if skill_catalog_context is not None:
         prefix_parts.append(skill_catalog_context)
+    capability_prompt_source, autorouted_skill_prompt_source = split_skill_context_prompt(
+        skill_context_prompt
+    )
     capability_prompt_text = truncate_text_to_token_budget(
-        skill_context_prompt or "",
+        capability_prompt_source,
+        budget.component_tokens.get("capability_prompt", 0),
+    )
+    autorouted_skill_prompt_text = truncate_text_to_token_budget(
+        autorouted_skill_prompt_source or "",
         budget.component_tokens.get("capability_prompt", 0),
     )
     if capability_prompt_text:
         prefix_parts.append(capability_prompt_text)
+    if autorouted_skill_prompt_text:
+        prefix_parts.append(autorouted_skill_prompt_text)
     prefix = "\n\n".join(part for part in prefix_parts if part)
-    fragments = (
+    fragments: list[PromptFragment] = [
         PromptFragment(
             name="core_immutable",
             role="system",
@@ -406,7 +456,36 @@ def build_anthropic_prompt_assembly(
             source="capability_facade",
             optional=not bool(prefix),
         ),
-    )
+    ]
+    if skill_catalog_context is not None:
+        fragments.append(
+            PromptFragment(
+                name="capability_inventory",
+                role="user_prefix",
+                content=skill_catalog_context,
+                source="skills_catalog",
+                optional=True,
+            )
+        )
+    if capability_prompt_text:
+        fragments.append(
+            PromptFragment(
+                name="capability_prompt_detail",
+                role="user_prefix",
+                content=capability_prompt_text,
+                source="capability_facade",
+                optional=True,
+            )
+        )
+    if autorouted_skill_prompt_text:
+        fragments.append(
+            PromptFragment(
+                name="autorouted_skill_context",
+                role="user_prefix",
+                content=autorouted_skill_prompt_text,
+                source="autorouted_skill_router",
+            )
+        )
     messages: list[dict[str, object]] = []
     if conversation_messages:
         history_messages = _trim_history_messages(
@@ -424,7 +503,7 @@ def build_anthropic_prompt_assembly(
     return PromptAssembly(
         system_prompt=SYSTEM_PROMPT,
         messages=messages,
-        fragments=fragments,
+        fragments=tuple(fragments),
         budget=budget,
     )
 
@@ -445,6 +524,9 @@ def build_workflow_prompting_state(
     capability_inventory_summary: str,
     capability_schema_summary: str,
     capability_prompt_fragment: str,
+    compact_summary: str = "",
+    reinjection_summary: str = "",
+    continuity_metadata: dict[str, object] | None = None,
     total_budget: int = 4096,
 ) -> dict[str, object]:
     safety_scope_text = (
@@ -458,6 +540,20 @@ def build_workflow_prompting_state(
     )
     role_text = "\n".join(
         part for part in (role_prompt.strip(), sub_agent_role_prompt.strip()) if part
+    )
+    compact_reinjection_text = "\n\n".join(
+        part for part in (compact_summary.strip(), reinjection_summary.strip()) if part
+    )
+    normalized_continuity_metadata = (
+        {str(key): value for key, value in continuity_metadata.items()}
+        if isinstance(continuity_metadata, dict)
+        else {}
+    )
+    raw_reinjected_components = normalized_continuity_metadata.get("reinjected_components")
+    reinjected_components = (
+        [str(item) for item in raw_reinjected_components if isinstance(item, str)]
+        if isinstance(raw_reinjected_components, list)
+        else []
     )
     budget = allocate_token_budget(
         total_budget=total_budget,
@@ -521,6 +617,11 @@ def build_workflow_prompting_state(
             TokenBudgetComponentRequest(
                 name="task_local_detail",
                 requested_tokens=estimate_token_count(projection_summary),
+                floor_tokens=0,
+            ),
+            TokenBudgetComponentRequest(
+                name="compact_reinjection",
+                requested_tokens=estimate_token_count(compact_reinjection_text),
                 floor_tokens=0,
             ),
         ],
@@ -610,6 +711,16 @@ def build_workflow_prompting_state(
             source="projection",
             optional=True,
         ),
+        PromptFragment(
+            name="compact_reinjection",
+            role="context",
+            content=truncate_text_to_token_budget(
+                compact_reinjection_text,
+                budget.component_tokens.get("compact_reinjection", 0),
+            ),
+            source="post_compact_reinjection",
+            optional=True,
+        ),
     )
     return {
         "provider_shape": "workflow",
@@ -618,4 +729,10 @@ def build_workflow_prompting_state(
             for fragment in fragments
         ],
         "budget": budget.to_state(),
+        "continuity": {
+            "compact_applied": bool(normalized_continuity_metadata.get("compact_applied", False)),
+            "boundary_marker": str(normalized_continuity_metadata.get("boundary_marker") or ""),
+            "source": str(normalized_continuity_metadata.get("source") or "workflow"),
+            "reinjected_components": reinjected_components,
+        },
     }

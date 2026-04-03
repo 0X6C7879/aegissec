@@ -1,9 +1,11 @@
 from typing import cast
 
 from app.agent.prompting import (
+    build_anthropic_prompt_assembly,
     build_chat_capability_prompt,
     build_openai_prompt_assembly,
     build_workflow_prompting_state,
+    split_skill_context_prompt,
 )
 from app.compat.mcp.service import MCPService
 from app.compat.skills.service import SkillService
@@ -49,6 +51,66 @@ def test_build_openai_prompt_assembly_preserves_system_layers_and_latest_message
     assert "scope.txt" in str(assembly.messages[-1]["content"])
 
 
+def test_split_skill_context_prompt_extracts_autorouted_fragment() -> None:
+    capability_prompt, autorouted_prompt = split_skill_context_prompt(
+        "Capability summary.\n\n## Auto-selected skill: ctf-web\nReason: matched alias"
+    )
+
+    assert capability_prompt == "Capability summary."
+    assert autorouted_prompt == "## Auto-selected skill: ctf-web\nReason: matched alias"
+
+
+def test_build_openai_prompt_assembly_tracks_autorouted_skill_as_formal_fragment() -> None:
+    assembly = build_openai_prompt_assembly(
+        content="分析这个 web ctf 场景",
+        attachments=[],
+        conversation_messages=None,
+        available_skills=[],
+        skill_context_prompt=(
+            "Capability summary.\n\n"
+            "## Auto-selected skill: ctf-web\n"
+            "Reason: matched alias tokens 'ctf web'"
+        ),
+        total_budget=12_000,
+    )
+
+    fragment_names = {fragment.name for fragment in assembly.fragments}
+    assert "capability_prompt" in fragment_names
+    assert "autorouted_skill_context" in fragment_names
+    assert any(
+        fragment.source == "autorouted_skill_router"
+        and "## Auto-selected skill: ctf-web" in fragment.content
+        for fragment in assembly.fragments
+    )
+    system_messages = [message for message in assembly.messages if message["role"] == "system"]
+    assert any(
+        "## Auto-selected skill: ctf-web" in str(message["content"]) for message in system_messages
+    )
+
+
+def test_build_anthropic_prompt_assembly_tracks_autorouted_skill_as_formal_fragment() -> None:
+    assembly = build_anthropic_prompt_assembly(
+        content="请处理 docx",
+        attachments=[],
+        conversation_messages=None,
+        available_skills=[],
+        skill_context_prompt=(
+            "Capability summary.\n\n"
+            "## Auto-selected skill: docx\n"
+            "Reason: matched explicit skill alias 'docx'"
+        ),
+        total_budget=12_000,
+    )
+
+    assert any(
+        fragment.name == "autorouted_skill_context" and fragment.source == "autorouted_skill_router"
+        for fragment in assembly.fragments
+    )
+    assert any(
+        "## Auto-selected skill: docx" in str(message["content"]) for message in assembly.messages
+    )
+
+
 def test_build_chat_capability_prompt_combines_inventory_schema_and_prompt_fragments() -> None:
     result = build_chat_capability_prompt(
         inventory_summary="Inventory",
@@ -79,14 +141,27 @@ def test_build_workflow_prompting_state_returns_budget_and_fragment_provenance()
         capability_inventory_summary="Inventory summary.",
         capability_schema_summary="Schema summary.",
         capability_prompt_fragment="Prompt fragment.",
+        compact_summary="Compact summary.",
+        reinjection_summary="Reinjection summary.",
+        continuity_metadata={
+            "compact_applied": True,
+            "boundary_marker": "compact-boundary:1",
+            "source": "post_compact_reinjection",
+            "reinjected_components": ["retrieval_summary", "session_memory_summary"],
+        },
     )
 
     assert prompting["provider_shape"] == "workflow"
     assert isinstance(prompting["fragments"], list)
     assert isinstance(prompting["budget"], dict)
+    assert isinstance(prompting["continuity"], dict)
     fragment_names = {fragment["name"] for fragment in prompting["fragments"]}
     assert "core_immutable" in fragment_names
     assert "capability_schema" in fragment_names
+    assert "compact_reinjection" in fragment_names
+    continuity = cast(dict[str, object], prompting["continuity"])
+    assert continuity["compact_applied"] is True
+    assert continuity["boundary_marker"] == "compact-boundary:1"
 
 
 def test_prompt_fragment_cache_keys_are_layer_specific() -> None:

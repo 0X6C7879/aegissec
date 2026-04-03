@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.agent.compact_runtime import CompactRuntimeService
 from app.agent.context_models import ContextSnapshot
 from app.agent.context_projection import ContextProjectionBuilder
 from app.agent.executor import ExecutionResult, Executor
 from app.agent.loop_models import LoopSelectedTask, WorkflowCycleArtifact, WorkflowLoopState
 from app.agent.memory import MemoryManager
+from app.agent.post_compact_reinjection import PostCompactReinjectionService
 from app.agent.prompting import build_workflow_prompting_state
 from app.agent.reflector import ReflectionResult, Reflector
 from app.agent.retrieval import RetrievalPipeline
@@ -80,6 +82,8 @@ class WorkflowLoopEngine:
         self._retrieval_pipeline = RetrievalPipeline(run_log_repository=run_log_repository)
         self._memory_manager = MemoryManager()
         self._context_projection_builder = ContextProjectionBuilder()
+        self._compact_runtime = CompactRuntimeService()
+        self._post_compact_reinjection = PostCompactReinjectionService()
         self._runtime = runtime or WorkflowGraphRuntime()
         self._selector = selector or WorkflowRunnableSelector(
             self._runtime,
@@ -1135,6 +1139,10 @@ class WorkflowLoopEngine:
                 "batch_status": batch.get("status"),
                 "execution": execution_compaction,
                 "messages": message_compaction,
+                "runtime": dict(context_snapshot.compact_runtime),
+                "compact_boundary_marker": context_snapshot.compact_runtime.get("boundary_marker"),
+                "compact_applied": bool(context_snapshot.compact_runtime.get("compacted", False)),
+                "compact_triggered": bool(context_snapshot.compact_runtime.get("triggered", False)),
                 "projection_active_level": context_snapshot.projection.active_level,
                 "projection_summary": context_snapshot.projection.summary,
             },
@@ -1169,6 +1177,8 @@ class WorkflowLoopEngine:
             memory=memory,
         )
         active_task_name = self._active_task_name(tasks)
+        current_stage = str(mutable_state.get("current_stage") or "") or None
+        history_summary = self._history_summary(mutable_state)
         capability_fragments = self._capability_facade.build_prompt_fragments(
             session_id=run.session_id,
             role_prompt=self._active_task_metadata(tasks, "role_prompt"),
@@ -1177,27 +1187,57 @@ class WorkflowLoopEngine:
             task_description=self._active_task_metadata(tasks, "description"),
             projection_summary=projection.summary,
         )
+        compact_runtime = self._compact_runtime.build_runtime_state(
+            mutable_state=mutable_state,
+            retrieval_summary=retrieval.summary,
+            memory_summary=memory.summary,
+            history_summary=history_summary,
+            projection=projection,
+            active_task_name=active_task_name,
+            current_stage=current_stage,
+        )
+        reinjection = self._post_compact_reinjection.build_reinjection(
+            compact_runtime=compact_runtime,
+            retrieval_summary=retrieval.summary,
+            session_memory_summary=memory.session.summary,
+            current_stage=current_stage,
+            task_name=active_task_name,
+            capability_inventory_summary=capability_fragments["inventory_summary"],
+            capability_schema_summary=capability_fragments["schema_summary"],
+            capability_prompt_fragment=capability_fragments["prompt_fragment"],
+        )
+        raw_reinjection_provenance = reinjection.get("provenance")
+        reinjection_provenance = (
+            {str(key): value for key, value in raw_reinjection_provenance.items()}
+            if isinstance(raw_reinjection_provenance, dict)
+            else {}
+        )
         prompting = build_workflow_prompting_state(
             goal=str(mutable_state.get("goal") or "authorized assessment"),
             template_name=run.template_name,
-            current_stage=str(mutable_state.get("current_stage") or "") or None,
+            current_stage=current_stage,
             task_name=active_task_name,
             role_prompt=self._active_task_metadata(tasks, "role_prompt"),
             sub_agent_role_prompt=self._active_task_metadata(tasks, "sub_agent_role_prompt"),
             task_description=self._active_task_metadata(tasks, "description"),
             retrieval_summary=retrieval.summary,
-            history_summary=self._history_summary(mutable_state),
+            history_summary=history_summary,
             memory_summary=memory.summary,
             projection_summary=projection.summary,
             capability_inventory_summary=capability_fragments["inventory_summary"],
             capability_schema_summary=capability_fragments["schema_summary"],
             capability_prompt_fragment=capability_fragments["prompt_fragment"],
+            compact_summary=str(compact_runtime.get("compact_summary") or ""),
+            reinjection_summary=str(reinjection.get("summary") or ""),
+            continuity_metadata=reinjection_provenance
+            | {"compact_applied": bool(reinjection.get("compact_applied", False))},
         )
         snapshot = ContextSnapshot(
             retrieval=retrieval,
             memory=memory,
             projection=projection,
             prompting=prompting,
+            compact_runtime=compact_runtime,
         )
         mutable_state["context"] = snapshot.to_state()
         return snapshot

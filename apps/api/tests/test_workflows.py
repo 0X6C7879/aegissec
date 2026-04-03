@@ -285,6 +285,7 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     memory = cast(dict[str, Any], context["memory"])
     projection = cast(dict[str, Any], context["projection"])
     prompting = cast(dict[str, Any], context["prompting"])
+    compact_runtime = cast(dict[str, Any], context["compact_runtime"])
 
     session_local_pack = cast(dict[str, Any], retrieval["session_local"])
     project_pack = cast(dict[str, Any], retrieval["project"])
@@ -309,12 +310,17 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     assert projection["active_level"] in {1, 2, 3, 4, 5}
     assert isinstance(prompting["fragments"], list)
     assert isinstance(prompting["budget"], dict)
+    assert isinstance(prompting["continuity"], dict)
+    assert isinstance(compact_runtime, dict)
+    assert isinstance(compact_runtime["metrics"], dict)
+    assert isinstance(compact_runtime["thresholds"], dict)
 
     loop_state = cast(dict[str, Any], state["loop"])
     latest_cycle = cast(list[dict[str, Any]], loop_state["cycles"])[-1]
     assert isinstance(latest_cycle["retrieval"], dict)
     assert isinstance(latest_cycle["memory"], dict)
     assert isinstance(latest_cycle["context_projection"], dict)
+    assert isinstance(cast(dict[str, Any], latest_cycle["compaction_summary"])["runtime"], dict)
     assert cast(dict[str, Any], latest_cycle["context_projection"])["active_level"] in {
         1,
         2,

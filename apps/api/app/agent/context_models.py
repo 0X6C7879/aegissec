@@ -450,6 +450,7 @@ class ContextSnapshot:
     memory: MemoryState
     projection: ContextProjection
     prompting: dict[str, object] = field(default_factory=dict)
+    compact_runtime: dict[str, object] = field(default_factory=dict)
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -457,6 +458,7 @@ class ContextSnapshot:
             "memory": self.memory.to_state(),
             "projection": self.projection.to_state(),
             "prompting": dict(self.prompting),
+            "compact_runtime": dict(self.compact_runtime),
         }
 
     @classmethod
@@ -466,6 +468,7 @@ class ContextSnapshot:
             memory=MemoryState.empty(),
             projection=ContextProjection.empty(),
             prompting={},
+            compact_runtime={},
         )
 
     @classmethod
@@ -476,4 +479,5 @@ class ContextSnapshot:
             memory=MemoryState.from_state(raw_dict.get("memory")),
             projection=ContextProjection.from_state(raw_dict.get("projection")),
             prompting=_dict(raw_dict.get("prompting")),
+            compact_runtime=_dict(raw_dict.get("compact_runtime")),
         )
