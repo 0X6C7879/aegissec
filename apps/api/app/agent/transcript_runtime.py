@@ -535,7 +535,12 @@ class TranscriptRuntimeService:
 
     @staticmethod
     def should_stop_current_cycle(directive: NextTurnDirective) -> bool:
-        return directive is not NextTurnDirective.CONTINUE
+        return directive in {
+            NextTurnDirective.AWAIT_APPROVAL,
+            NextTurnDirective.AWAIT_USER_INPUT,
+            NextTurnDirective.FINALIZE,
+            NextTurnDirective.STOP_LOOP,
+        }
 
     def _build_execution_delta(
         self, *, turn_id: str, task: TaskNode, execution: ExecutionResult

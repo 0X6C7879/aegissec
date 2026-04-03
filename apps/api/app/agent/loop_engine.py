@@ -166,6 +166,11 @@ class WorkflowLoopEngine:
         if blocked_approval_tasks and approve:
             blocked_approval_tasks[0].status = TaskNodeStatus.READY
             self._runtime.sync_execution_state(blocked_approval_tasks[0])
+            mutable_state["approval"] = {"required": False, "pending_task_id": None}
+            self._transcript_runtime.set_last_directive(
+                mutable_state,
+                NextTurnDirective.CONTINUE,
+            )
 
         selection = self._selector.select(tasks=tasks, state=mutable_state)
         schedule = self._tool_scheduler.build_schedule(selection)
