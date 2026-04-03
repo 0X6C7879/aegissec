@@ -314,10 +314,12 @@ class MemoryState:
 
     @property
     def summary(self) -> str:
-        return (
-            f"working={len(self.working.raw_entries)}/{len(self.working.distilled_entries)}; "
-            f"session={len(self.session.raw_entries)}/{len(self.session.distilled_entries)}; "
-            f"project={len(self.project.raw_entries)}/{len(self.project.distilled_entries)}"
+        return " | ".join(
+            [
+                f"working={len(self.working.raw_entries)}/{len(self.working.distilled_entries)}",
+                self.session.summary,
+                self.project.summary,
+            ]
         )
 
     @classmethod

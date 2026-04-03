@@ -3,6 +3,7 @@ import {
   extractSafeSessionSummary,
   mergeConversationGenerationEvent,
   mergeConversationReasoningEvent,
+  mergeQueueState,
   mergeSessionEventEntries,
   shouldStoreRealtimeEvent,
   toSessionMessageEvent,
@@ -314,6 +315,75 @@ describe("sessionUtils realtime summaries", () => {
     expect(replayedEvents[0]).toMatchObject({
       cursor: 12,
       summary: "重复回放",
+    });
+  });
+
+  it("keeps queued generations stable when the active generation completes and the next one starts", () => {
+    const baseQueue = {
+      session: {
+        id: "session-1",
+        title: "当前对话",
+        status: "running",
+        project_id: null,
+        goal: null,
+        scenario_type: null,
+        current_phase: null,
+        runtime_policy_json: null,
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+        deleted_at: null,
+      },
+      active_generation: {
+        id: "generation-1",
+        session_id: "session-1",
+        branch_id: "branch-1",
+        action: "reply",
+        assistant_message_id: "assistant-message-1",
+        status: "running",
+        reasoning_trace: [],
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+      },
+      queued_generations: [
+        {
+          id: "optimistic-generation-2",
+          session_id: "session-1",
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-2",
+          status: "queued",
+          reasoning_trace: [],
+          queue_position: 1,
+          created_at: "2026-04-01T10:00:01.000Z",
+          updated_at: "2026-04-01T10:00:01.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 1,
+    };
+
+    const afterCompleted = mergeQueueState(baseQueue, "assistant.trace", {
+      generation_id: "generation-1",
+      state: "generation.completed",
+    });
+
+    expect(afterCompleted).toMatchObject({
+      active_generation: null,
+      active_generation_id: null,
+      queued_generation_count: 1,
+      queued_generations: [{ id: "optimistic-generation-2" }],
+    });
+
+    const afterNextStarted = mergeQueueState(afterCompleted, "generation.started", {
+      generation_id: "optimistic-generation-2",
+      queued_prompt_count: 0,
+    });
+
+    expect(afterNextStarted).toMatchObject({
+      active_generation: { id: "optimistic-generation-2", status: "running" },
+      active_generation_id: "optimistic-generation-2",
+      queued_generations: [],
+      queued_generation_count: 0,
     });
   });
 });

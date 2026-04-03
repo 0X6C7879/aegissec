@@ -122,6 +122,7 @@ _SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS = {
 }
 _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE = 70
 _SKILL_AUTOROUTE_MARGIN = 10
+_SKILL_AUTOROUTE_CONTEXT_WINDOW = 6
 CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
@@ -894,10 +895,16 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
     if state == "skill.autoroute.selected":
         skill_name = entry.get("skill")
         if isinstance(skill_name, str) and skill_name:
-            return f"已自动选择技能：{skill_name}"
+            return f"自动选择 {skill_name}"
         return "已自动选择技能"
     if state == "skill.autoroute.skipped":
         reason = entry.get("reason")
+        if reason in {
+            "当前没有可用技能",
+            "当前消息没有可用于技能路由的上下文",
+            "没有高置信技能匹配",
+        }:
+            return None
         if isinstance(reason, str) and reason:
             return f"未自动预载技能：{reason}"
         return "未自动预载技能"
@@ -1020,7 +1027,7 @@ def _score_skill_for_autoroute(
         overlap = [token for token in description_tokens if token in context_tokens]
         if len(overlap) >= 2:
             overlap_preview = ", ".join(overlap[:3])
-            return 30 + len(overlap) * 5, f"description overlap: {overlap_preview}"
+            return min(95, 60 + len(overlap) * 5), f"description overlap: {overlap_preview}"
 
     return 0, ""
 
@@ -1030,9 +1037,15 @@ def _resolve_autorouted_skill_candidate(
     available_skills: list[Any],
     latest_message_text: str,
     recent_context_text: str,
-) -> tuple[Any | None, str]:
+) -> tuple[Any | None, dict[str, object]]:
     if not available_skills:
-        return None, "当前没有可用技能"
+        return None, {
+            "decision": "skipped",
+            "reason": "当前没有可用技能",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
 
     combined_context = "\n".join(
         part for part in [latest_message_text, recent_context_text] if part.strip()
@@ -1045,7 +1058,13 @@ def _resolve_autorouted_skill_candidate(
         )
     )
     if not normalized_context and not context_tokens:
-        return None, "当前消息没有可用于技能路由的上下文"
+        return None, {
+            "decision": "skipped",
+            "reason": "当前消息没有可用于技能路由的上下文",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
 
     scored_candidates: list[tuple[int, str, Any, str]] = []
     for skill in available_skills:
@@ -1059,23 +1078,55 @@ def _resolve_autorouted_skill_candidate(
         scored_candidates.append((score, _skill_autoroute_display_name(skill), skill, reason))
 
     if not scored_candidates:
-        return None, "没有高置信技能匹配"
+        return None, {
+            "decision": "skipped",
+            "reason": "没有高置信技能匹配",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
 
     scored_candidates.sort(key=lambda item: (-item[0], item[1]))
     top_score, top_name, top_skill, top_reason = scored_candidates[0]
     runner_up = scored_candidates[1] if len(scored_candidates) > 1 else None
+    candidate_preview = [
+        {
+            "skill": display_name,
+            "confidence": score,
+            "reason": reason,
+        }
+        for score, display_name, _skill, reason in scored_candidates[:3]
+    ]
 
     if top_score < _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE:
-        return None, "没有高置信技能匹配"
+        return None, {
+            "decision": "skipped",
+            "reason": "没有高置信技能匹配",
+            "confidence": top_score,
+            "top_candidate": top_name,
+            "candidates": candidate_preview,
+        }
 
     if runner_up is not None:
         runner_up_score, runner_up_name, _, _ = runner_up
         if runner_up_score >= _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE and (
             top_score - runner_up_score < _SKILL_AUTOROUTE_MARGIN
         ):
-            return None, f"存在多个高置信技能候选（{top_name}, {runner_up_name}）"
+            return None, {
+                "decision": "skipped",
+                "reason": f"存在多个高置信技能候选（{top_name}, {runner_up_name}）",
+                "confidence": top_score,
+                "top_candidate": top_name,
+                "candidates": candidate_preview,
+            }
 
-    return top_skill, top_reason
+    return top_skill, {
+        "decision": "selected",
+        "reason": top_reason,
+        "confidence": top_score,
+        "top_candidate": top_name,
+        "candidates": candidate_preview,
+    }
 
 
 async def _build_autorouted_skill_context(
@@ -1085,16 +1136,24 @@ async def _build_autorouted_skill_context(
     recent_context_text: str,
     execute_tool: Any,
 ) -> tuple[str | None, dict[str, object]]:
-    selected_skill, route_reason = _resolve_autorouted_skill_candidate(
+    selected_skill, route_report = _resolve_autorouted_skill_candidate(
         available_skills=available_skills,
         latest_message_text=latest_message_text,
         recent_context_text=recent_context_text,
     )
+    route_reason = str(route_report.get("reason") or "")
+    raw_route_confidence = route_report.get("confidence")
+    route_confidence = (
+        int(raw_route_confidence) if isinstance(raw_route_confidence, int | float | str) else 0
+    )
+    route_candidates = route_report.get("candidates")
     if selected_skill is None:
         return None, {
             "state": "skill.autoroute.skipped",
-            "summary": f"未自动预载技能：{route_reason}",
             "reason": route_reason,
+            "confidence": route_confidence,
+            "top_candidate": route_report.get("top_candidate"),
+            "candidates": route_candidates if isinstance(route_candidates, list) else [],
         }
 
     skill_identifier = _skill_autoroute_identifier(selected_skill)
@@ -1113,6 +1172,9 @@ async def _build_autorouted_skill_context(
             "summary": f"自动预载技能失败：{skill_display_name}（{exc}）",
             "skill": skill_display_name,
             "reason": route_reason,
+            "confidence": route_confidence,
+            "top_candidate": route_report.get("top_candidate"),
+            "candidates": route_candidates if isinstance(route_candidates, list) else [],
             "error": str(exc),
         }
 
@@ -1120,9 +1182,12 @@ async def _build_autorouted_skill_context(
     if not isinstance(skill_payload, dict):
         return f"## Auto-selected skill: {skill_display_name}", {
             "state": "skill.autoroute.selected",
-            "summary": f"已自动选择技能：{skill_display_name}",
+            "summary": f"自动选择 {skill_display_name}",
             "skill": skill_display_name,
             "reason": route_reason,
+            "confidence": route_confidence,
+            "top_candidate": route_report.get("top_candidate"),
+            "candidates": route_candidates if isinstance(route_candidates, list) else [],
         }
 
     directory_name = skill_payload.get("directory_name")
@@ -1139,7 +1204,12 @@ async def _build_autorouted_skill_context(
 
     context_lines = [
         f"## Auto-selected skill: {resolved_skill_name}",
+        f"Confidence: {route_confidence}",
         f"Reason: {route_reason}",
+        (
+            "Prompt provenance: this preloaded skill fragment was injected by the "
+            "server-side skill router before the first model turn."
+        ),
         "Use this preloaded skill guidance proactively before deciding on the next tool or answer.",
     ]
     if isinstance(description, str) and description.strip():
@@ -1149,9 +1219,12 @@ async def _build_autorouted_skill_context(
 
     return "\n".join(context_lines), {
         "state": "skill.autoroute.selected",
-        "summary": f"已自动选择技能：{resolved_skill_name}",
+        "summary": f"自动选择 {resolved_skill_name}",
         "skill": resolved_skill_name,
         "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": route_candidates if isinstance(route_candidates, list) else [],
     }
 
 
@@ -1789,7 +1862,7 @@ async def _process_generation(
                 latest_message_text=latest_message_text,
                 recent_context_text="\n\n".join(
                     message.content
-                    for message in conversation_history[-4:]
+                    for message in conversation_history[-_SKILL_AUTOROUTE_CONTEXT_WINDOW:]
                     if message.content.strip()
                 ),
                 execute_tool=execute_tool,
@@ -1807,6 +1880,26 @@ async def _process_generation(
                     for part in [skill_context_prompt, autorouted_skill_context]
                     if part.strip()
                 )
+            generation_metadata = dict(generation.metadata_json)
+            existing_prompt_provenance = generation_metadata.get("prompt_provenance")
+            prompt_provenance = (
+                dict(existing_prompt_provenance)
+                if isinstance(existing_prompt_provenance, dict)
+                else {}
+            )
+            generation_metadata["prompt_provenance"] = {
+                **prompt_provenance,
+                "autorouted_skill": {
+                    "state": autoroute_trace_entry.get("state"),
+                    "skill": autoroute_trace_entry.get("skill"),
+                    "confidence": autoroute_trace_entry.get("confidence"),
+                    "reason": autoroute_trace_entry.get("reason"),
+                    "top_candidate": autoroute_trace_entry.get("top_candidate"),
+                    "candidates": autoroute_trace_entry.get("candidates", []),
+                    "context_injected": bool(autorouted_skill_context),
+                },
+            }
+            repository.update_generation(generation, metadata_json=generation_metadata)
 
             raw_streamed_content = loaded_assistant_message.content
             streamed_content = _project_visible_stream_content(raw_streamed_content)

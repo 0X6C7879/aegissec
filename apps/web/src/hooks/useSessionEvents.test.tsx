@@ -3,7 +3,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../store/uiStore";
-import type { SessionConversation, SessionDetail, SessionSummary } from "../types/sessions";
+import type {
+  SessionConversation,
+  SessionDetail,
+  SessionQueue,
+  SessionSummary,
+} from "../types/sessions";
 import { useSessionEvents } from "./useSessionEvents";
 
 class MockWebSocket {
@@ -423,6 +428,103 @@ describe("useSessionEvents", () => {
         .getQueryData<SessionConversation>(["conversation", session.id])
         ?.generations[0]?.steps?.some((step) => step.kind === "output"),
     ).toBe(false);
+
+    unmount();
+  });
+
+  it("keeps queued generations stable through completion and next-start websocket events", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const session = createSessionSummary();
+    const queue: SessionQueue = {
+      session,
+      active_generation: {
+        id: "generation-1",
+        session_id: session.id,
+        branch_id: "branch-1",
+        action: "reply",
+        assistant_message_id: "assistant-message-1",
+        status: "running",
+        reasoning_trace: [],
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+      },
+      queued_generations: [
+        {
+          id: "optimistic-generation-2",
+          session_id: session.id,
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-2",
+          status: "queued",
+          reasoning_trace: [],
+          queue_position: 1,
+          created_at: "2026-04-01T10:00:01.000Z",
+          updated_at: "2026-04-01T10:00:01.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 1,
+    };
+
+    queryClient.setQueryData(["session-queue", session.id], queue);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const socket = MockWebSocket.instances[0]!;
+    act(() => {
+      socket.emitOpen();
+      socket.emitMessage({
+        type: "tool.call.started",
+        cursor: 1,
+        created_at: "2026-04-01T10:00:01.500Z",
+        data: {
+          generation_id: "generation-1",
+          tool_call_id: "tool-1",
+          tool: "execute_kali_command",
+          command: "nmap 127.0.0.1",
+        },
+      });
+    });
+
+    expect(queryClient.getQueryData<SessionQueue>(["session-queue", session.id])).toMatchObject({
+      active_generation_id: "generation-1",
+      queued_generations: [{ id: "optimistic-generation-2" }],
+      queued_generation_count: 1,
+    });
+
+    act(() => {
+      socket.emitMessage({
+        type: "assistant.trace",
+        cursor: 2,
+        created_at: "2026-04-01T10:00:02.000Z",
+        data: {
+          generation_id: "generation-1",
+          state: "generation.completed",
+        },
+      });
+      socket.emitMessage({
+        type: "generation.started",
+        cursor: 3,
+        created_at: "2026-04-01T10:00:03.000Z",
+        data: {
+          generation_id: "optimistic-generation-2",
+          queued_prompt_count: 0,
+        },
+      });
+    });
+
+    expect(queryClient.getQueryData<SessionQueue>(["session-queue", session.id])).toMatchObject({
+      active_generation_id: "optimistic-generation-2",
+      active_generation: { id: "optimistic-generation-2", status: "running" },
+      queued_generations: [],
+      queued_generation_count: 0,
+    });
 
     unmount();
   });

@@ -160,13 +160,14 @@ describe("ConversationFeed", () => {
                 title: "思路进展",
                 text: "<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑",
               }),
-              buildTranscriptSegment({
-                id: "segment-status",
-                sequence: 2,
-                kind: "status",
-                title: "运行状态",
-                text: "已自动选择技能：ctf-web",
-              }),
+                buildTranscriptSegment({
+                  id: "segment-status",
+                  sequence: 2,
+                  kind: "status",
+                  title: "运行状态",
+                  text: "自动选择 ctf-web",
+                  metadata: { state: "skill.autoroute.selected", skill: "ctf-web" },
+                }),
               buildTranscriptSegment({
                 id: "segment-tool-call",
                 sequence: 3,
@@ -225,22 +226,38 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("工具结果")).not.toBeInTheDocument();
     expect(screen.queryByText("正文输出")).not.toBeInTheDocument();
     expect(screen.queryByText("运行状态")).not.toBeInTheDocument();
-    expect(screen.getAllByText("思考过程").length).toBeGreaterThan(0);
-    expect(container.querySelectorAll("details.assistant-reasoning-stream").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelector("details.assistant-reasoning-stream")).toHaveAttribute("open");
-    expect(screen.getByText("已自动选择技能：ctf-web")).toBeInTheDocument();
-    expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(1);
+    expect(screen.queryByText("思考过程")).not.toBeInTheDocument();
+    expect(container.querySelector("details.assistant-reasoning-stream")).toBeNull();
+    expect(container.querySelectorAll(".assistant-reasoning-block")).toHaveLength(2);
+    expect(screen.getByText("自动选择")).toBeInTheDocument();
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-inline-cue")).toHaveLength(1);
+    expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(0);
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("private").length).toBeGreaterThan(0);
     expect(screen.getByText("正在检查 node5.buuoj.cn 的登录逻辑")).toBeInTheDocument();
     expect(screen.getByText("结合扫描结果继续确认过滤点")).toBeInTheDocument();
     expect(screen.getAllByText("very secret").length).toBeGreaterThan(0);
     expect(screen.getByText("最终答复")).toBeInTheDocument();
-    expect(
-      container.querySelector(".assistant-output-block-final details.assistant-reasoning-stream"),
-    ).not.toBeNull();
+    expect(container.querySelector(".assistant-output-block-final .assistant-inline-think")).not.toBeNull();
+    const transcriptOrder = [...container.querySelectorAll(".assistant-transcript > *")].map(
+      (element) => {
+        if (element.classList.contains("assistant-reasoning-block")) {
+          return "reasoning";
+        }
+        if (element.classList.contains("assistant-inline-cue")) {
+          return "cue";
+        }
+        if (element.classList.contains("assistant-tool-block")) {
+          return "tool";
+        }
+        if (element.classList.contains("assistant-output-block")) {
+          return "output";
+        }
+        return "unknown";
+      },
+    );
+    expect(transcriptOrder).toEqual(["reasoning", "cue", "tool", "reasoning", "output"]);
     expect(screen.queryByText("<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑")).not.toBeInTheDocument();
     expect(screen.queryByText("<think>very secret</think>最终答复")).not.toBeInTheDocument();
     fireEvent.click(container.querySelector(".assistant-tool-summary")!);
@@ -347,7 +364,7 @@ describe("ConversationFeed", () => {
     );
 
     expect(screen.getByText("正在持续更新当前回复。")).toBeInTheDocument();
-    expect(document.querySelectorAll(".assistant-status-note")).toHaveLength(1);
+    expect(document.querySelectorAll(".assistant-inline-cue")).toHaveLength(1);
   });
 
   it("uses a single icon-only inline edit control for user messages", () => {

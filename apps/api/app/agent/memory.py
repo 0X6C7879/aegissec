@@ -10,10 +10,15 @@ from app.agent.context_models import (
     MemoryState,
     RetrievalState,
 )
+from app.agent.memory_store import write_memory_entry
+from app.agent.session_memory import SessionMemoryService
 from app.db.models import Session
 
 
 class MemoryManager:
+    def __init__(self) -> None:
+        self._session_memory = SessionMemoryService()
+
     def build(
         self,
         *,
@@ -23,12 +28,24 @@ class MemoryManager:
     ) -> MemoryState:
         previous = MemoryState.from_state(self._context_dict(state).get("memory"))
         batch_cycle = self._batch_cycle(state)
+        session_summary = self._session_memory.update_session_summary(
+            state=state, retrieval=retrieval
+        )
         working_raw = self._build_working_raw_entries(state=state, batch_cycle=batch_cycle)
         working_distilled = self._build_working_distilled_entries(working_raw, retrieval)
         session_raw = self._merge_entries(previous.session.raw_entries, working_raw)
         session_distilled = self._merge_entries(
             previous.session.distilled_entries, working_distilled
         )
+        if session_summary.summary:
+            session_distilled = self._merge_entries(
+                session_distilled,
+                [
+                    self._build_session_summary_record(
+                        session_summary.summary, working_raw, retrieval
+                    )
+                ],
+            )
         promotions = [
             MemoryOperation(
                 entry_id=entry.record_id,
@@ -38,18 +55,28 @@ class MemoryManager:
             )
             for entry in working_distilled
         ]
-        project_entries = list(previous.project.distilled_entries)
+        project_entries = list(retrieval.project.items)
         project_promotions: list[MemoryOperation] = []
+        persistable_working_distilled = [
+            entry for entry in working_distilled if self._should_persist_to_project(entry)
+        ]
         if session is not None and session.project_id is not None:
-            project_entries = self._merge_entries(project_entries, working_distilled)
+            durable_entry_ids = [
+                self._persist_project_memory_entry(
+                    project_id=session.project_id,
+                    entry=entry,
+                    working_raw=working_raw,
+                )
+                for entry in persistable_working_distilled
+            ]
             project_promotions = [
                 MemoryOperation(
-                    entry_id=entry.record_id,
+                    entry_id=entry_id,
                     from_layer="session",
                     to_layer="project",
                     status="promoted",
                 )
-                for entry in working_distilled
+                for entry_id in durable_entry_ids
             ]
         elif working_distilled:
             project_promotions = [
@@ -60,7 +87,7 @@ class MemoryManager:
                     status="skipped",
                     reason="session has no project scope",
                 )
-                for entry in working_distilled
+                for entry in persistable_working_distilled
             ]
         return MemoryState(
             working=MemoryLayer(
@@ -77,8 +104,12 @@ class MemoryManager:
                 raw_entries=session_raw,
                 distilled_entries=session_distilled,
                 summary=(
-                    f"Session memory holds {len(session_raw)} raw and "
-                    f"{len(session_distilled)} distilled citation-backed entry(s)."
+                    session_summary.summary
+                    if session_summary.summary
+                    else (
+                        f"Session memory holds {len(session_raw)} raw and "
+                        f"{len(session_distilled)} distilled citation-backed entry(s)."
+                    )
                 ),
             ),
             project=MemoryLayer(
@@ -86,7 +117,7 @@ class MemoryManager:
                 raw_entries=[],
                 distilled_entries=project_entries,
                 summary=(
-                    f"Project memory holds {len(project_entries)} distilled entry(s)."
+                    f"Project memory surfaced {len(project_entries)} relevant durable entry(s)."
                     if session is not None and session.project_id is not None
                     else "Project memory remains scaffolded until a project scope is available."
                 ),
@@ -151,6 +182,59 @@ class MemoryManager:
             )
         return entries
 
+    def _build_session_summary_record(
+        self,
+        summary: str,
+        working_raw: list[ContextRecord],
+        retrieval: RetrievalState,
+    ) -> ContextRecord:
+        citations = [
+            citation
+            for entry in (working_raw[:2] + retrieval.session_local.items[:1])
+            for citation in entry.citations[:1]
+        ]
+        return ContextRecord(
+            record_id="memory:session:summary",
+            title="Session summary",
+            summary=summary,
+            kind="session_summary",
+            citations=citations,
+            metadata={"kind": "session_summary"},
+        )
+
+    def _persist_project_memory_entry(
+        self,
+        *,
+        project_id: str,
+        entry: ContextRecord,
+        working_raw: list[ContextRecord],
+    ) -> str:
+        supporting_summaries = [
+            raw.summary for raw in working_raw if raw.record_id != entry.record_id
+        ]
+        body_parts = [entry.summary]
+        if supporting_summaries:
+            body_parts.append("Supporting evidence: " + "; ".join(supporting_summaries[:3]))
+        stored_entry = write_memory_entry(
+            project_id,
+            entry_id=entry.record_id,
+            title=entry.title,
+            summary=entry.summary,
+            body="\n\n".join(body_parts),
+            tags=self._entry_tags(entry),
+            citations=list(entry.citations),
+            updated_at=datetime.now(UTC).isoformat(),
+        )
+        return stored_entry.entry_id
+
+    @staticmethod
+    def _entry_tags(entry: ContextRecord) -> list[str]:
+        tags = [entry.kind]
+        metadata_tags = entry.metadata.get("tags") if isinstance(entry.metadata, dict) else None
+        if isinstance(metadata_tags, list):
+            tags.extend(item for item in metadata_tags if isinstance(item, str))
+        return [tag for index, tag in enumerate(tags) if tag and tag not in tags[:index]]
+
     def _build_working_distilled_entries(
         self, working_raw: list[ContextRecord], retrieval: RetrievalState
     ) -> list[ContextRecord]:
@@ -163,7 +247,7 @@ class MemoryManager:
                     summary=f"Distilled from {raw_entry.title}: {raw_entry.summary}",
                     kind="working_distilled",
                     citations=list(raw_entry.citations),
-                    metadata={"source_record_id": raw_entry.record_id},
+                    metadata={"source_record_id": raw_entry.record_id, "persist_to_project": True},
                 )
             )
         if retrieval.session_local.items:
@@ -178,10 +262,22 @@ class MemoryManager:
                     ),
                     kind="retrieval_bridge",
                     citations=list(first_item.citations),
-                    metadata={"source_record_id": first_item.record_id},
+                    metadata={
+                        "source_record_id": first_item.record_id,
+                        "persist_to_project": False,
+                    },
                 )
             )
         return self._merge_entries([], entries)
+
+    @staticmethod
+    def _should_persist_to_project(entry: ContextRecord) -> bool:
+        persist_flag = (
+            entry.metadata.get("persist_to_project") if isinstance(entry.metadata, dict) else None
+        )
+        if isinstance(persist_flag, bool):
+            return persist_flag
+        return entry.kind == "working_distilled"
 
     @staticmethod
     def _merge_entries(

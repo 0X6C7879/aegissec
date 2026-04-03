@@ -4275,25 +4275,16 @@ a {
   gap: var(--space-3);
 }
 
-.assistant-reasoning-stream,
+.assistant-reasoning-block,
 .assistant-tool-block,
 .assistant-error-block,
 .assistant-output-block,
 .chat-bubble-action-shell,
-.assistant-status-note,
+.assistant-inline-cue,
 .assistant-inline-skill-tag {
   min-width: 0;
 }
 
-.assistant-reasoning-stream {
-  margin: 0;
-  border: 1px solid rgba(57, 84, 72, 0.12);
-  border-radius: 14px;
-  background: rgba(36, 88, 69, 0.05);
-  padding: 0.65rem 0.78rem;
-}
-
-.assistant-reasoning-toggle,
 .assistant-tool-summary,
 .assistant-error-summary {
   list-style: none;
@@ -4305,58 +4296,38 @@ a {
   cursor: pointer;
 }
 
-.assistant-reasoning-toggle::-webkit-details-marker,
 .assistant-tool-summary::-webkit-details-marker,
 .assistant-error-summary::-webkit-details-marker {
   display: none;
 }
 
-.assistant-reasoning-preview {
-  min-width: 0;
-  color: rgba(58, 66, 60, 0.62);
-  font-size: 0.84rem;
-  line-height: 1.55;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.assistant-reasoning-block {
+  padding-top: 2px;
 }
 
-.assistant-reasoning-toggle-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 1.6rem;
-  padding: 0 0.55rem;
-  border-radius: 999px;
-  background: rgba(57, 84, 72, 0.08);
-  color: rgba(58, 66, 60, 0.62);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.assistant-reasoning-stream:not([open]) .assistant-reasoning-toggle-label::before {
-  content: "展开";
-}
-
-.assistant-reasoning-stream[open] .assistant-reasoning-toggle-label::before {
-  content: "收起";
-}
-
-.assistant-reasoning-body {
-  margin-top: 0.7rem;
-  display: grid;
-  gap: 6px;
-  padding-left: 0;
-}
-
-.assistant-reasoning-body > :last-child {
-  margin-bottom: 0;
-}
-
-.assistant-reasoning-line,
-.assistant-reasoning-line .chat-bubble-markdown {
-  color: rgba(58, 66, 60, 0.68);
+.assistant-reasoning-block .chat-bubble-markdown {
+  color: rgba(58, 66, 60, 0.72);
   font-size: 0.86rem;
+  line-height: 1.62;
+}
+
+.assistant-reasoning-block .chat-bubble-markdown p,
+.assistant-reasoning-block .chat-bubble-markdown li,
+.assistant-reasoning-block .chat-bubble-markdown blockquote {
+  color: rgba(58, 66, 60, 0.72);
+}
+
+.assistant-inline-think {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 0.35rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid rgba(57, 84, 72, 0.18);
+  color: rgba(58, 66, 60, 0.72);
+}
+
+.assistant-inline-think > :last-child {
+  margin-bottom: 0;
 }
 
 .assistant-tool-block {
@@ -4499,11 +4470,26 @@ a {
   color: rgba(18, 23, 20, 0.98);
 }
 
-.assistant-status-note {
+.assistant-inline-cue {
   margin: 0;
   color: rgba(58, 66, 60, 0.62);
   font-size: 0.8rem;
   line-height: 1.5;
+}
+
+.assistant-inline-cue-skill {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.assistant-inline-cue-prefix {
+  color: rgba(58, 66, 60, 0.62);
+}
+
+.assistant-inline-cue-muted {
+  color: rgba(58, 66, 60, 0.6);
 }
 
 .chat-bubble-action-shell {

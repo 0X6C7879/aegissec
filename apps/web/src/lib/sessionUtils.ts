@@ -1210,12 +1210,15 @@ export function mergeQueueState(
     };
   }
 
+  const generationTraceState =
+    type === "assistant.trace" && typeof data.state === "string" ? data.state : null;
+  const normalizedType = generationTraceState ?? type;
   const generationId = readFirstNonEmptyString(data, ["generation_id"]);
   if (!generationId) {
     return queue;
   }
 
-  if (type === "generation.started") {
+  if (normalizedType === "generation.started") {
     const activeGeneration =
       queue.queued_generations.find((generation) => generation.id === generationId) ??
       queue.active_generation;
@@ -1236,7 +1239,18 @@ export function mergeQueueState(
     };
   }
 
-  if (type === "generation.cancelled" || type === "generation.failed") {
+  if (normalizedType === "generation.completed") {
+    return {
+      ...queue,
+      active_generation:
+        queue.active_generation?.id === generationId ? null : queue.active_generation,
+      active_generation_id:
+        queue.active_generation_id === generationId ? null : queue.active_generation_id,
+      queued_generation_count: queue.queued_generations.length,
+    };
+  }
+
+  if (normalizedType === "generation.cancelled" || normalizedType === "generation.failed") {
     return {
       ...queue,
       active_generation:

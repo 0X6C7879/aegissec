@@ -1729,8 +1729,6 @@ export function SessionWorkspaceWorkbench() {
         });
       });
 
-      void queryClient.invalidateQueries({ queryKey: ["session-queue", id] });
-
       return {
         previousDetail,
         previousQueue,
@@ -2078,7 +2076,7 @@ export function SessionWorkspaceWorkbench() {
     Boolean(
       sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id,
     ) ||
-    activeSession?.status === "running";
+    queuedGenerationCount > 0;
 
   function handleToggleSidebarCollapsed(): void {
     setIsSidebarCollapsed((currentValue) => !currentValue);

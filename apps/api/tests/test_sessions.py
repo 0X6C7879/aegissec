@@ -1452,7 +1452,6 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         status_texts = [segment["text"] for segment in status_segments]
         assert "开始生成回复" in status_texts
         assert "正在评估可预载技能" in status_texts
-        assert any(text.startswith("未自动预载技能：") for text in status_texts)
         assert "本轮生成已完成" in status_texts
         assert output_segments
         assert reasoning_segments[-1]["text"] == "<think>private</think>"
@@ -1929,7 +1928,7 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
             for segment in transcript
             if segment["kind"] in {"tool_call", "tool_result", "output"}
         ]
-        assert any(segment["text"] == "已自动选择技能：docx" for segment in status_segments)
+        assert any(segment["text"] == "自动选择 docx" for segment in status_segments)
         assert [segment["kind"] for segment in relevant_segments[:3]] == [
             "tool_call",
             "tool_result",
@@ -1937,6 +1936,21 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
         ]
         assert relevant_segments[0]["tool_name"] == "read_skill_content"
         assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "docx"
+        assert chat_payload["generation"]["metadata"]["prompt_provenance"]["autorouted_skill"] == {
+            "state": "skill.autoroute.selected",
+            "skill": "docx",
+            "confidence": 100,
+            "reason": "matched explicit skill alias 'docx'",
+            "top_candidate": "docx",
+            "candidates": [
+                {
+                    "skill": "docx",
+                    "confidence": 100,
+                    "reason": "matched explicit skill alias 'docx'",
+                }
+            ],
+            "context_injected": True,
+        }
         assert chat_payload["assistant_message"]["content"] == "已收到 docx 自动技能上下文"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
@@ -2006,7 +2020,7 @@ Create and edit Word documents.
             chat_response = client.post(
                 f"/api/sessions/{session_id}/chat",
                 json={
-                    "content": "这个 web ctf 题的 node5.buuoj.cn 登录绕过和 xss 怎么看？",
+                    "content": "这个 web ctf 题的 node5.buuoj.cn 登录绕过、xss 和 sqli 怎么看？",
                     "attachments": [],
                     "wait_for_completion": True,
                 },
@@ -2030,9 +2044,24 @@ Create and edit Word documents.
             for segment in transcript
             if segment["kind"] in {"tool_call", "tool_result", "output"}
         ]
-        assert any(segment["text"] == "已自动选择技能：ctf-web" for segment in status_segments)
+        assert any(segment["text"] == "自动选择 ctf-web" for segment in status_segments)
         assert relevant_segments[0]["tool_name"] == "read_skill_content"
         assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
+        assert chat_payload["generation"]["metadata"]["prompt_provenance"]["autorouted_skill"] == {
+            "state": "skill.autoroute.selected",
+            "skill": "ctf-web",
+            "confidence": 72,
+            "reason": "matched alias tokens 'ctf web'",
+            "top_candidate": "ctf-web",
+            "candidates": [
+                {
+                    "skill": "ctf-web",
+                    "confidence": 72,
+                    "reason": "matched alias tokens 'ctf web'",
+                }
+            ],
+            "context_injected": True,
+        }
         assert chat_payload["assistant_message"]["content"] == "已收到 ctf-web 自动技能上下文"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override

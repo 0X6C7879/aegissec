@@ -267,11 +267,15 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             );
           }
 
-          if (
+          const shouldMergeQueueState =
             envelope.type.startsWith("generation.") ||
             envelope.type === "session.updated" ||
-            envelope.type.startsWith("tool.call.")
-          ) {
+            (envelope.type === "assistant.trace" &&
+              isRecord(envelope.data) &&
+              typeof envelope.data.state === "string" &&
+              envelope.data.state.startsWith("generation."));
+
+          if (shouldMergeQueueState) {
             queryClient.setQueryData<SessionQueue | undefined>(
               ["session-queue", targetSessionId],
               (currentValue) => mergeQueueState(currentValue, envelope.type, envelope.data),

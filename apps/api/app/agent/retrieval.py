@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.agent.context_models import CitationPointer, ContextRecord, RetrievalPack, RetrievalState
+from app.agent.memory_recall import select_relevant_memory_entries
 from app.db.models import Session, TaskNode, WorkflowRun
 from app.db.repositories import RunLogRepository
 
@@ -17,10 +18,9 @@ class RetrievalPipeline:
         state: dict[str, object],
         tasks: list[TaskNode],
     ) -> RetrievalState:
-        del tasks
         return RetrievalState(
             session_local=self._build_session_local_pack(run=run, state=state),
-            project=self._build_project_pack(session=session),
+            project=self._build_project_pack(session=session, state=state, tasks=tasks),
             capability=self._build_capability_pack(state=state),
         )
 
@@ -120,7 +120,13 @@ class RetrievalPipeline:
             items=items,
         )
 
-    def _build_project_pack(self, *, session: Session | None) -> RetrievalPack:
+    def _build_project_pack(
+        self,
+        *,
+        session: Session | None,
+        state: dict[str, object],
+        tasks: list[TaskNode],
+    ) -> RetrievalPack:
         if session is None or session.project_id is None:
             return RetrievalPack.empty(
                 scope="project",
@@ -129,37 +135,55 @@ class RetrievalPipeline:
                     "Project retrieval scaffolded because the session is not linked to a project."
                 ),
             )
-        logs = self._run_log_repository.list_logs(
-            project_id=session.project_id, limit=3, sort_order="desc"
+        current_task = " ".join(
+            task.name for task in tasks if task.status.value in {"ready", "in_progress"}
         )
-        if not logs:
+        recent_tools = [
+            str(record.get("command_or_action") or "")
+            for record in (
+                self._dict_list(state.get("archived_execution_records"))
+                + self._dict_list(state.get("execution_records"))
+            )[-6:]
+            if str(record.get("command_or_action") or "").strip()
+        ]
+        already_surfaced = self._already_surfaced_entry_ids(state)
+        entries = select_relevant_memory_entries(
+            session.project_id,
+            current_task=current_task,
+            recent_tools=recent_tools,
+            already_surfaced=already_surfaced,
+            top_k=3,
+        )
+        if not entries:
             return RetrievalPack.empty(
                 scope="project",
                 status="scaffolded",
-                summary="Project retrieval scaffolded but no project history was available.",
+                summary="Project retrieval scaffolded but no durable project memory matched.",
             )
         items = [
             ContextRecord(
-                record_id=f"project-log:{log.id}",
-                title=log.event_type,
-                summary=log.message,
-                kind="project_log",
-                citations=[
-                    CitationPointer(
-                        source_kind="run_log",
-                        source_id=log.id,
-                        label=log.event_type,
-                    )
-                ],
-                metadata={"source": log.source, "level": log.level},
+                record_id=f"project-memory:{entry.entry_id}",
+                title=entry.title,
+                summary=entry.summary,
+                kind="project_memory",
+                citations=list(entry.citations),
+                metadata={
+                    "memory_entry_id": entry.entry_id,
+                    "filename": entry.filename,
+                    "tags": list(entry.tags),
+                    "updated_at": entry.updated_at,
+                },
             )
-            for log in logs
+            for entry in entries
         ]
         return RetrievalPack(
             pack_id=f"retrieval:project:{session.project_id}",
             scope="project",
             status="ready",
-            summary=f"Project retrieval reused {len(items)} project-scoped history item(s).",
+            summary=(
+                f"Project retrieval selected {len(items)} relevant durable memory entry(s) "
+                f"for the current task bias."
+            ),
             items=items,
         )
 
@@ -222,3 +246,27 @@ class RetrievalPipeline:
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, dict)]
+
+    def _already_surfaced_entry_ids(self, state: dict[str, object]) -> set[str]:
+        context = state.get("context")
+        if not isinstance(context, dict):
+            return set()
+        surfaced: set[str] = set()
+        for item in self._dict_list(
+            self._nested_list(context, "retrieval", "project", "items")
+        ) + self._dict_list(self._nested_list(context, "memory", "project", "distilled_entries")):
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                entry_id = metadata.get("memory_entry_id")
+                if isinstance(entry_id, str) and entry_id:
+                    surfaced.add(entry_id)
+        return surfaced
+
+    @staticmethod
+    def _nested_list(container: dict[str, object], *keys: str) -> object:
+        current: object = container
+        for key in keys:
+            if not isinstance(current, dict):
+                return []
+            current = current.get(key)
+        return current

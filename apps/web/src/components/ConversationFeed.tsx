@@ -26,23 +26,30 @@ type TranscriptOutputBlock = {
   segment: AssistantTranscriptSegment;
 };
 
+type TranscriptReasoningBlock = {
+  type: "reasoning";
+  key: string;
+  segment: AssistantTranscriptSegment;
+};
+
 type TranscriptErrorBlock = {
   type: "error";
   key: string;
   segment: AssistantTranscriptSegment;
 };
 
-type TranscriptStatusBlock = {
-  type: "status";
+type TranscriptCueBlock = {
+  type: "cue";
   key: string;
   segment: AssistantTranscriptSegment;
 };
 
 type TranscriptRenderableBlock =
   | TranscriptToolBlock
+  | TranscriptReasoningBlock
   | TranscriptOutputBlock
   | TranscriptErrorBlock
-  | TranscriptStatusBlock;
+  | TranscriptCueBlock;
 
 type ConversationFeedProps = {
   messages: SessionMessage[];
@@ -155,15 +162,24 @@ function normalizeMarkdownSpacing(content: string | null | undefined): string | 
 
 const markdownComponents = {
   think: ({ children }: { children?: ReactNode }) => (
-    <details className="assistant-reasoning-stream" open>
-      <summary className="assistant-reasoning-toggle">
-        <span className="assistant-reasoning-preview">思考过程</span>
-        <span className="assistant-reasoning-toggle-label" aria-hidden="true" />
-      </summary>
-      <div className="assistant-reasoning-body">{children}</div>
-    </details>
+    <div className="assistant-inline-think">{children}</div>
   ),
 } as Components;
+
+function readSegmentState(segment: AssistantTranscriptSegment): string | null {
+  const state = segment.metadata?.state;
+  return typeof state === "string" && state.trim().length > 0 ? state : null;
+}
+
+function isTranscriptLifecycleNoise(segment: AssistantTranscriptSegment): boolean {
+  const state = readSegmentState(segment);
+  return (
+    state === "generation.started" ||
+    state === "generation.completed" ||
+    state === "generation.cancelled" ||
+    state === "skill.autoroute.started"
+  );
+}
 
 function shouldRenderReasoningSegment(segment: AssistantTranscriptSegment): boolean {
   const normalized = normalizeForBoilerplateCheck(segment.text);
@@ -175,7 +191,7 @@ function shouldRenderStatusSegment(segment: AssistantTranscriptSegment): boolean
     return false;
   }
   const normalized = normalizeForBoilerplateCheck(segment.text);
-  return normalized !== null;
+  return normalized !== null && !isTranscriptLifecycleNoise(segment);
 }
 
 function renderAssistantMarkdownMessage(content: string) {
@@ -479,7 +495,7 @@ function buildTranscriptBlocks(
         const normalizedText = normalizeMarkdownSpacing(segment.text);
         if (normalizedText) {
           blocks.push({
-            type: "output",
+            type: "reasoning",
             key: `reasoning:${segment.id}`,
             segment: {
               ...segment,
@@ -493,7 +509,7 @@ function buildTranscriptBlocks(
 
     if (segment.kind === "status") {
       if (shouldRenderStatusSegment(segment)) {
-        blocks.push({ type: "status", key: segment.id, segment });
+        blocks.push({ type: "cue", key: segment.id, segment });
       }
       continue;
     }
@@ -896,13 +912,53 @@ function AssistantInlineSkillTag({ label }: { label: string }) {
   return <strong className="assistant-inline-skill-tag">{label}</strong>;
 }
 
-function AssistantStatusNote({ segment }: { segment: AssistantTranscriptSegment }) {
+function AssistantReasoningBlock({
+  segment,
+  isFinal,
+}: {
+  segment: AssistantTranscriptSegment;
+  isFinal: boolean;
+}) {
+  return (
+    <div
+      className={`assistant-reasoning-block${isFinal ? " assistant-reasoning-block-final" : ""}`}
+    >
+      {normalizeMarkdownSpacing(segment.text)
+        ? renderAssistantMarkdownMessage(segment.text ?? "")
+        : renderMarkdownMessage("")}
+    </div>
+  );
+}
+
+function readAutoroutedSkillName(segment: AssistantTranscriptSegment): string | null {
+  const skill = segment.metadata?.skill;
+  if (typeof skill === "string" && skill.trim().length > 0) {
+    return skill.trim();
+  }
+
+  const normalized = normalizeForBoilerplateCheck(segment.text);
+  const match = normalized?.match(/(?:自动选择(?:了)?(?:技能)?[:：]?\s*)(.+)$/);
+  return match?.[1]?.trim() || null;
+}
+
+function AssistantInlineCue({ segment }: { segment: AssistantTranscriptSegment }) {
   const text = normalizeMarkdownSpacing(segment.text);
   if (!text) {
     return null;
   }
 
-  return <p className="assistant-status-note">{text}</p>;
+  const state = readSegmentState(segment);
+  if (state === "skill.autoroute.selected") {
+    const skillName = readAutoroutedSkillName(segment);
+    return (
+      <div className="assistant-inline-cue assistant-inline-cue-skill">
+        <span className="assistant-inline-cue-prefix">自动选择</span>
+        <AssistantInlineSkillTag label={skillName ?? text} />
+      </div>
+    );
+  }
+
+  return <p className="assistant-inline-cue assistant-inline-cue-muted">{text}</p>;
 }
 
 function renderInlineSkillLabel(
@@ -1073,9 +1129,9 @@ export function ConversationFeed(props: ConversationFeedProps) {
       return renderMarkdownMessage("");
     }
 
-    const lastOutputBlockIndex = (() => {
+    const lastPrimaryTextBlockIndex = (() => {
       for (let index = blocks.length - 1; index >= 0; index -= 1) {
-        if (blocks[index]?.type === "output") {
+        if (blocks[index]?.type === "output" || blocks[index]?.type === "reasoning") {
           return index;
         }
       }
@@ -1100,15 +1156,25 @@ export function ConversationFeed(props: ConversationFeedProps) {
             return <AssistantErrorBlock key={block.key} segment={block.segment} />;
           }
 
-          if (block.type === "status") {
-            return <AssistantStatusNote key={block.key} segment={block.segment} />;
+          if (block.type === "cue") {
+            return <AssistantInlineCue key={block.key} segment={block.segment} />;
+          }
+
+          if (block.type === "reasoning") {
+            return (
+              <AssistantReasoningBlock
+                key={block.key}
+                segment={block.segment}
+                isFinal={index === lastPrimaryTextBlockIndex}
+              />
+            );
           }
 
           return (
             <AssistantPrimaryOutput
               key={block.key}
               segment={block.segment}
-              isFinal={index === lastOutputBlockIndex}
+              isFinal={index === lastPrimaryTextBlockIndex}
             />
           );
         })}
