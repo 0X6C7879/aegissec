@@ -260,6 +260,9 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(latest_cycle["reflection_summary"], str)
     assert isinstance(latest_cycle["memory_writes"], list)
     assert isinstance(latest_cycle["compaction_summary"], dict)
+    assert isinstance(latest_cycle["assistant_turn_input"], dict)
+    assert isinstance(latest_cycle["assistant_turn_plan"], dict)
+    assert isinstance(latest_cycle["assistant_turn_outcome"], dict)
     assert latest_cycle["next_action"] in {"continue", "complete", "await_approval", "idle"}
     scheduler_summary = cast(dict[str, Any], latest_cycle["scheduler_summary"])
     assert scheduler_summary["mode"] == "phase3_read_parallel_write_serial"
@@ -270,6 +273,67 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(merge_summary.get("phases"), list)
     assert isinstance(merge_summary.get("merged_task_ids"), list)
     assert isinstance(merge_summary.get("partial_failure_count"), int)
+
+    assistant_turn_input = cast(dict[str, Any], latest_cycle["assistant_turn_input"])
+    assistant_turn_plan = cast(dict[str, Any], latest_cycle["assistant_turn_plan"])
+    assistant_turn_outcome = cast(dict[str, Any], latest_cycle["assistant_turn_outcome"])
+    assert isinstance(assistant_turn_input["turn_id"], str) and assistant_turn_input["turn_id"]
+    assert assistant_turn_input["cycle_id"] == latest_cycle["cycle_id"]
+    assert assistant_turn_input["current_goal"] == state["goal"]
+    assert isinstance(assistant_turn_input["active_tasks"], list)
+    assert assistant_turn_input["active_tasks"]
+    assert isinstance(assistant_turn_input["retrieval_context"], dict)
+    assert isinstance(assistant_turn_input["memory_context"], dict)
+    assert isinstance(assistant_turn_input["transcript_context"], dict)
+    assert isinstance(assistant_turn_input["reasoning_frame"], dict)
+    assert (
+        cast(dict[str, Any], assistant_turn_input["retrieval_context"])["summary"]
+        == latest_cycle["retrieval_summary"]
+    )
+    assert (
+        cast(dict[str, Any], assistant_turn_input["memory_context"])["summary"]
+        == cast(dict[str, Any], latest_cycle["memory"])["summary"]
+    )
+    assert cast(dict[str, Any], assistant_turn_input["transcript_context"])["source"] == (
+        "runtime_transcript"
+    )
+    assert cast(dict[str, Any], assistant_turn_input["reasoning_frame"])["last_directive"] in {
+        "continue",
+        "retry_same_wave",
+        "replan_subgraph",
+        "await_user_input",
+        "await_approval",
+        "finalize",
+        "stop_loop",
+    }
+    assert isinstance(assistant_turn_plan["turn_id"], str)
+    assert assistant_turn_plan["turn_id"] == assistant_turn_input["turn_id"]
+    assert assistant_turn_plan["cycle_id"] == latest_cycle["cycle_id"]
+    assert isinstance(assistant_turn_plan["recommended_tool_wave"], dict)
+    recommended_tool_wave = cast(dict[str, Any], assistant_turn_plan["recommended_tool_wave"])
+    assert recommended_tool_wave["scheduler_mode"] == latest_cycle["scheduler_mode"]
+    assert recommended_tool_wave["expected_task_ids"] == [
+        task["task_id"] for task in cast(list[dict[str, Any]], latest_cycle["selected_tasks"])
+    ]
+    assert recommended_tool_wave["parallel_read_task_ids"] == latest_cycle["parallel_read_group"]
+    assert (
+        recommended_tool_wave["serialized_write_task_ids"] == latest_cycle["serialized_write_group"]
+    )
+    assert isinstance(assistant_turn_outcome["turn_id"], str)
+    assert assistant_turn_outcome["turn_id"] == assistant_turn_input["turn_id"]
+    assert assistant_turn_outcome["cycle_id"] == latest_cycle["cycle_id"]
+    assert assistant_turn_outcome["resulting_directive"] in {
+        "continue",
+        "retry_same_wave",
+        "replan_subgraph",
+        "await_user_input",
+        "await_approval",
+        "finalize",
+        "stop_loop",
+    }
+    assert isinstance(assistant_turn_outcome["next_turn_hint"], str)
+    assert isinstance(assistant_turn_outcome["unresolved_questions"], list)
+    assert assistant_turn_outcome["next_action"] == latest_cycle["next_action"]
 
 
 def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_tool_inputs(
@@ -446,6 +510,34 @@ def test_workflow_context_consumers_prefer_runtime_transcript_continuity(
     assert cast(list[dict[str, Any]], runtime_transcript["compact_events"]) or cast(
         list[dict[str, Any]], runtime_transcript["deltas"]
     )
+
+    assistant_turn_state = cast(dict[str, Any], state["assistant_turn"])
+    assistant_turn_input = cast(dict[str, Any], assistant_turn_state["input"])
+    assistant_turn_plan = cast(dict[str, Any], assistant_turn_state["plan"])
+    assistant_turn_outcome = cast(dict[str, Any], assistant_turn_state["outcome"])
+    assistant_turn_history = cast(list[dict[str, Any]], assistant_turn_state["history"])
+    assert assistant_turn_input["turn_id"] == assistant_turn_plan["turn_id"]
+    assert assistant_turn_input["turn_id"] == assistant_turn_outcome["turn_id"]
+    assert isinstance(assistant_turn_input["active_tasks"], list)
+    assert isinstance(assistant_turn_input["retrieval_context"], dict)
+    assert isinstance(assistant_turn_input["memory_context"], dict)
+    assert isinstance(assistant_turn_input["transcript_context"], dict)
+    assert isinstance(assistant_turn_plan["recommended_tool_wave"], dict)
+    assert isinstance(assistant_turn_outcome["next_turn_hint"], str)
+    assert isinstance(assistant_turn_outcome["unresolved_questions"], list)
+    assert assistant_turn_history
+    assert (
+        assistant_turn_history[-1]["outcome"]["resulting_directive"]
+        == assistant_turn_outcome["resulting_directive"]
+    )
+    assert (
+        continuity["assistant_turn_carry_forward"]
+        == assistant_turn_outcome["carry_forward_context"]
+    )
+    assert (
+        continuity["assistant_turn_next_directive"] == assistant_turn_outcome["resulting_directive"]
+    )
+    assert continuity["assistant_turn_next_hint"] == assistant_turn_outcome["next_turn_hint"]
 
 
 def test_context_additions_preserve_export_replay_and_session_history_compatibility(

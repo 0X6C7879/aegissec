@@ -24,6 +24,7 @@ from app.agent.tool_scheduler import (
 )
 from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.agent.turn_models import NextTurnDirective
+from app.agent.turn_planner import AssistantTurnPlanner
 from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
@@ -87,6 +88,7 @@ class WorkflowLoopEngine:
         self._compact_runtime = CompactRuntimeService()
         self._post_compact_reinjection = PostCompactReinjectionService()
         self._transcript_runtime = TranscriptRuntimeService()
+        self._assistant_turn_planner = AssistantTurnPlanner()
         self._runtime = runtime or WorkflowGraphRuntime()
         self._selector = selector or WorkflowRunnableSelector(
             self._runtime,
@@ -1198,8 +1200,9 @@ class WorkflowLoopEngine:
         )
         started_at = batch.get("started_at") if isinstance(batch.get("started_at"), str) else None
         ended_at = batch.get("ended_at") if isinstance(batch.get("ended_at"), str) else None
-        return WorkflowCycleArtifact(
-            cycle_id=f"cycle-{uuid4()}",
+        cycle_id = f"cycle-{uuid4()}"
+        base_cycle = WorkflowCycleArtifact(
+            cycle_id=cycle_id,
             batch_cycle=self._batch_cycle(mutable_state),
             selected_tasks=[
                 LoopSelectedTask(
@@ -1261,6 +1264,33 @@ class WorkflowLoopEngine:
             started_at=started_at,
             ended_at=ended_at,
         )
+        reflection_summary = base_cycle.reflection_summary
+        bundle = self._assistant_turn_planner.build_bundle(
+            mutable_state=mutable_state,
+            cycle_id=cycle_id,
+            context_snapshot=context_snapshot,
+            schedule=schedule,
+            tool_results=tool_results,
+            reflection_summary=reflection_summary,
+            partial_failures=partial_failures,
+            next_action=next_action,
+            next_directive=self._transcript_runtime.last_directive(mutable_state),
+        )
+        self._assistant_turn_planner.persist_bundle(mutable_state=mutable_state, bundle=bundle)
+        context_raw = mutable_state.get("context")
+        if isinstance(context_raw, dict):
+            prompting_raw = context_raw.get("prompting")
+            if isinstance(prompting_raw, dict):
+                continuity_raw = prompting_raw.get("continuity")
+                if isinstance(continuity_raw, dict):
+                    continuity_raw["assistant_turn_carry_forward"] = (
+                        bundle.turn_outcome.carry_forward_context
+                    )
+                    continuity_raw["assistant_turn_next_directive"] = (
+                        bundle.turn_outcome.resulting_directive
+                    )
+                    continuity_raw["assistant_turn_next_hint"] = bundle.turn_outcome.next_turn_hint
+        return self._assistant_turn_planner.apply_to_cycle(cycle=base_cycle, bundle=bundle)
 
     def _build_context_snapshot(
         self,
@@ -1332,6 +1362,7 @@ class WorkflowLoopEngine:
             if isinstance(raw_transcript_provenance, dict)
             else {}
         )
+        prior_turn_outcome = self._assistant_turn_planner.latest_outcome(mutable_state)
         prompting = build_workflow_prompting_state(
             goal=str(mutable_state.get("goal") or "authorized assessment"),
             template_name=run.template_name,
@@ -1354,7 +1385,22 @@ class WorkflowLoopEngine:
             ),
             continuity_metadata=reinjection_provenance
             | transcript_provenance
-            | {"compact_applied": bool(reinjection.get("compact_applied", False))},
+            | {
+                "compact_applied": bool(reinjection.get("compact_applied", False)),
+                "assistant_turn_carry_forward": (
+                    prior_turn_outcome.carry_forward_context
+                    if prior_turn_outcome is not None
+                    else ""
+                ),
+                "assistant_turn_next_directive": (
+                    prior_turn_outcome.resulting_directive
+                    if prior_turn_outcome is not None
+                    else self._transcript_runtime.last_directive(mutable_state).value
+                ),
+                "assistant_turn_next_hint": (
+                    prior_turn_outcome.next_turn_hint if prior_turn_outcome is not None else ""
+                ),
+            },
         )
         snapshot = ContextSnapshot(
             retrieval=retrieval,
@@ -1430,7 +1476,9 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
+                else "blocked"
+                if resolved_status is WorkflowRunStatus.BLOCKED
+                else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,

@@ -758,5 +758,14 @@ def build_workflow_prompting_state(
             "reinjected_components": reinjected_components,
             "recent_delta_ids": recent_delta_ids,
             "tool_result_delta_ids": tool_result_delta_ids,
+            "assistant_turn_carry_forward": str(
+                normalized_continuity_metadata.get("assistant_turn_carry_forward") or ""
+            ),
+            "assistant_turn_next_directive": str(
+                normalized_continuity_metadata.get("assistant_turn_next_directive") or ""
+            ),
+            "assistant_turn_next_hint": str(
+                normalized_continuity_metadata.get("assistant_turn_next_hint") or ""
+            ),
         },
     }

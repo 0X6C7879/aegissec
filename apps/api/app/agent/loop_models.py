@@ -117,6 +117,9 @@ class WorkflowCycleArtifact:
     memory: dict[str, object] = field(default_factory=dict)
     compaction_summary: dict[str, object] = field(default_factory=dict)
     context_projection: dict[str, object] = field(default_factory=dict)
+    assistant_turn_input: dict[str, object] = field(default_factory=dict)
+    assistant_turn_plan: dict[str, object] = field(default_factory=dict)
+    assistant_turn_outcome: dict[str, object] = field(default_factory=dict)
     next_action: str = "idle"
     started_at: str | None = None
     ended_at: str | None = None
@@ -140,6 +143,9 @@ class WorkflowCycleArtifact:
             "memory": dict(self.memory),
             "compaction_summary": dict(self.compaction_summary),
             "context_projection": dict(self.context_projection),
+            "assistant_turn_input": dict(self.assistant_turn_input),
+            "assistant_turn_plan": dict(self.assistant_turn_plan),
+            "assistant_turn_outcome": dict(self.assistant_turn_outcome),
             "next_action": self.next_action,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
@@ -239,6 +245,24 @@ class WorkflowCycleArtifact:
             if isinstance(raw_context_projection, dict)
             else {}
         )
+        raw_assistant_turn_input = raw_dict.get("assistant_turn_input")
+        assistant_turn_input = (
+            {str(key): value for key, value in raw_assistant_turn_input.items()}
+            if isinstance(raw_assistant_turn_input, dict)
+            else {}
+        )
+        raw_assistant_turn_plan = raw_dict.get("assistant_turn_plan")
+        assistant_turn_plan = (
+            {str(key): value for key, value in raw_assistant_turn_plan.items()}
+            if isinstance(raw_assistant_turn_plan, dict)
+            else {}
+        )
+        raw_assistant_turn_outcome = raw_dict.get("assistant_turn_outcome")
+        assistant_turn_outcome = (
+            {str(key): value for key, value in raw_assistant_turn_outcome.items()}
+            if isinstance(raw_assistant_turn_outcome, dict)
+            else {}
+        )
         return cls(
             cycle_id=cycle_id,
             batch_cycle=batch_cycle,
@@ -257,6 +281,9 @@ class WorkflowCycleArtifact:
             memory=memory,
             compaction_summary=compaction_summary,
             context_projection=context_projection,
+            assistant_turn_input=assistant_turn_input,
+            assistant_turn_plan=assistant_turn_plan,
+            assistant_turn_outcome=assistant_turn_outcome,
             next_action=str(raw_dict.get("next_action") or "idle"),
             started_at=(
                 raw_dict.get("started_at") if isinstance(raw_dict.get("started_at"), str) else None
