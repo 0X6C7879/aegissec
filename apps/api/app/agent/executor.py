@@ -34,7 +34,9 @@ class Executor:
         self._tool_registry = tool_registry or build_default_tool_registry(capability_facade)
 
     def execute(self, *, context: WorkflowExecutionContext, task: TaskNode) -> ExecutionResult:
-        tool_result = self._tool_registry.execute(context=context, task=task)
+        tool_result = self._tool_registry.execute_envelope(
+            context=context, task=task
+        ).runtime_result
         trace_id = tool_result.input_payload.get("trace_id")
         return ExecutionResult(
             trace_id=trace_id if isinstance(trace_id, str) else task.id,
@@ -42,7 +44,7 @@ class Executor:
             source_name=tool_result.source_name,
             command_or_action=tool_result.command_or_action,
             input_payload=dict(tool_result.input_payload),
-            output_payload=tool_result.output_payload,
+            output_payload=dict(tool_result.output_payload),
             status=tool_result.status,
             started_at=tool_result.started_at,
             ended_at=tool_result.ended_at,

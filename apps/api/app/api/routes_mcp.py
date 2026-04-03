@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.compat.mcp.service import MCPService, get_mcp_service
+from app.compat.mcp.service import (
+    MCPDisabledServerError,
+    MCPInvalidToolError,
+    MCPService,
+    get_mcp_service,
+)
 from app.db.models import MCPServerRead, MCPTransport
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -158,6 +163,10 @@ async def invoke_mcp_tool(
 
     try:
         result = await mcp_service.call_tool(server_id, tool_name, dict(payload.arguments))
+    except MCPDisabledServerError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MCPInvalidToolError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 

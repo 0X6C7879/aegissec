@@ -5288,6 +5288,41 @@ a {
   gap: var(--space-2);
 }
 
+.mcp-view-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mcp-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text-strong);
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.mcp-view-tab:hover,
+.mcp-view-tab:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(36, 88, 69, 0.22);
+  box-shadow: 0 12px 22px rgba(20, 26, 22, 0.06);
+}
+
+.mcp-view-tab-active {
+  border-color: rgba(36, 88, 69, 0.24);
+  background: rgba(36, 88, 69, 0.08);
+}
+
 .management-list-card,
 .settings-nav-item,
 .management-capability-card,
@@ -5548,6 +5583,11 @@ a {
   align-items: center;
 }
 
+.mcp-server-card {
+  min-height: 212px;
+  align-content: start;
+}
+
 .mcp-card-row {
   display: flex;
   align-items: center;
@@ -5565,6 +5605,16 @@ a {
 
 .mcp-card .management-detail-copy {
   min-width: 0;
+}
+
+.mcp-server-meta-copy {
+  margin: 0;
+}
+
+.mcp-server-count-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .mcp-card-switch {
@@ -5634,6 +5684,38 @@ a {
 .mcp-capability-button-active {
   border-color: rgba(36, 88, 69, 0.24);
   background: rgba(36, 88, 69, 0.08);
+}
+
+.mcp-flat-card {
+  min-height: 240px;
+  align-content: start;
+}
+
+.mcp-flat-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.mcp-flat-meta-item {
+  display: grid;
+  gap: 4px;
+}
+
+.mcp-flat-meta-item-full {
+  grid-column: 1 / -1;
+}
+
+.mcp-flat-meta-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.mcp-flat-meta-value {
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .management-inline-notice,
@@ -5923,6 +6005,10 @@ a {
 
   .mcp-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mcp-flat-meta-grid {
+    grid-template-columns: 1fr;
   }
 
   .management-unified-header,

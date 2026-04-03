@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from hashlib import blake2b
 from typing import Any, cast
 
 from app.compat.mcp.service import MCPService
 from app.compat.skills.service import SkillService
 from app.db.models import (
+    MCPCapabilityKind,
     MCPServerRead,
     RuntimeExecuteRequest,
     RuntimeExecutionRunRead,
@@ -24,6 +27,9 @@ class CapabilityFacade:
     SCHEMA_SUMMARY_CACHE_HIT_EVENT = "capability.skills.schema_summary.cache_hit"
     PROMPT_FRAGMENT_CACHE_EVENT = "capability.skills.prompt_fragment.cache"
     PROMPT_FRAGMENT_CACHE_HIT_EVENT = "capability.skills.prompt_fragment.cache_hit"
+    MCP_TOOL_ALIAS_MAX_LENGTH = 64
+
+    _MCP_ALIAS_COMPONENT_RE = re.compile(r"[^a-z0-9]+")
 
     def __init__(
         self,
@@ -147,10 +153,51 @@ class CapabilityFacade:
                     ),
                 },
                 "capability_count": len(server.capabilities),
+                "capabilities": [
+                    {
+                        "kind": capability.kind.value,
+                        "name": capability.name,
+                        "title": capability.title,
+                        "description": capability.description,
+                        "uri": capability.uri,
+                    }
+                    for capability in server.capabilities
+                ],
             }
             for server in self.list_mcp_servers()
             if server.enabled
         ]
+
+    def build_mcp_tool_inventory(self) -> list[dict[str, object]]:
+        inventory: list[dict[str, object]] = []
+        seen_aliases: set[str] = set()
+        for server in self.list_mcp_servers():
+            if not server.enabled:
+                continue
+            for capability in server.capabilities:
+                if capability.kind != MCPCapabilityKind.TOOL:
+                    continue
+                tool_alias = self._build_mcp_tool_alias(
+                    server_id=server.id,
+                    server_name=server.name,
+                    tool_name=capability.name,
+                    seen_aliases=seen_aliases,
+                )
+                inventory.append(
+                    {
+                        "tool_alias": tool_alias,
+                        "server_id": server.id,
+                        "server_name": server.name,
+                        "source": server.source.value,
+                        "scope": server.scope.value,
+                        "transport": server.transport.value,
+                        "tool_name": capability.name,
+                        "tool_title": capability.title,
+                        "tool_description": capability.description,
+                        "input_schema": self._normalize_mcp_input_schema(capability.input_schema),
+                    }
+                )
+        return inventory
 
     def build_snapshot(
         self,
@@ -223,16 +270,58 @@ class CapabilityFacade:
 
         payload = self.build_skill_context()
         skills = payload.get("skills")
-        if not isinstance(skills, list) or not skills:
-            summary = "No loaded skills are currently available."
+        mcp_servers = self.build_mcp_snapshot()
+        if (not isinstance(skills, list) or not skills) and not mcp_servers:
+            summary = "No loaded skills or enabled MCP servers are currently available."
         else:
-            lines = ["Loaded skills inventory:"]
-            for item in skills:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("directory_name") or item.get("name") or "unknown")
-                description = str(item.get("description") or "No description provided.")
-                lines.append(f"- {label}: {description}")
+            lines: list[str] = []
+            if isinstance(skills, list) and skills:
+                lines.append("Loaded skills inventory:")
+            else:
+                lines.append("Loaded skills inventory: none")
+            if isinstance(skills, list):
+                for item in skills:
+                    if not isinstance(item, dict):
+                        continue
+                    label = str(item.get("directory_name") or item.get("name") or "unknown")
+                    description = str(item.get("description") or "No description provided.")
+                    lines.append(f"- {label}: {description}")
+            if mcp_servers:
+                lines.extend(["", "Enabled MCP capability inventory:"])
+                tool_inventory = self.build_mcp_tool_inventory()
+                if tool_inventory:
+                    lines.append("Callable MCP tools:")
+                    for item in tool_inventory:
+                        alias = str(item.get("tool_alias") or "unknown")
+                        server_name = str(item.get("server_name") or "unknown")
+                        tool_name = str(item.get("tool_name") or "unknown")
+                        description = str(
+                            item.get("tool_description")
+                            or item.get("tool_title")
+                            or "No description provided."
+                        )
+                        lines.append(f"- {alias}: {server_name} / {tool_name} — {description}")
+                resource_like_items: list[str] = []
+                for server in mcp_servers:
+                    server_name = str(server.get("name") or "unknown")
+                    raw_capabilities = server.get("capabilities", [])
+                    if not isinstance(raw_capabilities, list):
+                        continue
+                    for capability in raw_capabilities:
+                        if not isinstance(capability, dict):
+                            continue
+                        capability_kind = str(capability.get("kind") or "unknown")
+                        if capability_kind == MCPCapabilityKind.TOOL.value:
+                            continue
+                        capability_name = str(
+                            capability.get("name") or capability.get("uri") or "unknown"
+                        )
+                        resource_like_items.append(
+                            f"- {server_name}: {capability_kind} / {capability_name}"
+                        )
+                if resource_like_items:
+                    lines.append("Non-callable MCP resources/prompts/templates (visible only):")
+                    lines.extend(resource_like_items)
             summary = "\n".join(lines)
         self._save_cached_fragment(
             event_type=self.INVENTORY_SUMMARY_CACHE_EVENT,
@@ -265,19 +354,30 @@ class CapabilityFacade:
 
         payload = self.build_skill_context()
         skills = payload.get("skills")
-        if not isinstance(skills, list) or not skills:
-            summary = "No loaded skill parameter schemas are currently available."
+        mcp_tool_inventory = self.build_mcp_tool_inventory()
+        if (not isinstance(skills, list) or not skills) and not mcp_tool_inventory:
+            summary = "No loaded skill or MCP tool parameter schemas are currently available."
         else:
-            lines = ["Loaded skill parameter schemas:"]
-            for item in skills:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("directory_name") or item.get("name") or "unknown")
-                parameter_schema = item.get("parameter_schema")
-                if isinstance(parameter_schema, dict) and parameter_schema:
-                    lines.append(f"- {label}: {parameter_schema}")
-                else:
-                    lines.append(f"- {label}: no parameters")
+            lines: list[str] = []
+            if isinstance(skills, list) and skills:
+                lines.append("Loaded skill parameter schemas:")
+            else:
+                lines.append("Loaded skill parameter schemas: none")
+            if isinstance(skills, list):
+                for item in skills:
+                    if not isinstance(item, dict):
+                        continue
+                    label = str(item.get("directory_name") or item.get("name") or "unknown")
+                    parameter_schema = item.get("parameter_schema")
+                    if isinstance(parameter_schema, dict) and parameter_schema:
+                        lines.append(f"- {label}: {parameter_schema}")
+                    else:
+                        lines.append(f"- {label}: no parameters")
+            if mcp_tool_inventory:
+                lines.extend(["", "Callable MCP tool input schemas:"])
+                for item in mcp_tool_inventory:
+                    alias = str(item.get("tool_alias") or "unknown")
+                    lines.append(f"- {alias}: {item.get('input_schema')}")
             summary = "\n".join(lines)
         self._save_cached_fragment(
             event_type=self.SCHEMA_SUMMARY_CACHE_EVENT,
@@ -349,10 +449,13 @@ class CapabilityFacade:
                 inventory_summary,
                 schema_summary,
                 (
-                    "Never call a skill slug or skill name directly as a tool. The only callable "
-                    "tool names are execute_kali_command, list_available_skills, and "
-                    "read_skill_content. If you need a skill, call read_skill_content with the "
-                    "skill slug, name, or id."
+                    "Never call a skill slug or skill name directly as a tool. Skills remain "
+                    "reference documents, so use read_skill_content with the skill slug, name, "
+                    "or id when you need SKILL.md content. Callable tools always include the "
+                    "fixed tools execute_kali_command, list_available_skills, and "
+                    "read_skill_content, plus any MCP tool aliases listed above in the format "
+                    "mcp__{server}__{tool}. MCP resources, prompts, and templates are visible "
+                    "for context but are not callable tools."
                 ),
             ]
         )
@@ -522,3 +625,57 @@ class CapabilityFacade:
             message=message,
             payload=payload,
         )
+
+    @classmethod
+    def _slugify_alias_component(cls, value: str, *, fallback: str) -> str:
+        normalized = cls._MCP_ALIAS_COMPONENT_RE.sub("_", value.casefold()).strip("_")
+        return normalized or fallback
+
+    @classmethod
+    def _build_mcp_tool_alias(
+        cls,
+        *,
+        server_id: str,
+        server_name: str,
+        tool_name: str,
+        seen_aliases: set[str],
+    ) -> str:
+        server_slug = cls._slugify_alias_component(server_name, fallback="server")
+        tool_slug = cls._slugify_alias_component(tool_name, fallback="tool")
+        base_alias = f"mcp__{server_slug}__{tool_slug}"
+        unique_key = f"{server_id}:{tool_name}".encode()
+        suffix = f"__{blake2b(unique_key, digest_size=4).hexdigest()}"
+        alias = base_alias
+        if len(alias) > cls.MCP_TOOL_ALIAS_MAX_LENGTH:
+            alias = f"{base_alias[: cls.MCP_TOOL_ALIAS_MAX_LENGTH - len(suffix)]}{suffix}".rstrip(
+                "_"
+            )
+        if alias in seen_aliases:
+            trimmed = base_alias[: cls.MCP_TOOL_ALIAS_MAX_LENGTH - len(suffix)].rstrip("_")
+            alias = f"{trimmed}{suffix}"
+        seen_aliases.add(alias)
+        return alias
+
+    @staticmethod
+    def _normalize_mcp_input_schema(schema: object) -> dict[str, object]:
+        fallback_schema: dict[str, object] = {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        }
+        if not isinstance(schema, dict):
+            return fallback_schema
+
+        schema_type = schema.get("type")
+        if schema_type != "object":
+            return fallback_schema
+
+        normalized_schema = dict(schema)
+        properties = normalized_schema.get("properties")
+        normalized_schema["properties"] = properties if isinstance(properties, dict) else {}
+        required = normalized_schema.get("required")
+        if required is not None and not isinstance(required, list):
+            normalized_schema.pop("required", None)
+        if "additionalProperties" not in normalized_schema:
+            normalized_schema["additionalProperties"] = True
+        return normalized_schema

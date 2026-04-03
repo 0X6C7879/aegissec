@@ -73,7 +73,8 @@ describe("WorkbenchComposer", () => {
     const firstSend = new Promise<void>((resolve) => {
       resolveFirstSend = resolve;
     });
-    const onSend = vi.fn<(content: string) => Promise<void>>()
+    const onSend = vi
+      .fn<(content: string) => Promise<void>>()
       .mockImplementationOnce(() => firstSend)
       .mockResolvedValueOnce(undefined);
     const onInterrupt = vi.fn().mockResolvedValue(undefined);

@@ -18,12 +18,18 @@ from app.api.routes_chat import (
     _project_visible_stream_content,
     _sanitize_persisted_assistant_text,
 )
+from app.compat.mcp.service import get_mcp_service
 from app.compat.skills.models import SkillScanRoot
 from app.compat.skills.service import SkillContentReadError
 from app.db.models import (
     CompatibilityScope,
     CompatibilitySource,
     GenerationStatus,
+    MCPCapabilityKind,
+    MCPCapabilityRead,
+    MCPServerRead,
+    MCPServerStatus,
+    MCPTransport,
     MessageRole,
     MessageStatus,
 )
@@ -1895,6 +1901,125 @@ Use when performing Active Directory pentest orchestration without using ADscan 
         assert api_data(chat_response)["assistant_message"]["content"] == "adscan: ---"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_can_call_mcp_tool_via_dynamic_alias(client: TestClient) -> None:
+    class FakeMCPService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def list_servers(self) -> list[MCPServerRead]:
+            return [
+                MCPServerRead(
+                    id="server-1",
+                    name="Burp Suite",
+                    source=CompatibilitySource.LOCAL,
+                    scope=CompatibilityScope.PROJECT,
+                    transport=MCPTransport.STDIO,
+                    enabled=True,
+                    timeout_ms=30_000,
+                    status=MCPServerStatus.CONNECTED,
+                    config_path="mcp.json",
+                    imported_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+                    capabilities=[
+                        MCPCapabilityRead(
+                            kind=MCPCapabilityKind.TOOL,
+                            name="scan-target",
+                            title="Scan Target",
+                            description="Run a focused MCP scan.",
+                            input_schema={
+                                "type": "object",
+                                "properties": {"target": {"type": "string"}},
+                                "required": ["target"],
+                                "additionalProperties": False,
+                            },
+                        )
+                    ],
+                )
+            ]
+
+        async def call_tool(
+            self,
+            server_id: str,
+            tool_name: str,
+            arguments: dict[str, object],
+        ) -> dict[str, object]:
+            self.calls.append((server_id, tool_name, dict(arguments)))
+            return {"content": [{"type": "text", "text": "scan ok"}]}
+
+    class MCPAliasChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            mcp_tools: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del content, attachments, conversation_messages, available_skills, callbacks
+            assert execute_tool is not None
+            assert mcp_tools == [
+                {
+                    "tool_alias": "mcp__burp_suite__scan_target",
+                    "server_id": "server-1",
+                    "server_name": "Burp Suite",
+                    "source": "local",
+                    "scope": "project",
+                    "transport": "stdio",
+                    "tool_name": "scan-target",
+                    "tool_title": "Scan Target",
+                    "tool_description": "Run a focused MCP scan.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                }
+            ]
+            assert skill_context_prompt is not None
+            assert "mcp__burp_suite__scan_target: Burp Suite / scan-target" in skill_context_prompt
+
+            tool_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="mcp-call-1",
+                    tool_name="mcp__burp_suite__scan_target",
+                    arguments={"target": "https://example.test"},
+                    mcp_server_id="server-1",
+                    mcp_tool_name="scan-target",
+                )
+            )
+            return str(tool_result.payload["result"]["content"][0]["text"])
+
+    fake_mcp_service = FakeMCPService()
+    original_runtime_override = app.dependency_overrides[get_chat_runtime]
+    original_mcp_override = app.dependency_overrides.get(get_mcp_service)
+    app.dependency_overrides[get_chat_runtime] = lambda: MCPAliasChatRuntime()
+    app.dependency_overrides[get_mcp_service] = lambda: fake_mcp_service
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "MCP Alias Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "run mcp scan", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 200
+        assert api_data(chat_response)["assistant_message"]["content"] == "scan ok"
+        assert fake_mcp_service.calls == [
+            ("server-1", "scan-target", {"target": "https://example.test"})
+        ]
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_runtime_override
+        if original_mcp_override is None:
+            app.dependency_overrides.pop(get_mcp_service, None)
+        else:
+            app.dependency_overrides[get_mcp_service] = original_mcp_override
 
 
 def test_chat_autoroutes_docx_skill_context_on_exact_skill_mention(

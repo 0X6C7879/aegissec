@@ -206,6 +206,9 @@ def test_workflow_execution_records_and_graph_snapshots_are_persisted(client: Te
     assert capability_record is not None
     output_json = cast(dict[str, Any], capability_record["output_json"])
     assert isinstance(output_json.get("capability_snapshot"), dict)
+    runtime_protocol = cast(dict[str, Any], output_json["runtime_protocol"])
+    assert runtime_protocol["version"] == "2.0"
+    assert runtime_protocol["tool_name"] == "workflow.capability_snapshot"
 
     task_graph = client.get(f"/api/sessions/{session_id}/graphs/task")
     evidence_graph = client.get(f"/api/sessions/{session_id}/graphs/evidence")
@@ -832,6 +835,108 @@ def test_serial_write_tasks_execute_in_order_without_parallel_worker_path(
     assert [
         record["task_node_id"] for record in cast(list[dict[str, Any]], state["execution_records"])
     ] == [task.id for task in write_tasks]
+
+
+def test_workflow_preserves_blocked_tool_execution_as_blocked_runtime_state() -> None:
+    import asyncio
+
+    class StubExecutor:
+        def execute(self, *, context: object, task: Any) -> ExecutionResult:
+            del context
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            return ExecutionResult(
+                trace_id=f"trace-{task.name}",
+                source_type="runtime",
+                source_name="test-executor",
+                command_or_action=f"execute:{task.name}",
+                input_payload={"task": task.name},
+                output_payload={
+                    "stdout": "",
+                    "stderr": "tool execution blocked pending user interaction",
+                    "exit_code": 1,
+                    "execution_blocked": True,
+                    "interaction_required": True,
+                    "interrupt_behavior": "user_interaction",
+                    "block_reason": "user_interaction_required",
+                },
+                status=TaskNodeStatus.BLOCKED,
+                started_at=now,
+                ended_at=now,
+            )
+
+        def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+            del task
+            return ToolSpec(
+                name="workflow.structured_runtime",
+                category=ToolCategory.EXECUTION,
+                capability=ToolCapability.STRUCTURED_RUNTIME,
+                safety_profile=ToolSafetyProfile(
+                    writes_state=True,
+                    is_concurrency_safe=False,
+                    is_read_only=False,
+                    is_destructive=True,
+                ),
+                access_mode=ToolAccessMode.WRITE,
+            )
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=cast(Any, StubExecutor()),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-1",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="validation",
+        state_json={
+            "goal": "blocked runtime test",
+            "runtime_policy": {},
+            "batch": {"max_nodes_per_cycle": 1},
+        },
+    )
+    blocked_task = TaskNode(
+        workflow_run_id=run.id,
+        name="needs.input",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
+    )
+
+    result = asyncio.run(engine.advance(run=run, tasks=[blocked_task], approve=True))
+    state = cast(dict[str, Any], result.state)
+    execution_records = cast(list[dict[str, Any]], state["execution_records"])
+
+    assert result.status is WorkflowRunStatus.BLOCKED
+    assert blocked_task.status is TaskNodeStatus.BLOCKED
+    assert blocked_task.metadata_json["last_attempt_status"] == TaskNodeStatus.BLOCKED.value
+    assert blocked_task.metadata_json["execution_state"] == "blocked"
+    assert result.approval_required is False
+    assert execution_records[-1]["status"] == TaskNodeStatus.BLOCKED.value
+    assert execution_records[-1]["output_json"]["execution_blocked"] is True
+    assert execution_records[-1]["output_json"]["interrupt_behavior"] == "user_interaction"
 
 
 def test_parallel_policy_denial_does_not_contaminate_sibling_read_task(

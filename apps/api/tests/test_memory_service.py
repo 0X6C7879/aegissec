@@ -111,10 +111,10 @@ def test_relevant_recall_top_k_and_already_surfaced_dedup(tmp_path: Path) -> Non
     second = write_memory_entry(
         project_id,
         entry_id="memory-beta",
-        title="Privilege Escalation Notes",
-        summary="Privilege escalation opportunities on Linux bastion.",
+        title="Attack Surface External Services",
+        summary="External services inventory for the exposed attack surface.",
         body="beta",
-        tags=["privesc"],
+        tags=["recon", "services"],
         citations=[],
         updated_at=(now - timedelta(days=2)).isoformat(),
         base_dir=tmp_path,
@@ -142,8 +142,9 @@ def test_relevant_recall_top_k_and_already_surfaced_dedup(tmp_path: Path) -> Non
 
     selected_ids = [entry.entry_id for entry in selected]
     assert len(selected) == 2
-    assert first.entry_id not in selected_ids
-    assert second.entry_id in selected_ids or third.entry_id in selected_ids
+    assert selected_ids[0] == second.entry_id
+    assert first.entry_id in selected_ids
+    assert third.entry_id not in selected_ids
 
 
 def test_memory_manager_does_not_persist_synthetic_retrieval_bridge(

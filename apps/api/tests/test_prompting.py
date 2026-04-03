@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import cast
 
 from app.agent.prompting import (
@@ -9,7 +10,18 @@ from app.agent.prompting import (
 )
 from app.compat.mcp.service import MCPService
 from app.compat.skills.service import SkillService
-from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
+from app.db.models import (
+    AttachmentMetadata,
+    CompatibilityScope,
+    CompatibilitySource,
+    MCPCapabilityKind,
+    MCPCapabilityRead,
+    MCPServerRead,
+    MCPServerStatus,
+    MCPTransport,
+    MessageRole,
+    SkillAgentSummaryRead,
+)
 from app.prompt import PromptFragmentBuilder, PromptFragmentCacheContext, build_fragment_cache_key
 from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import ConversationMessage
@@ -231,3 +243,71 @@ def test_capability_prompt_fragment_builder_coexists_with_existing_prompt_behavi
 
     assert "Loaded skills inventory:" in fragment
     assert "Never call a skill slug or skill name directly as a tool." in fragment
+
+
+def test_capability_facade_builds_mcp_tool_inventory_and_safe_prompt_text() -> None:
+    class _SkillServiceStub:
+        def build_skill_context_payload(self) -> dict[str, object]:
+            return {"skills": []}
+
+    class _MCPServiceStub:
+        def list_servers(self) -> list[MCPServerRead]:
+            return [
+                MCPServerRead(
+                    id="server-1",
+                    name="Burp Suite",
+                    source=CompatibilitySource.LOCAL,
+                    scope=CompatibilityScope.PROJECT,
+                    transport=MCPTransport.STDIO,
+                    enabled=True,
+                    timeout_ms=30_000,
+                    status=MCPServerStatus.CONNECTED,
+                    config_path="mcp.json",
+                    imported_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+                    capabilities=[
+                        MCPCapabilityRead(
+                            kind=MCPCapabilityKind.TOOL,
+                            name="scan target",
+                            title="Scan target",
+                            description="Run a focused scan.",
+                            input_schema={"type": "string"},
+                        ),
+                        MCPCapabilityRead(
+                            kind=MCPCapabilityKind.PROMPT,
+                            name="triage-playbook",
+                            title="Triage Playbook",
+                        ),
+                    ],
+                )
+            ]
+
+    facade = CapabilityFacade(
+        skill_service=cast(SkillService, _SkillServiceStub()),
+        mcp_service=cast(MCPService, _MCPServiceStub()),
+    )
+
+    inventory = facade.build_mcp_tool_inventory()
+    fragment = facade.build_skill_prompt_fragment(session_id="session-1")
+
+    assert inventory == [
+        {
+            "tool_alias": "mcp__burp_suite__scan_target",
+            "server_id": "server-1",
+            "server_name": "Burp Suite",
+            "source": "local",
+            "scope": "project",
+            "transport": "stdio",
+            "tool_name": "scan target",
+            "tool_title": "Scan target",
+            "tool_description": "Run a focused scan.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            },
+        }
+    ]
+    assert "Callable MCP tools:" in fragment
+    assert "mcp__burp_suite__scan_target: Burp Suite / scan target" in fragment
+    assert "Non-callable MCP resources/prompts/templates" in fragment
+    assert "The only callable tool names are" not in fragment

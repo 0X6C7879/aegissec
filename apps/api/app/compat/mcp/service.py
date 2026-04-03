@@ -20,6 +20,7 @@ from app.db.models import (
     CompatibilityScope,
     CompatibilitySource,
     MCPCapability,
+    MCPCapabilityKind,
     MCPServer,
     MCPServerRead,
     MCPServerStatus,
@@ -29,6 +30,14 @@ from app.db.models import (
 )
 from app.db.repositories import MCPRepository
 from app.db.session import get_db_session
+
+
+class MCPDisabledServerError(Exception):
+    pass
+
+
+class MCPInvalidToolError(Exception):
+    pass
 
 
 class MCPService:
@@ -45,17 +54,18 @@ class MCPService:
     async def import_servers(self) -> list[MCPServerRead]:
         imported_servers = import_mcp_servers(resolve_mcp_import_targets(self._settings))
         server_records: list[MCPServer] = []
-        capabilities_by_server_id: dict[str, list[MCPCapability]] = {}
+        capabilities_by_server_id: dict[str, list[MCPCapability] | None] = {}
         for imported_server in imported_servers:
             server_record = self._to_server_record(imported_server)
             if imported_server.enabled:
                 discovered = await self._safe_discover(imported_server, server_record)
-                capabilities_by_server_id[server_record.id] = self._to_capability_records(
-                    server_record.id,
-                    discovered,
+                capabilities_by_server_id[server_record.id] = (
+                    self._to_capability_records(server_record.id, discovered)
+                    if discovered is not None
+                    else None
                 )
             else:
-                capabilities_by_server_id[server_record.id] = []
+                capabilities_by_server_id[server_record.id] = None
             server_records.append(server_record)
 
         self._repository.replace_all(server_records, capabilities_by_server_id)
@@ -90,10 +100,11 @@ class MCPService:
             config_path=f"manual://{name}",
         )
         server_record = self._to_server_record(imported_server)
-        capabilities: list[MCPCapability] = []
+        capabilities: list[MCPCapability] | None = None
         if imported_server.enabled:
             discovered = await self._safe_discover(imported_server, server_record)
-            capabilities = self._to_capability_records(server_record.id, discovered)
+            if discovered is not None:
+                capabilities = self._to_capability_records(server_record.id, discovered)
         self._repository.save_server(server_record, capabilities)
         return self._read_server(server_record)
 
@@ -115,12 +126,16 @@ class MCPService:
         server.last_error = None
         if enabled:
             discovered = await self._safe_discover(self._to_imported_server(server), server)
-            capabilities = self._to_capability_records(server.id, discovered)
+            capabilities = (
+                self._to_capability_records(server.id, discovered)
+                if discovered is not None
+                else None
+            )
             self._repository.save_server(server, capabilities)
         else:
             await self._client_manager.shutdown(server.id)
             server.status = MCPServerStatus.INACTIVE
-            self._repository.save_server(server, [])
+            self._repository.save_server(server, None)
 
         return self.get_server(server_id)
 
@@ -128,9 +143,13 @@ class MCPService:
         server = self._repository.get_server(server_id)
         if server is None:
             return None
+        if not server.enabled:
+            return self.get_server(server_id)
 
         discovered = await self._safe_discover(self._to_imported_server(server), server)
-        capabilities = self._to_capability_records(server.id, discovered)
+        capabilities = (
+            self._to_capability_records(server.id, discovered) if discovered is not None else None
+        )
         self._repository.save_server(server, capabilities)
         return self.get_server(server_id)
 
@@ -153,6 +172,24 @@ class MCPService:
         server = self._repository.get_server(server_id)
         if server is None:
             return None
+        if not server.enabled:
+            raise MCPDisabledServerError(f"MCP server '{server.name}' is disabled.")
+
+        matching_capabilities = [
+            capability
+            for capability in self._repository.list_capabilities(server.id)
+            if capability.name == tool_name
+        ]
+        if not matching_capabilities:
+            raise MCPInvalidToolError(
+                f"MCP tool '{tool_name}' is not registered for server '{server.name}'."
+            )
+        if not any(
+            capability.kind == MCPCapabilityKind.TOOL for capability in matching_capabilities
+        ):
+            raise MCPInvalidToolError(
+                f"MCP capability '{tool_name}' on server '{server.name}' is not an invokable tool."
+            )
         imported_server = self._to_imported_server(server)
         try:
             result = await self._client_manager.call_tool(
@@ -177,14 +214,14 @@ class MCPService:
         self,
         imported_server: ImportedMCPServer,
         server_record: MCPServer,
-    ) -> list[DiscoveredMCPCapability]:
+    ) -> list[DiscoveredMCPCapability] | None:
         try:
             discovered = await self._client_manager.discover(imported_server)
         except Exception as exc:
             server_record.status = MCPServerStatus.ERROR
             server_record.last_error = str(exc)
             self._apply_health_result(server_record, "error", None, str(exc))
-            return []
+            return None
 
         server_record.status = MCPServerStatus.CONNECTED
         server_record.last_error = None

@@ -28,8 +28,10 @@ SAFETY_SCOPE_PROMPT = (
     "a skill, call list_available_skills or read_skill_content before asking generic "
     "clarifying questions, and do not guess skill contents. Skills are reference documents, "
     "not callable tool names, so never emit a tool call using a skill slug such as "
-    "agent-browser directly. The only callable tool names are execute_kali_command, "
-    "list_available_skills, and read_skill_content. Use execute_kali_command only when "
+    "agent-browser directly. Callable tool names always include execute_kali_command, "
+    "list_available_skills, and read_skill_content, and may also include MCP tool aliases "
+    "listed in the capability context using the format mcp__{server}__{tool}. Use "
+    "execute_kali_command only when "
     "shell-based verification or command output would materially improve accuracy. Prefer "
     "batching adjacent low-risk reconnaissance checks into a single command instead of many "
     "small commands, and avoid redundant tool calls once you have enough evidence. After tool "
@@ -124,8 +126,9 @@ def render_skill_catalog_context(available_skills: list[SkillAgentSummaryRead]) 
     lines.append(
         "If the user asks to list skills, explain a skill, or use a skill, call the skills "
         "tools before asking broad clarification questions. Skill names in this catalog are "
-        "reference entries, not callable tools. The only callable tool names are "
-        "execute_kali_command, list_available_skills, and read_skill_content."
+        "reference entries, not callable tools. Fixed callable tool names are "
+        "execute_kali_command, list_available_skills, and read_skill_content. Additional "
+        "callable MCP tool aliases may appear in the capability context."
     )
     return "\n".join(lines)
 

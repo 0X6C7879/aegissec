@@ -469,6 +469,8 @@ class WorkflowLoopEngine:
     ) -> None:
         if execution.status is TaskNodeStatus.COMPLETED and reflection.conclusion == "success":
             task.status = TaskNodeStatus.COMPLETED
+        elif execution.status is TaskNodeStatus.BLOCKED:
+            task.status = TaskNodeStatus.BLOCKED
         else:
             task.status = TaskNodeStatus.FAILED
         attempts = self._metadata_int(task.metadata_json, "attempt_count", default=0) + 1

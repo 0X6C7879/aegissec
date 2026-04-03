@@ -160,14 +160,14 @@ describe("ConversationFeed", () => {
                 title: "思路进展",
                 text: "<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑",
               }),
-                buildTranscriptSegment({
-                  id: "segment-status",
-                  sequence: 2,
-                  kind: "status",
-                  title: "运行状态",
-                  text: "自动选择 ctf-web",
-                  metadata: { state: "skill.autoroute.selected", skill: "ctf-web" },
-                }),
+              buildTranscriptSegment({
+                id: "segment-status",
+                sequence: 2,
+                kind: "status",
+                title: "运行状态",
+                text: "自动选择 ctf-web",
+                metadata: { state: "skill.autoroute.selected", skill: "ctf-web" },
+              }),
               buildTranscriptSegment({
                 id: "segment-tool-call",
                 sequence: 3,
@@ -239,7 +239,9 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("结合扫描结果继续确认过滤点")).toBeInTheDocument();
     expect(screen.getAllByText("very secret").length).toBeGreaterThan(0);
     expect(screen.getByText("最终答复")).toBeInTheDocument();
-    expect(container.querySelector(".assistant-output-block-final .assistant-inline-think")).not.toBeNull();
+    expect(
+      container.querySelector(".assistant-output-block-final .assistant-inline-think"),
+    ).not.toBeNull();
     const transcriptOrder = [...container.querySelectorAll(".assistant-transcript > *")].map(
       (element) => {
         if (element.classList.contains("assistant-reasoning-block")) {
@@ -258,7 +260,9 @@ describe("ConversationFeed", () => {
       },
     );
     expect(transcriptOrder).toEqual(["reasoning", "cue", "tool", "reasoning", "output"]);
-    expect(screen.queryByText("<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("<think>very secret</think>最终答复")).not.toBeInTheDocument();
     fireEvent.click(container.querySelector(".assistant-tool-summary")!);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();

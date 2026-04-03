@@ -14,6 +14,7 @@ class WorkflowNodeExecutionState(str, Enum):
     PENDING = "pending"
     QUEUED = "queued"
     RUNNING = "running"
+    BLOCKED = "blocked"
     WAITING_APPROVAL = "waiting_approval"
     SUCCESS = "success"
     FAILED = "failed"
@@ -63,6 +64,8 @@ class WorkflowGraphRuntime:
             return WorkflowNodeExecutionState.RUNNING
         if task.status is TaskNodeStatus.BLOCKED and WorkflowGraphRuntime.approval_required(task):
             return WorkflowNodeExecutionState.WAITING_APPROVAL
+        if task.status is TaskNodeStatus.BLOCKED:
+            return WorkflowNodeExecutionState.BLOCKED
         if task.status is TaskNodeStatus.COMPLETED:
             return WorkflowNodeExecutionState.SUCCESS
         if task.status is TaskNodeStatus.FAILED:
@@ -119,9 +122,9 @@ class WorkflowGraphRuntime:
         task_index = {task.id: task for task in tasks}
         updated: list[TaskNode] = []
         for task in tasks:
-            if task.status not in {TaskNodeStatus.PENDING, TaskNodeStatus.BLOCKED}:
+            if task.status is TaskNodeStatus.BLOCKED:
                 continue
-            if task.status is TaskNodeStatus.BLOCKED and cls.approval_required(task):
+            if task.status is not TaskNodeStatus.PENDING:
                 continue
             dependencies = cls.task_depends_on_ids(task)
             if dependencies and not all(
@@ -190,11 +193,19 @@ class WorkflowGraphRuntime:
         return blocked
 
     @classmethod
+    def blocked_tasks(cls, tasks: list[TaskNode]) -> list[TaskNode]:
+        blocked = [task for task in tasks if task.status is TaskNodeStatus.BLOCKED]
+        blocked.sort(key=lambda task: (task.sequence, task.created_at, task.id))
+        return blocked
+
+    @classmethod
     def resolve_run_status(cls, tasks: list[TaskNode]) -> WorkflowRunStatus:
         if any(task.status is TaskNodeStatus.FAILED for task in tasks):
             return WorkflowRunStatus.ERROR
         if cls.blocked_for_approval(tasks):
             return WorkflowRunStatus.NEEDS_APPROVAL
+        if cls.blocked_tasks(tasks):
+            return WorkflowRunStatus.BLOCKED
         if all(cls.is_terminal_task(task) for task in tasks):
             return WorkflowRunStatus.DONE
         return WorkflowRunStatus.RUNNING

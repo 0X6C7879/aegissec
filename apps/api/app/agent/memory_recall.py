@@ -24,11 +24,8 @@ def select_relevant_memory_entries(
     if not manifest or top_k <= 0:
         return []
     surfaced = already_surfaced or set()
-    candidates = [entry for entry in manifest if entry.entry_id not in surfaced]
-    if not candidates:
-        return []
     ranked = sorted(
-        candidates,
+        manifest,
         key=lambda entry: _score_entry(
             entry,
             current_task=current_task,

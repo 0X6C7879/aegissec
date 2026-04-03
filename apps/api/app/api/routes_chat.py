@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from datetime import datetime
 from typing import Any
@@ -12,7 +13,12 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 
 from app.agent.prompting import build_chat_capability_prompt, build_chat_prompt_budget
-from app.compat.mcp.service import MCPService, get_mcp_service
+from app.compat.mcp.service import (
+    MCPDisabledServerError,
+    MCPInvalidToolError,
+    MCPService,
+    get_mcp_service,
+)
 from app.compat.skills.service import (
     SkillContentReadError,
     SkillLookupError,
@@ -1235,7 +1241,6 @@ def _build_tool_executor(
     mcp_service: MCPService,
 ) -> Any:
     available_skills = skill_service.list_loaded_skills_for_agent()
-    del mcp_service
 
     async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
         started_payload: dict[str, Any] = {
@@ -1249,6 +1254,13 @@ def _build_tool_executor(
                     "command": tool_request.arguments.get("command"),
                     "timeout_seconds": tool_request.arguments.get("timeout_seconds"),
                     "artifact_paths": tool_request.arguments.get("artifact_paths", []),
+                }
+            )
+        if tool_request.mcp_server_id is not None and tool_request.mcp_tool_name is not None:
+            started_payload.update(
+                {
+                    "mcp_server_id": tool_request.mcp_server_id,
+                    "mcp_tool_name": tool_request.mcp_tool_name,
                 }
             )
 
@@ -1675,11 +1687,123 @@ def _build_tool_executor(
                     )
             return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_result_payload)
 
+        if tool_request.mcp_server_id is not None and tool_request.mcp_tool_name is not None:
+            try:
+                result = await mcp_service.call_tool(
+                    tool_request.mcp_server_id,
+                    tool_request.mcp_tool_name,
+                    dict(tool_request.arguments),
+                )
+            except (MCPDisabledServerError, MCPInvalidToolError) as exc:
+                await publish_tool_failed(str(exc))
+                raise ChatRuntimeError(str(exc)) from exc
+            except Exception as exc:
+                await publish_tool_failed(str(exc))
+                raise ChatRuntimeError(str(exc)) from exc
+
+            mcp_result_payload: dict[str, Any] = {
+                "server_id": tool_request.mcp_server_id,
+                "tool_name": tool_request.mcp_tool_name,
+                "result": result or {},
+            }
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="completed",
+                    metadata_json={
+                        "mcp_server_id": tool_request.mcp_server_id,
+                        "mcp_tool_name": tool_request.mcp_tool_name,
+                    },
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status="completed",
+                title=tool_request.tool_name,
+                text=None,
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={
+                    "arguments": dict(tool_request.arguments),
+                    "result": mcp_result_payload,
+                    "mcp_server_id": tool_request.mcp_server_id,
+                    "mcp_tool_name": tool_request.mcp_tool_name,
+                },
+            )
+            await _publish_assistant_trace(
+                repository,
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+                entry={
+                    "state": "tool.finished",
+                    "tool": tool_request.tool_name,
+                    "tool_call_id": tool_request.tool_call_id,
+                    "mcp_server_id": tool_request.mcp_server_id,
+                    "mcp_tool_name": tool_request.mcp_tool_name,
+                },
+            )
+            await event_broker.publish(
+                SessionEvent(
+                    type=SessionEventType.TOOL_CALL_FINISHED,
+                    session_id=session.id,
+                    payload={**started_payload, "result": mcp_result_payload},
+                )
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
+            )
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="completed",
+                        state="finished",
+                        safe_summary=(
+                            f"已调用 MCP 工具 {tool_request.tool_name} -> "
+                            f"{tool_request.mcp_tool_name}。"
+                        ),
+                        ended_at=utc_now(),
+                        metadata_json={
+                            **dict(tool_step.metadata_json),
+                            "result": mcp_result_payload,
+                            "mcp_server_id": tool_request.mcp_server_id,
+                            "mcp_tool_name": tool_request.mcp_tool_name,
+                        },
+                    )
+            return ToolCallResult(tool_name=tool_request.tool_name, payload=mcp_result_payload)
+
         error_message = f"Unsupported tool requested: {tool_request.tool_name}."
         await publish_tool_failed(error_message)
         raise ChatRuntimeError(error_message)
 
     return execute_tool
+
+
+def _chat_runtime_supports_mcp_tools(chat_runtime: ChatRuntime) -> bool:
+    try:
+        signature = inspect.signature(chat_runtime.generate_reply)
+    except (TypeError, ValueError):
+        return False
+    return "mcp_tools" in signature.parameters
 
 
 async def _mark_queued_generations_failed(
@@ -1769,6 +1893,7 @@ async def _process_generation(
                 mcp_service=mcp_service,
             )
             capability_fragments = capability_facade.build_prompt_fragments(session_id=session.id)
+            mcp_tool_inventory = capability_facade.build_mcp_tool_inventory()
             execute_tool = _build_tool_executor(
                 session=session,
                 assistant_message=loaded_assistant_message,
@@ -1958,6 +2083,20 @@ async def _process_generation(
                         summary=summary.strip(),
                     )
 
+            generate_reply_kwargs: dict[str, Any] = {
+                "conversation_messages": _build_conversation_messages(conversation_history),
+                "available_skills": available_skills,
+                "skill_context_prompt": skill_context_prompt,
+                "execute_tool": execute_tool,
+                "callbacks": GenerationCallbacks(
+                    on_text_delta=on_text_delta,
+                    on_summary=on_summary,
+                    is_cancelled=cancel_event.is_set,
+                ),
+            }
+            if _chat_runtime_supports_mcp_tools(chat_runtime):
+                generate_reply_kwargs["mcp_tools"] = mcp_tool_inventory
+
             final_content = await chat_runtime.generate_reply(
                 (
                     user_message.content
@@ -1969,15 +2108,7 @@ async def _process_generation(
                     if user_message is not None
                     else []
                 ),
-                conversation_messages=_build_conversation_messages(conversation_history),
-                available_skills=available_skills,
-                skill_context_prompt=skill_context_prompt,
-                execute_tool=execute_tool,
-                callbacks=GenerationCallbacks(
-                    on_text_delta=on_text_delta,
-                    on_summary=on_summary,
-                    is_cancelled=cancel_event.is_set,
-                ),
+                **generate_reply_kwargs,
             )
             final_content = _sanitize_persisted_assistant_text(final_content) or (
                 "模型已完成分析，但没有返回可展示的最终答复。"

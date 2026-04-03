@@ -13,13 +13,50 @@ import {
   setMcpServerEnabled,
 } from "../lib/api";
 import { formatDateTime } from "../lib/format";
-import type { MCPCapability, MCPServer, MCPToolInvokeResponse, MCPTransport } from "../types/mcp";
+import type {
+  MCPCapability,
+  MCPCapabilityKind,
+  MCPServer,
+  MCPToolInvokeResponse,
+  MCPTransport,
+} from "../types/mcp";
 
 const MCP_SERVERS_QUERY_KEY = ["mcp", "servers"] as const;
+const EMPTY_MCP_SERVERS: MCPServer[] = [];
+
+const MCP_VIEW_OPTIONS = [
+  { key: "servers", label: "服务器", emptyTitle: "没有匹配的服务器" },
+  { key: "tool", label: "工具", emptyTitle: "没有匹配的工具" },
+  { key: "resource", label: "资源", emptyTitle: "没有匹配的资源" },
+  { key: "prompt", label: "Prompts", emptyTitle: "没有匹配的 Prompts" },
+] as const;
+
+type McpViewKey = (typeof MCP_VIEW_OPTIONS)[number]["key"];
+
+type CapabilityCounts = {
+  tool: number;
+  resource: number;
+  resource_template: number;
+  prompt: number;
+};
+
+type FlattenedCapability = {
+  server: MCPServer;
+  capability: MCPCapability;
+  capabilityKey: string;
+  hasInputSchema: boolean;
+  searchIndex: string;
+};
 
 function buildServerSearchIndex(server: MCPServer): string {
   const capabilityContent = server.capabilities
-    .flatMap((capability) => [capability.name, capability.title, capability.description])
+    .flatMap((capability) => [
+      capability.kind,
+      capability.name,
+      capability.title,
+      capability.description,
+      capability.uri,
+    ])
     .join(" ");
 
   return [
@@ -29,7 +66,27 @@ function buildServerSearchIndex(server: MCPServer): string {
     server.config_path,
     server.command,
     server.url,
+    server.source,
+    server.scope,
     capabilityContent,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function buildCapabilitySearchIndex(server: MCPServer, capability: MCPCapability): string {
+  return [
+    server.name,
+    server.status,
+    server.transport,
+    server.config_path,
+    server.source,
+    server.scope,
+    capability.kind,
+    capability.name,
+    capability.title,
+    capability.description,
+    capability.uri,
   ]
     .join(" ")
     .toLowerCase();
@@ -156,11 +213,103 @@ function upsertServerList(
   return currentValue.map((server) => (server.id === updatedServer.id ? updatedServer : server));
 }
 
+function getCapabilityCounts(capabilities: MCPCapability[]): CapabilityCounts {
+  return capabilities.reduce<CapabilityCounts>(
+    (counts, capability) => {
+      if (capability.kind === "tool") {
+        counts.tool += 1;
+      }
+      if (capability.kind === "resource") {
+        counts.resource += 1;
+      }
+      if (capability.kind === "resource_template") {
+        counts.resource_template += 1;
+      }
+      if (capability.kind === "prompt") {
+        counts.prompt += 1;
+      }
+
+      return counts;
+    },
+    {
+      tool: 0,
+      resource: 0,
+      resource_template: 0,
+      prompt: 0,
+    },
+  );
+}
+
+function hasCapabilityInputSchema(capability: MCPCapability): boolean {
+  return Object.keys(capability.input_schema).length > 0;
+}
+
+function flattenCapabilities(servers: MCPServer[]): FlattenedCapability[] {
+  return servers.flatMap((server) =>
+    server.capabilities.map((capability) => ({
+      server,
+      capability,
+      capabilityKey: getCapabilityKey(capability),
+      hasInputSchema: hasCapabilityInputSchema(capability),
+      searchIndex: buildCapabilitySearchIndex(server, capability),
+    })),
+  );
+}
+
+function getPrimaryServerValue(server: MCPServer): string {
+  return server.transport === "http"
+    ? (server.url ?? "未配置 URL")
+    : (server.command ?? "未配置命令");
+}
+
+function getFlatViewTitle(view: McpViewKey): string {
+  switch (view) {
+    case "servers":
+      return "服务器总览";
+    case "tool":
+      return "全部工具";
+    case "resource":
+      return "全部资源";
+    case "prompt":
+      return "全部 Prompts";
+  }
+}
+
+function getFlatViewDescription(view: McpViewKey): string {
+  switch (view) {
+    case "servers":
+      return "按服务器查看连接状态、健康情况与能力数量。";
+    case "tool":
+      return "聚合全部工具，便于快速搜索并直接跳到原有详情弹窗执行。";
+    case "resource":
+      return "资源与资源模板统一平铺展示，只提供详情查看。";
+    case "prompt":
+      return "汇总所有 Prompts，快速定位所属服务器与描述。";
+  }
+}
+
+function matchesFlatView(view: McpViewKey, kind: MCPCapabilityKind): boolean {
+  if (view === "tool") {
+    return kind === "tool";
+  }
+
+  if (view === "resource") {
+    return kind === "resource" || kind === "resource_template";
+  }
+
+  if (view === "prompt") {
+    return kind === "prompt";
+  }
+
+  return false;
+}
+
 export function McpWorkbench() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { serverId } = useParams<{ serverId?: string }>();
   const [searchValue, setSearchValue] = useState("");
+  const [activeView, setActiveView] = useState<McpViewKey>("servers");
   const [registerName, setRegisterName] = useState("");
   const [registerTransport, setRegisterTransport] = useState<MCPTransport>("stdio");
   const [registerEnabled, setRegisterEnabled] = useState(true);
@@ -172,6 +321,7 @@ export function McpWorkbench() {
   const [registerTimeoutMs, setRegisterTimeoutMs] = useState("5000");
   const [registerFormError, setRegisterFormError] = useState<string | null>(null);
   const [selectedCapabilityKey, setSelectedCapabilityKey] = useState<string | null>(null);
+  const [routeSelectedCapabilityKey, setRouteSelectedCapabilityKey] = useState<string | null>(null);
   const [toolArgumentsText, setToolArgumentsText] = useState("{}");
   const [toolArgumentsError, setToolArgumentsError] = useState<string | null>(null);
   const [invokeResult, setInvokeResult] = useState<MCPToolInvokeResponse | null>(null);
@@ -181,30 +331,61 @@ export function McpWorkbench() {
     queryFn: ({ signal }) => listMcpServers(signal),
   });
 
+  const allServers = serversQuery.data ?? EMPTY_MCP_SERVERS;
+
   const filteredServers = useMemo(() => {
     const keyword = searchValue.trim().toLowerCase();
-    const servers = serversQuery.data ?? [];
 
     if (!keyword) {
-      return servers;
+      return allServers;
     }
 
-    return servers.filter((server) => buildServerSearchIndex(server).includes(keyword));
-  }, [searchValue, serversQuery.data]);
+    return allServers.filter((server) => buildServerSearchIndex(server).includes(keyword));
+  }, [allServers, searchValue]);
+
+  const flattenedCapabilities = useMemo(() => flattenCapabilities(allServers), [allServers]);
+
+  const filteredTools = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase();
+
+    return flattenedCapabilities.filter(
+      (entry) =>
+        matchesFlatView("tool", entry.capability.kind) &&
+        (!keyword || entry.searchIndex.includes(keyword)),
+    );
+  }, [flattenedCapabilities, searchValue]);
+
+  const filteredResources = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase();
+
+    return flattenedCapabilities.filter(
+      (entry) =>
+        matchesFlatView("resource", entry.capability.kind) &&
+        (!keyword || entry.searchIndex.includes(keyword)),
+    );
+  }, [flattenedCapabilities, searchValue]);
+
+  const filteredPrompts = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase();
+
+    return flattenedCapabilities.filter(
+      (entry) =>
+        matchesFlatView("prompt", entry.capability.kind) &&
+        (!keyword || entry.searchIndex.includes(keyword)),
+    );
+  }, [flattenedCapabilities, searchValue]);
 
   const selectedServerId = useMemo(() => {
-    const servers = serversQuery.data ?? [];
-
-    if (serverId && servers.some((server) => server.id === serverId)) {
+    if (serverId && allServers.some((server) => server.id === serverId)) {
       return serverId;
     }
 
     return null;
-  }, [serverId, serversQuery.data]);
+  }, [allServers, serverId]);
 
   const activeServerSummary = useMemo(
-    () => (serversQuery.data ?? []).find((server) => server.id === selectedServerId) ?? null,
-    [selectedServerId, serversQuery.data],
+    () => allServers.find((server) => server.id === selectedServerId) ?? null,
+    [allServers, selectedServerId],
   );
 
   const serverDetailQuery = useQuery({
@@ -214,6 +395,7 @@ export function McpWorkbench() {
   });
 
   const activeServer = serverDetailQuery.data ?? activeServerSummary;
+
   const selectedCapability = useMemo(
     () =>
       activeServer?.capabilities.find(
@@ -222,6 +404,43 @@ export function McpWorkbench() {
     [activeServer, selectedCapabilityKey],
   );
 
+  const capabilitySummary = useMemo(() => {
+    const counts = allServers.reduce<CapabilityCounts>(
+      (summary, server) => {
+        const nextCounts = getCapabilityCounts(server.capabilities);
+        summary.tool += nextCounts.tool;
+        summary.resource += nextCounts.resource;
+        summary.resource_template += nextCounts.resource_template;
+        summary.prompt += nextCounts.prompt;
+        return summary;
+      },
+      { tool: 0, resource: 0, resource_template: 0, prompt: 0 },
+    );
+
+    return {
+      servers: allServers.length,
+      enabledServers: allServers.filter((server) => server.enabled).length,
+      connectedServers: allServers.filter((server) => server.status === "connected").length,
+      ...counts,
+    };
+  }, [allServers]);
+
+  const currentViewCount =
+    activeView === "servers"
+      ? filteredServers.length
+      : activeView === "tool"
+        ? filteredTools.length
+        : activeView === "resource"
+          ? filteredResources.length
+          : filteredPrompts.length;
+
+  const currentFlatItems =
+    activeView === "tool"
+      ? filteredTools
+      : activeView === "resource"
+        ? filteredResources
+        : filteredPrompts;
+
   function handleSelectCapability(capabilityKey: string | null): void {
     setSelectedCapabilityKey(capabilityKey);
     setToolArgumentsError(null);
@@ -229,13 +448,40 @@ export function McpWorkbench() {
     setToolArgumentsText("{}");
   }
 
+  function handleOpenCapability(server: MCPServer, capabilityKey: string): void {
+    setRouteSelectedCapabilityKey(capabilityKey);
+
+    if (server.id === selectedServerId) {
+      handleSelectCapability(capabilityKey);
+    }
+
+    navigate(`/mcp/${server.id}`);
+  }
+
   useEffect(() => {
     if (!activeServer) {
       setSelectedCapabilityKey(null);
+      setRouteSelectedCapabilityKey(null);
       setToolArgumentsError(null);
       setInvokeResult(null);
       setToolArgumentsText("{}");
       return;
+    }
+
+    if (routeSelectedCapabilityKey) {
+      const requestedCapability = activeServer.capabilities.find(
+        (capability) => getCapabilityKey(capability) === routeSelectedCapabilityKey,
+      );
+
+      setRouteSelectedCapabilityKey(null);
+
+      if (requestedCapability) {
+        setSelectedCapabilityKey(getCapabilityKey(requestedCapability));
+        setToolArgumentsError(null);
+        setInvokeResult(null);
+        setToolArgumentsText("{}");
+        return;
+      }
     }
 
     const nextCapability =
@@ -252,7 +498,7 @@ export function McpWorkbench() {
       setInvokeResult(null);
       setToolArgumentsText("{}");
     }
-  }, [activeServer, selectedCapabilityKey]);
+  }, [activeServer, routeSelectedCapabilityKey, selectedCapabilityKey]);
 
   const importMutation = useMutation({
     mutationFn: () => importMcpServers(),
@@ -380,7 +626,6 @@ export function McpWorkbench() {
     },
   });
 
-  const filteredCount = filteredServers.length;
   const mutationErrorMessage = enableMutation.isError
     ? enableMutation.error.message
     : refreshMutation.isError
@@ -398,7 +643,7 @@ export function McpWorkbench() {
           <div className="management-detail-copy">
             <h2 className="panel-title">MCP</h2>
             <p className="management-unified-description">
-              维护服务器连接，并在需要时完成一次工具级验证。
+              同时保留服务器视角与能力平铺视角，便于快速查找工具、资源与 Prompts。
             </p>
           </div>
 
@@ -418,10 +663,10 @@ export function McpWorkbench() {
             type="search"
             value={searchValue}
             onChange={(event) => setSearchValue(event.target.value)}
-            placeholder="搜索名称、传输方式、能力、命令或配置路径"
+            placeholder="搜索服务器、工具、标题、描述、传输方式或配置路径"
           />
 
-          <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+          <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
         </div>
 
         {mutationErrorMessage ? (
@@ -442,84 +687,272 @@ export function McpWorkbench() {
           <div className="management-unified-body management-unified-stack">
             <section className="management-section-card management-section-card-compact">
               <div className="management-section-header">
-                <h3 className="management-section-title">MCP 列表</h3>
-                <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+                <h3 className="management-section-title">总览</h3>
+              </div>
+
+              <div className="management-metric-row management-metric-row-wide">
+                <article className="management-metric-card">
+                  <span className="management-metric-label">服务器</span>
+                  <strong className="management-metric-value">{capabilitySummary.servers}</strong>
+                  <span className="management-list-copy">
+                    已启用 {capabilitySummary.enabledServers} · 已连接{" "}
+                    {capabilitySummary.connectedServers}
+                  </span>
+                </article>
+                <article className="management-metric-card">
+                  <span className="management-metric-label">工具</span>
+                  <strong className="management-metric-value">{capabilitySummary.tool}</strong>
+                  <span className="management-list-copy">支持直接跳转并调用</span>
+                </article>
+                <article className="management-metric-card">
+                  <span className="management-metric-label">资源</span>
+                  <strong className="management-metric-value">{capabilitySummary.resource}</strong>
+                  <span className="management-list-copy">
+                    模板 {capabilitySummary.resource_template}
+                  </span>
+                </article>
+                <article className="management-metric-card">
+                  <span className="management-metric-label">Prompts</span>
+                  <strong className="management-metric-value">{capabilitySummary.prompt}</strong>
+                  <span className="management-list-copy">保持原有详情阅读流</span>
+                </article>
+              </div>
+            </section>
+
+            <section className="management-section-card management-section-card-compact">
+              <div className="management-section-header">
+                <h3 className="management-section-title">视图</h3>
+                <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
+              </div>
+
+              <div className="mcp-view-tabs" role="tablist" aria-label="MCP 视图切换">
+                {MCP_VIEW_OPTIONS.map((view) => {
+                  const count =
+                    view.key === "servers"
+                      ? filteredServers.length
+                      : view.key === "tool"
+                        ? filteredTools.length
+                        : view.key === "resource"
+                          ? filteredResources.length
+                          : filteredPrompts.length;
+
+                  return (
+                    <button
+                      key={view.key}
+                      className={`mcp-view-tab${activeView === view.key ? " mcp-view-tab-active" : ""}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeView === view.key}
+                      onClick={() => setActiveView(view.key)}
+                    >
+                      <span>{view.label}</span>
+                      <span className="management-status-badge tone-neutral">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="management-section-card management-section-card-compact">
+              <div className="management-section-header">
+                <div className="management-detail-copy">
+                  <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
+                  <p className="management-unified-description">
+                    {getFlatViewDescription(activeView)}
+                  </p>
+                </div>
+                <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
               </div>
 
               <div className="management-list-shell">
-                {filteredServers.length === 0 ? (
+                {activeView === "servers" ? (
+                  filteredServers.length === 0 ? (
+                    <div className="management-empty-state">
+                      <p className="management-empty-title">没有匹配的服务器</p>
+                      <p className="management-empty-copy">
+                        可以先导入现有配置，或手动注册一台新服务器。
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="management-card-grid mcp-card-grid">
+                      {filteredServers.map((server) => {
+                        const isActive = server.id === selectedServerId;
+                        const counts = getCapabilityCounts(server.capabilities);
+
+                        return (
+                          <li key={server.id}>
+                            <article
+                              className={`management-list-card mcp-server-card${isActive ? " management-list-card-active" : ""}`}
+                            >
+                              <div className="mcp-card-row">
+                                <div className="management-detail-copy">
+                                  <strong className="management-list-title mcp-card-title">
+                                    {server.name}
+                                  </strong>
+                                  <p className="management-list-subtitle">
+                                    {getPrimaryServerValue(server)}
+                                  </p>
+                                </div>
+                                <label
+                                  className="mcp-card-switch"
+                                  aria-label={`${server.name} 连接开关`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={server.enabled}
+                                    onChange={() =>
+                                      void enableMutation.mutateAsync({
+                                        id: server.id,
+                                        enabled: !server.enabled,
+                                      })
+                                    }
+                                    disabled={enableMutation.isPending}
+                                  />
+                                  <span className="mcp-card-switch-track" />
+                                </label>
+                              </div>
+
+                              <p className="management-list-copy mcp-server-meta-copy">
+                                配置路径：{server.config_path}
+                              </p>
+
+                              <div className="mcp-server-count-row">
+                                <span className="management-status-badge tone-success">
+                                  工具 {counts.tool}
+                                </span>
+                                <span className="management-status-badge tone-neutral">
+                                  资源 {counts.resource}
+                                </span>
+                                <span className="management-status-badge tone-neutral">
+                                  模板 {counts.resource_template}
+                                </span>
+                                <span className="management-status-badge tone-warning">
+                                  Prompts {counts.prompt}
+                                </span>
+                              </div>
+
+                              <div className="action-row">
+                                <span
+                                  className={`management-status-badge ${server.enabled ? "tone-success" : "tone-neutral"}`}
+                                >
+                                  {server.enabled ? "已启用" : "已禁用"}
+                                </span>
+                                <span
+                                  className={`management-status-badge ${getServerTone(server.status)}`}
+                                >
+                                  {server.status}
+                                </span>
+                                <span className="management-status-badge tone-neutral">
+                                  {server.transport}
+                                </span>
+                                <span
+                                  className={`management-status-badge ${getHealthTone(server.health_status)}`}
+                                >
+                                  健康 {server.health_status ?? "未检测"}
+                                </span>
+                                <span className="management-status-badge tone-neutral">
+                                  {server.source}/{server.scope}
+                                </span>
+                                <button
+                                  className="text-button"
+                                  type="button"
+                                  onClick={() => navigate(`/mcp/${server.id}`)}
+                                >
+                                  查看详情
+                                </button>
+                              </div>
+                            </article>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )
+                ) : currentFlatItems.length === 0 ? (
                   <div className="management-empty-state">
-                    <p className="management-empty-title">没有匹配的服务器</p>
+                    <p className="management-empty-title">
+                      {MCP_VIEW_OPTIONS.find((view) => view.key === activeView)?.emptyTitle ??
+                        "没有匹配项"}
+                    </p>
                     <p className="management-empty-copy">
-                      可以先导入现有配置，或手动注册一台新服务器。
+                      可以调整关键词，或切回服务器视图查看完整连接信息。
                     </p>
                   </div>
                 ) : (
-                  <ul className="management-card-grid mcp-card-grid">
-                    {filteredServers.map((server) => {
-                      const isActive = server.id === selectedServerId;
-                      const primaryValue =
-                        server.transport === "http"
-                          ? (server.url ?? "未配置 URL")
-                          : (server.command ?? "未配置命令");
-
-                      return (
-                        <li key={server.id}>
-                          <article
-                            className={`management-list-card mcp-card${isActive ? " management-list-card-active" : ""}`}
-                          >
-                            <div className="mcp-card-row">
-                              <div className="management-detail-copy">
-                                <strong className="management-list-title mcp-card-title">
-                                  {server.name}
-                                </strong>
-                                <p className="management-list-subtitle">{primaryValue}</p>
-                              </div>
-                              <label
-                                className="mcp-card-switch"
-                                aria-label={`${server.name} 连接开关`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={server.enabled}
-                                  onChange={() =>
-                                    void enableMutation.mutateAsync({
-                                      id: server.id,
-                                      enabled: !server.enabled,
-                                    })
-                                  }
-                                  disabled={enableMutation.isPending}
-                                />
-                                <span className="mcp-card-switch-track" />
-                              </label>
+                  <ul className="management-card-grid">
+                    {currentFlatItems.map((entry) => (
+                      <li key={`${entry.server.id}:${entry.capabilityKey}`}>
+                        <article className="management-list-card mcp-flat-card">
+                          <div className="management-list-card-header">
+                            <div className="management-detail-copy">
+                              <strong className="management-list-title">
+                                {entry.capability.name}
+                              </strong>
+                              <p className="management-list-subtitle">
+                                {entry.capability.title ?? "未提供标题"}
+                              </p>
                             </div>
+                            <span
+                              className={`management-status-badge ${getCapabilityTone(entry.capability.kind)}`}
+                            >
+                              {entry.capability.kind}
+                            </span>
+                          </div>
 
-                            <div className="action-row">
-                              <span
-                                className={`management-status-badge ${getServerTone(server.status)}`}
-                              >
-                                {server.status}
-                              </span>
-                              <span className="management-status-badge tone-neutral">
-                                {server.transport}
-                              </span>
-                              <span
-                                className={`management-status-badge ${getHealthTone(server.health_status)}`}
-                              >
-                                健康 {server.health_status ?? "未检测"}
-                              </span>
-                              <button
-                                className="text-button"
-                                type="button"
-                                onClick={() => navigate(`/mcp/${server.id}`)}
-                              >
-                                查看详情
-                              </button>
+                          <p className="management-list-copy">
+                            {entry.capability.description ?? "暂无描述。"}
+                          </p>
+
+                          <div className="mcp-flat-meta-grid">
+                            <div className="mcp-flat-meta-item">
+                              <span className="mcp-flat-meta-label">所属服务器</span>
+                              <strong className="mcp-flat-meta-value">{entry.server.name}</strong>
                             </div>
-                          </article>
-                        </li>
-                      );
-                    })}
+                            <div className="mcp-flat-meta-item">
+                              <span className="mcp-flat-meta-label">状态</span>
+                              <strong className="mcp-flat-meta-value">{entry.server.status}</strong>
+                            </div>
+                            <div className="mcp-flat-meta-item">
+                              <span className="mcp-flat-meta-label">传输方式</span>
+                              <strong className="mcp-flat-meta-value">
+                                {entry.server.transport}
+                              </strong>
+                            </div>
+                            <div className="mcp-flat-meta-item">
+                              <span className="mcp-flat-meta-label">来源 / 范围</span>
+                              <strong className="mcp-flat-meta-value">
+                                {entry.server.source}/{entry.server.scope}
+                              </strong>
+                            </div>
+                            <div className="mcp-flat-meta-item mcp-flat-meta-item-full">
+                              <span className="mcp-flat-meta-label">配置路径</span>
+                              <strong className="mcp-flat-meta-value">
+                                {entry.server.config_path}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="action-row">
+                            <span
+                              className={`management-status-badge ${getServerTone(entry.server.status)}`}
+                            >
+                              服务器 {entry.server.status}
+                            </span>
+                            <span className="management-status-badge tone-neutral">
+                              {entry.hasInputSchema ? "有输入 Schema" : "无输入 Schema"}
+                            </span>
+                            <button
+                              className="text-button"
+                              type="button"
+                              onClick={() =>
+                                handleOpenCapability(entry.server, entry.capabilityKey)
+                              }
+                            >
+                              {entry.capability.kind === "tool" ? "查看并调用" : "查看详情"}
+                            </button>
+                          </div>
+                        </article>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </div>

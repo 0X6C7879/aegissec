@@ -37,21 +37,14 @@ class MCPRepository:
     def replace_all(
         self,
         servers: list[MCPServer],
-        capabilities_by_server_id: dict[str, list[MCPCapability]],
+        capabilities_by_server_id: dict[str, list[MCPCapability] | None],
     ) -> None:
         imported_by_id = {server.id: server for server in servers}
         imported_ids = set(imported_by_id)
 
         existing_servers = self.list_servers()
         for existing_server in existing_servers:
-            is_manual = existing_server.config_path.startswith("manual://")
-            if is_manual:
-                continue
-
             if existing_server.id not in imported_ids:
-                for capability in self.list_capabilities(existing_server.id):
-                    self.db_session.delete(capability)
-                self.db_session.delete(existing_server)
                 continue
 
             imported = imported_by_id[existing_server.id]
@@ -73,30 +66,34 @@ class MCPRepository:
             existing_server.health_error = imported.health_error
             existing_server.health_checked_at = imported.health_checked_at
             existing_server.config_path = imported.config_path
-            existing_server.imported_at = imported.imported_at
             self.db_session.add(existing_server)
 
-            for capability in self.list_capabilities(existing_server.id):
-                self.db_session.delete(capability)
-            for capability in capabilities_by_server_id.get(existing_server.id, []):
-                self.db_session.add(capability)
+            capabilities = capabilities_by_server_id.get(existing_server.id)
+            if capabilities is not None:
+                for capability in self.list_capabilities(existing_server.id):
+                    self.db_session.delete(capability)
+                for capability in capabilities:
+                    self.db_session.add(capability)
 
             imported_ids.remove(existing_server.id)
 
         for imported_id in imported_ids:
             imported = imported_by_id[imported_id]
             self.db_session.add(imported)
-            for capability in capabilities_by_server_id.get(imported_id, []):
-                self.db_session.add(capability)
+            capabilities = capabilities_by_server_id.get(imported_id)
+            if capabilities is not None:
+                for capability in capabilities:
+                    self.db_session.add(capability)
         self.db_session.commit()
 
-    def save_server(self, server: MCPServer, capabilities: list[MCPCapability]) -> None:
+    def save_server(self, server: MCPServer, capabilities: list[MCPCapability] | None) -> None:
         self.db_session.add(server)
-        for capability in self.list_capabilities(server.id):
-            self.db_session.delete(capability)
-        self.db_session.flush()
-        for capability in capabilities:
-            self.db_session.add(capability)
+        if capabilities is not None:
+            for capability in self.list_capabilities(server.id):
+                self.db_session.delete(capability)
+            self.db_session.flush()
+            for capability in capabilities:
+                self.db_session.add(capability)
         self.db_session.commit()
 
     def update_server(self, server: MCPServer) -> MCPServer:

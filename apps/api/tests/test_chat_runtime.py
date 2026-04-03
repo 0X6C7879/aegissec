@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import cast
 
 from pytest import MonkeyPatch
 
@@ -145,6 +146,144 @@ def test_extract_tool_calls_coerces_loaded_skill_name_to_read_skill_content() ->
     assert tool_calls[0].tool_call_id == "call-1"
     assert tool_calls[0].tool_name == "read_skill_content"
     assert tool_calls[0].arguments == {"skill_name_or_id": "agent-browser"}
+
+
+def test_openai_tool_definitions_include_mcp_tools_and_safe_schema_fallback() -> None:
+    definitions = OpenAICompatibleChatRuntime._tool_definitions(
+        [
+            {
+                "tool_alias": "mcp__burp_suite__scan_target",
+                "server_id": "server-1",
+                "server_name": "Burp Suite",
+                "source": "local",
+                "scope": "project",
+                "transport": "stdio",
+                "tool_name": "scan-target",
+                "tool_title": "Scan Target",
+                "tool_description": "Run a focused MCP scan.",
+                "input_schema": None,
+            }
+        ]
+    )
+
+    openai_functions = [cast(dict[str, object], item["function"]) for item in definitions]
+    function_names = [str(item["name"]) for item in openai_functions]
+
+    assert function_names[:3] == [
+        "execute_kali_command",
+        "list_available_skills",
+        "read_skill_content",
+    ]
+    assert function_names[3] == "mcp__burp_suite__scan_target"
+    assert openai_functions[3]["parameters"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": True,
+    }
+
+
+def test_anthropic_tool_definitions_include_mcp_tools_and_safe_schema_fallback() -> None:
+    definitions = AnthropicChatRuntime._tool_definitions(
+        [
+            {
+                "tool_alias": "mcp__burp_suite__scan_target",
+                "server_id": "server-1",
+                "server_name": "Burp Suite",
+                "source": "local",
+                "scope": "project",
+                "transport": "stdio",
+                "tool_name": "scan-target",
+                "tool_title": "Scan Target",
+                "tool_description": "Run a focused MCP scan.",
+                "input_schema": {"type": "array"},
+            }
+        ]
+    )
+
+    assert [item["name"] for item in definitions[:4]] == [
+        "execute_kali_command",
+        "list_available_skills",
+        "read_skill_content",
+        "mcp__burp_suite__scan_target",
+    ]
+    assert definitions[3]["input_schema"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": True,
+    }
+
+
+def test_extract_tool_calls_resolves_mcp_alias_to_server_and_tool() -> None:
+    message: dict[str, object] = {
+        "tool_calls": [
+            {
+                "id": "call-mcp-1",
+                "function": {
+                    "name": "mcp__burp_suite__scan_target",
+                    "arguments": json.dumps({"target": "https://example.test"}),
+                },
+            },
+            {
+                "id": "call-fixed-1",
+                "function": {"name": "list_available_skills", "arguments": {}},
+            },
+        ]
+    }
+
+    tool_calls = OpenAICompatibleChatRuntime._extract_tool_calls(
+        message,
+        mcp_tools=[
+            {
+                "tool_alias": "mcp__burp_suite__scan_target",
+                "server_id": "server-1",
+                "server_name": "Burp Suite",
+                "source": "local",
+                "scope": "project",
+                "transport": "stdio",
+                "tool_name": "scan-target",
+                "tool_title": "Scan Target",
+                "tool_description": "Run a focused MCP scan.",
+                "input_schema": {"type": "object", "properties": {"target": {"type": "string"}}},
+            }
+        ],
+    )
+
+    assert tool_calls[0].tool_name == "mcp__burp_suite__scan_target"
+    assert tool_calls[0].mcp_server_id == "server-1"
+    assert tool_calls[0].mcp_tool_name == "scan-target"
+    assert tool_calls[0].arguments == {"target": "https://example.test"}
+    assert tool_calls[1].tool_name == "list_available_skills"
+
+
+def test_anthropic_extract_tool_request_from_use_resolves_mcp_alias() -> None:
+    request = AnthropicChatRuntime._extract_tool_request_from_use(
+        {
+            "type": "tool_use",
+            "id": "tool-use-mcp-1",
+            "name": "mcp__burp_suite__scan_target",
+            "input": {"target": "https://example.test"},
+        },
+        mcp_tools=[
+            {
+                "tool_alias": "mcp__burp_suite__scan_target",
+                "server_id": "server-1",
+                "server_name": "Burp Suite",
+                "source": "local",
+                "scope": "project",
+                "transport": "stdio",
+                "tool_name": "scan-target",
+                "tool_title": "Scan Target",
+                "tool_description": "Run a focused MCP scan.",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    )
+
+    assert request.tool_call_id == "tool-use-mcp-1"
+    assert request.tool_name == "mcp__burp_suite__scan_target"
+    assert request.mcp_server_id == "server-1"
+    assert request.mcp_tool_name == "scan-target"
+    assert request.arguments == {"target": "https://example.test"}
 
 
 def test_openai_build_initial_messages_uses_persisted_conversation_messages() -> None:

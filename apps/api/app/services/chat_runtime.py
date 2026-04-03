@@ -83,12 +83,28 @@ class ToolCallRequest:
     tool_call_id: str
     tool_name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
 
 
 @dataclass(slots=True)
 class ToolCallResult:
     tool_name: str
     payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolBinding:
+    tool_alias: str
+    server_id: str
+    server_name: str
+    source: str
+    scope: str
+    transport: str
+    tool_name: str
+    tool_title: str | None
+    tool_description: str | None
+    input_schema: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -102,6 +118,82 @@ ToolExecutor = Callable[[ToolCallRequest], Awaitable[ToolCallResult]]
 TextDeltaHandler = Callable[[str], Awaitable[None]]
 SummaryHandler = Callable[[str], Awaitable[None]]
 CancelledChecker = Callable[[], bool]
+
+
+def _fallback_mcp_input_schema() -> dict[str, object]:
+    return {"type": "object", "properties": {}, "additionalProperties": True}
+
+
+def _normalize_mcp_input_schema(schema: object) -> dict[str, object]:
+    if not isinstance(schema, dict):
+        return _fallback_mcp_input_schema()
+    if schema.get("type") != "object":
+        return _fallback_mcp_input_schema()
+    normalized_schema = dict(schema)
+    properties = normalized_schema.get("properties")
+    normalized_schema["properties"] = properties if isinstance(properties, dict) else {}
+    required = normalized_schema.get("required")
+    if required is not None and not isinstance(required, list):
+        normalized_schema.pop("required", None)
+    if "additionalProperties" not in normalized_schema:
+        normalized_schema["additionalProperties"] = True
+    return normalized_schema
+
+
+def _normalize_mcp_tool_bindings(
+    mcp_tools: list[Mapping[str, object]] | None,
+) -> list[MCPToolBinding]:
+    bindings: list[MCPToolBinding] = []
+    for item in mcp_tools or []:
+        tool_alias = item.get("tool_alias")
+        server_id = item.get("server_id")
+        tool_name = item.get("tool_name")
+        server_name = item.get("server_name")
+        source = item.get("source")
+        scope = item.get("scope")
+        transport = item.get("transport")
+        if not all(
+            isinstance(value, str) and value
+            for value in (tool_alias, server_id, tool_name, server_name, source, scope, transport)
+        ):
+            continue
+        normalized_tool_alias = str(tool_alias)
+        normalized_server_id = str(server_id)
+        normalized_tool_name = str(tool_name)
+        normalized_server_name = str(server_name)
+        normalized_source = str(source)
+        normalized_scope = str(scope)
+        normalized_transport = str(transport)
+        tool_title = item.get("tool_title")
+        tool_description = item.get("tool_description")
+        bindings.append(
+            MCPToolBinding(
+                tool_alias=normalized_tool_alias,
+                server_id=normalized_server_id,
+                server_name=normalized_server_name,
+                source=normalized_source,
+                scope=normalized_scope,
+                transport=normalized_transport,
+                tool_name=normalized_tool_name,
+                tool_title=tool_title if isinstance(tool_title, str) else None,
+                tool_description=(tool_description if isinstance(tool_description, str) else None),
+                input_schema=_normalize_mcp_input_schema(item.get("input_schema")),
+            )
+        )
+    return bindings
+
+
+def _find_mcp_tool_binding(
+    tool_alias: str,
+    mcp_tools: list[Mapping[str, object]] | None,
+) -> MCPToolBinding | None:
+    normalized_alias = tool_alias.strip()
+    if not normalized_alias:
+        return None
+    for binding in _normalize_mcp_tool_bindings(mcp_tools):
+        if binding.tool_alias == normalized_alias:
+            return binding
+    return None
 
 
 @dataclass(slots=True)
@@ -130,6 +222,7 @@ class ChatRuntime(Protocol):
         attachments: list[AttachmentMetadata],
         conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
+        mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
@@ -147,6 +240,7 @@ class OpenAICompatibleChatRuntime:
         attachments: list[AttachmentMetadata],
         conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
+        mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
@@ -169,6 +263,7 @@ class OpenAICompatibleChatRuntime:
             payload = self._build_payload(
                 model,
                 messages,
+                mcp_tools=mcp_tools,
                 allow_tools=execute_tool is not None,
                 stream=callbacks is not None,
             )
@@ -180,7 +275,7 @@ class OpenAICompatibleChatRuntime:
                 response_payload = await self._request_completion(endpoint, headers, payload)
             assistant_message = self._extract_message_payload(response_payload)
             text_content = self._extract_message_content(assistant_message.get("content"))
-            tool_calls = self._extract_tool_calls(assistant_message, available_skills)
+            tool_calls = self._extract_tool_calls(assistant_message, available_skills, mcp_tools)
 
             if tool_calls:
                 if execute_tool is None:
@@ -265,6 +360,7 @@ class OpenAICompatibleChatRuntime:
         model: str,
         messages: list[dict[str, object]],
         *,
+        mcp_tools: list[Mapping[str, object]] | None,
         allow_tools: bool,
         stream: bool,
     ) -> dict[str, object]:
@@ -274,7 +370,7 @@ class OpenAICompatibleChatRuntime:
             "stream": stream,
         }
         if allow_tools:
-            payload["tools"] = self._tool_definitions()
+            payload["tools"] = self._tool_definitions(mcp_tools)
         return payload
 
     async def _generate_tool_budget_reply(
@@ -287,6 +383,7 @@ class OpenAICompatibleChatRuntime:
         payload = self._build_payload(
             model,
             _append_tool_budget_exhausted_prompt(messages),
+            mcp_tools=None,
             allow_tools=False,
             stream=False,
         )
@@ -419,12 +516,38 @@ class OpenAICompatibleChatRuntime:
         return format_message_content(content, attachments)
 
     @staticmethod
-    def _tool_definitions() -> list[dict[str, object]]:
+    def _tool_definitions(
+        mcp_tools: list[Mapping[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
         return [
             OpenAICompatibleChatRuntime._execute_kali_command_definition(),
             OpenAICompatibleChatRuntime._list_available_skills_definition(),
             OpenAICompatibleChatRuntime._read_skill_content_definition(),
+            *OpenAICompatibleChatRuntime._mcp_tool_definitions(mcp_tools),
         ]
+
+    @staticmethod
+    def _mcp_tool_definitions(
+        mcp_tools: list[Mapping[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        definitions: list[dict[str, object]] = []
+        for binding in _normalize_mcp_tool_bindings(mcp_tools):
+            description = (
+                binding.tool_description
+                or binding.tool_title
+                or f"Call MCP tool '{binding.tool_name}' on server '{binding.server_name}'."
+            )
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": binding.tool_alias,
+                        "description": description,
+                        "parameters": binding.input_schema,
+                    },
+                }
+            )
+        return definitions
 
     @staticmethod
     def _execute_kali_command_definition() -> dict[str, object]:
@@ -616,6 +739,7 @@ class OpenAICompatibleChatRuntime:
     def _extract_tool_calls(
         message: dict[str, object],
         available_skills: list[SkillAgentSummaryRead] | None = None,
+        mcp_tools: list[Mapping[str, object]] | None = None,
     ) -> list[ToolCallRequest]:
         raw_tool_calls = message.get("tool_calls")
         if not isinstance(raw_tool_calls, list):
@@ -672,6 +796,19 @@ class OpenAICompatibleChatRuntime:
                         tool_call_id=tool_call_id,
                         tool_name=function_name,
                         arguments={"skill_name_or_id": raw_identifier.strip()},
+                    )
+                )
+                continue
+
+            mcp_binding = _find_mcp_tool_binding(function_name, mcp_tools)
+            if mcp_binding is not None:
+                tool_calls.append(
+                    ToolCallRequest(
+                        tool_call_id=tool_call_id,
+                        tool_name=mcp_binding.tool_alias,
+                        arguments=parsed_arguments,
+                        mcp_server_id=mcp_binding.server_id,
+                        mcp_tool_name=mcp_binding.tool_name,
                     )
                 )
                 continue
@@ -752,6 +889,7 @@ class AnthropicChatRuntime:
         attachments: list[AttachmentMetadata],
         conversation_messages: list[ConversationMessage] | None = None,
         available_skills: list[SkillAgentSummaryRead] | None = None,
+        mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
@@ -775,6 +913,7 @@ class AnthropicChatRuntime:
             payload = self._build_payload(
                 model,
                 messages,
+                mcp_tools=mcp_tools,
                 allow_tools=execute_tool is not None,
                 stream=callbacks is not None,
             )
@@ -800,7 +939,9 @@ class AnthropicChatRuntime:
                 )
                 tool_results: list[dict[str, object]] = []
                 for tool_use in tool_uses:
-                    tool_request = self._extract_tool_request_from_use(tool_use, available_skills)
+                    tool_request = self._extract_tool_request_from_use(
+                        tool_use, available_skills, mcp_tools
+                    )
                     tool_result = await execute_tool(tool_request)
                     tool_results.append(
                         {
@@ -893,6 +1034,7 @@ class AnthropicChatRuntime:
         model: str,
         messages: list[dict[str, object]],
         *,
+        mcp_tools: list[Mapping[str, object]] | None,
         allow_tools: bool,
         stream: bool,
     ) -> dict[str, object]:
@@ -904,7 +1046,7 @@ class AnthropicChatRuntime:
             "stream": stream,
         }
         if allow_tools:
-            payload["tools"] = self._tool_definitions()
+            payload["tools"] = self._tool_definitions(mcp_tools)
         return payload
 
     async def _generate_tool_budget_reply(
@@ -917,6 +1059,7 @@ class AnthropicChatRuntime:
         payload = self._build_payload(
             model,
             _append_tool_budget_exhausted_prompt(messages),
+            mcp_tools=None,
             allow_tools=False,
             stream=False,
         )
@@ -1054,12 +1197,35 @@ class AnthropicChatRuntime:
         return assembly.messages
 
     @staticmethod
-    def _tool_definitions() -> list[dict[str, object]]:
+    def _tool_definitions(
+        mcp_tools: list[Mapping[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
         return [
             AnthropicChatRuntime._execute_kali_command_definition(),
             AnthropicChatRuntime._list_available_skills_definition(),
             AnthropicChatRuntime._read_skill_content_definition(),
+            *AnthropicChatRuntime._mcp_tool_definitions(mcp_tools),
         ]
+
+    @staticmethod
+    def _mcp_tool_definitions(
+        mcp_tools: list[Mapping[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        definitions: list[dict[str, object]] = []
+        for binding in _normalize_mcp_tool_bindings(mcp_tools):
+            description = (
+                binding.tool_description
+                or binding.tool_title
+                or f"Call MCP tool '{binding.tool_name}' on server '{binding.server_name}'."
+            )
+            definitions.append(
+                {
+                    "name": binding.tool_alias,
+                    "description": description,
+                    "input_schema": binding.input_schema,
+                }
+            )
+        return definitions
 
     @staticmethod
     def _execute_kali_command_definition() -> dict[str, object]:
@@ -1170,6 +1336,7 @@ class AnthropicChatRuntime:
     def _extract_tool_request_from_use(
         tool_use: dict[str, object],
         available_skills: list[SkillAgentSummaryRead] | None = None,
+        mcp_tools: list[Mapping[str, object]] | None = None,
     ) -> ToolCallRequest:
         tool_use_id = tool_use.get("id")
         tool_name = tool_use.get("name")
@@ -1206,6 +1373,15 @@ class AnthropicChatRuntime:
                 arguments={"skill_name_or_id": raw_identifier.strip()},
             )
         else:
+            mcp_binding = _find_mcp_tool_binding(tool_name, mcp_tools)
+            if mcp_binding is not None:
+                return ToolCallRequest(
+                    tool_call_id=tool_use_id,
+                    tool_name=mcp_binding.tool_alias,
+                    arguments=parsed_arguments,
+                    mcp_server_id=mcp_binding.server_id,
+                    mcp_tool_name=mcp_binding.tool_name,
+                )
             skill_tool_call = OpenAICompatibleChatRuntime._coerce_skill_tool_call(
                 tool_call_id=tool_use_id,
                 function_name=tool_name,
@@ -1290,8 +1466,9 @@ class AnthropicChatRuntime:
             "If the user asks to list skills, explain a skill, or use a skill, "
             "call the skills tools before asking broad clarification questions. "
             "Skill names in this catalog are reference entries, not callable tools. "
-            "The only callable tool names are execute_kali_command, list_available_skills, "
-            "and read_skill_content."
+            "Fixed callable tool names are execute_kali_command, list_available_skills, "
+            "and read_skill_content. Additional callable MCP tool aliases may appear in the "
+            "capability context."
         )
         return "\n".join(lines)
 
