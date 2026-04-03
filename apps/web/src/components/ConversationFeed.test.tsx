@@ -148,10 +148,69 @@ function buildMessages(
 }
 
 describe("ConversationFeed", () => {
-  it("renders native think blocks inline, strips noisy boilerplate, and keeps shell output compact", () => {
+  it("renders chronological reasoning, status, tool, and final output blocks together", () => {
     const { container } = render(
       <ConversationFeed
-        messages={buildMessages()}
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-reasoning-1",
+                kind: "reasoning",
+                title: "思路进展",
+                text: "<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑",
+              }),
+              buildTranscriptSegment({
+                id: "segment-status",
+                sequence: 2,
+                kind: "status",
+                title: "运行状态",
+                text: "已自动选择技能：ctf-web",
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-call",
+                sequence: 3,
+                kind: "tool_call",
+                title: "开始调用工具",
+                tool_name: "bash",
+                tool_call_id: "tool-call-1",
+                text: "准备执行 nmap 127.0.0.1",
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result",
+                sequence: 4,
+                kind: "tool_result",
+                title: "工具执行结果",
+                tool_name: "bash",
+                tool_call_id: "tool-call-1",
+                text: "工具执行完成，状态：success。",
+                metadata: {
+                  stdout: "runtime command completed",
+                  stderr: "",
+                  artifacts: ["reports/auto.txt"],
+                  result: {
+                    status: "success",
+                    exit_code: 0,
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-reasoning-2",
+                sequence: 5,
+                kind: "reasoning",
+                title: "思路进展",
+                text: "结合扫描结果继续确认过滤点",
+              }),
+              buildTranscriptSegment({
+                id: "segment-output",
+                sequence: 6,
+                kind: "output",
+                title: "正文输出",
+                text: "<think>very secret</think>最终答复",
+              }),
+            ],
+          },
+        })}
         generations={[buildGeneration()]}
         events={[]}
         runtimeRuns={[]}
@@ -166,25 +225,23 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("工具结果")).not.toBeInTheDocument();
     expect(screen.queryByText("正文输出")).not.toBeInTheDocument();
     expect(screen.queryByText("运行状态")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("Assistant is analyzing the request and preparing a response."),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("Generation completed")).not.toBeInTheDocument();
     expect(screen.getAllByText("思考过程").length).toBeGreaterThan(0);
     expect(container.querySelectorAll("details.assistant-reasoning-stream").length).toBeGreaterThan(
       0,
     );
     expect(container.querySelector("details.assistant-reasoning-stream")).toHaveAttribute("open");
-    expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(0);
+    expect(screen.getByText("已自动选择技能：ctf-web")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(1);
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("private").length).toBeGreaterThan(0);
-    expect(screen.getByText("分析中")).toBeInTheDocument();
+    expect(screen.getByText("正在检查 node5.buuoj.cn 的登录逻辑")).toBeInTheDocument();
+    expect(screen.getByText("结合扫描结果继续确认过滤点")).toBeInTheDocument();
     expect(screen.getAllByText("very secret").length).toBeGreaterThan(0);
     expect(screen.getByText("最终答复")).toBeInTheDocument();
     expect(
       container.querySelector(".assistant-output-block-final details.assistant-reasoning-stream"),
     ).not.toBeNull();
-    expect(screen.queryByText("<think>private</think>分析中")).not.toBeInTheDocument();
+    expect(screen.queryByText("<think>private</think>正在检查 node5.buuoj.cn 的登录逻辑")).not.toBeInTheDocument();
     expect(screen.queryByText("<think>very secret</think>最终答复")).not.toBeInTheDocument();
     fireEvent.click(container.querySelector(".assistant-tool-summary")!);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();

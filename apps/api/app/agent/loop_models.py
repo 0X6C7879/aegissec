@@ -12,6 +12,9 @@ class LoopSelectedTask:
     approval_required: bool
     tool_name: str | None = None
     writes_state: bool = False
+    is_concurrency_safe: bool = False
+    is_read_only: bool = False
+    is_destructive: bool = False
     scheduler_group: str | None = None
     access_mode: str | None = None
     side_effect_level: str | None = None
@@ -26,6 +29,9 @@ class LoopSelectedTask:
             "approval_required": self.approval_required,
             "tool_name": self.tool_name,
             "writes_state": self.writes_state,
+            "is_concurrency_safe": self.is_concurrency_safe,
+            "is_read_only": self.is_read_only,
+            "is_destructive": self.is_destructive,
             "scheduler_group": self.scheduler_group,
             "access_mode": self.access_mode,
             "side_effect_level": self.side_effect_level,
@@ -50,6 +56,12 @@ class LoopSelectedTask:
             raw_dict.get("tool_name") if isinstance(raw_dict.get("tool_name"), str) else None
         )
         writes_state = bool(raw_dict.get("writes_state", False))
+        is_concurrency_safe = bool(raw_dict.get("is_concurrency_safe", False))
+        if "is_read_only" in raw_dict:
+            is_read_only = bool(raw_dict.get("is_read_only", False))
+        else:
+            is_read_only = not writes_state
+        is_destructive = bool(raw_dict.get("is_destructive", writes_state))
         scheduler_group = (
             raw_dict.get("scheduler_group")
             if isinstance(raw_dict.get("scheduler_group"), str)
@@ -76,6 +88,9 @@ class LoopSelectedTask:
             approval_required=approval_required,
             tool_name=tool_name,
             writes_state=writes_state,
+            is_concurrency_safe=is_concurrency_safe,
+            is_read_only=is_read_only,
+            is_destructive=is_destructive,
             scheduler_group=scheduler_group,
             access_mode=access_mode,
             side_effect_level=side_effect_level,
@@ -88,9 +103,12 @@ class WorkflowCycleArtifact:
     cycle_id: str
     batch_cycle: int
     selected_tasks: list[LoopSelectedTask] = field(default_factory=list)
+    scheduler_mode: str | None = None
     parallel_read_group: list[str] = field(default_factory=list)
     serialized_write_group: list[str] = field(default_factory=list)
     scheduler_summary: dict[str, object] = field(default_factory=dict)
+    merge_summary: dict[str, object] = field(default_factory=dict)
+    partial_failures: list[dict[str, object]] = field(default_factory=list)
     retrieval_summary: str = ""
     retrieval: dict[str, object] = field(default_factory=dict)
     tool_results: list[dict[str, object]] = field(default_factory=list)
@@ -108,9 +126,12 @@ class WorkflowCycleArtifact:
             "cycle_id": self.cycle_id,
             "batch_cycle": self.batch_cycle,
             "selected_tasks": [task.to_state() for task in self.selected_tasks],
+            "scheduler_mode": self.scheduler_mode,
             "parallel_read_group": list(self.parallel_read_group),
             "serialized_write_group": list(self.serialized_write_group),
             "scheduler_summary": dict(self.scheduler_summary),
+            "merge_summary": dict(self.merge_summary),
+            "partial_failures": list(self.partial_failures),
             "retrieval_summary": self.retrieval_summary,
             "retrieval": dict(self.retrieval),
             "tool_results": list(self.tool_results),
@@ -143,6 +164,11 @@ class WorkflowCycleArtifact:
             parsed_task = LoopSelectedTask.from_state(item)
             if parsed_task is not None:
                 selected_tasks.append(parsed_task)
+        scheduler_mode = (
+            raw_dict.get("scheduler_mode")
+            if isinstance(raw_dict.get("scheduler_mode"), str)
+            else None
+        )
         parallel_read_group = (
             [item for item in raw_dict.get("parallel_read_group", []) if isinstance(item, str)]
             if isinstance(raw_dict.get("parallel_read_group", []), list)
@@ -159,6 +185,20 @@ class WorkflowCycleArtifact:
             if isinstance(raw_scheduler_summary, dict)
             else {}
         )
+        raw_merge_summary = raw_dict.get("merge_summary")
+        merge_summary = (
+            {str(key): value for key, value in raw_merge_summary.items()}
+            if isinstance(raw_merge_summary, dict)
+            else {}
+        )
+        partial_failures_raw: list[object] = []
+        partial_failures_value = raw_dict.get("partial_failures")
+        if isinstance(partial_failures_value, list):
+            partial_failures_raw = partial_failures_value
+        partial_failures: list[dict[str, object]] = []
+        for item in partial_failures_raw:
+            if isinstance(item, dict):
+                partial_failures.append(item)
         raw_retrieval = raw_dict.get("retrieval")
         retrieval = (
             {str(key): value for key, value in raw_retrieval.items()}
@@ -203,9 +243,12 @@ class WorkflowCycleArtifact:
             cycle_id=cycle_id,
             batch_cycle=batch_cycle,
             selected_tasks=selected_tasks,
+            scheduler_mode=scheduler_mode,
             parallel_read_group=parallel_read_group,
             serialized_write_group=serialized_write_group,
             scheduler_summary=scheduler_summary,
+            merge_summary=merge_summary,
+            partial_failures=partial_failures,
             retrieval_summary=str(raw_dict.get("retrieval_summary") or ""),
             retrieval=retrieval,
             tool_results=tool_results,

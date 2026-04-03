@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useUiStore } from "../store/uiStore";
 
 type WorkbenchComposerProps = {
@@ -22,46 +22,32 @@ export function WorkbenchComposer({
 }: WorkbenchComposerProps) {
   const draft = useUiStore((state) => state.draftsBySession[sessionId]);
   const setDraftContent = useUiStore((state) => state.setDraftContent);
-  const clearDraft = useUiStore((state) => state.clearDraft);
   const sendLockRef = useRef(false);
   const [isLocallySending, setIsLocallySending] = useState(false);
-  const [inputValue, setInputValue] = useState(draft?.content ?? "");
 
   const draftContent = draft?.content ?? "";
-  const effectiveDraftContent = isLocallySending ? inputValue : draftContent;
-  const isEmptyDraft = effectiveDraftContent.length === 0;
-  const trimmedDraftContent = effectiveDraftContent.trim();
-  const isPrimaryDisabled = disabled || isLocallySending || trimmedDraftContent.length === 0;
-
-  useEffect(() => {
-    if (isLocallySending) {
-      return;
-    }
-
-    setInputValue(draftContent);
-  }, [draftContent, isLocallySending]);
+  const isEmptyDraft = draftContent.length === 0;
+  const trimmedDraftContent = draftContent.trim();
+  const isPrimaryDisabled =
+    disabled || (isLocallySending && !isGenerating) || trimmedDraftContent.length === 0;
 
   async function handleSendMessage(): Promise<void> {
-    const trimmed = effectiveDraftContent.trim();
+    const trimmed = draftContent.trim();
 
-    if (!trimmed || isLocallySending || disabled || sendLockRef.current) {
+    if (!trimmed || disabled || sendLockRef.current || (isLocallySending && !isGenerating)) {
       return;
     }
 
     sendLockRef.current = true;
     setIsLocallySending(true);
-    setInputValue("");
-    clearDraft(sessionId);
+    setDraftContent(sessionId, "");
 
     try {
       await onSend(trimmed);
-      setInputValue("");
-      clearDraft(sessionId);
     } catch (error) {
       const latestDraftContent = useUiStore.getState().draftsBySession[sessionId]?.content ?? "";
 
       if (latestDraftContent.trim().length === 0) {
-        setInputValue(trimmed);
         setDraftContent(sessionId, trimmed);
       }
 
@@ -78,7 +64,13 @@ export function WorkbenchComposer({
   }
 
   function handleInputKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
-    if (event.key !== "Enter" || event.shiftKey || isPrimaryDisabled) {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      disabled ||
+      trimmedDraftContent.length === 0 ||
+      (isLocallySending && !isGenerating)
+    ) {
       return;
     }
 
@@ -105,15 +97,13 @@ export function WorkbenchComposer({
         <textarea
           className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
           rows={1}
-          value={effectiveDraftContent}
+          value={draftContent}
           onChange={(event) => {
-            const nextValue = event.target.value;
-            setInputValue(nextValue);
-            setDraftContent(sessionId, nextValue);
+            setDraftContent(sessionId, event.target.value);
           }}
           onKeyDown={handleInputKeyDown}
           placeholder="输入目标、上下文或要验证的问题"
-          disabled={disabled || isLocallySending}
+          disabled={disabled}
         />
 
         <div className="workbench-composer-footer">

@@ -67,6 +67,59 @@ describe("WorkbenchComposer", () => {
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the textarea editable while the first send is still pending and preserves the follow-up draft", async () => {
+    const user = userEvent.setup();
+    let resolveFirstSend: () => void = () => {};
+    const firstSend = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    const onSend = vi.fn<(content: string) => Promise<void>>()
+      .mockImplementationOnce(() => firstSend)
+      .mockResolvedValueOnce(undefined);
+    const onInterrupt = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <WorkbenchComposer
+        sessionId="session-pending"
+        disabled={false}
+        isGenerating={false}
+        isInterrupting={false}
+        queuedCount={0}
+        onSend={onSend}
+        onInterrupt={onInterrupt}
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox"), "第一条消息");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onSend).toHaveBeenNthCalledWith(1, "第一条消息"));
+    expect(screen.getByRole("textbox")).toBeEnabled();
+
+    await user.type(screen.getByRole("textbox"), "第二条跟进");
+
+    expect(screen.getByRole("textbox")).toHaveValue("第二条跟进");
+    expect(useUiStore.getState().draftsBySession["session-pending"]?.content).toBe("第二条跟进");
+
+    resolveFirstSend();
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+
+    rerender(
+      <WorkbenchComposer
+        sessionId="session-pending"
+        disabled={false}
+        isGenerating={true}
+        isInterrupting={false}
+        queuedCount={1}
+        onSend={onSend}
+        onInterrupt={onInterrupt}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "加入队列" }));
+    await waitFor(() => expect(onSend).toHaveBeenNthCalledWith(2, "第二条跟进"));
+  });
+
   it("submits on Enter and preserves Shift + Enter for new lines", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);

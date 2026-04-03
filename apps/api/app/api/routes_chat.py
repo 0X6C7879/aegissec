@@ -100,6 +100,10 @@ _VISIBLE_TRANSCRIPT_NOISE_PATTERNS = [
     re.compile(r"^已列出当前可用技能。$", re.IGNORECASE),
     re.compile(r"^已读取\s+.+\s+的技能内容。$", re.IGNORECASE),
 ]
+_CTF_WEB_AUTOROUTE_SIGNAL_RE = re.compile(
+    r"(\bctf\b.*\bweb\b|\bweb\b.*\bctf\b|sql\s*注入|\bsqli\b|\bxss\b|文件包含|登录绕过|login\s*bypass|buuoj|node\d+\.buuoj\.cn)",
+    re.IGNORECASE,
+)
 CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
@@ -469,30 +473,15 @@ async def _publish_assistant_summary(
     if not sanitized_summary or _is_visible_transcript_noise(sanitized_summary):
         return
     repository.update_message_summary(assistant_message, sanitized_summary)
-    transcript_segments = _message_transcript_segments(repository, assistant_message)
-    reasoning_segment = _find_transcript_segment(
-        transcript_segments, kind=AssistantTranscriptSegmentKind.REASONING
+    _append_transcript_segment(
+        repository,
+        assistant_message=assistant_message,
+        kind=AssistantTranscriptSegmentKind.REASONING,
+        status="completed",
+        title=None,
+        text=sanitized_summary,
+        metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
     )
-    if reasoning_segment is None:
-        _append_transcript_segment(
-            repository,
-            assistant_message=assistant_message,
-            kind=AssistantTranscriptSegmentKind.REASONING,
-            status="completed",
-            title=None,
-            text=sanitized_summary,
-            metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
-        )
-    else:
-        _update_transcript_segment(
-            repository,
-            assistant_message=assistant_message,
-            segment=reasoning_segment,
-            status="completed",
-            title=None,
-            text=sanitized_summary,
-            metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
-        )
     if assistant_message.generation_id is not None:
         generation = repository.get_generation(assistant_message.generation_id)
         if generation is not None:
@@ -893,6 +882,83 @@ def _find_sibling_version_group_id(
         ):
             return message.version_group_id
     return None
+
+
+def _find_ctf_web_skill_identifier(available_skills: list[Any]) -> str | None:
+    for skill in available_skills:
+        directory_name = getattr(skill, "directory_name", None)
+        if isinstance(directory_name, str) and directory_name.strip().lower() == "ctf-web":
+            return directory_name.strip()
+
+        skill_name = getattr(skill, "name", None)
+        if isinstance(skill_name, str) and skill_name.strip().lower() == "ctf-web":
+            return skill_name.strip()
+
+    return None
+
+
+def _should_autoroute_ctf_web(*, latest_message_text: str, recent_context_text: str) -> bool:
+    combined_context = "\n".join(
+        part for part in [latest_message_text, recent_context_text] if part.strip()
+    )
+    return bool(_CTF_WEB_AUTOROUTE_SIGNAL_RE.search(combined_context))
+
+
+async def _build_autorouted_skill_context(
+    *,
+    available_skills: list[Any],
+    latest_message_text: str,
+    recent_context_text: str,
+    execute_tool: Any,
+) -> str | None:
+    if not _should_autoroute_ctf_web(
+        latest_message_text=latest_message_text,
+        recent_context_text=recent_context_text,
+    ):
+        return None
+
+    skill_identifier = _find_ctf_web_skill_identifier(available_skills)
+    if skill_identifier is None:
+        return None
+
+    try:
+        tool_result = await execute_tool(
+            ToolCallRequest(
+                tool_call_id=f"autoroute-skill-{uuid4()}",
+                tool_name="read_skill_content",
+                arguments={"skill_name_or_id": skill_identifier},
+            )
+        )
+    except ChatRuntimeError:
+        return None
+
+    skill_payload = tool_result.payload.get("skill")
+    if not isinstance(skill_payload, dict):
+        return f"## Auto-selected skill: {skill_identifier}"
+
+    directory_name = skill_payload.get("directory_name")
+    resolved_skill_name = (
+        str(directory_name).strip()
+        if isinstance(directory_name, str) and directory_name.strip()
+        else skill_identifier
+    )
+    description = skill_payload.get("description")
+    content = skill_payload.get("content")
+    truncated_content = content.strip() if isinstance(content, str) else ""
+    if len(truncated_content) > 4000:
+        truncated_content = truncated_content[:4000].rstrip() + "\n...[truncated]"
+
+    context_lines = [
+        f"## Auto-selected skill: {resolved_skill_name}",
+        "Reason: recent context strongly indicates a web CTF / web exploit task.",
+        "Use this preloaded skill guidance proactively before deciding on the next tool or answer.",
+    ]
+    if isinstance(description, str) and description.strip():
+        context_lines.append(f"Description: {description.strip()}")
+    if truncated_content:
+        context_lines.extend(["", truncated_content])
+
+    return "\n".join(context_lines)
 
 
 def _build_tool_executor(
@@ -1516,6 +1582,23 @@ async def _process_generation(
                 assistant_message=assistant_message,
                 entry={"state": "generation.started", "generation_id": generation.id},
             )
+
+            autorouted_skill_context = await _build_autorouted_skill_context(
+                available_skills=available_skills,
+                latest_message_text=latest_message_text,
+                recent_context_text="\n\n".join(
+                    message.content
+                    for message in conversation_history[-4:]
+                    if message.content.strip()
+                ),
+                execute_tool=execute_tool,
+            )
+            if autorouted_skill_context:
+                skill_context_prompt = "\n\n".join(
+                    part
+                    for part in [skill_context_prompt, autorouted_skill_context]
+                    if part.strip()
+                )
 
             raw_streamed_content = loaded_assistant_message.content
             streamed_content = _project_visible_stream_content(raw_streamed_content)

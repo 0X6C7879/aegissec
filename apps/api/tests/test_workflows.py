@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import time
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
 
+from app.agent.context_models import ContextSnapshot
 from app.agent.coordinator import Coordinator
 from app.agent.executor import ExecutionResult
-from app.agent.selection import WorkflowRunnableSelector
+from app.agent.loop_engine import WorkflowLoopEngine
+from app.agent.reflector import Reflector
+from app.agent.selection import RunnableSelection, SelectedTask, WorkflowRunnableSelector
 from app.agent.tool_registry import (
     NoOpToolExecutionHooks,
+    ToolAccessMode,
     ToolCapability,
     ToolCategory,
     ToolExecutionRequest,
@@ -19,8 +22,16 @@ from app.agent.tool_registry import (
     ToolSafetyProfile,
     ToolSpec,
 )
+from app.agent.tool_scheduler import WorkflowToolScheduler
 from app.agent.workflow import WorkflowExecutionContext
-from app.db.models import TaskNode, TaskNodeStatus, TaskNodeType
+from app.db.models import (
+    Session,
+    TaskNode,
+    TaskNodeStatus,
+    TaskNodeType,
+    WorkflowRun,
+    WorkflowRunStatus,
+)
 from tests.utils import api_data
 
 
@@ -49,6 +60,11 @@ def _start_workflow(
 
 def _workflow_tasks_by_name(workflow: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {cast(str, task["name"]): task for task in cast(list[dict[str, Any]], workflow["tasks"])}
+
+
+class _StubRunLogRepository:
+    def list_logs(self, **_: object) -> list[dict[str, Any]]:
+        return []
 
 
 def test_start_workflow_persists_structured_plan_and_dag_task_metadata(client: TestClient) -> None:
@@ -230,9 +246,12 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(latest_cycle["cycle_id"], str) and latest_cycle["cycle_id"]
     assert latest_cycle["batch_cycle"] == batch_state["cycle"]
     assert isinstance(latest_cycle["selected_tasks"], list)
+    assert latest_cycle["scheduler_mode"] == "phase3_read_parallel_write_serial"
     assert isinstance(latest_cycle["parallel_read_group"], list)
     assert isinstance(latest_cycle["serialized_write_group"], list)
     assert isinstance(latest_cycle["scheduler_summary"], dict)
+    assert isinstance(latest_cycle["merge_summary"], dict)
+    assert isinstance(latest_cycle["partial_failures"], list)
     assert isinstance(latest_cycle["retrieval_summary"], str)
     assert isinstance(latest_cycle["tool_results"], list)
     assert isinstance(latest_cycle["reflection_summary"], str)
@@ -244,6 +263,10 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert scheduler_summary["selected_task_ids"] == [
         task["task_id"] for task in cast(list[dict[str, Any]], latest_cycle["selected_tasks"])
     ]
+    merge_summary = cast(dict[str, Any], latest_cycle["merge_summary"])
+    assert isinstance(merge_summary.get("phases"), list)
+    assert isinstance(merge_summary.get("merged_task_ids"), list)
+    assert isinstance(merge_summary.get("partial_failure_count"), int)
 
 
 def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_tool_inputs(
@@ -445,40 +468,417 @@ def test_batch_execution_logs_all_records_to_session_history(client: TestClient)
 
 
 def test_workflow_executes_read_tasks_with_async_parallelism_and_merges_state_in_selection_order(
+    monkeypatch: Any,
+) -> None:
+    import asyncio
+    import threading
+
+    to_thread_calls: list[str] = []
+    real_to_thread = asyncio.to_thread
+    barrier = threading.Barrier(2)
+
+    class StubExecutor:
+        def execute(self, *, context: object, task: Any) -> ExecutionResult:
+            del context
+            from datetime import UTC, datetime
+
+            barrier.wait(timeout=1.0)
+            now = datetime.now(UTC)
+            return ExecutionResult(
+                trace_id=f"trace-{task.name}",
+                source_type="runtime",
+                source_name="test-executor",
+                command_or_action=f"execute:{task.name}",
+                input_payload={"task": task.name},
+                output_payload={"status": "completed", "artifacts": [], "citations": []},
+                status=TaskNodeStatus.COMPLETED,
+                started_at=now,
+                ended_at=now,
+            )
+
+        def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+            del task
+            return ToolSpec(
+                name="workflow.capability_snapshot",
+                category=ToolCategory.DISCOVERY,
+                capability=ToolCapability.CAPABILITY_SNAPSHOT,
+                safety_profile=ToolSafetyProfile(
+                    writes_state=False,
+                    is_concurrency_safe=True,
+                    is_read_only=True,
+                    is_destructive=False,
+                ),
+                access_mode=ToolAccessMode.READ,
+            )
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=cast(Any, StubExecutor()),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-1",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="discovery",
+        state_json={"goal": "parallel read test", "runtime_policy": {}},
+    )
+    session = Session(project_id="project-1")
+    read_tasks = [
+        TaskNode(
+            workflow_run_id=run.id,
+            name="read_alpha",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=1,
+            metadata_json={"stage_key": "discovery", "scheduler_access_mode": "read"},
+        ),
+        TaskNode(
+            workflow_run_id=run.id,
+            name="read_beta",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=2,
+            metadata_json={"stage_key": "discovery", "scheduler_access_mode": "read"},
+        ),
+    ]
+
+    async def recording_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        task = kwargs.get("task")
+        if task is not None and hasattr(task, "name"):
+            to_thread_calls.append(cast(str, task.name))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr("app.agent.loop_engine.asyncio.to_thread", recording_to_thread)
+
+    outcomes = asyncio.run(
+        engine._execute_parallel_read_wave(
+            run=run,
+            session=session,
+            mutable_state={"goal": "parallel read test", "runtime_policy": {}},
+            context_snapshot=ContextSnapshot.empty(),
+            read_tasks=read_tasks,
+        )
+    )
+
+    assert [outcome.task.name for outcome in outcomes] == ["read_alpha", "read_beta"]
+    assert [outcome.execution.status for outcome in outcomes] == [
+        TaskNodeStatus.COMPLETED,
+        TaskNodeStatus.COMPLETED,
+    ]
+    assert to_thread_calls == ["read_alpha", "read_beta"]
+
+
+def test_parallel_read_wave_does_not_mutate_state_before_merge_and_merges_after_barrier() -> None:
+    import asyncio
+
+    class StubExecutor:
+        def execute(self, *, context: object, task: Any) -> ExecutionResult:
+            del context
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            return ExecutionResult(
+                trace_id=f"trace-{task.name}",
+                source_type="runtime",
+                source_name="test-executor",
+                command_or_action=f"execute:{task.name}",
+                input_payload={"task": task.name},
+                output_payload={
+                    "status": "completed",
+                    "artifacts": [{"name": f"{task.name}.json"}],
+                    "citations": [{"label": task.name}],
+                },
+                status=TaskNodeStatus.COMPLETED,
+                started_at=now,
+                ended_at=now,
+            )
+
+        def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+            del task
+            return ToolSpec(
+                name="workflow.capability_snapshot",
+                category=ToolCategory.DISCOVERY,
+                capability=ToolCapability.CAPABILITY_SNAPSHOT,
+                safety_profile=ToolSafetyProfile(
+                    writes_state=False,
+                    is_concurrency_safe=True,
+                    is_read_only=True,
+                    is_destructive=False,
+                ),
+                access_mode=ToolAccessMode.READ,
+            )
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=cast(Any, StubExecutor()),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-1",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="discovery",
+        state_json={"goal": "merge barrier test", "runtime_policy": {}},
+    )
+    session = Session(project_id="project-1")
+    mutable_state: dict[str, Any] = {"goal": "merge barrier test", "runtime_policy": {}}
+    read_tasks = [
+        TaskNode(
+            workflow_run_id=run.id,
+            name="read_alpha",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=1,
+            metadata_json={"stage_key": "discovery", "scheduler_access_mode": "read"},
+        ),
+        TaskNode(
+            workflow_run_id=run.id,
+            name="read_beta",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=2,
+            metadata_json={"stage_key": "discovery", "scheduler_access_mode": "read"},
+        ),
+    ]
+
+    outcomes = asyncio.run(
+        engine._execute_parallel_read_wave(
+            run=run,
+            session=session,
+            mutable_state=mutable_state,
+            context_snapshot=ContextSnapshot.empty(),
+            read_tasks=read_tasks,
+        )
+    )
+
+    assert len(outcomes) == 2
+    assert "execution_records" not in mutable_state
+    assert "findings" not in mutable_state
+    assert "graph_updates" not in mutable_state
+
+    tool_results: list[dict[str, Any]] = []
+    reflection_summaries: list[str] = []
+    executed_task_ids: list[str] = []
+    merge_result = engine._merge_execution_outcomes(
+        run=run,
+        outcomes=outcomes,
+        mutable_state=mutable_state,
+        tasks=read_tasks,
+        tool_results=tool_results,
+        reflection_summaries=reflection_summaries,
+        executed_task_ids=executed_task_ids,
+        scheduler_group="parallel_read_group",
+    )
+
+    assert merge_result["merged_after_batch_completion"] is True
+    assert merge_result["merged_task_ids"] == [task.id for task in read_tasks]
+    assert [record["task_node_id"] for record in mutable_state["execution_records"]] == [
+        task.id for task in read_tasks
+    ]
+    assert [result["task_name"] for result in tool_results] == ["read_alpha", "read_beta"]
+
+
+def test_serial_write_tasks_execute_in_order_without_parallel_worker_path(
+    monkeypatch: Any,
+) -> None:
+    import asyncio
+
+    executed_names: list[str] = []
+
+    class StubExecutor:
+        def execute(self, *, context: object, task: Any) -> ExecutionResult:
+            del context
+            from datetime import UTC, datetime
+
+            executed_names.append(cast(str, task.name))
+            now = datetime.now(UTC)
+            return ExecutionResult(
+                trace_id=f"trace-{task.name}",
+                source_type="runtime",
+                source_name="test-executor",
+                command_or_action=f"execute:{task.name}",
+                input_payload={"task": task.name},
+                output_payload={"status": "completed", "artifacts": [], "citations": []},
+                status=TaskNodeStatus.COMPLETED,
+                started_at=now,
+                ended_at=now,
+            )
+
+        def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+            del task
+            return ToolSpec(
+                name="workflow.structured_runtime",
+                category=ToolCategory.EXECUTION,
+                capability=ToolCapability.STRUCTURED_RUNTIME,
+                safety_profile=ToolSafetyProfile(
+                    writes_state=True,
+                    is_concurrency_safe=False,
+                    is_read_only=False,
+                    is_destructive=True,
+                ),
+                access_mode=ToolAccessMode.WRITE,
+            )
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    async def fail_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        del func, args, kwargs
+        raise AssertionError("serialized write execution should not use asyncio.to_thread")
+
+    monkeypatch.setattr("app.agent.loop_engine.asyncio.to_thread", fail_to_thread)
+
+    engine = WorkflowLoopEngine(
+        executor=cast(Any, StubExecutor()),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-1",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="validation",
+        state_json={
+            "goal": "serial write test",
+            "runtime_policy": {},
+            "batch": {"max_nodes_per_cycle": 2},
+        },
+    )
+    write_tasks = [
+        TaskNode(
+            workflow_run_id=run.id,
+            name="write_alpha",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=1,
+            metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
+        ),
+        TaskNode(
+            workflow_run_id=run.id,
+            name="write_beta",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=2,
+            metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
+        ),
+    ]
+
+    result = asyncio.run(engine.advance(run=run, tasks=write_tasks, approve=True))
+    state = cast(dict[str, Any], result.state)
+
+    assert executed_names == ["write_alpha", "write_beta"]
+    assert result.executed_task_ids == [task.id for task in write_tasks]
+    assert [
+        record["task_node_id"] for record in cast(list[dict[str, Any]], state["execution_records"])
+    ] == [task.id for task in write_tasks]
+
+
+def test_parallel_policy_denial_does_not_contaminate_sibling_read_task(
     client: TestClient,
     monkeypatch: Any,
 ) -> None:
-    def delayed_execute(self: object, *, context: object, task: Any) -> ExecutionResult:
+    def policy_aware_execute(self: object, *, context: object, task: Any) -> ExecutionResult:
         del self, context
         from datetime import UTC, datetime
 
-        started_at = datetime.now(UTC)
-        if task.name in {"context_collect.attack_surface", "context_collect.existing_evidence"}:
-            time.sleep(0.20)
-        ended_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        if task.name == "context_collect.attack_surface":
+            return ExecutionResult(
+                trace_id=f"trace-denied-{task.name}",
+                source_type="runtime",
+                source_name="test-executor",
+                command_or_action=f"execute:{task.name}",
+                input_payload={"task": task.name},
+                output_payload={
+                    "status": "failed",
+                    "policy_denied": True,
+                    "policy_reason": "denied for test",
+                    "stderr": "denied for test",
+                    "artifacts": [],
+                    "citations": [],
+                },
+                status=TaskNodeStatus.FAILED,
+                started_at=now,
+                ended_at=now,
+            )
         return ExecutionResult(
-            trace_id=f"trace-delay-{task.name}",
+            trace_id=f"trace-ok-{task.name}",
             source_type="runtime",
             source_name="test-executor",
             command_or_action=f"execute:{task.name}",
             input_payload={"task": task.name},
-            output_payload={"status": "completed"},
+            output_payload={"status": "completed", "artifacts": [], "citations": []},
             status=TaskNodeStatus.COMPLETED,
-            started_at=started_at,
-            ended_at=ended_at,
+            started_at=now,
+            ended_at=now,
         )
 
-    monkeypatch.setattr("app.agent.executor.Executor.execute", delayed_execute)
+    monkeypatch.setattr("app.agent.executor.Executor.execute", policy_aware_execute)
 
-    session_id = _create_session(client, goal="Verify parallel read execution")
+    session_id = _create_session(client, goal="Verify isolated policy denial in parallel reads")
     workflow = _start_workflow(client, session_id)
     run_id = cast(str, workflow["id"])
 
+    target_cycle: int | None = None
     payload: dict[str, Any] | None = None
     task_index: dict[str, str] = {}
-    target_batch_cycle: int | None = None
-    target_task_ids: list[str] = []
-    target_task_set = {"context_collect.attack_surface", "context_collect.existing_evidence"}
+    target_names = {"context_collect.attack_surface", "context_collect.existing_evidence"}
+
     for _ in range(12):
         advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
         assert advance.status_code == 200
@@ -488,63 +888,52 @@ def test_workflow_executes_read_tasks_with_async_parallelism_and_merges_state_in
             cast(str, task["id"]): cast(str, task["name"])
             for task in cast(list[dict[str, Any]], payload["tasks"])
         }
-        execution_records = cast(list[dict[str, Any]], state["execution_records"])
-        records_by_cycle: dict[int, list[dict[str, Any]]] = {}
-        for record in execution_records:
+        for record in cast(list[dict[str, Any]], state["execution_records"]):
             cycle = record.get("batch_cycle")
-            if not isinstance(cycle, int):
+            task_id = record.get("task_node_id")
+            if not isinstance(cycle, int) or not isinstance(task_id, str):
                 continue
-            records_by_cycle.setdefault(cycle, []).append(record)
-        for cycle, cycle_records in records_by_cycle.items():
-            cycle_task_ids = [
-                cast(str, record.get("task_node_id"))
-                for record in cycle_records
-                if isinstance(record.get("task_node_id"), str)
-            ]
-            cycle_task_names = {
-                task_index[task_id] for task_id in cycle_task_ids if task_id in task_index
+            if task_index.get(task_id) not in target_names:
+                continue
+            cycle_names = {
+                task_index.get(cast(str, item.get("task_node_id")), "")
+                for item in cast(list[dict[str, Any]], state["execution_records"])
+                if item.get("batch_cycle") == cycle
             }
-            if target_task_set.issubset(cycle_task_names):
-                target_batch_cycle = cycle
-                target_task_ids = [
-                    task_id
-                    for task_id in cycle_task_ids
-                    if task_index.get(task_id) in target_task_set
-                ]
+            if target_names.issubset(cycle_names):
+                target_cycle = cycle
                 break
-        if target_batch_cycle is not None:
+        if target_cycle is not None:
             break
     else:
-        assert False, "context_collect read batch was not observed"
+        assert False, "parallel read cycle with isolated policy denial was not observed"
 
     assert payload is not None
     state = cast(dict[str, Any], payload["state"])
-    assert target_batch_cycle is not None
-
-    batch_cycle = target_batch_cycle
-    execution_records = cast(list[dict[str, Any]], state["execution_records"])
-    batch_records = [
+    records = [
         record
-        for record in execution_records
-        if record.get("batch_cycle") == batch_cycle
-        and record.get("task_node_id") in set(target_task_ids)
+        for record in cast(list[dict[str, Any]], state["execution_records"])
+        if record.get("batch_cycle") == target_cycle
     ]
-    assert [record["task_node_id"] for record in batch_records] == target_task_ids
+    records_by_name = {
+        task_index[cast(str, record["task_node_id"])]: record
+        for record in records
+        if isinstance(record.get("task_node_id"), str)
+        and cast(str, record["task_node_id"]) in task_index
+        and task_index[cast(str, record["task_node_id"])] in target_names
+    }
+    denied_record = records_by_name["context_collect.attack_surface"]
+    sibling_record = records_by_name["context_collect.existing_evidence"]
+    assert denied_record["status"] == "failed"
+    assert cast(dict[str, Any], denied_record["output_json"])["policy_denied"] is True
+    assert sibling_record["status"] == "completed"
 
-    read_records = [
-        record
-        for record in batch_records
-        if task_index.get(cast(str, record.get("task_node_id")), "").startswith("context_collect.")
-    ]
-    assert len(read_records) == 2
-    from datetime import datetime
-
-    started_times = [
-        datetime.fromisoformat(cast(str, record["started_at"])) for record in read_records
-    ]
-    ended_times = [datetime.fromisoformat(cast(str, record["ended_at"])) for record in read_records]
-    elapsed_window_seconds = (max(ended_times) - min(started_times)).total_seconds()
-    assert elapsed_window_seconds < 0.33
+    latest_cycle = cast(list[dict[str, Any]], cast(dict[str, Any], state["loop"])["cycles"])[-1]
+    partial_failures = cast(list[dict[str, Any]], latest_cycle["partial_failures"])
+    assert any(item["task_name"] == "context_collect.attack_surface" for item in partial_failures)
+    assert all(
+        item["task_name"] != "context_collect.existing_evidence" for item in partial_failures
+    )
 
 
 def test_start_workflow_carries_session_runtime_policy_into_workflow_state(
@@ -803,7 +1192,13 @@ def test_runnable_selector_groups_read_and_write_tasks_without_changing_flat_ord
                 name=f"tool.{task.name}",
                 category=ToolCategory.DISCOVERY,
                 capability=ToolCapability.CAPABILITY_SNAPSHOT,
-                safety_profile=ToolSafetyProfile(writes_state=task.name.endswith("write")),
+                safety_profile=ToolSafetyProfile(
+                    writes_state=task.name.endswith("write"),
+                    is_concurrency_safe=(False if task.name.endswith("write") else None),
+                ),
+                access_mode=(
+                    ToolAccessMode.WRITE if task.name.endswith("write") else ToolAccessMode.READ
+                ),
             )
         ),
     )
@@ -852,6 +1247,131 @@ def test_runnable_selector_groups_read_and_write_tasks_without_changing_flat_ord
         "parallel_read_group",
     ]
     assert [task.access_mode for task in selection.selected_tasks] == ["read", "write", "read"]
+    assert [task.is_read_only for task in selection.selected_tasks] == [True, False, True]
+    assert [task.is_concurrency_safe for task in selection.selected_tasks] == [True, False, True]
+    assert [task.is_destructive for task in selection.selected_tasks] == [False, True, False]
+
+
+def test_runnable_selector_does_not_allow_metadata_to_weaken_concrete_tool_safety() -> None:
+    selector = WorkflowRunnableSelector(
+        tool_spec_resolver=lambda task: ToolSpec(
+            name="workflow.stage_transition",
+            category=ToolCategory.ORCHESTRATION,
+            capability=ToolCapability.STAGE_TRANSITION,
+            safety_profile=ToolSafetyProfile(
+                writes_state=True,
+                is_concurrency_safe=False,
+                is_read_only=False,
+                is_destructive=False,
+            ),
+            access_mode=ToolAccessMode.WRITE,
+        ),
+    )
+    task = TaskNode(
+        workflow_run_id="run-1",
+        name="stage_guard",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={
+            "stage_key": "scope",
+            "scheduler_access_mode": "read",
+            "scheduler_is_read_only": True,
+            "scheduler_is_concurrency_safe": True,
+            "scheduler_is_destructive": False,
+        },
+    )
+
+    selection = selector.select(tasks=[task], state={"batch": {"max_nodes_per_cycle": 1}})
+
+    assert [item.task_name for item in selection.parallel_read_group] == []
+    assert [item.task_name for item in selection.serialized_write_group] == ["stage_guard"]
+    selected = selection.selected_tasks[0]
+    assert selected.access_mode == "write"
+    assert selected.is_read_only is False
+    assert selected.is_concurrency_safe is False
+    assert selected.scheduler_group == "serialized_write_group"
+
+
+def test_tool_scheduler_preserves_write_order_and_read_phase_boundaries() -> None:
+    schedule = WorkflowToolScheduler().build_schedule(
+        RunnableSelection(
+            batch_size=4,
+            selected_tasks=[
+                SelectedTask(
+                    task_id="alpha",
+                    task_name="alpha_read",
+                    stage_key="discovery",
+                    priority=40,
+                    approval_required=False,
+                    tool_name="tool.alpha",
+                    writes_state=False,
+                    is_concurrency_safe=True,
+                    is_read_only=True,
+                    is_destructive=False,
+                    scheduler_group="parallel_read_group",
+                    access_mode="read",
+                ),
+                SelectedTask(
+                    task_id="beta",
+                    task_name="beta_write",
+                    stage_key="analysis",
+                    priority=30,
+                    approval_required=False,
+                    tool_name="tool.beta",
+                    writes_state=True,
+                    is_concurrency_safe=False,
+                    is_read_only=False,
+                    is_destructive=True,
+                    scheduler_group="serialized_write_group",
+                    access_mode="write",
+                ),
+                SelectedTask(
+                    task_id="gamma",
+                    task_name="gamma_write",
+                    stage_key="analysis",
+                    priority=20,
+                    approval_required=False,
+                    tool_name="tool.gamma",
+                    writes_state=True,
+                    is_concurrency_safe=False,
+                    is_read_only=False,
+                    is_destructive=True,
+                    scheduler_group="serialized_write_group",
+                    access_mode="write",
+                ),
+                SelectedTask(
+                    task_id="delta",
+                    task_name="delta_read",
+                    stage_key="reporting",
+                    priority=10,
+                    approval_required=False,
+                    tool_name="tool.delta",
+                    writes_state=False,
+                    is_concurrency_safe=True,
+                    is_read_only=True,
+                    is_destructive=False,
+                    scheduler_group="parallel_read_group",
+                    access_mode="read",
+                ),
+            ],
+            parallel_read_group=[],
+            serialized_write_group=[],
+        )
+    )
+
+    assert [phase.scheduler_group for phase in schedule.phases] == [
+        "parallel_read_group",
+        "serialized_write_group",
+        "serialized_write_group",
+        "parallel_read_group",
+    ]
+    assert [phase.task_ids for phase in schedule.phases] == [
+        ["alpha"],
+        ["beta"],
+        ["gamma"],
+        ["delta"],
+    ]
 
 
 def test_tool_registry_policy_denial_returns_failed_result_without_approval_state() -> None:

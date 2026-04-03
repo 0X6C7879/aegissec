@@ -12,17 +12,6 @@ import type {
 } from "../types/sessions";
 import { StatusBadge } from "./StatusBadge";
 
-const BOILERPLATE_REASONING_PATTERNS = [
-  /^assistant is analy[sz]ing/i,
-  /^generation (started|completed|cancelled|canceled)\b/i,
-  /^running tool\b/i,
-  /^completed tool\b/i,
-  /^tool (running|completed)\b/i,
-  /^当前生成已完成[。.!]?$/,
-  /^正在持续更新当前回复[。.!]?$/,
-  /^generation status/i,
-];
-
 type TranscriptToolBlock = {
   type: "tool";
   key: string;
@@ -176,21 +165,9 @@ const markdownComponents = {
   ),
 } as Components;
 
-function isBoilerplateReasoningText(content: string | null | undefined): boolean {
-  const normalized = normalizeForBoilerplateCheck(content);
-  if (!normalized) {
-    return true;
-  }
-  return BOILERPLATE_REASONING_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
 function shouldRenderReasoningSegment(segment: AssistantTranscriptSegment): boolean {
   const normalized = normalizeForBoilerplateCheck(segment.text);
-  if (!normalized) {
-    return false;
-  }
-
-  return !isBoilerplateReasoningText(normalized);
+  return normalized !== null;
 }
 
 function shouldRenderStatusSegment(segment: AssistantTranscriptSegment): boolean {
@@ -198,10 +175,7 @@ function shouldRenderStatusSegment(segment: AssistantTranscriptSegment): boolean
     return false;
   }
   const normalized = normalizeForBoilerplateCheck(segment.text);
-  if (!normalized) {
-    return false;
-  }
-  return !isBoilerplateReasoningText(normalized);
+  return normalized !== null;
 }
 
 function renderAssistantMarkdownMessage(content: string) {

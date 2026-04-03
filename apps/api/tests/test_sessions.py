@@ -1537,6 +1537,87 @@ def test_chat_preserves_think_blocks_in_assistant_history_for_follow_up_turns(
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
+def test_chat_appends_reasoning_transcript_segments_for_multiple_summaries(
+    client: TestClient,
+) -> None:
+    class MultiSummaryChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_summary is not None
+            assert callbacks.on_text_delta is not None
+
+            await callbacks.on_summary("<think>first</think>初步分析")
+            await callbacks.on_text_delta("中间输出")
+            await callbacks.on_summary("<think>second</think>进一步分析")
+            return "<think>final</think>最终答复"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: MultiSummaryChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Multi Summary Session"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"content": "继续推理", "attachments": [], "wait_for_completion": True},
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        summary_events = [event for event in events if event["type"] == "assistant.summary"]
+        assert [event["payload"]["summary"] for event in summary_events] == [
+            "<think>first</think>初步分析",
+            "<think>second</think>进一步分析",
+        ]
+
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        reasoning_segments = [segment for segment in transcript if segment["kind"] == "reasoning"]
+        output_segments = [segment for segment in transcript if segment["kind"] == "output"]
+
+        assert [segment["text"] for segment in reasoning_segments] == [
+            "<think>first</think>初步分析",
+            "<think>second</think>进一步分析",
+        ]
+        assert output_segments[-1]["text"] == "<think>final</think>最终答复"
+
+        persisted_trace = chat_payload["generation"]["reasoning_trace"]
+        summary_trace_entries = [
+            entry for entry in persisted_trace if entry.get("state") == "summary.updated"
+        ]
+        assert [entry["summary"] for entry in summary_trace_entries] == [
+            "<think>first</think>初步分析",
+            "<think>second</think>进一步分析",
+        ]
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
 def test_chat_preserves_interleaved_output_segments_around_tool_events(
     client: TestClient,
 ) -> None:
@@ -1751,6 +1832,171 @@ Use when performing Active Directory pentest orchestration without using ADscan 
 
         assert chat_response.status_code == 200
         assert api_data(chat_response)["assistant_message"]["content"] == "adscan: ---"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_autoroutes_ctf_web_skill_context_before_generation(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "ctf-web": """---
+name: ctf-web
+description: Web CTF exploitation playbook
+---
+# ctf-web
+
+Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass.
+""",
+            "docx": """---
+name: docx
+description: Document helper
+---
+# docx
+
+Create and edit Word documents.
+""",
+        },
+    )
+
+    class AutoRouteSkillRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del content, attachments, conversation_messages, execute_tool, callbacks
+            assert available_skills is not None
+            assert any(
+                getattr(skill, "directory_name", None) == "ctf-web"
+                or getattr(skill, "name", None) == "ctf-web"
+                for skill in available_skills
+            )
+            assert skill_context_prompt is not None
+            assert "Auto-selected skill: ctf-web" in skill_context_prompt
+            assert "# ctf-web" in skill_context_prompt
+            return "已收到 ctf-web 自动技能上下文"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: AutoRouteSkillRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "CTF Web Autoroute"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "这个 web ctf 题的 node5.buuoj.cn 登录绕过和 xss 怎么看？",
+                    "attachments": [],
+                    "wait_for_completion": True,
+                },
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        assert any(event["type"] == "tool.call.started" for event in events)
+        assert any(event["type"] == "tool.call.finished" for event in events)
+
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        relevant_segments = [
+            segment
+            for segment in transcript
+            if segment["kind"] in {"tool_call", "tool_result", "output"}
+        ]
+        assert [segment["kind"] for segment in relevant_segments[:3]] == [
+            "tool_call",
+            "tool_result",
+            "output",
+        ]
+        assert relevant_segments[0]["tool_name"] == "read_skill_content"
+        assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
+        assert chat_payload["assistant_message"]["content"] == "已收到 ctf-web 自动技能上下文"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_does_not_autoroute_ctf_web_for_unrelated_prompt(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "ctf-web": """---
+name: ctf-web
+description: Web CTF exploitation playbook
+---
+# ctf-web
+
+Focus on web-CTF workflows.
+""",
+        },
+    )
+
+    class NoAutoRouteSkillRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                execute_tool,
+                callbacks,
+            )
+            assert skill_context_prompt is not None
+            assert "Auto-selected skill: ctf-web" not in skill_context_prompt
+            return "未自动选择技能"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: NoAutoRouteSkillRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "No Autoroute Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={
+                "content": "帮我整理这份 docx 文档",
+                "attachments": [],
+                "wait_for_completion": True,
+            },
+        )
+
+        assert chat_response.status_code == 200
+        assert api_data(chat_response)["assistant_message"]["content"] == "未自动选择技能"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

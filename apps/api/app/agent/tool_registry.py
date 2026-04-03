@@ -39,6 +39,9 @@ class ToolSideEffectLevel(str, Enum):
 class ToolSafetyProfile:
     requires_approval: bool = False
     writes_state: bool = False
+    is_concurrency_safe: bool | None = None
+    is_read_only: bool | None = None
+    is_destructive: bool | None = None
     uses_runtime: bool = False
     uses_network: bool = False
     risk_level: str = "low"
@@ -278,6 +281,12 @@ def build_default_tool_registry(
         name="workflow.stage_transition",
         category=ToolCategory.ORCHESTRATION,
         capability=ToolCapability.STAGE_TRANSITION,
+        safety_profile=ToolSafetyProfile(
+            writes_state=True,
+            is_concurrency_safe=False,
+            is_read_only=False,
+            is_destructive=False,
+        ),
         access_mode=ToolAccessMode.WRITE,
         side_effect_level=ToolSideEffectLevel.LOW,
         resource_keys=("workflow.stage",),
@@ -287,7 +296,13 @@ def build_default_tool_registry(
         name="workflow.capability_snapshot",
         category=ToolCategory.DISCOVERY,
         capability=ToolCapability.CAPABILITY_SNAPSHOT,
-        access_mode=ToolAccessMode.WRITE,
+        safety_profile=ToolSafetyProfile(
+            writes_state=False,
+            is_concurrency_safe=True,
+            is_read_only=True,
+            is_destructive=False,
+        ),
+        access_mode=ToolAccessMode.READ,
         side_effect_level=ToolSideEffectLevel.LOW,
         resource_keys=("workflow.capability_snapshot",),
         description="Capture Skill and MCP capability snapshots.",
@@ -296,7 +311,13 @@ def build_default_tool_registry(
         name="workflow.structured_runtime",
         category=ToolCategory.EXECUTION,
         capability=ToolCapability.STRUCTURED_RUNTIME,
-        safety_profile=ToolSafetyProfile(writes_state=True, uses_runtime=True),
+        safety_profile=ToolSafetyProfile(
+            writes_state=True,
+            is_concurrency_safe=False,
+            is_read_only=False,
+            is_destructive=True,
+            uses_runtime=True,
+        ),
         access_mode=ToolAccessMode.WRITE,
         side_effect_level=ToolSideEffectLevel.HIGH,
         resource_keys=("workflow.runtime",),
