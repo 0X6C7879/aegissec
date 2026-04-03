@@ -51,6 +51,7 @@ class WorkflowExecutionContext:
     memory: dict[str, object] = field(default_factory=dict)
     context_projection: dict[str, object] = field(default_factory=dict)
     prompting: dict[str, object] = field(default_factory=dict)
+    resume: dict[str, object] = field(default_factory=dict)
 
 
 class WorkflowGraphRuntime:

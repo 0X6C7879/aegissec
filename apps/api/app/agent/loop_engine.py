@@ -12,6 +12,7 @@ from app.agent.context_projection import ContextProjectionBuilder
 from app.agent.executor import ExecutionResult, Executor
 from app.agent.loop_models import LoopSelectedTask, WorkflowCycleArtifact, WorkflowLoopState
 from app.agent.memory import MemoryManager
+from app.agent.pause_runtime import PauseRuntimeService
 from app.agent.post_compact_reinjection import PostCompactReinjectionService
 from app.agent.prompting import build_workflow_prompting_state
 from app.agent.reflector import ReflectionResult, Reflector
@@ -84,6 +85,7 @@ class WorkflowLoopEngine:
         self._capability_facade = capability_facade
         self._retrieval_pipeline = RetrievalPipeline(run_log_repository=run_log_repository)
         self._memory_manager = MemoryManager()
+        self._pause_runtime = PauseRuntimeService()
         self._context_projection_builder = ContextProjectionBuilder()
         self._compact_runtime = CompactRuntimeService()
         self._post_compact_reinjection = PostCompactReinjectionService()
@@ -97,20 +99,69 @@ class WorkflowLoopEngine:
         self._tool_scheduler = WorkflowToolScheduler()
 
     async def advance(
-        self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
+        self,
+        *,
+        run: WorkflowRun,
+        tasks: list[TaskNode],
+        approve: bool,
+        user_input: str | None,
+        resume_token: str | None,
+        resolution_payload: dict[str, object] | None,
     ) -> LoopAdvanceResult:
         mutable_state = dict(run.state_json)
         self._transcript_runtime.ensure_state(mutable_state)
+        self._pause_runtime.ensure_state(mutable_state)
         self._ensure_batch_contract(mutable_state)
         loop_state = WorkflowLoopState.from_state(mutable_state)
         session = self._session_repository.get_session(run.session_id)
         self._runtime.materialize_ready_tasks(tasks)
+        resolved_protocol = self._pause_runtime.resolve_pending(
+            mutable_state=mutable_state,
+            approve=approve,
+            user_input=user_input,
+            resume_token=resume_token,
+            resolution_payload=resolution_payload,
+        )
+        if isinstance(resolved_protocol, dict):
+            resolved_task = self._pause_runtime.mark_task_ready_for_resolution(
+                tasks=tasks,
+                resolved_entry=resolved_protocol,
+            )
+            self._sync_compatibility_approval_state(
+                mutable_state=mutable_state,
+                resolved_protocol=resolved_protocol,
+                resolved_task=resolved_task,
+            )
+            self._transcript_runtime.append_protocol_resolution_event(
+                mutable_state=mutable_state,
+                cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
+                current_stage=self._runtime.task_stage(resolved_task)
+                if resolved_task
+                else run.current_stage,
+                task_name=resolved_task.name if resolved_task is not None else "workflow-protocol",
+                resolved_entry=resolved_protocol,
+            )
+            self._transcript_runtime.set_last_directive(
+                mutable_state,
+                NextTurnDirective.CONTINUE,
+            )
         context_snapshot = self._build_context_snapshot(
             run=run,
             session=session,
             mutable_state=mutable_state,
             tasks=tasks,
         )
+
+        active_pending = self._pause_runtime.active_pending(mutable_state)
+        if isinstance(active_pending, dict):
+            return self._return_pending_protocol_pause(
+                run=run,
+                tasks=tasks,
+                mutable_state=mutable_state,
+                loop_state=loop_state,
+                context_snapshot=context_snapshot,
+                pending_entry=active_pending,
+            )
 
         blocked_approval_tasks = self._runtime.blocked_for_approval(tasks)
         if blocked_approval_tasks and not approve:
@@ -255,7 +306,12 @@ class WorkflowLoopEngine:
                     (
                         index
                         for index, phase_task in enumerate(phase_tasks)
-                        if self._runtime.approval_required(phase_task) and not approve
+                        if (
+                            self._runtime.approval_required(phase_task)
+                            and not approve
+                            and self._executor.resolve_tool_spec(phase_task).name
+                            != "workflow.request_approval"
+                        )
                     ),
                     None,
                 )
@@ -382,7 +438,12 @@ class WorkflowLoopEngine:
                 continue
 
             for phase_task in phase_tasks:
-                if self._runtime.approval_required(phase_task) and not approve:
+                if (
+                    self._runtime.approval_required(phase_task)
+                    and not approve
+                    and self._executor.resolve_tool_spec(phase_task).name
+                    != "workflow.request_approval"
+                ):
                     phase_task.status = TaskNodeStatus.BLOCKED
                     self._runtime.sync_execution_state(phase_task)
                     stage_key = self._runtime.task_stage(phase_task)
@@ -618,6 +679,31 @@ class WorkflowLoopEngine:
         self._trim_execution_context(mutable_state)
         self._trim_message_context(mutable_state)
 
+        pending_protocol = self._pause_runtime.register_pending_protocol(
+            mutable_state=mutable_state,
+            task=task,
+            execution=execution,
+        )
+        if isinstance(pending_protocol, dict):
+            self._transcript_runtime.append_protocol_pending_event(
+                mutable_state=mutable_state,
+                cycle_id=cycle_id,
+                current_stage=self._runtime.task_stage(task),
+                task_name=task.name,
+                pending_entry=pending_protocol,
+            )
+            if str(pending_protocol.get("kind") or "") == "approval":
+                pending_resume_payload = pending_protocol.get("resume_payload")
+                mutable_state["approval"] = {
+                    "required": True,
+                    "pending_task_id": task.id,
+                    "resume_payload": (
+                        dict(pending_resume_payload)
+                        if isinstance(pending_resume_payload, dict)
+                        else {}
+                    ),
+                }
+
         hypothesis_updates = mutable_state.get("hypothesis_updates", [])
         if not isinstance(hypothesis_updates, list):
             hypothesis_updates = []
@@ -644,6 +730,13 @@ class WorkflowLoopEngine:
             }
         )
         mutable_state["graph_updates"] = graph_updates
+
+        resume_input = execution.input_payload.get("resume")
+        if isinstance(resume_input, dict) and isinstance(resume_input.get("task_id"), str):
+            self._pause_runtime.clear_resume_context(
+                mutable_state,
+                task_id=str(resume_input.get("task_id") or task.id),
+            )
 
         self._runtime.materialize_ready_tasks(tasks)
         return transcript_append.directive
@@ -873,6 +966,7 @@ class WorkflowLoopEngine:
             memory=context_snapshot.memory.to_state(),
             context_projection=context_snapshot.projection.to_state(),
             prompting=dict(context_snapshot.prompting),
+            resume=self._pause_runtime.resume_context_for_task(mutable_state, task_id=task.id),
         )
 
     def _merge_execution_outcomes(
@@ -1317,7 +1411,7 @@ class WorkflowLoopEngine:
             memory=memory,
         )
         active_task_name = self._active_task_name(tasks)
-        current_stage = str(mutable_state.get("current_stage") or "") or None
+        current_stage = str(mutable_state.get("current_stage") or run.current_stage or "") or None
         history_summary = self._history_summary(mutable_state)
         capability_fragments = self._capability_facade.build_prompt_fragments(
             session_id=run.session_id,
@@ -1334,7 +1428,16 @@ class WorkflowLoopEngine:
             history_summary=history_summary,
             projection=projection,
             active_task_name=active_task_name,
+            active_tasks=self._workspace_active_tasks(tasks, active_task_name=active_task_name),
             current_stage=current_stage,
+            latest_turn_directive=self._transcript_runtime.last_directive(mutable_state).value,
+            pending_protocol=self._workspace_pending_protocol(mutable_state),
+            active_capability_inventory_summary=capability_fragments["inventory_summary"],
+            selected_project_memory_entries=self._selected_project_memory_entries(
+                retrieval=retrieval,
+                mutable_state=mutable_state,
+            ),
+            current_retrieval_focus=self._current_retrieval_focus(retrieval, mutable_state),
             cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
         )
         reinjection = self._post_compact_reinjection.build_reinjection(
@@ -1362,6 +1465,9 @@ class WorkflowLoopEngine:
             if isinstance(raw_transcript_provenance, dict)
             else {}
         )
+        pause_state = self._pause_runtime.continuity_snapshot(mutable_state)
+        active_pause = pause_state.get("active")
+        latest_resolved_pause = pause_state.get("latest_resolved")
         prior_turn_outcome = self._assistant_turn_planner.latest_outcome(mutable_state)
         prompting = build_workflow_prompting_state(
             goal=str(mutable_state.get("goal") or "authorized assessment"),
@@ -1400,6 +1506,33 @@ class WorkflowLoopEngine:
                 "assistant_turn_next_hint": (
                     prior_turn_outcome.next_turn_hint if prior_turn_outcome is not None else ""
                 ),
+                "pending_protocol_kind": (
+                    str(active_pause.get("kind") or "") if isinstance(active_pause, dict) else ""
+                ),
+                "pending_protocol_pause_reason": (
+                    str(active_pause.get("pause_reason") or "")
+                    if isinstance(active_pause, dict)
+                    else ""
+                ),
+                "pending_protocol_resume_condition": (
+                    str(active_pause.get("resume_condition") or "")
+                    if isinstance(active_pause, dict)
+                    else ""
+                ),
+                "resolved_protocol_kind": (
+                    str(latest_resolved_pause.get("kind") or "")
+                    if isinstance(latest_resolved_pause, dict)
+                    else ""
+                ),
+                "resolved_protocol_payload": (
+                    dict(latest_resolved_pause.get("resolution") or {})
+                    if isinstance(latest_resolved_pause, dict)
+                    else {}
+                ),
+                "workspace_state": self._workspace_state_continuity(
+                    compact_runtime=compact_runtime,
+                    reinjection=reinjection,
+                ),
             },
         )
         snapshot = ContextSnapshot(
@@ -1411,6 +1544,191 @@ class WorkflowLoopEngine:
         )
         mutable_state["context"] = snapshot.to_state()
         return snapshot
+
+    def _return_pending_protocol_pause(
+        self,
+        *,
+        run: WorkflowRun,
+        tasks: list[TaskNode],
+        mutable_state: dict[str, object],
+        loop_state: WorkflowLoopState,
+        context_snapshot: ContextSnapshot,
+        pending_entry: dict[str, object],
+    ) -> LoopAdvanceResult:
+        pending_task_id = pending_entry.get("task_id")
+        pending_task = next(
+            (
+                task
+                for task in tasks
+                if isinstance(pending_task_id, str) and task.id == pending_task_id
+            ),
+            None,
+        )
+        current_stage = (
+            self._runtime.task_stage(pending_task)
+            if pending_task is not None
+            else run.current_stage
+        )
+        mutable_state["current_stage"] = current_stage
+        is_approval = str(pending_entry.get("kind") or "") == "approval"
+        self._update_batch_state(
+            mutable_state,
+            status="waiting_approval" if is_approval else "blocked",
+            selected_task_ids=[],
+            executed_task_ids=[],
+        )
+        idle_schedule = self._tool_scheduler.build_schedule(
+            RunnableSelection(
+                batch_size=self._runtime.resolve_batch_size(mutable_state),
+                selected_tasks=[],
+            )
+        )
+        directive = (
+            NextTurnDirective.AWAIT_APPROVAL if is_approval else NextTurnDirective.AWAIT_USER_INPUT
+        )
+        loop_state = loop_state.append_cycle(
+            self._build_cycle_artifact(
+                mutable_state,
+                schedule=idle_schedule,
+                context_snapshot=context_snapshot,
+                tool_results=[],
+                reflection_summaries=[],
+                merge_summary=self._build_merge_summary(
+                    merge_events=[],
+                    executed_task_ids=[],
+                    partial_failures=[],
+                ),
+                partial_failures=[],
+                next_action=self._transcript_runtime.directive_to_next_action(
+                    self._transcript_runtime.set_last_directive(mutable_state, directive)
+                ),
+            )
+        )
+        loop_state.apply_to_state(mutable_state)
+        return LoopAdvanceResult(
+            status=(WorkflowRunStatus.NEEDS_APPROVAL if is_approval else WorkflowRunStatus.BLOCKED),
+            current_stage=current_stage,
+            state=mutable_state,
+            last_error=None,
+            ended_at=None,
+            approval_required=is_approval,
+            executed_task_id=None,
+            executed_task_ids=[],
+        )
+
+    @staticmethod
+    def _sync_compatibility_approval_state(
+        *,
+        mutable_state: dict[str, object],
+        resolved_protocol: dict[str, object],
+        resolved_task: TaskNode | None,
+    ) -> None:
+        if str(resolved_protocol.get("kind") or "") == "approval":
+            resolved_payload = resolved_protocol.get("resolution")
+            mutable_state["approval"] = {
+                "required": False,
+                "pending_task_id": None,
+                "resolved": True,
+                "resolution": (
+                    dict(resolved_payload) if isinstance(resolved_payload, dict) else {}
+                ),
+            }
+            return
+        if resolved_task is not None:
+            mutable_state["approval"] = {
+                "required": False,
+                "pending_task_id": None,
+            }
+
+    @staticmethod
+    def _workspace_active_tasks(tasks: list[TaskNode], *, active_task_name: str) -> list[str]:
+        active_tasks = [
+            task.name
+            for task in tasks
+            if task.status
+            in {TaskNodeStatus.IN_PROGRESS, TaskNodeStatus.READY, TaskNodeStatus.BLOCKED}
+        ]
+        if active_tasks:
+            return active_tasks[:4]
+        return [active_task_name] if active_task_name else []
+
+    def _workspace_pending_protocol(self, mutable_state: dict[str, object]) -> dict[str, object]:
+        pause_snapshot = self._pause_runtime.continuity_snapshot(mutable_state)
+        active = pause_snapshot.get("active")
+        if not isinstance(active, dict):
+            return {}
+        return {
+            "kind": str(active.get("kind") or ""),
+            "pause_reason": str(active.get("pause_reason") or ""),
+            "resume_condition": str(active.get("resume_condition") or ""),
+            "task_id": str(active.get("task_id") or ""),
+            "task_name": str(active.get("task_name") or ""),
+        }
+
+    @staticmethod
+    def _selected_project_memory_entries(
+        *, retrieval: object, mutable_state: dict[str, object]
+    ) -> list[str]:
+        if not hasattr(retrieval, "project"):
+            return WorkflowLoopEngine._project_manifest_source_ids(mutable_state)
+        project_pack = getattr(retrieval, "project")
+        items = getattr(project_pack, "items", [])
+        selected: list[str] = []
+        if isinstance(items, list):
+            for item in items:
+                metadata = getattr(item, "metadata", {})
+                if isinstance(metadata, dict):
+                    entry_id = metadata.get("memory_entry_id")
+                    if isinstance(entry_id, str) and entry_id:
+                        selected.append(entry_id)
+        return selected or WorkflowLoopEngine._project_manifest_source_ids(mutable_state)
+
+    @staticmethod
+    def _current_retrieval_focus(
+        retrieval: ContextSnapshot | object, mutable_state: dict[str, object]
+    ) -> dict[str, object]:
+        retrieval_manifest = mutable_state.get("retrieval_manifest")
+        project_manifest = (
+            retrieval_manifest.get("project") if isinstance(retrieval_manifest, dict) else {}
+        )
+        sources = project_manifest.get("sources") if isinstance(project_manifest, dict) else []
+        top_source = sources[0] if isinstance(sources, list) and sources else {}
+        return {
+            "scope": "project" if isinstance(top_source, dict) and top_source else "session_local",
+            "focus": (
+                str(top_source.get("source_id") or "") if isinstance(top_source, dict) else ""
+            ),
+            "source_count": len(sources) if isinstance(sources, list) else 0,
+        }
+
+    @staticmethod
+    def _project_manifest_source_ids(mutable_state: dict[str, object]) -> list[str]:
+        retrieval_manifest = mutable_state.get("retrieval_manifest")
+        project_manifest = (
+            retrieval_manifest.get("project") if isinstance(retrieval_manifest, dict) else {}
+        )
+        sources = project_manifest.get("sources") if isinstance(project_manifest, dict) else []
+        if not isinstance(sources, list):
+            return []
+        return [
+            str(source.get("source_id") or "")
+            for source in sources
+            if isinstance(source, dict) and isinstance(source.get("source_id"), str)
+        ]
+
+    @staticmethod
+    def _workspace_state_continuity(
+        *, compact_runtime: dict[str, object], reinjection: dict[str, object]
+    ) -> dict[str, object]:
+        fragments = reinjection.get("fragments")
+        if isinstance(fragments, dict) and isinstance(fragments.get("workspace_state"), dict):
+            return dict(fragments.get("workspace_state") or {})
+        retained_live_state = compact_runtime.get("retained_live_state")
+        if isinstance(retained_live_state, dict) and isinstance(
+            retained_live_state.get("workspace_state"), dict
+        ):
+            return dict(retained_live_state.get("workspace_state") or {})
+        return {}
 
     @staticmethod
     def _history_summary(mutable_state: dict[str, object]) -> str:

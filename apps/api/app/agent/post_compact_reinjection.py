@@ -25,6 +25,7 @@ class PostCompactReinjectionService:
         boundary_marker = str(compact_runtime.get("boundary_marker") or "")
         compact_summary = str(compact_runtime.get("compact_summary") or "")
         retained_live_state = self._dict(compact_runtime.get("retained_live_state"))
+        workspace_state = self._dict(retained_live_state.get("workspace_state"))
         restored_stage = self._string_value(retained_live_state.get("current_stage"))
         restored_task = self._string_value(retained_live_state.get("current_task"))
         effective_stage = (
@@ -48,28 +49,23 @@ class PostCompactReinjectionService:
             ),
             "active_tool_summary": active_tool_summary,
             "compact_summary": compact_summary,
+            "workspace_state": workspace_state,
         }
-        summary = "\n".join(
-            part
-            for part in [
-                (
-                    f"Compact boundary: {boundary_marker}"
-                    if compact_applied and boundary_marker
-                    else ""
-                ),
-                fragments["task_stage_marker"],
-                f"Retrieval continuity: {retrieval_summary}",
-                f"Session memory continuity: {session_memory_summary}",
-                f"Active tool availability summary: {active_tool_summary}",
-                f"Capability prompt continuity: {capability_prompt_fragment}",
-                (
-                    f"Compact summary: {compact_summary}"
-                    if compact_applied and compact_summary
-                    else ""
-                ),
-            ]
-            if part
-        )
+        summary_lines = [
+            (f"Compact boundary: {boundary_marker}" if compact_applied and boundary_marker else ""),
+            str(fragments["task_stage_marker"]),
+            f"Retrieval continuity: {retrieval_summary}",
+            f"Session memory continuity: {session_memory_summary}",
+            f"Active tool availability summary: {active_tool_summary}",
+            (
+                f"Workspace continuity: {self._workspace_summary(workspace_state)}"
+                if workspace_state
+                else ""
+            ),
+            f"Capability prompt continuity: {capability_prompt_fragment}",
+            (f"Compact summary: {compact_summary}" if compact_applied and compact_summary else ""),
+        ]
+        summary = "\n".join(part for part in summary_lines if part)
         reinjection = {
             "compact_applied": compact_applied,
             "boundary_marker": boundary_marker,
@@ -80,6 +76,7 @@ class PostCompactReinjectionService:
                 "boundary_marker": boundary_marker,
                 "restored_from_boundary": compact_applied,
                 "reinjected_components": sorted(fragments.keys()),
+                "workspace_state": workspace_state,
             },
         }
         self._transcript_runtime.append_reinjection_event(
@@ -114,3 +111,17 @@ class PostCompactReinjectionService:
         if isinstance(value, str) and value:
             return value
         return None
+
+    @staticmethod
+    def _workspace_summary(workspace_state: dict[str, object]) -> str:
+        active_stage = str(workspace_state.get("active_stage") or "unknown")
+        active_tasks = workspace_state.get("active_tasks")
+        task_text = (
+            ", ".join(item for item in active_tasks if isinstance(item, str))
+            if isinstance(active_tasks, list)
+            else ""
+        )
+        latest_turn_directive = str(workspace_state.get("latest_turn_directive") or "continue")
+        return (
+            f"stage={active_stage}; tasks={task_text or 'n/a'}; directive={latest_turn_directive}"
+        )

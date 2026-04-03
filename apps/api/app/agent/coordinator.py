@@ -160,9 +160,23 @@ class Coordinator:
         return CoordinatorStartResult(plan=plan, state=state, current_stage=current_stage)
 
     async def advance_workflow(
-        self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
+        self,
+        *,
+        run: WorkflowRun,
+        tasks: list[TaskNode],
+        approve: bool,
+        user_input: str | None,
+        resume_token: str | None,
+        resolution_payload: dict[str, object] | None,
     ) -> CoordinatorStepResult:
-        step_result = await self._loop_engine.advance(run=run, tasks=tasks, approve=approve)
+        step_result = await self._loop_engine.advance(
+            run=run,
+            tasks=tasks,
+            approve=approve,
+            user_input=user_input,
+            resume_token=resume_token,
+            resolution_payload=resolution_payload,
+        )
         executed_task_ids = list(step_result.executed_task_ids)
         active_records = step_result.state.get("execution_records")
         archived_records = step_result.state.get("archived_execution_records")

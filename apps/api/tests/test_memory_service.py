@@ -10,8 +10,14 @@ from pytest import MonkeyPatch
 from app.agent.context_models import CitationPointer, ContextRecord, RetrievalPack, RetrievalState
 from app.agent.memory import MemoryManager
 from app.agent.memory_files import ensure_memory_dir, manifest_path
-from app.agent.memory_recall import select_relevant_memory_entries
-from app.agent.memory_store import load_memory_manifest, read_memory_entry, write_memory_entry
+from app.agent.memory_recall import rank_memory_manifest_sources, select_relevant_memory_entries
+from app.agent.memory_store import (
+    load_memory_manifest,
+    read_memory_entry,
+    record_memory_entry_surfaced,
+    write_memory_entry,
+)
+from app.agent.recall_policy import RecallPolicy
 from app.agent.session_memory import SessionMemoryService
 from app.db.models import Session
 
@@ -44,8 +50,46 @@ def test_durable_memory_files_create_entry_and_update_manifest(tmp_path: Path) -
     assert len(manifest) == 1
     assert manifest[0].entry_id == entry.entry_id
     assert manifest[0].summary == "Captured externally reachable services."
+    assert manifest[0].scope == "project"
+    assert manifest[0].source_trace is None
+    assert manifest[0].recall_weight == 1.0
+    assert manifest[0].surfacing_history == ()
     assert stored.title == "Attack Surface Summary"
     assert stored.body == "Detailed notes about ingress points."
+
+
+def test_durable_memory_manifest_persists_scope_trace_weight_and_surfacing_history(
+    tmp_path: Path,
+) -> None:
+    project_id = "project-metadata"
+    entry = write_memory_entry(
+        project_id,
+        entry_id="memory-policy-aware",
+        title="Session Derived Finding",
+        summary="Derived from session runtime evidence.",
+        body="Body",
+        tags=["finding"],
+        citations=[],
+        scope="session_derived",
+        source_trace="trace-123",
+        recall_weight=2.5,
+        surfacing_history=[
+            {"scope": "session_derived", "surfaced_at": "2026-01-01T00:00:00+00:00"}
+        ],
+        base_dir=tmp_path,
+    )
+
+    manifest = load_memory_manifest(project_id, base_dir=tmp_path)
+    stored = read_memory_entry(project_id, entry_id=entry.entry_id, base_dir=tmp_path)
+
+    assert manifest[0].scope == "session_derived"
+    assert manifest[0].source_trace == "trace-123"
+    assert manifest[0].recall_weight == 2.5
+    assert len(manifest[0].surfacing_history) == 1
+    assert stored.scope == "session_derived"
+    assert stored.source_trace == "trace-123"
+    assert stored.recall_weight == 2.5
+    assert len(stored.surfacing_history) == 1
 
 
 def test_session_memory_trigger_thresholds() -> None:
@@ -145,6 +189,61 @@ def test_relevant_recall_top_k_and_already_surfaced_dedup(tmp_path: Path) -> Non
     assert selected_ids[0] == second.entry_id
     assert first.entry_id in selected_ids
     assert third.entry_id not in selected_ids
+
+
+def test_recall_policy_uses_durable_surfacing_history_for_down_ranking(tmp_path: Path) -> None:
+    project_id = "project-policy"
+    now = datetime.now(UTC)
+    first = write_memory_entry(
+        project_id,
+        entry_id="memory-one",
+        title="Attack Surface Primer",
+        summary="Primer for attack surface review.",
+        body="one",
+        tags=["recon"],
+        citations=[],
+        updated_at=now.isoformat(),
+        base_dir=tmp_path,
+    )
+    second = write_memory_entry(
+        project_id,
+        entry_id="memory-two",
+        title="Attack Surface Follow-up",
+        summary="Follow-up notes for attack surface review.",
+        body="two",
+        tags=["recon"],
+        citations=[],
+        updated_at=now.isoformat(),
+        base_dir=tmp_path,
+    )
+    updated_manifest = record_memory_entry_surfaced(
+        project_id,
+        entry_id=first.entry_id,
+        scope="session_derived",
+        source_trace="trace-surfaced",
+        source_pack="project",
+        base_dir=tmp_path,
+    )
+    assert updated_manifest is not None
+
+    ranked = rank_memory_manifest_sources(
+        load_memory_manifest(project_id, base_dir=tmp_path),
+        current_task="attack surface review",
+        recent_tools=["execute:context_collect.attack_surface"],
+        already_surfaced=set(),
+        recall_policy=RecallPolicy(),
+    )
+    assert ranked[0]["source_id"] == second.entry_id
+
+    selected = select_relevant_memory_entries(
+        project_id,
+        current_task="attack surface review",
+        recent_tools=["execute:context_collect.attack_surface"],
+        already_surfaced=set(),
+        recall_policy=RecallPolicy(top_k=1),
+        base_dir=tmp_path,
+    )
+    assert [entry.entry_id for entry in selected] == [second.entry_id]
 
 
 def test_memory_manager_does_not_persist_synthetic_retrieval_bridge(

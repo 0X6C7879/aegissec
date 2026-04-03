@@ -31,6 +31,9 @@ class WorkflowStartRequest(SQLModel):
 
 class WorkflowAdvanceRequest(SQLModel):
     approve: bool = False
+    user_input: str | None = None
+    resume_token: str | None = None
+    resolution_payload: dict[str, object] | None = None
 
 
 class WorkflowTaskPriorityReorderRequest(SQLModel):
@@ -148,6 +151,13 @@ async def advance_workflow(
         workflow = await workflow_service.advance_workflow(
             run_id=run_id,
             approve=payload.approve,
+            user_input=payload.user_input,
+            resume_token=payload.resume_token,
+            resolution_payload=(
+                dict(payload.resolution_payload)
+                if isinstance(payload.resolution_payload, dict)
+                else None
+            ),
         )
         await _publish_workflow_progress_events(event_broker, workflow)
         return workflow

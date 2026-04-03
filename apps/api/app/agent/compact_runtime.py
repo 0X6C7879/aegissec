@@ -36,6 +36,30 @@ class CompactRuntimeThresholds:
         }
 
 
+@dataclass(frozen=True)
+class WorkspaceRetainedState:
+    active_stage: str | None
+    active_tasks: tuple[str, ...]
+    latest_turn_directive: str
+    pending_protocol: dict[str, object]
+    active_capability_inventory_summary: str
+    recent_transcript_highlights: tuple[str, ...]
+    selected_project_memory_entries: tuple[str, ...]
+    current_retrieval_focus: dict[str, object]
+
+    def to_state(self) -> dict[str, object]:
+        return {
+            "active_stage": self.active_stage,
+            "active_tasks": list(self.active_tasks),
+            "latest_turn_directive": self.latest_turn_directive,
+            "pending_protocol": dict(self.pending_protocol),
+            "active_capability_inventory_summary": self.active_capability_inventory_summary,
+            "recent_transcript_highlights": list(self.recent_transcript_highlights),
+            "selected_project_memory_entries": list(self.selected_project_memory_entries),
+            "current_retrieval_focus": dict(self.current_retrieval_focus),
+        }
+
+
 class CompactRuntimeService:
     DEFAULT_THRESHOLDS = CompactRuntimeThresholds()
 
@@ -51,7 +75,13 @@ class CompactRuntimeService:
         history_summary: str,
         projection: ContextProjection,
         active_task_name: str,
+        active_tasks: list[str],
         current_stage: str | None,
+        latest_turn_directive: str,
+        pending_protocol: dict[str, object],
+        active_capability_inventory_summary: str,
+        selected_project_memory_entries: list[str],
+        current_retrieval_focus: dict[str, object],
         cycle_id: str,
     ) -> dict[str, object]:
         thresholds = self._resolve_thresholds(mutable_state)
@@ -66,7 +96,20 @@ class CompactRuntimeService:
         latest_boundary = self._dict(runtime_store.get("latest_boundary"))
         triggered = self._should_compact(metrics, thresholds)
 
-        if triggered and self._should_create_boundary(latest_boundary, metrics):
+        workspace_state = WorkspaceRetainedState(
+            active_stage=current_stage,
+            active_tasks=tuple(item for item in active_tasks if isinstance(item, str)),
+            latest_turn_directive=latest_turn_directive,
+            pending_protocol=self._dict(pending_protocol),
+            active_capability_inventory_summary=active_capability_inventory_summary,
+            recent_transcript_highlights=tuple(self._recent_transcript_highlights(mutable_state)),
+            selected_project_memory_entries=tuple(
+                item for item in selected_project_memory_entries if isinstance(item, str)
+            ),
+            current_retrieval_focus=self._dict(current_retrieval_focus),
+        )
+
+        if triggered and self._should_create_boundary(latest_boundary, metrics, workspace_state):
             latest_boundary = self._build_boundary(
                 mutable_state=mutable_state,
                 metrics=metrics,
@@ -77,6 +120,7 @@ class CompactRuntimeService:
                 history_summary=history_summary,
                 active_task_name=active_task_name,
                 current_stage=current_stage,
+                workspace_state=workspace_state,
                 boundary_index=self._next_boundary_index(runtime_store),
             )
             boundaries = self._dict_list(runtime_store.get("boundaries"))
@@ -190,10 +234,16 @@ class CompactRuntimeService:
         self,
         latest_boundary: dict[str, object],
         metrics: CompactRuntimeMetrics,
+        workspace_state: WorkspaceRetainedState,
     ) -> bool:
         latest_metadata = self._dict(latest_boundary.get("compact_metadata"))
         latest_metrics = self._dict(latest_metadata.get("metrics"))
-        return latest_metrics != metrics.to_state()
+        latest_retained_live_state = self._dict(latest_boundary.get("retained_live_state"))
+        latest_workspace_state = self._dict(latest_retained_live_state.get("workspace_state"))
+        return (
+            latest_metrics != metrics.to_state()
+            or latest_workspace_state != workspace_state.to_state()
+        )
 
     def _build_boundary(
         self,
@@ -207,6 +257,7 @@ class CompactRuntimeService:
         history_summary: str,
         active_task_name: str,
         current_stage: str | None,
+        workspace_state: WorkspaceRetainedState,
         boundary_index: int,
     ) -> dict[str, object]:
         created_at = datetime.now(UTC).isoformat()
@@ -229,6 +280,7 @@ class CompactRuntimeService:
             "projection_active_level": projection.active_level,
             "recent_messages": recent_messages,
             "recent_execution_records": recent_records,
+            "workspace_state": workspace_state.to_state(),
         }
         compact_metadata = {
             "created_at": created_at,
@@ -359,6 +411,25 @@ class CompactRuntimeService:
         if not isinstance(value, list):
             return []
         return [item for item in value if isinstance(item, dict)]
+
+    def _recent_transcript_highlights(self, mutable_state: dict[str, object]) -> list[str]:
+        highlights: list[str] = []
+        for delta in self._transcript_runtime.recent_deltas(mutable_state, limit=4):
+            for key in (
+                "tool_result_blocks",
+                "tool_error_blocks",
+                "assistant_blocks",
+            ):
+                for block in self._dict_list(delta.get(key))[:1]:
+                    content = str(block.get("content") or "").strip()
+                    if content:
+                        highlights.append(content[:160])
+                        break
+                if highlights and len(highlights) >= 4:
+                    break
+            if len(highlights) >= 4:
+                break
+        return highlights[:4]
 
     @staticmethod
     def _int(value: object, *, default: int) -> int:

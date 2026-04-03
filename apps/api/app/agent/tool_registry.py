@@ -28,6 +28,8 @@ class ToolCapability(str, Enum):
     STAGE_TRANSITION = "stage_transition"
     CAPABILITY_SNAPSHOT = "capability_snapshot"
     STRUCTURED_RUNTIME = "structured_runtime"
+    ASK_USER_QUESTION = "ask_user_question"
+    REQUEST_APPROVAL = "request_approval"
 
 
 class ToolAccessMode(str, Enum):
@@ -390,6 +392,45 @@ def build_default_tool_registry(
             },
         },
     )
+    ask_user_question_spec = ToolSpec(
+        name="workflow.ask_user_question",
+        category=ToolCategory.ORCHESTRATION,
+        capability=ToolCapability.ASK_USER_QUESTION,
+        safety_profile=ToolSafetyProfile(
+            writes_state=False,
+            is_concurrency_safe=False,
+            is_read_only=False,
+            is_destructive=False,
+        ),
+        access_mode=ToolAccessMode.WRITE,
+        side_effect_level=ToolSideEffectLevel.LOW,
+        resource_keys=("workflow.interaction",),
+        description="Pause the workflow and request user input using a protocolized payload.",
+        interaction_required=True,
+        interrupt_behavior_value=ToolInterruptBehavior.USER_INTERACTION,
+        output_schema={"type": "object"},
+    )
+    request_approval_spec = ToolSpec(
+        name="workflow.request_approval",
+        category=ToolCategory.ORCHESTRATION,
+        capability=ToolCapability.REQUEST_APPROVAL,
+        safety_profile=ToolSafetyProfile(
+            requires_approval=True,
+            writes_state=False,
+            is_concurrency_safe=False,
+            is_read_only=False,
+            is_destructive=False,
+        ),
+        access_mode=ToolAccessMode.WRITE,
+        side_effect_level=ToolSideEffectLevel.LOW,
+        resource_keys=("workflow.approval",),
+        description=(
+            "Pause the workflow and request operator approval using a protocolized payload."
+        ),
+        interaction_required=True,
+        interrupt_behavior_value=ToolInterruptBehavior.REQUIRE_APPROVAL,
+        output_schema={"type": "object"},
+    )
 
     def _complete(
         request: ToolExecutionRequest,
@@ -492,6 +533,79 @@ def build_default_tool_registry(
             },
         )
 
+    def _handle_ask_user_question(request: ToolExecutionRequest) -> ToolExecutionResult:
+        resume = dict(request.context.resume) if isinstance(request.context.resume, dict) else {}
+        resolution_raw = resume.get("resolution")
+        resolution = dict(resolution_raw) if isinstance(resolution_raw, dict) else {}
+        user_input = str(resolution.get("user_input") or "")
+        return _complete(
+            request,
+            spec=ask_user_question_spec,
+            source_type="coordinator",
+            source_name="workflow-engine",
+            command_or_action=f"execute:{request.task.name}",
+            output_payload={
+                "stdout": user_input,
+                "stderr": "",
+                "exit_code": 0,
+                "interaction_resolved": True,
+                "resolution": resolution,
+                "artifacts": [],
+                "observations": [
+                    {
+                        "task": request.task.name,
+                        "goal": request.context.goal,
+                        "stage": request.task.metadata_json.get("stage_key"),
+                        "observation": f"User input received for {request.task.name}.",
+                    }
+                ],
+            },
+        )
+
+    def _handle_request_approval(request: ToolExecutionRequest) -> ToolExecutionResult:
+        resume = dict(request.context.resume) if isinstance(request.context.resume, dict) else {}
+        resolution_raw = resume.get("resolution")
+        resolution = dict(resolution_raw) if isinstance(resolution_raw, dict) else {}
+        approved = bool(resolution.get("approved", False))
+        return _complete(
+            request,
+            spec=request_approval_spec,
+            source_type="coordinator",
+            source_name="workflow-engine",
+            command_or_action=f"execute:{request.task.name}",
+            output_payload={
+                "stdout": "approved" if approved else "not_approved",
+                "stderr": "",
+                "exit_code": 0,
+                "approval_resolved": True,
+                "resolution": resolution,
+                "artifacts": [],
+                "observations": [
+                    {
+                        "task": request.task.name,
+                        "goal": request.context.goal,
+                        "stage": request.task.metadata_json.get("stage_key"),
+                        "observation": f"Approval captured for {request.task.name}.",
+                    }
+                ],
+            },
+        )
+
+    registry.register(
+        spec=ask_user_question_spec,
+        matcher=lambda task: (
+            str(task.metadata_json.get("workflow_tool") or "") == "workflow.ask_user_question"
+            or str(task.metadata_json.get("interrupt_behavior") or "") == "user_interaction"
+            or bool(task.metadata_json.get("interaction_required", False))
+        ),
+        handler=_handle_ask_user_question,
+    )
+    registry.register(
+        spec=request_approval_spec,
+        matcher=lambda task: bool(task.metadata_json.get("approval_required", False)),
+        handler=_handle_request_approval,
+    )
+
     registry.register(
         spec=stage_spec,
         matcher=lambda task: str(task.metadata_json.get("kind") or "task") == "stage",
@@ -528,4 +642,5 @@ def build_tool_input_payload(request: ToolExecutionRequest) -> dict[str, object]
         "memory": dict(request.context.memory),
         "context_projection": dict(request.context.context_projection),
         "prompting": dict(request.context.prompting),
+        "resume": dict(request.context.resume),
     }

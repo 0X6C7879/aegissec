@@ -315,6 +315,70 @@ class TranscriptRuntimeService:
         runtime_state["reinjection_events"] = reinjection_events
         return event
 
+    def append_protocol_pending_event(
+        self,
+        *,
+        mutable_state: dict[str, object],
+        cycle_id: str,
+        current_stage: str | None,
+        task_name: str,
+        pending_entry: dict[str, object],
+    ) -> dict[str, object]:
+        return self._append_protocol_event(
+            mutable_state=mutable_state,
+            cycle_id=cycle_id,
+            current_stage=current_stage,
+            task_name=task_name,
+            event_type=f"{str(pending_entry.get('kind') or 'protocol')}_pending",
+            content=(
+                f"Pending {str(pending_entry.get('kind') or 'protocol')} for {task_name}: "
+                f"{str(pending_entry.get('pause_reason') or '')}"
+            ).strip(),
+            metadata={
+                "pending_id": str(pending_entry.get("pending_id") or ""),
+                "continuation_token": str(pending_entry.get("continuation_token") or ""),
+                "resume_condition": str(pending_entry.get("resume_condition") or ""),
+                "pause_reason": str(pending_entry.get("pause_reason") or ""),
+                "task_id": str(pending_entry.get("task_id") or ""),
+                "kind": str(pending_entry.get("kind") or ""),
+            },
+        )
+
+    def append_protocol_resolution_event(
+        self,
+        *,
+        mutable_state: dict[str, object],
+        cycle_id: str,
+        current_stage: str | None,
+        task_name: str,
+        resolved_entry: dict[str, object],
+    ) -> dict[str, object]:
+        resolution = self._dict(resolved_entry.get("resolution"))
+        resolution_summary = str(
+            resolution.get("user_input")
+            or resolution.get("approved")
+            or resolution.get("resolution_payload")
+            or "resolved"
+        )
+        return self._append_protocol_event(
+            mutable_state=mutable_state,
+            cycle_id=cycle_id,
+            current_stage=current_stage,
+            task_name=task_name,
+            event_type=f"{str(resolved_entry.get('kind') or 'protocol')}_resolved",
+            content=(
+                f"Resolved {str(resolved_entry.get('kind') or 'protocol')} for {task_name}: "
+                f"{resolution_summary}"
+            ),
+            metadata={
+                "pending_id": str(resolved_entry.get("pending_id") or ""),
+                "continuation_token": str(resolved_entry.get("continuation_token") or ""),
+                "task_id": str(resolved_entry.get("task_id") or ""),
+                "kind": str(resolved_entry.get("kind") or ""),
+                "resolution": resolution,
+            },
+        )
+
     def project_execution_record(
         self,
         *,
@@ -446,6 +510,19 @@ class TranscriptRuntimeService:
             for item in reinjection_events
             if str(item.get("summary") or "").strip()
         ]
+        pending_protocol_lines: list[str] = []
+        resolved_protocol_lines: list[str] = []
+        for delta in deltas:
+            for block in self._dict_list(delta.get("assistant_blocks")):
+                metadata = self._dict(block.get("metadata"))
+                event_type = str(metadata.get("event_type") or "")
+                content = str(block.get("content") or "").strip()
+                if not content:
+                    continue
+                if event_type.endswith("_pending"):
+                    pending_protocol_lines.append(content)
+                if event_type.endswith("_resolved"):
+                    resolved_protocol_lines.append(content)
         provenance = {
             "source": "runtime_transcript",
             "recent_delta_ids": [str(delta.get("delta_id") or "") for delta in deltas],
@@ -464,6 +541,8 @@ class TranscriptRuntimeService:
             "recent_tool_result_continuity": "\n".join(result_lines),
             "compact_continuity": "\n".join(compact_lines),
             "reinjection_continuity": "\n".join(reinjection_lines),
+            "pending_protocol_continuity": "\n".join(pending_protocol_lines),
+            "resolved_protocol_continuity": "\n".join(resolved_protocol_lines),
             "provenance": provenance,
         }
 
@@ -667,6 +746,63 @@ class TranscriptRuntimeService:
                 if content:
                     return content[:160]
         return ""
+
+    def _append_protocol_event(
+        self,
+        *,
+        mutable_state: dict[str, object],
+        cycle_id: str,
+        current_stage: str | None,
+        task_name: str,
+        event_type: str,
+        content: str,
+        metadata: dict[str, object],
+    ) -> dict[str, object]:
+        runtime_state = self.ensure_state(mutable_state)
+        now = datetime.now(UTC).isoformat()
+        turn = AgentTurn(
+            turn_id=f"turn-{uuid4()}",
+            cycle_id=cycle_id,
+            phase="workflow_protocol",
+            current_stage=current_stage,
+            current_task_names=[task_name] if task_name else [],
+            assistant_reasoning_summary=content,
+            transcript_delta_id=None,
+            next_turn_directive=self.last_directive(mutable_state),
+            started_at=now,
+            ended_at=now,
+        )
+        block = {
+            "kind": event_type,
+            "content": content,
+            "metadata": {"event_type": event_type, **dict(metadata)},
+            "is_metadata_only": False,
+        }
+        delta = TranscriptDelta(
+            delta_id=f"delta-{uuid4()}",
+            turn_id=turn.turn_id,
+            assistant_blocks=[block],
+            metadata={"event_type": event_type, **dict(metadata)},
+        )
+        turn = AgentTurn(
+            turn_id=turn.turn_id,
+            cycle_id=turn.cycle_id,
+            phase=turn.phase,
+            current_stage=turn.current_stage,
+            current_task_names=list(turn.current_task_names),
+            assistant_reasoning_summary=turn.assistant_reasoning_summary,
+            transcript_delta_id=delta.delta_id,
+            next_turn_directive=turn.next_turn_directive,
+            started_at=turn.started_at,
+            ended_at=turn.ended_at,
+        )
+        turns = self._dict_list(runtime_state.get("turns"))
+        deltas = self._dict_list(runtime_state.get("deltas"))
+        turns.append(turn.to_state())
+        deltas.append(delta.to_state())
+        runtime_state["turns"] = turns
+        runtime_state["deltas"] = deltas
+        return {"turn_id": turn.turn_id, "delta_id": delta.delta_id, "event_type": event_type}
 
     @staticmethod
     def _dict(raw: object) -> dict[str, object]:

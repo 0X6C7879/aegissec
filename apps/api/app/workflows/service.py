@@ -196,7 +196,15 @@ class WorkflowService:
         tasks = self._workflow_repository.list_task_nodes(run.id)
         return to_workflow_run_detail_read(run, tasks)
 
-    async def advance_workflow(self, run_id: str, *, approve: bool) -> WorkflowRunDetailRead:
+    async def advance_workflow(
+        self,
+        run_id: str,
+        *,
+        approve: bool,
+        user_input: str | None,
+        resume_token: str | None,
+        resolution_payload: dict[str, object] | None,
+    ) -> WorkflowRunDetailRead:
         run = self._workflow_repository.get_run(run_id)
         if run is None:
             raise WorkflowRunNotFoundError
@@ -204,7 +212,12 @@ class WorkflowService:
         tasks = self._workflow_repository.list_task_nodes(run.id)
 
         step_result = await self._coordinator.advance_workflow(
-            run=run, tasks=tasks, approve=approve
+            run=run,
+            tasks=tasks,
+            approve=approve,
+            user_input=user_input,
+            resume_token=resume_token,
+            resolution_payload=resolution_payload,
         )
         for task in tasks:
             self._workflow_repository.patch_task_node(

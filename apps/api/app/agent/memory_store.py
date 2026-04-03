@@ -22,6 +22,10 @@ class MemoryManifestEntry:
     updated_at: str
     filename: str
     source_labels: tuple[str, ...] = ()
+    scope: str = "project"
+    source_trace: str | None = None
+    recall_weight: float = 1.0
+    surfacing_history: tuple[dict[str, object], ...] = ()
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -32,6 +36,10 @@ class MemoryManifestEntry:
             "updated_at": self.updated_at,
             "filename": self.filename,
             "source_labels": list(self.source_labels),
+            "scope": self.scope,
+            "source_trace": self.source_trace,
+            "recall_weight": self.recall_weight,
+            "surfacing_history": [dict(item) for item in self.surfacing_history],
         }
 
     @classmethod
@@ -55,6 +63,8 @@ class MemoryManifestEntry:
         normalized_filename = str(filename)
         tags_raw = raw.get("tags")
         source_labels_raw = raw.get("source_labels")
+        surfacing_history_raw = raw.get("surfacing_history")
+        recall_weight_raw = raw.get("recall_weight")
         return cls(
             entry_id=normalized_entry_id,
             title=normalized_title,
@@ -71,6 +81,20 @@ class MemoryManifestEntry:
                 if isinstance(source_labels_raw, list)
                 else ()
             ),
+            scope=(str(raw.get("scope") or "project") or "project"),
+            source_trace=(
+                str(raw.get("source_trace"))
+                if isinstance(raw.get("source_trace"), str) and str(raw.get("source_trace"))
+                else None
+            ),
+            recall_weight=(
+                float(recall_weight_raw) if isinstance(recall_weight_raw, int | float) else 1.0
+            ),
+            surfacing_history=(
+                tuple(item for item in surfacing_history_raw if isinstance(item, dict))
+                if isinstance(surfacing_history_raw, list)
+                else ()
+            ),
         )
 
 
@@ -84,6 +108,10 @@ class MemoryEntry:
     citations: tuple[CitationPointer, ...]
     updated_at: str
     filename: str
+    scope: str = "project"
+    source_trace: str | None = None
+    recall_weight: float = 1.0
+    surfacing_history: tuple[dict[str, object], ...] = ()
 
     def to_manifest_entry(self) -> MemoryManifestEntry:
         source_labels = tuple(citation.label for citation in self.citations if citation.label)
@@ -95,6 +123,10 @@ class MemoryEntry:
             updated_at=self.updated_at,
             filename=self.filename,
             source_labels=source_labels,
+            scope=self.scope,
+            source_trace=self.source_trace,
+            recall_weight=self.recall_weight,
+            surfacing_history=self.surfacing_history,
         )
 
 
@@ -127,6 +159,10 @@ def write_memory_entry(
     citations: list[CitationPointer] | tuple[CitationPointer, ...],
     updated_at: str | None = None,
     entry_id: str | None = None,
+    scope: str = "project",
+    source_trace: str | None = None,
+    recall_weight: float = 1.0,
+    surfacing_history: list[dict[str, object]] | tuple[dict[str, object], ...] = (),
     base_dir: Path | None = None,
 ) -> MemoryEntry:
     ensure_memory_dir(project_id, base_dir=base_dir)
@@ -142,6 +178,10 @@ def write_memory_entry(
         citations=tuple(citations),
         updated_at=normalized_updated_at,
         filename=filename,
+        scope=scope,
+        source_trace=source_trace,
+        recall_weight=float(recall_weight),
+        surfacing_history=_normalize_surfacing_history(surfacing_history),
     )
     path = entry_path(project_id, normalized_entry_id, base_dir=base_dir)
     path.write_text(_render_memory_entry(entry), encoding="utf-8")
@@ -192,6 +232,8 @@ def read_memory_entry(
             parsed = CitationPointer.from_state(item)
             if parsed is not None:
                 citations.append(parsed)
+    recall_weight_raw = metadata.get("recall_weight")
+    surfacing_history_raw = metadata.get("surfacing_history")
     return MemoryEntry(
         entry_id=str(metadata.get("entry_id") or entry_id or path.stem),
         title=str(metadata.get("title") or path.stem),
@@ -201,7 +243,61 @@ def read_memory_entry(
         citations=tuple(citations),
         updated_at=str(metadata.get("updated_at") or ""),
         filename=path.name,
+        scope=str(metadata.get("scope") or "project"),
+        source_trace=(
+            str(metadata.get("source_trace"))
+            if isinstance(metadata.get("source_trace"), str) and str(metadata.get("source_trace"))
+            else None
+        ),
+        recall_weight=(
+            float(recall_weight_raw) if isinstance(recall_weight_raw, int | float) else 1.0
+        ),
+        surfacing_history=(
+            tuple(item for item in surfacing_history_raw if isinstance(item, dict))
+            if isinstance(surfacing_history_raw, list)
+            else ()
+        ),
     )
+
+
+def record_memory_entry_surfaced(
+    project_id: str,
+    *,
+    entry_id: str,
+    scope: str,
+    source_trace: str | None,
+    surfaced_at: str | None = None,
+    source_pack: str | None = None,
+    base_dir: Path | None = None,
+) -> MemoryManifestEntry | None:
+    manifest = load_memory_manifest(project_id, base_dir=base_dir)
+    manifest_index = {item.entry_id: item for item in manifest}
+    existing = manifest_index.get(entry_id)
+    if existing is None:
+        return None
+    event = {
+        "scope": scope,
+        "source_trace": source_trace,
+        "source_pack": source_pack or "project",
+        "surfaced_at": surfaced_at or datetime.now(UTC).isoformat(),
+    }
+    history = [*existing.surfacing_history, event][-8:]
+    updated = MemoryManifestEntry(
+        entry_id=existing.entry_id,
+        title=existing.title,
+        summary=existing.summary,
+        tags=existing.tags,
+        updated_at=existing.updated_at,
+        filename=existing.filename,
+        source_labels=existing.source_labels,
+        scope=existing.scope,
+        source_trace=existing.source_trace,
+        recall_weight=existing.recall_weight,
+        surfacing_history=_normalize_surfacing_history(history),
+    )
+    manifest_index[entry_id] = updated
+    update_memory_manifest(project_id, entries=list(manifest_index.values()), base_dir=base_dir)
+    return updated
 
 
 def _parse_embedded_json(content: str, *, marker: str) -> dict[str, object]:
@@ -230,6 +326,10 @@ def _render_memory_entry(entry: MemoryEntry) -> str:
         "citations": [citation.to_state() for citation in entry.citations],
         "updated_at": entry.updated_at,
         "filename": entry.filename,
+        "scope": entry.scope,
+        "source_trace": entry.source_trace,
+        "recall_weight": entry.recall_weight,
+        "surfacing_history": [dict(item) for item in entry.surfacing_history],
     }
     source_lines = [
         f"- {citation.source_kind}:{citation.source_id} ({citation.label})"
@@ -254,6 +354,12 @@ def _render_memory_entry(entry: MemoryEntry) -> str:
             "## Updated At",
             entry.updated_at,
             "",
+            "## Recall Metadata",
+            f"Scope: {entry.scope}",
+            f"Source trace: {entry.source_trace or 'n/a'}",
+            f"Recall weight: {entry.recall_weight:.2f}",
+            f"Surfaced count: {len(entry.surfacing_history)}",
+            "",
             "## Body",
             entry.body,
             "",
@@ -270,7 +376,9 @@ def _render_manifest(*, project_id: str, entries: list[MemoryManifestEntry]) -> 
     visible_entries = [
         (
             f"- [{entry.title}](entries/{entry.filename}) — {entry.summary} "
-            f"(tags: {', '.join(entry.tags) or 'untagged'}; updated: {entry.updated_at})"
+            f"(scope: {entry.scope}; tags: {', '.join(entry.tags) or 'untagged'}; "
+            f"weight: {entry.recall_weight:.2f}; surfaced: {len(entry.surfacing_history)}; "
+            f"updated: {entry.updated_at})"
         )
         for entry in entries
     ] or ["- No durable project memory has been recorded yet."]
@@ -299,3 +407,9 @@ def _normalize_tags(raw_tags: object) -> tuple[str, ...]:
         if cleaned and cleaned not in normalized:
             normalized.append(cleaned)
     return tuple(normalized)
+
+
+def _normalize_surfacing_history(raw_history: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(raw_history, list | tuple):
+        return ()
+    return tuple(item for item in raw_history if isinstance(item, dict))[:8]

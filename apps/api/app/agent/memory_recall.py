@@ -9,6 +9,8 @@ from app.agent.memory_store import (
     load_memory_manifest,
     read_memory_entry,
 )
+from app.agent.recall_policy import RecallPolicy
+from app.agent.retrieval_manifest import RetrievalManifestSource, manifest_source_from_memory
 
 
 def select_relevant_memory_entries(
@@ -17,68 +19,138 @@ def select_relevant_memory_entries(
     current_task: str = "",
     recent_tools: list[str] | None = None,
     already_surfaced: set[str] | None = None,
-    top_k: int = 3,
+    recall_policy: RecallPolicy | None = None,
+    top_k: int | None = None,
     base_dir: Path | None = None,
 ) -> list[MemoryEntry]:
     manifest = load_memory_manifest(project_id, base_dir=base_dir)
-    if not manifest or top_k <= 0:
+    policy = recall_policy or RecallPolicy()
+    limit = top_k if isinstance(top_k, int) else policy.top_k
+    if not manifest or limit <= 0:
         return []
     surfaced = already_surfaced or set()
+    manifest_sources = [manifest_source_from_memory(entry) for entry in manifest]
     ranked = sorted(
-        manifest,
-        key=lambda entry: _score_entry(
-            entry,
+        manifest_sources,
+        key=lambda source: _score_entry(
+            source,
             current_task=current_task,
             recent_tools=recent_tools or [],
             already_surfaced=surfaced,
+            recall_policy=policy,
         ),
         reverse=True,
     )
     selected = [
-        entry
-        for entry in ranked
+        source
+        for source in ranked
         if _score_entry(
-            entry,
+            source,
             current_task=current_task,
             recent_tools=recent_tools or [],
             already_surfaced=surfaced,
+            recall_policy=policy,
         )
         > 0
-    ][:top_k]
-    if len(selected) < top_k:
-        seen = {entry.entry_id for entry in selected}
-        for entry in ranked:
-            if entry.entry_id in seen:
+    ][:limit]
+    if len(selected) < limit:
+        seen = {source.source_id for source in selected}
+        for source in ranked:
+            if source.source_id in seen:
                 continue
-            selected.append(entry)
-            seen.add(entry.entry_id)
-            if len(selected) >= top_k:
+            selected.append(source)
+            seen.add(source.source_id)
+            if len(selected) >= limit:
                 break
     return [
-        read_memory_entry(project_id, filename=entry.filename, base_dir=base_dir)
-        for entry in selected[:top_k]
+        read_memory_entry(
+            project_id,
+            filename=str(source.metadata.get("filename") or ""),
+            base_dir=base_dir,
+        )
+        for source in selected[:limit]
     ]
 
 
-def _score_entry(
-    entry: MemoryManifestEntry,
+def rank_memory_manifest_sources(
+    manifest: list[MemoryManifestEntry],
     *,
     current_task: str,
     recent_tools: list[str],
     already_surfaced: set[str],
-) -> float:
-    query_terms = _terms(current_task) | {term for tool in recent_tools for term in _terms(tool)}
-    entry_terms = (
-        _terms(entry.title)
-        | _terms(entry.summary)
-        | {term for tag in entry.tags for term in _terms(tag)}
+    recall_policy: RecallPolicy,
+) -> list[dict[str, object]]:
+    ranked_sources = sorted(
+        [manifest_source_from_memory(entry) for entry in manifest],
+        key=lambda source: _score_entry(
+            source,
+            current_task=current_task,
+            recent_tools=recent_tools,
+            already_surfaced=already_surfaced,
+            recall_policy=recall_policy,
+        ),
+        reverse=True,
     )
-    source_terms = {term for label in entry.source_labels for term in _terms(label)}
-    overlap = len(query_terms & (entry_terms | source_terms))
-    recency_bonus = _recency_bonus(entry.updated_at)
-    surfaced_penalty = 4.0 if entry.entry_id in already_surfaced else 0.0
-    source_bonus = min(len(entry.source_labels), 3) * 0.15
-    return overlap * 2.0 + recency_bonus + source_bonus - surfaced_penalty
+    result: list[dict[str, object]] = []
+    for source in ranked_sources:
+        result.append(
+            {
+                **source.to_state(),
+                "score": _score_entry(
+                    source,
+                    current_task=current_task,
+                    recent_tools=recent_tools,
+                    already_surfaced=already_surfaced,
+                    recall_policy=recall_policy,
+                ),
+            }
+        )
+    return result
+
+
+def _score_entry(
+    source: RetrievalManifestSource,
+    *,
+    current_task: str,
+    recent_tools: list[str],
+    already_surfaced: set[str],
+    recall_policy: RecallPolicy,
+) -> float:
+    task_terms = _terms(current_task)
+    recent_tool_terms = {term for tool in recent_tools for term in _terms(tool)}
+    tags_raw = source.metadata.get("tags")
+    tags = [tag for tag in tags_raw if isinstance(tag, str)] if isinstance(tags_raw, list) else []
+    entry_terms = (
+        _terms(source.title)
+        | _terms(source.summary)
+        | {term for tag in tags for term in _terms(tag)}
+    )
+    source_labels_raw = source.metadata.get("source_labels")
+    source_labels = (
+        [label for label in source_labels_raw if isinstance(label, str)]
+        if isinstance(source_labels_raw, list)
+        else []
+    )
+    source_terms = {term for label in source_labels for term in _terms(label)}
+    task_overlap = len(task_terms & (entry_terms | source_terms))
+    recent_tool_overlap = len(recent_tool_terms & (entry_terms | source_terms))
+    recency_bonus = _recency_bonus(str(source.metadata.get("updated_at") or ""))
+    surfaced_penalty = (
+        recall_policy.already_surfaced_penalty if source.source_id in already_surfaced else 0.0
+    ) + (source.surfaced_count * 0.35)
+    compact_bonus = (
+        recall_policy.compact_boundary_bias
+        if any("compact" in label for label in source_labels)
+        else 0.0
+    )
+    return (
+        (task_overlap * recall_policy.task_match_bias)
+        + (recent_tool_overlap * recall_policy.recent_tool_bias)
+        + (recency_bonus * recall_policy.freshness_bias)
+        + float(source.recall_weight)
+        + compact_bonus
+        - surfaced_penalty
+    )
 
 
 def _terms(text: str) -> set[str]:

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.agent.context_models import ContextSnapshot
 from app.agent.coordinator import Coordinator
-from app.agent.executor import ExecutionResult
+from app.agent.executor import ExecutionResult, Executor
 from app.agent.loop_engine import WorkflowLoopEngine
 from app.agent.reflector import Reflector
 from app.agent.selection import RunnableSelection, SelectedTask, WorkflowRunnableSelector
@@ -151,6 +151,36 @@ def test_advance_workflow_blocks_for_approval_and_supports_resume(client: TestCl
     blocked_detail = client.get(f"/api/workflows/{run_id}")
     blocked_payload = cast(dict[str, Any], api_data(blocked_detail))
     assert blocked_payload["status"] == "needs_approval"
+    blocked_state = cast(dict[str, Any], blocked_payload["state"])
+    blocked_pause = cast(dict[str, Any], blocked_state["pause"])
+    pending_approvals = cast(list[dict[str, Any]], blocked_pause["pending_approvals"])
+    assert pending_approvals
+    active_pause = cast(dict[str, Any], blocked_pause["active"])
+    assert active_pause["kind"] == "approval"
+    assert active_pause["resume_payload"]["resolution_kind"] == "approval"
+    runtime_transcript = cast(dict[str, Any], blocked_state["runtime_transcript"])
+    assert set(runtime_transcript.keys()) == {
+        "turns",
+        "deltas",
+        "tool_use_records",
+        "tool_result_records",
+        "compact_events",
+        "reinjection_events",
+        "last_directive",
+    }
+    assert any(
+        any(
+            block["metadata"].get("event_type") == "approval_pending"
+            for block in cast(list[dict[str, Any]], delta.get("assistant_blocks", []))
+        )
+        for delta in cast(list[dict[str, Any]], runtime_transcript["deltas"])
+    )
+    blocked_continuity = cast(
+        dict[str, Any], cast(dict[str, Any], blocked_state["context"])["prompting"]
+    )["continuity"]
+    assert blocked_continuity["pending_protocol_kind"] == "approval"
+    assert blocked_continuity["pending_protocol_pause_reason"]
+    assert blocked_continuity["pending_protocol_resume_condition"]
 
     tasks = _workflow_tasks_by_name(blocked_payload)
     assert tasks["safe_validation.validate_primary_hypothesis"]["status"] == "blocked"
@@ -158,16 +188,314 @@ def test_advance_workflow_blocks_for_approval_and_supports_resume(client: TestCl
         "waiting_approval"
     )
 
-    approved = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    approved = client.post(
+        f"/api/workflows/{run_id}/advance",
+        json={
+            "approve": True,
+            "resume_token": active_pause["continuation_token"],
+            "resolution_payload": {"operator": "test-client", "decision": "approve"},
+        },
+    )
     assert approved.status_code == 200
     approved_payload = cast(dict[str, Any], api_data(approved))
     assert approved_payload["status"] == "running"
+    approved_state = cast(dict[str, Any], approved_payload["state"])
+    approved_pause = cast(dict[str, Any], approved_state["pause"])
+    assert not cast(list[dict[str, Any]], approved_pause["pending_approvals"])
+    resolved_approvals = cast(list[dict[str, Any]], approved_pause["resolved_approvals"])
+    assert resolved_approvals
+    assert cast(dict[str, Any], resolved_approvals[-1]["resolution"])["approved"] is True
+    approved_runtime = cast(dict[str, Any], approved_state["runtime_transcript"])
+    assert any(
+        any(
+            block["metadata"].get("event_type") == "approval_resolved"
+            for block in cast(list[dict[str, Any]], delta.get("assistant_blocks", []))
+        )
+        for delta in cast(list[dict[str, Any]], approved_runtime["deltas"])
+    )
+    approved_continuity = cast(
+        dict[str, Any], cast(dict[str, Any], approved_state["context"])["prompting"]
+    )["continuity"]
+    assert approved_continuity["resolved_protocol_kind"] == "approval"
+    assert (
+        cast(dict[str, Any], approved_continuity["resolved_protocol_payload"])["approved"] is True
+    )
     approved_tasks = _workflow_tasks_by_name(approved_payload)
     assert approved_tasks["safe_validation.validate_primary_hypothesis"]["status"] == "completed"
     assert (
         approved_tasks["safe_validation.validate_primary_hypothesis"]["metadata"]["execution_state"]
         == "success"
     )
+
+
+def test_workflow_ask_user_question_protocol_pause_and_resume_updates_state_and_transcript() -> (
+    None
+):
+    import asyncio
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=Executor(),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-ask-user",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="context_collect",
+        state_json={"goal": "Need scope clarification", "runtime_policy": {}},
+    )
+    task = TaskNode(
+        workflow_run_id=run.id,
+        name="scope_clarification",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={
+            "stage_key": "context_collect",
+            "workflow_tool": "workflow.ask_user_question",
+            "question": "Which host should the agent validate first?",
+            "description": "Ask the operator to clarify the first in-scope host.",
+        },
+    )
+
+    blocked_result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[task],
+            approve=False,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
+
+    assert blocked_result.status is WorkflowRunStatus.BLOCKED
+    blocked_state = blocked_result.state
+    pause_state = cast(dict[str, Any], blocked_state["pause"])
+    pending_interactions = cast(list[dict[str, Any]], pause_state["pending_interactions"])
+    assert pending_interactions
+    active_pause = cast(dict[str, Any], pause_state["active"])
+    assert active_pause["kind"] == "interaction"
+    assert active_pause["resume_payload"]["resolution_kind"] == "interaction"
+    blocked_runtime = cast(dict[str, Any], blocked_state["runtime_transcript"])
+    assert set(blocked_runtime.keys()) == {
+        "turns",
+        "deltas",
+        "tool_use_records",
+        "tool_result_records",
+        "compact_events",
+        "reinjection_events",
+        "last_directive",
+    }
+    assert any(
+        any(
+            block["metadata"].get("event_type") == "interaction_pending"
+            for block in cast(list[dict[str, Any]], delta.get("assistant_blocks", []))
+        )
+        for delta in cast(list[dict[str, Any]], blocked_runtime["deltas"])
+    )
+    blocked_continuity = cast(
+        dict[str, Any], cast(dict[str, Any], blocked_state["context"])["prompting"]
+    )["continuity"]
+    assert blocked_continuity["pending_protocol_kind"] == "interaction"
+    assert blocked_continuity["pending_protocol_pause_reason"]
+    assert blocked_continuity["pending_protocol_resume_condition"]
+
+    run.state_json = blocked_state
+    resumed_result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[task],
+            approve=False,
+            user_input="Validate host app.internal.example first.",
+            resume_token=active_pause["continuation_token"],
+            resolution_payload={"provided_by": "operator"},
+        )
+    )
+
+    assert resumed_result.status is WorkflowRunStatus.DONE
+    resumed_state = resumed_result.state
+    resumed_pause = cast(dict[str, Any], resumed_state["pause"])
+    assert not cast(list[dict[str, Any]], resumed_pause["pending_interactions"])
+    resolved_interactions = cast(list[dict[str, Any]], resumed_pause["resolved_interactions"])
+    assert resolved_interactions
+    resolution = cast(dict[str, Any], resolved_interactions[-1]["resolution"])
+    assert resolution["user_input"] == "Validate host app.internal.example first."
+    resumed_runtime = cast(dict[str, Any], resumed_state["runtime_transcript"])
+    assert any(
+        any(
+            block["metadata"].get("event_type") == "interaction_resolved"
+            for block in cast(list[dict[str, Any]], delta.get("assistant_blocks", []))
+        )
+        for delta in cast(list[dict[str, Any]], resumed_runtime["deltas"])
+    )
+    resumed_continuity = cast(
+        dict[str, Any], cast(dict[str, Any], resumed_state["context"])["prompting"]
+    )["continuity"]
+    assert resumed_continuity["resolved_protocol_kind"] == "interaction"
+    assert (
+        cast(dict[str, Any], resumed_continuity["resolved_protocol_payload"])["user_input"]
+        == "Validate host app.internal.example first."
+    )
+    execution_records = cast(list[dict[str, Any]], resumed_state["execution_records"])
+    assert len(execution_records) == 2
+    assert execution_records[0]["status"] == "blocked"
+    assert execution_records[1]["status"] == "completed"
+
+
+def test_workflow_rehydrates_workspace_state_into_prompting_and_assistant_turn_after_compact() -> (
+    None
+):
+    import asyncio
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "Loaded skills inventory:\n- agent-browser",
+                "schema_summary": "Capability schema summary.",
+                "prompt_fragment": "Capability prompt fragment.",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=Executor(),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-workspace-state",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="context_collect",
+        state_json={
+            "goal": "Need compact workspace continuity",
+            "runtime_policy": {},
+            "messages": [
+                {"role": "user", "content": "Force compact for workspace continuity."},
+                {"role": "assistant", "content": "Preparing compact boundary context."},
+            ],
+            "execution_records": [
+                {
+                    "id": "trace-old",
+                    "task_name": "context_collect.attack_surface",
+                    "task_node_id": "task-old",
+                    "summary": "Mapped exposed services.",
+                    "status": "completed",
+                    "command_or_action": "execute:context_collect.attack_surface",
+                }
+            ],
+            "compaction": {
+                "runtime": {
+                    "config": {
+                        "rough_token_threshold": 1,
+                        "message_count_threshold": 1,
+                        "execution_record_threshold": 1,
+                    }
+                }
+            },
+            "pause": {
+                "active": {
+                    "kind": "interaction",
+                    "pause_reason": "awaiting user input",
+                    "resume_condition": "provide answer",
+                    "task_id": "pending-task",
+                    "task_name": "scope_clarification",
+                }
+            },
+            "retrieval_manifest": {
+                "project": {
+                    "sources": [
+                        {"source_id": "memory-one", "scope": "project"},
+                        {"source_id": "memory-two", "scope": "project"},
+                    ]
+                }
+            },
+        },
+    )
+    task = TaskNode(
+        workflow_run_id=run.id,
+        name="scope_clarification",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={
+            "stage_key": "context_collect",
+            "workflow_tool": "workflow.ask_user_question",
+            "question": "Which host should the agent validate first?",
+            "description": "Ask for the first host to validate.",
+        },
+    )
+
+    blocked_result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[task],
+            approve=False,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
+
+    blocked_state = blocked_result.state
+    compact_runtime = cast(
+        dict[str, Any], cast(dict[str, Any], blocked_state["context"])["compact_runtime"]
+    )
+    retained_live_state = cast(dict[str, Any], compact_runtime["retained_live_state"])
+    workspace_state = cast(dict[str, Any], retained_live_state["workspace_state"])
+    assert workspace_state["active_stage"] == "context_collect"
+    assert workspace_state["active_tasks"]
+    assert cast(dict[str, Any], workspace_state["pending_protocol"])["kind"] == "interaction"
+    assert workspace_state["active_capability_inventory_summary"]
+    assert isinstance(workspace_state["recent_transcript_highlights"], list)
+    assert workspace_state["selected_project_memory_entries"] == ["memory-one", "memory-two"]
+
+    continuity = cast(dict[str, Any], cast(dict[str, Any], blocked_state["context"])["prompting"])[
+        "continuity"
+    ]
+    assert cast(dict[str, Any], continuity["workspace_state"])["active_stage"] == "context_collect"
+    assistant_turn_input = cast(
+        dict[str, Any], cast(dict[str, Any], blocked_state["assistant_turn"])["input"]
+    )
+    assert (
+        cast(dict[str, Any], assistant_turn_input["transcript_context"])["workspace_state"][
+            "active_stage"
+        ]
+        == "context_collect"
+    )
+    assert cast(dict[str, Any], assistant_turn_input["reasoning_frame"])["workspace_state"][
+        "selected_project_memory_entries"
+    ] == ["memory-one", "memory-two"]
 
 
 def test_workflow_execution_records_and_graph_snapshots_are_persisted(client: TestClient) -> None:
@@ -348,6 +676,7 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     payload = cast(dict[str, Any], api_data(advance))
     state = cast(dict[str, Any], payload["state"])
     context = cast(dict[str, Any], state["context"])
+    retrieval_manifest = cast(dict[str, Any], state["retrieval_manifest"])
     retrieval = cast(dict[str, Any], context["retrieval"])
     memory = cast(dict[str, Any], context["memory"])
     projection = cast(dict[str, Any], context["projection"])
@@ -381,6 +710,11 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     assert isinstance(compact_runtime, dict)
     assert isinstance(compact_runtime["metrics"], dict)
     assert isinstance(compact_runtime["thresholds"], dict)
+    assert cast(dict[str, Any], retrieval_manifest["policy"])["already_surfaced_penalty"] >= 0
+    assert cast(dict[str, Any], retrieval_manifest["session_local"])["scope"] == "session_derived"
+    assert cast(dict[str, Any], retrieval_manifest["project"])["scope"] == "project"
+    assert cast(dict[str, Any], retrieval_manifest["capability"])["scope"] == "capability_adjacent"
+    assert isinstance(cast(dict[str, Any], prompting["continuity"])["workspace_state"], dict)
 
     loop_state = cast(dict[str, Any], state["loop"])
     latest_cycle = cast(list[dict[str, Any]], loop_state["cycles"])[-1]
@@ -538,6 +872,7 @@ def test_workflow_context_consumers_prefer_runtime_transcript_continuity(
         continuity["assistant_turn_next_directive"] == assistant_turn_outcome["resulting_directive"]
     )
     assert continuity["assistant_turn_next_hint"] == assistant_turn_outcome["next_turn_hint"]
+    assert isinstance(continuity["workspace_state"], dict)
 
 
 def test_context_additions_preserve_export_replay_and_session_history_compatibility(
@@ -1026,7 +1361,16 @@ def test_serial_write_tasks_execute_in_order_without_parallel_worker_path(
         ),
     ]
 
-    result = asyncio.run(engine.advance(run=run, tasks=write_tasks, approve=True))
+    result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=write_tasks,
+            approve=True,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
     state = cast(dict[str, Any], result.state)
 
     assert executed_names == ["write_alpha", "write_beta"]
@@ -1124,7 +1468,16 @@ def test_workflow_preserves_blocked_tool_execution_as_blocked_runtime_state() ->
         metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
     )
 
-    result = asyncio.run(engine.advance(run=run, tasks=[blocked_task], approve=True))
+    result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[blocked_task],
+            approve=True,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
     state = cast(dict[str, Any], result.state)
     execution_records = cast(list[dict[str, Any]], state["execution_records"])
     runtime_transcript = cast(dict[str, Any], state["runtime_transcript"])
@@ -1247,7 +1600,16 @@ def test_workflow_directive_stops_remaining_tasks_in_same_cycle() -> None:
         metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
     )
 
-    result = asyncio.run(engine.advance(run=run, tasks=[blocked_task, skipped_task], approve=True))
+    result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[blocked_task, skipped_task],
+            approve=True,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
     state = cast(dict[str, Any], result.state)
     execution_records = cast(list[dict[str, Any]], state["execution_records"])
     runtime_transcript = cast(dict[str, Any], state["runtime_transcript"])

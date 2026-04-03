@@ -331,6 +331,11 @@ class AssistantTurnPlanner:
             "prior_next_turn_hint": (
                 prior_outcome.next_turn_hint if prior_outcome is not None else ""
             ),
+            "workspace_state": (
+                dict(workspace_state)
+                if isinstance((workspace_state := continuity_dict.get("workspace_state")), dict)
+                else {}
+            ),
         }
 
     @staticmethod
@@ -340,6 +345,11 @@ class AssistantTurnPlanner:
         prior_outcome: AssistantTurnOutcome | None,
         schedule: WorkflowToolSchedule,
     ) -> dict[str, object]:
+        prompting = (
+            context_snapshot.prompting if isinstance(context_snapshot.prompting, dict) else {}
+        )
+        continuity = prompting.get("continuity") if isinstance(prompting, dict) else {}
+        workspace_state = continuity.get("workspace_state") if isinstance(continuity, dict) else {}
         return {
             "projection_summary": context_snapshot.projection.summary,
             "last_directive": (
@@ -350,6 +360,7 @@ class AssistantTurnPlanner:
             ),
             "scheduler_mode": schedule.scheduler_mode,
             "selected_task_count": len(schedule.selected_tasks),
+            "workspace_state": dict(workspace_state) if isinstance(workspace_state, dict) else {},
         }
 
     @staticmethod

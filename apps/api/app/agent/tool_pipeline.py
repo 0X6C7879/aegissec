@@ -80,7 +80,9 @@ class ToolPipeline:
                 pipeline_stages=pipeline_stages,
             )
 
-        if spec.requires_user_interaction() or spec.interrupt_behavior().value != "none":
+        if (
+            spec.requires_user_interaction() or spec.interrupt_behavior().value != "none"
+        ) and not self._has_resume_resolution(normalized_input):
             return self._build_interaction_required_envelope(
                 request=request,
                 spec=spec,
@@ -260,6 +262,27 @@ class ToolPipeline:
         input_payload: dict[str, object],
         pipeline_stages: list[str],
     ) -> ToolExecutionEnvelope:
+        protocol_payload = self._build_protocol_payload(
+            request=request,
+            spec=spec,
+            input_payload=input_payload,
+        )
+        deferred = protocol_payload.get("deferred_continuation")
+        resume_payload = deferred.get("resume_payload") if isinstance(deferred, dict) else {}
+        continuation_token = (
+            deferred.get("continuation_token") if isinstance(deferred, dict) else ""
+        )
+        protocol_kind = str(protocol_payload.get("protocol_kind") or "interaction")
+        pause_reason = (
+            "approval requested from operator"
+            if protocol_kind == "approval"
+            else "awaiting user input"
+        )
+        resume_condition = (
+            "resume with approve=true and matching continuation token"
+            if protocol_kind == "approval"
+            else "resume with user_input or resolution_payload and matching continuation token"
+        )
         output_payload = {
             "stdout": "",
             "stderr": "tool execution blocked pending user interaction",
@@ -268,6 +291,11 @@ class ToolPipeline:
             "interaction_required": True,
             "interrupt_behavior": spec.interrupt_behavior().value,
             "block_reason": "user_interaction_required",
+            "protocol_payload": protocol_payload,
+            "resume_payload": dict(resume_payload) if isinstance(resume_payload, dict) else {},
+            "continuation_token": str(continuation_token),
+            "pause_reason": pause_reason,
+            "resume_condition": resume_condition,
         }
         runtime_protocol = self._build_runtime_protocol(
             spec=spec,
@@ -395,6 +423,85 @@ class ToolPipeline:
             "input_keys": sorted(input_payload.keys()),
             "output_keys": sorted(output_payload.keys()),
         }
+
+    def _build_protocol_payload(
+        self,
+        *,
+        request: ToolExecutionRequest,
+        spec: ToolSpec,
+        input_payload: dict[str, object],
+    ) -> dict[str, object]:
+        continuation_token = f"resume-{request.trace_id}"
+        resume_kind = (
+            "approval" if spec.interrupt_behavior().value == "require_approval" else "interaction"
+        )
+        resume_payload: dict[str, object] = {
+            "continuation_token": continuation_token,
+            "task_id": request.task.id,
+            "task_name": request.task.name,
+            "workflow_run_id": request.context.workflow_run_id,
+            "tool_name": spec.name,
+            "resolution_kind": resume_kind,
+        }
+        if resume_kind == "approval":
+            approval_payload = {
+                "approval_id": f"approval-{request.trace_id}",
+                "reason": str(
+                    request.task.metadata_json.get("approval_reason")
+                    or request.task.metadata_json.get("description")
+                    or request.task.name
+                ),
+                "approval_scope": str(
+                    request.task.metadata_json.get("stage_key") or request.task.name
+                ),
+                "resume_condition": "approve workflow advance request",
+            }
+            return {
+                "protocol_kind": "approval",
+                "protocol_version": "1.0",
+                "approval": approval_payload,
+                "deferred_continuation": {
+                    "continuation_token": continuation_token,
+                    "resume_payload": resume_payload,
+                },
+            }
+        question = str(
+            request.task.metadata_json.get("question")
+            or request.task.metadata_json.get("description")
+            or f"Provide input for {request.task.name}."
+        )
+        return {
+            "protocol_kind": "interaction",
+            "protocol_version": "1.0",
+            "interaction": {
+                "interaction_id": f"interaction-{request.trace_id}",
+                "question": question,
+                "expected_answer_schema": {
+                    "type": "object",
+                    "properties": {
+                        "user_input": {"type": "string"},
+                    },
+                    "required": ["user_input"],
+                },
+                "resume_condition": "supply user input to workflow advance request",
+            },
+            "deferred_continuation": {
+                "continuation_token": continuation_token,
+                "resume_payload": resume_payload,
+            },
+            "input_snapshot": {
+                "task_id": str(input_payload.get("task_id") or request.task.id),
+                "task_name": str(input_payload.get("task_name") or request.task.name),
+            },
+        }
+
+    @staticmethod
+    def _has_resume_resolution(input_payload: dict[str, object]) -> bool:
+        resume = input_payload.get("resume")
+        if not isinstance(resume, dict):
+            return False
+        resolution = resume.get("resolution")
+        return isinstance(resolution, dict) and bool(resolution)
 
     def _validate_schema(
         self,

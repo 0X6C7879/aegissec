@@ -767,5 +767,33 @@ def build_workflow_prompting_state(
             "assistant_turn_next_hint": str(
                 normalized_continuity_metadata.get("assistant_turn_next_hint") or ""
             ),
+            "pending_protocol_kind": str(
+                normalized_continuity_metadata.get("pending_protocol_kind") or ""
+            ),
+            "pending_protocol_pause_reason": str(
+                normalized_continuity_metadata.get("pending_protocol_pause_reason") or ""
+            ),
+            "pending_protocol_resume_condition": str(
+                normalized_continuity_metadata.get("pending_protocol_resume_condition") or ""
+            ),
+            "resolved_protocol_kind": str(
+                normalized_continuity_metadata.get("resolved_protocol_kind") or ""
+            ),
+            "resolved_protocol_payload": (
+                dict(payload)
+                if isinstance(
+                    (payload := normalized_continuity_metadata.get("resolved_protocol_payload")),
+                    dict,
+                )
+                else {}
+            ),
+            "workspace_state": (
+                dict(workspace_state)
+                if isinstance(
+                    (workspace_state := normalized_continuity_metadata.get("workspace_state")),
+                    dict,
+                )
+                else {}
+            ),
         },
     }
