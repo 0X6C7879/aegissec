@@ -202,10 +202,10 @@ class MCPService:
                 arguments=arguments,
             )
         except Exception as exc:
-            message = self._client_manager.error_message(exc)
+            normalized_message = self._client_manager.error_message(exc)
             server.status = MCPServerStatus.ERROR
-            server.last_error = message
-            self._apply_health_result(server, "error", None, message)
+            server.last_error = normalized_message
+            self._apply_health_result(server, "error", None, normalized_message)
             self._repository.update_server(server)
             raise
 
@@ -223,10 +223,10 @@ class MCPService:
         try:
             discovered = await self._client_manager.discover(imported_server)
         except Exception as exc:
-            message = self._client_manager.error_message(exc)
+            normalized_message = self._client_manager.error_message(exc)
             server_record.status = MCPServerStatus.ERROR
-            server_record.last_error = message
-            self._apply_health_result(server_record, "error", None, message)
+            server_record.last_error = normalized_message
+            self._apply_health_result(server_record, "error", None, normalized_message)
             return None
 
         server_record.status = MCPServerStatus.CONNECTED

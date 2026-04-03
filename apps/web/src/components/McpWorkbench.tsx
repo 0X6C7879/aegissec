@@ -13,7 +13,6 @@ import {
   registerManualMcpServer,
   setMcpServerEnabled,
 } from "../lib/api";
-import { formatDateTime } from "../lib/format";
 import type {
   MCPCapability,
   MCPCapabilityKind,
@@ -47,7 +46,6 @@ type FlattenedCapability = {
   server: MCPServer;
   capability: MCPCapability;
   capabilityKey: string;
-  hasInputSchema: boolean;
   searchIndex: string;
 };
 
@@ -121,17 +119,6 @@ function getHealthTone(status: string | null): string {
   }
 }
 
-function getCapabilityTone(kind: string): string {
-  switch (kind) {
-    case "tool":
-      return "tone-success";
-    case "prompt":
-      return "tone-warning";
-    default:
-      return "tone-neutral";
-  }
-}
-
 function getCapabilityKey(capability: MCPCapability): string {
   return `${capability.kind}:${capability.name}`;
 }
@@ -146,18 +133,6 @@ function isStaleImportedServer(server: MCPServer): boolean {
 
 function isImportMissingMessage(message: string | null): boolean {
   return message === MCP_IMPORT_MISSING_ERROR;
-}
-
-function groupCapabilities(capabilities: MCPCapability[]): Array<[string, MCPCapability[]]> {
-  const grouped = new Map<string, MCPCapability[]>();
-
-  for (const capability of capabilities) {
-    const currentGroup = grouped.get(capability.kind) ?? [];
-    currentGroup.push(capability);
-    grouped.set(capability.kind, currentGroup);
-  }
-
-  return Array.from(grouped.entries());
 }
 
 function stringifyJson(value: unknown): string {
@@ -266,12 +241,9 @@ function getCapabilityCounts(capabilities: MCPCapability[]): CapabilityCounts {
   );
 }
 
-function hasCapabilityInputSchema(capability: MCPCapability): boolean {
-  return Object.keys(capability.input_schema).length > 0;
-}
-
-function getCapabilityDisplayName(capability: MCPCapability): string {
-  return capability.title?.trim() || capability.name;
+function getPreferredCapabilities(capabilities: MCPCapability[]): MCPCapability[] {
+  const tools = capabilities.filter((capability) => capability.kind === "tool");
+  return tools.length > 0 ? tools : capabilities;
 }
 
 function flattenCapabilities(servers: MCPServer[]): FlattenedCapability[] {
@@ -280,7 +252,6 @@ function flattenCapabilities(servers: MCPServer[]): FlattenedCapability[] {
       server,
       capability,
       capabilityKey: getCapabilityKey(capability),
-      hasInputSchema: hasCapabilityInputSchema(capability),
       searchIndex: buildCapabilitySearchIndex(server, capability),
     })),
   );
@@ -302,19 +273,6 @@ function getFlatViewTitle(view: McpViewKey): string {
       return "全部资源";
     case "prompt":
       return "全部 Prompts";
-  }
-}
-
-function getFlatViewDescription(view: McpViewKey): string {
-  switch (view) {
-    case "servers":
-      return "按服务器查看连接状态、健康情况与能力数量。";
-    case "tool":
-      return "聚合全部工具，便于快速搜索并直接跳到原有详情弹窗执行。";
-    case "resource":
-      return "资源与资源模板统一平铺展示，只提供详情查看。";
-    case "prompt":
-      return "汇总所有 Prompts，快速定位所属服务器与描述。";
   }
 }
 
@@ -426,6 +384,10 @@ export function McpWorkbench() {
 
   const activeServer = serverDetailQuery.data ?? activeServerSummary;
   const activeServerIsStale = activeServer ? isStaleImportedServer(activeServer) : false;
+  const preferredCapabilities = useMemo(
+    () => (activeServer ? getPreferredCapabilities(activeServer.capabilities) : []),
+    [activeServer],
+  );
 
   const selectedCapability = useMemo(
     () =>
@@ -434,27 +396,6 @@ export function McpWorkbench() {
       ) ?? null,
     [activeServer, selectedCapabilityKey],
   );
-
-  const capabilitySummary = useMemo(() => {
-    const counts = allServers.reduce<CapabilityCounts>(
-      (summary, server) => {
-        const nextCounts = getCapabilityCounts(server.capabilities);
-        summary.tool += nextCounts.tool;
-        summary.resource += nextCounts.resource;
-        summary.resource_template += nextCounts.resource_template;
-        summary.prompt += nextCounts.prompt;
-        return summary;
-      },
-      { tool: 0, resource: 0, resource_template: 0, prompt: 0 },
-    );
-
-    return {
-      servers: allServers.length,
-      enabledServers: allServers.filter((server) => server.enabled).length,
-      connectedServers: allServers.filter((server) => server.status === "connected").length,
-      ...counts,
-    };
-  }, [allServers]);
 
   const currentViewCount =
     activeView === "servers"
@@ -515,10 +456,7 @@ export function McpWorkbench() {
       }
     }
 
-    const nextCapability =
-      activeServer.capabilities.find((capability) => capability.kind === "tool") ??
-      activeServer.capabilities[0] ??
-      null;
+    const nextCapability = getPreferredCapabilities(activeServer.capabilities)[0] ?? null;
     const currentCapabilityExists = activeServer.capabilities.some(
       (capability) => getCapabilityKey(capability) === selectedCapabilityKey,
     );
@@ -748,40 +686,6 @@ export function McpWorkbench() {
           <div className="management-unified-body management-unified-stack">
             <section className="management-section-card management-section-card-compact">
               <div className="management-section-header">
-                <h3 className="management-section-title">总览</h3>
-              </div>
-
-              <div className="management-metric-row management-metric-row-wide">
-                <article className="management-metric-card">
-                  <span className="management-metric-label">服务器</span>
-                  <strong className="management-metric-value">{capabilitySummary.servers}</strong>
-                  <span className="management-list-copy">
-                    已启用 {capabilitySummary.enabledServers} · 已连接{" "}
-                    {capabilitySummary.connectedServers}
-                  </span>
-                </article>
-                <article className="management-metric-card">
-                  <span className="management-metric-label">工具</span>
-                  <strong className="management-metric-value">{capabilitySummary.tool}</strong>
-                  <span className="management-list-copy">支持直接跳转并调用</span>
-                </article>
-                <article className="management-metric-card">
-                  <span className="management-metric-label">资源</span>
-                  <strong className="management-metric-value">{capabilitySummary.resource}</strong>
-                  <span className="management-list-copy">
-                    模板 {capabilitySummary.resource_template}
-                  </span>
-                </article>
-                <article className="management-metric-card">
-                  <span className="management-metric-label">Prompts</span>
-                  <strong className="management-metric-value">{capabilitySummary.prompt}</strong>
-                  <span className="management-list-copy">保持原有详情阅读流</span>
-                </article>
-              </div>
-            </section>
-
-            <section className="management-section-card management-section-card-compact">
-              <div className="management-section-header">
                 <h3 className="management-section-title">视图</h3>
                 <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
               </div>
@@ -816,12 +720,7 @@ export function McpWorkbench() {
 
             <section className="management-section-card management-section-card-compact">
               <div className="management-section-header">
-                <div className="management-detail-copy">
-                  <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
-                  <p className="management-unified-description">
-                    {getFlatViewDescription(activeView)}
-                  </p>
-                </div>
+                <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
                 <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
               </div>
 
@@ -962,34 +861,13 @@ export function McpWorkbench() {
                     {currentFlatItems.map((entry) => (
                       <li key={`${entry.server.id}:${entry.capabilityKey}`}>
                         <article className="management-list-card mcp-flat-card">
-                          <div className="management-list-card-header">
-                            <div className="management-detail-copy">
-                              <strong className="management-list-title">
-                                {getCapabilityDisplayName(entry.capability)}
-                              </strong>
-                              <p className="management-list-subtitle">来自 {entry.server.name}</p>
-                            </div>
-                            <span
-                              className={`management-status-badge ${getCapabilityTone(entry.capability.kind)}`}
-                            >
-                              {entry.capability.kind}
-                            </span>
-                          </div>
-
-                          <p className="management-list-copy">
-                            {entry.capability.description ?? "暂无描述。"}
-                          </p>
+                          <strong className="management-list-title">{entry.capability.name}</strong>
+                          <p className="management-list-subtitle">{entry.server.name}</p>
 
                           <div className="action-row">
-                            <span className="management-status-badge tone-neutral">
-                              {entry.server.name}
-                            </span>
                             {isStaleImportedServer(entry.server) ? (
                               <span className="management-status-badge tone-warning">导入缺失</span>
                             ) : null}
-                            <span className="management-status-badge tone-neutral">
-                              {entry.hasInputSchema ? "有输入 Schema" : "无输入 Schema"}
-                            </span>
                             <button
                               className="text-button"
                               type="button"
@@ -1161,30 +1039,6 @@ export function McpWorkbench() {
                   <div className="management-modal-header">
                     <div className="management-detail-copy">
                       <h3 className="panel-title">{activeServer.name}</h3>
-                      <div className="action-row">
-                        {activeServerIsStale ? (
-                          <span className="management-status-badge tone-warning">导入缺失</span>
-                        ) : null}
-                        <span
-                          className={`management-status-badge ${activeServer.enabled ? "tone-success" : "tone-neutral"}`}
-                        >
-                          {activeServer.enabled ? "已启用" : "已禁用"}
-                        </span>
-                        <span
-                          className={`management-status-badge ${getServerTone(activeServer.status)}`}
-                        >
-                          {activeServer.status}
-                        </span>
-                        <span
-                          className={`management-status-badge ${getHealthTone(activeServer.health_status)}`}
-                        >
-                          健康 {activeServer.health_status ?? "未检测"}
-                        </span>
-                        <span className="management-status-badge tone-neutral">
-                          {activeServer.transport}
-                        </span>
-                      </div>
-                      <p className="management-list-copy">{getPrimaryServerValue(activeServer)}</p>
                     </div>
 
                     <div className="management-action-row">
@@ -1246,9 +1100,6 @@ export function McpWorkbench() {
                     </div>
                   </div>
 
-                  {serverDetailQuery.isLoading ? (
-                    <div className="management-inline-notice">正在加载服务器详情。</div>
-                  ) : null}
                   {serverDetailQuery.isError ? (
                     <div className="management-error-banner">{serverDetailQuery.error.message}</div>
                   ) : null}
@@ -1263,268 +1114,91 @@ export function McpWorkbench() {
                     <div className="management-error-banner">{activeServer.health_error}</div>
                   ) : null}
 
-                  <div className="management-info-grid">
-                    <div className="management-info-card">
-                      <span className="management-info-label">传输方式</span>
-                      <strong className="management-info-value">{activeServer.transport}</strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">超时</span>
-                      <strong className="management-info-value">
-                        {activeServer.timeout_ms} ms
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">健康延迟</span>
-                      <strong className="management-info-value">
-                        {activeServer.health_latency_ms !== null
-                          ? `${activeServer.health_latency_ms} ms`
-                          : "未提供"}
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">来源</span>
-                      <strong className="management-info-value">{activeServer.source}</strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">范围</span>
-                      <strong className="management-info-value">{activeServer.scope}</strong>
-                    </div>
-                    <div className="management-info-card management-info-card-full">
-                      <span className="management-info-label">配置路径</span>
-                      <strong className="management-info-value management-info-code">
-                        {activeServer.config_path}
-                      </strong>
-                    </div>
-                    <div className="management-info-card management-info-card-full">
-                      <span className="management-info-label">导入时间</span>
-                      <strong className="management-info-value">
-                        {formatDateTime(activeServer.imported_at)}
-                      </strong>
-                    </div>
-                    <div className="management-info-card management-info-card-full">
-                      <span className="management-info-label">最近健康检查</span>
-                      <strong className="management-info-value">
-                        {activeServer.health_checked_at
-                          ? formatDateTime(activeServer.health_checked_at)
-                          : "尚未执行"}
-                      </strong>
-                    </div>
-                    {activeServer.command ? (
-                      <div className="management-info-card management-info-card-full">
-                        <span className="management-info-label">命令</span>
-                        <strong className="management-info-value management-info-code">
-                          {activeServer.command}
-                        </strong>
-                      </div>
-                    ) : null}
-                    {activeServer.url ? (
-                      <div className="management-info-card management-info-card-full">
-                        <span className="management-info-label">URL</span>
-                        <strong className="management-info-value management-info-code">
-                          {activeServer.url}
-                        </strong>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {activeServer.args.length > 0 ? (
-                    <div className="management-subcard">
-                      <span className="management-info-label">启动参数</span>
-                      <pre className="management-code-block">{activeServer.args.join("\n")}</pre>
-                    </div>
-                  ) : null}
-                  {Object.keys(activeServer.env).length > 0 ? (
-                    <div className="management-subcard">
-                      <span className="management-info-label">环境变量</span>
-                      <pre className="management-code-block">{stringifyJson(activeServer.env)}</pre>
-                    </div>
-                  ) : null}
-                  {Object.keys(activeServer.headers).length > 0 ? (
-                    <div className="management-subcard">
-                      <span className="management-info-label">请求头</span>
-                      <pre className="management-code-block">
-                        {stringifyJson(activeServer.headers)}
-                      </pre>
-                    </div>
-                  ) : null}
-
                   <section className="management-section-card management-section-card-compact">
                     <div className="management-section-header">
-                      <h4 className="management-section-title">能力</h4>
+                      <h4 className="management-section-title">
+                        {preferredCapabilities.some((capability) => capability.kind === "tool")
+                          ? "工具"
+                          : "能力"}
+                      </h4>
                       <span className="management-status-badge tone-neutral">
-                        {activeServer.capabilities.length} 项
+                        {preferredCapabilities.length} 项
                       </span>
                     </div>
 
-                    {activeServer.capabilities.length === 0 ? (
+                    {preferredCapabilities.length === 0 ? (
                       <div className="management-inline-notice">
                         当前服务器还没有发现能力，刷新后再看一次。
                       </div>
                     ) : (
-                      <div className="management-capability-groups">
-                        {groupCapabilities(activeServer.capabilities).map(
-                          ([groupName, capabilities]) => (
-                            <div key={groupName} className="management-capability-group">
-                              <div className="management-capability-group-header">
-                                <h4>{groupName}</h4>
-                                <span
-                                  className={`management-status-badge ${getCapabilityTone(groupName)}`}
-                                >
-                                  {capabilities.length} 项
-                                </span>
-                              </div>
+                      <ul className="management-capability-list">
+                        {preferredCapabilities.map((capability) => {
+                          const capabilityKey = getCapabilityKey(capability);
+                          const isActive = capabilityKey === selectedCapabilityKey;
 
-                              <ul className="management-capability-list">
-                                {capabilities.map((capability) => {
-                                  const capabilityKey = getCapabilityKey(capability);
-                                  const isActive = capabilityKey === selectedCapabilityKey;
-
-                                  return (
-                                    <li key={capabilityKey}>
-                                      <button
-                                        className={`management-capability-card mcp-capability-button${isActive ? " mcp-capability-button-active" : ""}`}
-                                        type="button"
-                                        onClick={() => handleSelectCapability(capabilityKey)}
-                                      >
-                                        <div className="management-list-card-header">
-                                          <strong className="management-list-title">
-                                            {capability.title ?? capability.name}
-                                          </strong>
-                                          <span
-                                            className={`management-status-badge ${getCapabilityTone(capability.kind)}`}
-                                          >
-                                            {capability.kind}
-                                          </span>
-                                        </div>
-                                        <p className="management-list-copy">
-                                          {capability.description ?? "暂无描述。"}
-                                        </p>
-                                      </button>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </div>
-                          ),
-                        )}
-                      </div>
+                          return (
+                            <li key={capabilityKey}>
+                              <button
+                                className={`management-capability-card mcp-capability-button${isActive ? " mcp-capability-button-active" : ""}`}
+                                type="button"
+                                onClick={() => handleSelectCapability(capabilityKey)}
+                              >
+                                <strong className="management-list-title">{capability.name}</strong>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     )}
                   </section>
 
-                  {selectedCapability ? (
+                  {selectedCapability?.kind === "tool" ? (
                     <section className="management-section-card management-section-card-compact">
                       <div className="management-section-header">
-                        <h4 className="management-section-title">能力详情</h4>
-                        <div className="action-row">
-                          <span
-                            className={`management-status-badge ${getCapabilityTone(selectedCapability.kind)}`}
-                          >
-                            {selectedCapability.kind}
-                          </span>
-                          <span className="management-status-badge tone-neutral">
-                            {hasCapabilityInputSchema(selectedCapability)
-                              ? "有输入 Schema"
-                              : "无输入 Schema"}
-                          </span>
-                        </div>
+                        <h4 className="management-section-title">调用工具</h4>
                       </div>
 
-                      <div className="management-detail-copy">
-                        <strong className="management-list-title">
-                          {getCapabilityDisplayName(selectedCapability)}
-                        </strong>
-                        {selectedCapability.title &&
-                        selectedCapability.title.trim() !== selectedCapability.name ? (
-                          <p className="management-list-copy">标识：{selectedCapability.name}</p>
-                        ) : null}
+                      <label className="field-label">
+                        参数 JSON
+                        <textarea
+                          className="field-textarea"
+                          value={toolArgumentsText}
+                          onChange={(event) => setToolArgumentsText(event.target.value)}
+                          placeholder='{"path": "README.md"}'
+                        />
+                      </label>
+
+                      {toolArgumentsError ? (
+                        <div className="management-error-banner">{toolArgumentsError}</div>
+                      ) : null}
+
+                      <div className="management-action-row">
+                        <button
+                          className="button button-primary"
+                          type="button"
+                          disabled={invokeMutation.isPending}
+                          onClick={() => {
+                            if (!activeServer) {
+                              return;
+                            }
+
+                            setToolArgumentsError(null);
+                            void invokeMutation.mutateAsync({
+                              server: activeServer,
+                              capability: selectedCapability,
+                            });
+                          }}
+                        >
+                          {invokeMutation.isPending ? "调用中" : "执行工具"}
+                        </button>
                       </div>
 
-                      {selectedCapability.description ? (
-                        <p className="management-unified-description">
-                          {selectedCapability.description}
-                        </p>
-                      ) : null}
-                      {selectedCapability.uri ? (
+                      {invokeResult ? (
                         <div className="management-subcard">
-                          <span className="management-info-label">URI</span>
-                          <pre className="management-code-block">{selectedCapability.uri}</pre>
-                        </div>
-                      ) : null}
-                      {Object.keys(selectedCapability.input_schema).length > 0 ? (
-                        <div className="management-subcard">
-                          <span className="management-info-label">输入 Schema</span>
+                          <span className="management-info-label">调用结果</span>
                           <pre className="management-code-block">
-                            {stringifyJson(selectedCapability.input_schema)}
+                            {stringifyJson(invokeResult.result)}
                           </pre>
-                        </div>
-                      ) : null}
-                      {Object.keys(selectedCapability.metadata).length > 0 ? (
-                        <div className="management-subcard">
-                          <span className="management-info-label">Metadata</span>
-                          <pre className="management-code-block">
-                            {stringifyJson(selectedCapability.metadata)}
-                          </pre>
-                        </div>
-                      ) : null}
-                      {Object.keys(selectedCapability.raw_payload).length > 0 ? (
-                        <div className="management-subcard">
-                          <span className="management-info-label">原始 Payload</span>
-                          <pre className="management-code-block">
-                            {stringifyJson(selectedCapability.raw_payload)}
-                          </pre>
-                        </div>
-                      ) : null}
-
-                      {selectedCapability.kind === "tool" ? (
-                        <div className="management-subcard">
-                          <div className="management-section-header">
-                            <h4 className="management-section-title">调用工具</h4>
-                          </div>
-
-                          <label className="field-label">
-                            参数 JSON
-                            <textarea
-                              className="field-textarea"
-                              value={toolArgumentsText}
-                              onChange={(event) => setToolArgumentsText(event.target.value)}
-                              placeholder='{"path": "README.md"}'
-                            />
-                          </label>
-
-                          {toolArgumentsError ? (
-                            <div className="management-error-banner">{toolArgumentsError}</div>
-                          ) : null}
-
-                          <div className="management-action-row">
-                            <button
-                              className="button button-primary"
-                              type="button"
-                              disabled={invokeMutation.isPending}
-                              onClick={() => {
-                                if (!activeServer) {
-                                  return;
-                                }
-
-                                setToolArgumentsError(null);
-                                void invokeMutation.mutateAsync({
-                                  server: activeServer,
-                                  capability: selectedCapability,
-                                });
-                              }}
-                            >
-                              {invokeMutation.isPending ? "调用中" : "执行工具"}
-                            </button>
-                          </div>
-
-                          {invokeResult ? (
-                            <div className="management-subcard">
-                              <span className="management-info-label">调用结果</span>
-                              <pre className="management-code-block">
-                                {stringifyJson(invokeResult.result)}
-                              </pre>
-                            </div>
-                          ) : null}
                         </div>
                       ) : null}
                     </section>

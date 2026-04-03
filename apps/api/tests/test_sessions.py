@@ -594,7 +594,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                 if callbacks.is_cancelled is not None and callbacks.is_cancelled():
                     raise asyncio.CancelledError
                 await callbacks.on_text_delta(chunk)
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.15)
             return f"{content}-done"
 
     original_override = app.dependency_overrides[get_chat_runtime]

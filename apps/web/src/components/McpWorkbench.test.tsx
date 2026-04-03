@@ -226,13 +226,13 @@ describe("McpWorkbench", () => {
     });
   });
 
-  it("renders richer server cards with per-kind counts and top summary totals", async () => {
+  it("renders server cards without the removed top summary section", async () => {
     renderWorkbench();
 
     await screen.findByText("服务器总览");
 
-    expect(screen.getByText("已启用 1 · 已连接 1")).toBeInTheDocument();
-    expect(screen.getAllByText("模板 1").length).toBeGreaterThan(0);
+    expect(screen.queryByText("总览")).not.toBeInTheDocument();
+    expect(screen.queryByText("已启用 1 · 已连接 1")).not.toBeInTheDocument();
 
     const alphaCard = screen.getByText("alpha-server").closest("article");
     expect(alphaCard).not.toBeNull();
@@ -258,21 +258,25 @@ describe("McpWorkbench", () => {
     await user.click(screen.getByRole("tab", { name: /工具/i }));
 
     expect(screen.getByText("全部工具")).toBeInTheDocument();
-    expect(screen.getByText("主机扫描")).toBeInTheDocument();
-    expect(screen.getByText("日志采集")).toBeInTheDocument();
-    expect(screen.getByText("报告下发")).toBeInTheDocument();
+    expect(screen.getByText("scan_hosts")).toBeInTheDocument();
+    expect(screen.getByText("collect_logs")).toBeInTheDocument();
+    expect(screen.getByText("deploy_report")).toBeInTheDocument();
     expect(screen.getByText("beta-server")).toBeInTheDocument();
     expect(screen.getByText("导入缺失")).toBeInTheDocument();
+    expect(screen.queryByText("主机扫描")).not.toBeInTheDocument();
+    expect(screen.queryByText("扫描目标主机")).not.toBeInTheDocument();
+    expect(screen.queryByText("发送报告到目标系统")).not.toBeInTheDocument();
+    expect(document.querySelector(".mcp-flat-meta-grid")).toBeNull();
     expect(screen.queryByText("D:/configs/second-config.json")).not.toBeInTheDocument();
 
     await user.clear(screen.getByRole("searchbox"));
     await user.type(screen.getByRole("searchbox"), "second-config.json");
 
     await waitFor(() => {
-      expect(screen.queryByText("主机扫描")).not.toBeInTheDocument();
+      expect(screen.queryByText("scan_hosts")).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText("报告下发")).toBeInTheDocument();
+    expect(screen.getByText("deploy_report")).toBeInTheDocument();
     expect(screen.getByText("beta-server")).toBeInTheDocument();
     expect(screen.queryByText("D:/configs/second-config.json")).not.toBeInTheDocument();
   });
@@ -285,7 +289,7 @@ describe("McpWorkbench", () => {
 
     await user.click(screen.getByRole("tab", { name: /工具/i }));
 
-    const deployCard = screen.getByText("报告下发").closest("article");
+    const deployCard = screen.getByText("deploy_report").closest("article");
     expect(deployCard).not.toBeNull();
 
     await user.click(within(deployCard!).getByRole("button", { name: "查看并调用" }));
@@ -296,12 +300,16 @@ describe("McpWorkbench", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "beta-server 详情" });
 
-    expect(within(dialog).getByText("导入缺失")).toBeInTheDocument();
     expect(within(dialog).getByText(STALE_SERVER_COPY)).toBeInTheDocument();
     expect(within(dialog).queryByText(IMPORT_MISSING_ERROR)).not.toBeInTheDocument();
-    expect(within(dialog).getAllByText("报告下发").length).toBeGreaterThan(0);
-    expect(within(dialog).getByText("标识：deploy_report")).toBeInTheDocument();
-    expect(within(dialog).getByText("报告模板")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "deploy_report" })).toBeInTheDocument();
+    expect(within(dialog).queryByText("能力详情")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("输入 Schema")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Metadata")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("原始 Payload")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("发送报告到目标系统")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("报告模板")).not.toBeInTheDocument();
+    expect(dialog.querySelector(".management-info-grid")).toBeNull();
     expect(within(dialog).getByRole("button", { name: "执行工具" })).toBeInTheDocument();
   });
 

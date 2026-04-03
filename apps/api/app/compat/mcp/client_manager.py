@@ -64,12 +64,22 @@ class MCPClientManager:
         return MCPHealthCheckResult(status="ok", latency_ms=latency_ms, error=None)
 
     @staticmethod
-    def error_message(exc: Exception) -> str:
+    def error_message(exc: BaseException) -> str:
         if isinstance(exc, MCPClientOperationError):
             return str(exc)
 
+        messages = MCPClientManager._flatten_exception_messages(exc)
+        if messages:
+            detail = MCPClientManager._compact_error_detail("; ".join(messages))
+            if detail:
+                return detail
+
         detail = MCPClientManager._compact_error_detail(str(exc))
-        return detail or "MCP operation failed."
+        return (
+            detail
+            if detail and not MCPClientManager._is_wrapper_only_message(detail)
+            else "MCP operation failed."
+        )
 
     async def _run_operation(
         self,
@@ -77,24 +87,30 @@ class MCPClientManager:
         operation_name: str,
         operation: Callable[[Any], Awaitable[_T]],
     ) -> _T:
-        try:
-            return await self._with_session(server, operation)
-        except MCPClientOperationError:
-            raise
-        except Exception as exc:
-            raise MCPClientOperationError(
-                self._format_operation_error(server, operation_name, exc)
-            ) from exc
+        return await self._with_session(server, operation_name, operation)
 
     async def _with_session(
         self,
         server: ImportedMCPServer,
+        operation_name: str,
         operation: Callable[[Any], Awaitable[_T]],
     ) -> _T:
-        async with AsyncExitStack() as exit_stack:
-            session = await self._open_session(server, exit_stack)
-            await self._initialize(session)
-            return await operation(session)
+        phase = "open"
+        try:
+            async with AsyncExitStack() as exit_stack:
+                session = await self._open_session(server, exit_stack)
+                phase = "initialize"
+                await self._initialize(session)
+                phase = "operation"
+                result = await operation(session)
+                phase = "close"
+                return result
+        except MCPClientOperationError:
+            raise
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt | SystemExit):
+                raise
+            raise self._normalize_mcp_exception(server, operation_name, phase, exc) from exc
 
     async def _open_session(self, server: ImportedMCPServer, exit_stack: AsyncExitStack) -> Any:
         if server.transport == MCPTransport.STDIO:
@@ -162,11 +178,31 @@ class MCPClientManager:
 
     async def _discover_capabilities(self, session: Any) -> list[DiscoveredMCPCapability]:
         capabilities: list[DiscoveredMCPCapability] = []
-        capabilities.extend(await self._discover_tools(session))
-        capabilities.extend(await self._discover_resources(session))
-        capabilities.extend(await self._discover_resource_templates(session))
-        capabilities.extend(await self._discover_prompts(session))
+        capabilities.extend(
+            await self._discover_optional_capabilities(session, self._discover_tools)
+        )
+        capabilities.extend(
+            await self._discover_optional_capabilities(session, self._discover_resources)
+        )
+        capabilities.extend(
+            await self._discover_optional_capabilities(session, self._discover_resource_templates)
+        )
+        capabilities.extend(
+            await self._discover_optional_capabilities(session, self._discover_prompts)
+        )
         return capabilities
+
+    async def _discover_optional_capabilities(
+        self,
+        session: Any,
+        discover: Callable[[Any], Awaitable[list[DiscoveredMCPCapability]]],
+    ) -> list[DiscoveredMCPCapability]:
+        try:
+            return await discover(session)
+        except Exception as exc:
+            if self._is_method_not_found_exception(exc):
+                return []
+            raise
 
     async def _discover_tools(self, session: Any) -> list[DiscoveredMCPCapability]:
         result = await session.list_tools()
@@ -300,16 +336,71 @@ class MCPClientManager:
         return value if isinstance(value, str) else str(value)
 
     @classmethod
-    def _format_operation_error(
+    def _flatten_exception_messages(cls, exc: BaseException) -> list[str]:
+        messages: list[str] = []
+        if isinstance(exc, BaseExceptionGroup):
+            for nested in exc.exceptions:
+                messages.extend(cls._flatten_exception_messages(nested))
+
+        detail = cls._compact_error_detail(str(exc))
+        if detail and not cls._is_wrapper_only_message(detail):
+            messages.append(detail)
+
+        deduplicated: list[str] = []
+        for message in messages:
+            if message not in deduplicated:
+                deduplicated.append(message)
+        return deduplicated
+
+    @classmethod
+    def _is_method_not_found_exception(cls, exc: BaseException) -> bool:
+        messages = cls._flatten_exception_messages(exc)
+        if not messages:
+            detail = cls._compact_error_detail(str(exc))
+            messages = [detail] if detail else []
+        return any("method not found" in message.lower() for message in messages)
+
+    @classmethod
+    def _normalize_mcp_exception(
         cls,
         server: ImportedMCPServer,
         operation_name: str,
-        exc: Exception,
-    ) -> str:
-        detail = cls._compact_error_detail(str(exc))
+        phase: str,
+        exc: BaseException,
+    ) -> RuntimeError:
+        messages = cls._flatten_exception_messages(exc)
+        detail = cls._compact_error_detail("; ".join(messages)) if messages else ""
         if not detail:
-            return f"MCP server '{server.name}' failed to {operation_name}."
-        return f"MCP server '{server.name}' failed to {operation_name}: {detail}"
+            detail = cls._fallback_error_detail(server, operation_name, phase)
+        return MCPClientOperationError(
+            f"{cls._operation_error_prefix(server, operation_name)}: {detail}"
+        )
+
+    @classmethod
+    def _operation_error_prefix(cls, server: ImportedMCPServer, operation_name: str) -> str:
+        if operation_name == "check health":
+            return f"MCP server '{server.name}' failed health check"
+        return f"MCP server '{server.name}' failed to {operation_name}"
+
+    @classmethod
+    def _fallback_error_detail(
+        cls,
+        server: ImportedMCPServer,
+        operation_name: str,
+        phase: str,
+    ) -> str:
+        if server.transport == MCPTransport.STDIO and phase == "initialize":
+            return f"MCP stdio server '{server.name}' failed to initialize."
+        if server.transport == MCPTransport.STDIO and operation_name == "discover capabilities":
+            return (
+                f"MCP stdio server '{server.name}' exited unexpectedly during capability discovery."
+            )
+        return f"MCP server '{server.name}' process exited unexpectedly."
+
+    @staticmethod
+    def _is_wrapper_only_message(detail: str) -> bool:
+        lowered = detail.lower()
+        return lowered == "generatorexit" or lowered.startswith("unhandled errors in a taskgroup")
 
     @staticmethod
     def _compact_error_detail(detail: str) -> str:

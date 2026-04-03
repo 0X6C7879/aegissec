@@ -752,7 +752,8 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
         assert third_server["imported_at"] == first_imported_at
 
         fake_manager.discover_failures["open-local"] = RuntimeError(
-            "MCP server 'open-local' failed to discover capabilities: discover boom"
+            "MCP server 'open-local' failed to discover capabilities: "
+            "MCP stdio server 'open-local' exited unexpectedly during capability discovery."
         )
 
         fourth_import = client.post("/api/mcp/import")
@@ -763,11 +764,13 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
         assert fourth_server["status"] == MCPServerStatus.ERROR
         assert (
             fourth_server["last_error"]
-            == "MCP server 'open-local' failed to discover capabilities: discover boom"
+            == "MCP server 'open-local' failed to discover capabilities: "
+            "MCP stdio server 'open-local' exited unexpectedly during capability discovery."
         )
         assert (
             fourth_server["health_error"]
-            == "MCP server 'open-local' failed to discover capabilities: discover boom"
+            == "MCP server 'open-local' failed to discover capabilities: "
+            "MCP stdio server 'open-local' exited unexpectedly during capability discovery."
         )
         assert fourth_server["capabilities"][0]["name"] == "collect"
         assert fourth_server["imported_at"] == first_imported_at
@@ -918,7 +921,8 @@ def test_mcp_invoke_upstream_failure_preserves_error_and_health_updates(client: 
         }
     )
     fake_manager.tool_failures[("manual-demo", "manual_tool")] = RuntimeError(
-        "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+        "MCP server 'manual-demo' failed to call tool 'manual_tool': "
+        "MCP server 'manual-demo' process exited unexpectedly."
     )
     app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
 
@@ -942,7 +946,8 @@ def test_mcp_invoke_upstream_failure_preserves_error_and_health_updates(client: 
         assert invoke_response.status_code == 502
         assert (
             api_data(invoke_response)["detail"]
-            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': "
+            "MCP server 'manual-demo' process exited unexpectedly."
         )
 
         server_detail = client.get(f"/api/mcp/servers/{server_id}")
@@ -951,12 +956,14 @@ def test_mcp_invoke_upstream_failure_preserves_error_and_health_updates(client: 
         assert detail_payload["status"] == MCPServerStatus.ERROR
         assert (
             detail_payload["last_error"]
-            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': "
+            "MCP server 'manual-demo' process exited unexpectedly."
         )
         assert detail_payload["health_status"] == "error"
         assert (
             detail_payload["health_error"]
-            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': "
+            "MCP server 'manual-demo' process exited unexpectedly."
         )
     finally:
         app.dependency_overrides.pop(get_mcp_client_manager, None)

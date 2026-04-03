@@ -168,6 +168,25 @@ class _CallToolFailingSession(_FakeSession):
         raise RuntimeError("upstream boom\nextra detail")
 
 
+class _GroupedDiscoverFailingSession(_FakeSession):
+    async def list_tools(self) -> object:
+        raise BaseExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [RuntimeError("tool listing exploded"), GeneratorExit()],
+        )
+
+
+class _PartiallySupportedSession(_FakeSession):
+    async def list_resources(self) -> object:
+        raise RuntimeError("Method not found")
+
+    async def list_resource_templates(self) -> object:
+        raise RuntimeError("Method not found")
+
+    async def list_prompts(self) -> object:
+        raise RuntimeError("Method not found")
+
+
 @pytest.mark.anyio
 async def test_discover_stdio_server_initializes_session_and_maps_capabilities(
     monkeypatch: pytest.MonkeyPatch,
@@ -494,10 +513,154 @@ async def test_check_health_normalizes_transport_failures(monkeypatch: pytest.Mo
     result = await manager.check_health(server)
 
     assert result.status == "error"
-    assert result.error == (
-        "MCP server 'health-server' failed to check health: launch boom stack trace detail"
+    assert (
+        result.error
+        == "MCP server 'health-server' failed health check: launch boom stack trace detail"
     )
     assert isinstance(result.latency_ms, int)
+
+
+@pytest.mark.anyio
+async def test_discover_strips_taskgroup_wrapper_text_from_base_exception_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _GroupedDiscoverFailingSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+
+    def fake_client_session(
+        read_stream: object, write_stream: object
+    ) -> _GroupedDiscoverFailingSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="group-server",
+        name="group-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.discover(server)
+
+    message = str(exc_info.value)
+    assert message == (
+        "MCP server 'group-server' failed to discover capabilities: tool listing exploded"
+    )
+    assert "unhandled errors in a TaskGroup" not in message
+    assert "GeneratorExit" not in message
+
+
+@pytest.mark.anyio
+async def test_discover_uses_readable_fallback_for_cleanup_wrapper_only_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+        raise BaseExceptionGroup("unhandled errors in a TaskGroup", [GeneratorExit()])
+
+    def fake_client_session(read_stream: object, write_stream: object) -> _FakeSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="cleanup-server",
+        name="cleanup-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.discover(server)
+
+    assert str(exc_info.value) == (
+        "MCP server 'cleanup-server' failed to discover capabilities: "
+        "MCP stdio server 'cleanup-server' exited unexpectedly during capability discovery."
+    )
+
+
+@pytest.mark.anyio
+async def test_discover_ignores_unsupported_capability_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PartiallySupportedSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+
+    def fake_client_session(
+        read_stream: object, write_stream: object
+    ) -> _PartiallySupportedSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="partial-server",
+        name="partial-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    capabilities = await manager.discover(server)
+
+    assert [capability.kind for capability in capabilities] == [MCPCapabilityKind.TOOL]
+    assert capabilities[0].name == "scan"
+    assert session.closed is True
+
+
+def test_error_message_flattens_raw_taskgroup_wrappers() -> None:
+    exc = BaseExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [RuntimeError("real child failure"), GeneratorExit()],
+    )
+
+    assert MCPClientManager.error_message(exc) == "real child failure"
 
 
 @pytest.mark.anyio
