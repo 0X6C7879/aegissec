@@ -100,10 +100,28 @@ _VISIBLE_TRANSCRIPT_NOISE_PATTERNS = [
     re.compile(r"^已列出当前可用技能。$", re.IGNORECASE),
     re.compile(r"^已读取\s+.+\s+的技能内容。$", re.IGNORECASE),
 ]
-_CTF_WEB_AUTOROUTE_SIGNAL_RE = re.compile(
-    r"(\bctf\b.*\bweb\b|\bweb\b.*\bctf\b|sql\s*注入|\bsqli\b|\bxss\b|文件包含|登录绕过|login\s*bypass|buuoj|node\d+\.buuoj\.cn)",
-    re.IGNORECASE,
-)
+_SKILL_AUTOROUTE_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", re.IGNORECASE)
+_SKILL_AUTOROUTE_SEPARATOR_RE = re.compile(r"[\s_\-./\\]+")
+_SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "helper",
+    "into",
+    "of",
+    "or",
+    "skill",
+    "the",
+    "to",
+    "tool",
+    "use",
+    "when",
+    "with",
+}
+_SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE = 70
+_SKILL_AUTOROUTE_MARGIN = 10
 CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
@@ -561,10 +579,13 @@ async def _publish_assistant_trace(
     )
     trace_state = str(sanitized_entry.get("state") or "")
     visible_trace_summary = _infer_trace_summary(sanitized_entry)
-    if trace_state.startswith("generation.") and visible_trace_summary:
+    should_append_trace_segment = (
+        trace_state.startswith("generation.") or trace_state.startswith("skill.autoroute.")
+    ) and bool(visible_trace_summary)
+    if should_append_trace_segment:
         transcript_kind = (
             AssistantTranscriptSegmentKind.ERROR
-            if trace_state == "generation.failed"
+            if trace_state in {"generation.failed", "skill.autoroute.failed"}
             else AssistantTranscriptSegmentKind.STATUS
         )
         _append_transcript_segment(
@@ -584,7 +605,7 @@ async def _publish_assistant_trace(
             payload=payload,
         )
     )
-    if trace_state.startswith("generation.") and visible_trace_summary:
+    if should_append_trace_segment:
         await _publish_message_event(
             event_broker,
             event_type=SessionEventType.MESSAGE_UPDATED,
@@ -813,6 +834,8 @@ def _infer_trace_phase(entry: dict[str, object]) -> str:
         return "failed"
     if state == "generation.started":
         return "planning"
+    if state.startswith("skill.autoroute"):
+        return "failed" if state == "skill.autoroute.failed" else "planning"
     if state == "tool.started":
         return "tool_running"
     if state in {"tool.finished", "tool.failed"}:
@@ -824,11 +847,15 @@ def _infer_trace_status(entry: dict[str, object]) -> str:
     state = str(entry.get("state") or "")
     if state in {"generation.completed", "tool.finished", "summary.updated"}:
         return "completed"
+    if state in {"skill.autoroute.selected", "skill.autoroute.skipped"}:
+        return "completed"
     if state in {"generation.failed", "tool.failed"}:
+        return "failed"
+    if state == "skill.autoroute.failed":
         return "failed"
     if state == "generation.cancelled":
         return "cancelled"
-    if state in {"generation.started", "tool.started"}:
+    if state in {"generation.started", "tool.started", "skill.autoroute.started"}:
         return "running"
     return "completed"
 
@@ -841,11 +868,11 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
     tool_name = entry.get("tool")
     tool_display = str(tool_name) if isinstance(tool_name, str) and tool_name else "tool"
     if state == "generation.started":
-        return None
+        return "开始生成回复"
     if state == "generation.completed":
-        return None
+        return "本轮生成已完成"
     if state == "generation.cancelled":
-        return None
+        return "当前生成已停止"
     if state == "generation.failed":
         error_value = entry.get("error")
         return (
@@ -862,6 +889,26 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
         if isinstance(error_value, str) and error_value:
             return error_value
         return f"{tool_display} failed."
+    if state == "skill.autoroute.started":
+        return "正在评估可预载技能"
+    if state == "skill.autoroute.selected":
+        skill_name = entry.get("skill")
+        if isinstance(skill_name, str) and skill_name:
+            return f"已自动选择技能：{skill_name}"
+        return "已自动选择技能"
+    if state == "skill.autoroute.skipped":
+        reason = entry.get("reason")
+        if isinstance(reason, str) and reason:
+            return f"未自动预载技能：{reason}"
+        return "未自动预载技能"
+    if state == "skill.autoroute.failed":
+        summary_value = entry.get("summary")
+        if isinstance(summary_value, str) and summary_value:
+            return summary_value
+        error_value = entry.get("error")
+        if isinstance(error_value, str) and error_value:
+            return f"自动预载技能失败：{error_value}"
+        return "自动预载技能失败"
     return None
 
 
@@ -884,24 +931,151 @@ def _find_sibling_version_group_id(
     return None
 
 
-def _find_ctf_web_skill_identifier(available_skills: list[Any]) -> str | None:
-    for skill in available_skills:
-        directory_name = getattr(skill, "directory_name", None)
-        if isinstance(directory_name, str) and directory_name.strip().lower() == "ctf-web":
-            return directory_name.strip()
-
-        skill_name = getattr(skill, "name", None)
-        if isinstance(skill_name, str) and skill_name.strip().lower() == "ctf-web":
-            return skill_name.strip()
-
-    return None
+def _normalize_skill_autoroute_text(content: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        _SKILL_AUTOROUTE_SEPARATOR_RE.sub(" ", content.casefold()),
+    ).strip()
 
 
-def _should_autoroute_ctf_web(*, latest_message_text: str, recent_context_text: str) -> bool:
+def _extract_skill_autoroute_tokens(
+    content: str,
+    *,
+    filter_description_stop_tokens: bool,
+) -> list[str]:
+    tokens: list[str] = []
+    for token in _SKILL_AUTOROUTE_TOKEN_RE.findall(_normalize_skill_autoroute_text(content)):
+        normalized_token = token.casefold()
+        if normalized_token.isascii() and len(normalized_token) < 2:
+            continue
+        if (
+            filter_description_stop_tokens
+            and normalized_token in _SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS
+        ):
+            continue
+        tokens.append(normalized_token)
+    return tokens
+
+
+def _skill_autoroute_display_name(skill: Any) -> str:
+    directory_name = getattr(skill, "directory_name", None)
+    if isinstance(directory_name, str) and directory_name.strip():
+        return directory_name.strip()
+    name = getattr(skill, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return "unknown-skill"
+
+
+def _skill_autoroute_aliases(skill: Any) -> list[str]:
+    aliases: list[str] = []
+    for raw_value in (getattr(skill, "directory_name", None), getattr(skill, "name", None)):
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            continue
+        normalized_value = _normalize_skill_autoroute_text(raw_value)
+        if normalized_value and normalized_value not in aliases:
+            aliases.append(normalized_value)
+    return aliases
+
+
+def _skill_autoroute_identifier(skill: Any) -> str:
+    directory_name = getattr(skill, "directory_name", None)
+    if isinstance(directory_name, str) and directory_name.strip():
+        return directory_name.strip()
+    return _skill_autoroute_display_name(skill)
+
+
+def _score_skill_for_autoroute(
+    *,
+    skill: Any,
+    normalized_context: str,
+    context_tokens: set[str],
+) -> tuple[int, str]:
+    aliases = _skill_autoroute_aliases(skill)
+    exact_alias_matches = [
+        alias for alias in aliases if alias and f" {alias} " in f" {normalized_context} "
+    ]
+    if exact_alias_matches:
+        return 100, f"matched explicit skill alias '{exact_alias_matches[0]}'"
+
+    alias_token_matches: list[tuple[str, list[str]]] = []
+    for alias in aliases:
+        alias_tokens = _extract_skill_autoroute_tokens(
+            alias,
+            filter_description_stop_tokens=False,
+        )
+        if alias_tokens and all(token in context_tokens for token in alias_tokens):
+            alias_token_matches.append((alias, alias_tokens))
+    if alias_token_matches:
+        alias, alias_tokens = max(alias_token_matches, key=lambda item: len(item[1]))
+        return 70 + len(alias_tokens), f"matched alias tokens '{alias}'"
+
+    description = getattr(skill, "description", None)
+    if isinstance(description, str) and description.strip():
+        description_tokens = _extract_skill_autoroute_tokens(
+            description,
+            filter_description_stop_tokens=True,
+        )
+        overlap = [token for token in description_tokens if token in context_tokens]
+        if len(overlap) >= 2:
+            overlap_preview = ", ".join(overlap[:3])
+            return 30 + len(overlap) * 5, f"description overlap: {overlap_preview}"
+
+    return 0, ""
+
+
+def _resolve_autorouted_skill_candidate(
+    *,
+    available_skills: list[Any],
+    latest_message_text: str,
+    recent_context_text: str,
+) -> tuple[Any | None, str]:
+    if not available_skills:
+        return None, "当前没有可用技能"
+
     combined_context = "\n".join(
         part for part in [latest_message_text, recent_context_text] if part.strip()
     )
-    return bool(_CTF_WEB_AUTOROUTE_SIGNAL_RE.search(combined_context))
+    normalized_context = _normalize_skill_autoroute_text(combined_context)
+    context_tokens = set(
+        _extract_skill_autoroute_tokens(
+            combined_context,
+            filter_description_stop_tokens=False,
+        )
+    )
+    if not normalized_context and not context_tokens:
+        return None, "当前消息没有可用于技能路由的上下文"
+
+    scored_candidates: list[tuple[int, str, Any, str]] = []
+    for skill in available_skills:
+        score, reason = _score_skill_for_autoroute(
+            skill=skill,
+            normalized_context=normalized_context,
+            context_tokens=context_tokens,
+        )
+        if score <= 0:
+            continue
+        scored_candidates.append((score, _skill_autoroute_display_name(skill), skill, reason))
+
+    if not scored_candidates:
+        return None, "没有高置信技能匹配"
+
+    scored_candidates.sort(key=lambda item: (-item[0], item[1]))
+    top_score, top_name, top_skill, top_reason = scored_candidates[0]
+    runner_up = scored_candidates[1] if len(scored_candidates) > 1 else None
+
+    if top_score < _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE:
+        return None, "没有高置信技能匹配"
+
+    if runner_up is not None:
+        runner_up_score, runner_up_name, _, _ = runner_up
+        if runner_up_score >= _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE and (
+            top_score - runner_up_score < _SKILL_AUTOROUTE_MARGIN
+        ):
+            return None, f"存在多个高置信技能候选（{top_name}, {runner_up_name}）"
+
+    return top_skill, top_reason
 
 
 async def _build_autorouted_skill_context(
@@ -910,17 +1084,21 @@ async def _build_autorouted_skill_context(
     latest_message_text: str,
     recent_context_text: str,
     execute_tool: Any,
-) -> str | None:
-    if not _should_autoroute_ctf_web(
+) -> tuple[str | None, dict[str, object]]:
+    selected_skill, route_reason = _resolve_autorouted_skill_candidate(
+        available_skills=available_skills,
         latest_message_text=latest_message_text,
         recent_context_text=recent_context_text,
-    ):
-        return None
+    )
+    if selected_skill is None:
+        return None, {
+            "state": "skill.autoroute.skipped",
+            "summary": f"未自动预载技能：{route_reason}",
+            "reason": route_reason,
+        }
 
-    skill_identifier = _find_ctf_web_skill_identifier(available_skills)
-    if skill_identifier is None:
-        return None
-
+    skill_identifier = _skill_autoroute_identifier(selected_skill)
+    skill_display_name = _skill_autoroute_display_name(selected_skill)
     try:
         tool_result = await execute_tool(
             ToolCallRequest(
@@ -929,18 +1107,29 @@ async def _build_autorouted_skill_context(
                 arguments={"skill_name_or_id": skill_identifier},
             )
         )
-    except ChatRuntimeError:
-        return None
+    except ChatRuntimeError as exc:
+        return None, {
+            "state": "skill.autoroute.failed",
+            "summary": f"自动预载技能失败：{skill_display_name}（{exc}）",
+            "skill": skill_display_name,
+            "reason": route_reason,
+            "error": str(exc),
+        }
 
     skill_payload = tool_result.payload.get("skill")
     if not isinstance(skill_payload, dict):
-        return f"## Auto-selected skill: {skill_identifier}"
+        return f"## Auto-selected skill: {skill_display_name}", {
+            "state": "skill.autoroute.selected",
+            "summary": f"已自动选择技能：{skill_display_name}",
+            "skill": skill_display_name,
+            "reason": route_reason,
+        }
 
     directory_name = skill_payload.get("directory_name")
     resolved_skill_name = (
         str(directory_name).strip()
         if isinstance(directory_name, str) and directory_name.strip()
-        else skill_identifier
+        else skill_display_name
     )
     description = skill_payload.get("description")
     content = skill_payload.get("content")
@@ -950,7 +1139,7 @@ async def _build_autorouted_skill_context(
 
     context_lines = [
         f"## Auto-selected skill: {resolved_skill_name}",
-        "Reason: recent context strongly indicates a web CTF / web exploit task.",
+        f"Reason: {route_reason}",
         "Use this preloaded skill guidance proactively before deciding on the next tool or answer.",
     ]
     if isinstance(description, str) and description.strip():
@@ -958,7 +1147,12 @@ async def _build_autorouted_skill_context(
     if truncated_content:
         context_lines.extend(["", truncated_content])
 
-    return "\n".join(context_lines)
+    return "\n".join(context_lines), {
+        "state": "skill.autoroute.selected",
+        "summary": f"已自动选择技能：{resolved_skill_name}",
+        "skill": resolved_skill_name,
+        "reason": route_reason,
+    }
 
 
 def _build_tool_executor(
@@ -1583,7 +1777,14 @@ async def _process_generation(
                 entry={"state": "generation.started", "generation_id": generation.id},
             )
 
-            autorouted_skill_context = await _build_autorouted_skill_context(
+            await _publish_assistant_trace(
+                repository,
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+                entry={"state": "skill.autoroute.started"},
+            )
+            autorouted_skill_context, autoroute_trace_entry = await _build_autorouted_skill_context(
                 available_skills=available_skills,
                 latest_message_text=latest_message_text,
                 recent_context_text="\n\n".join(
@@ -1592,6 +1793,13 @@ async def _process_generation(
                     if message.content.strip()
                 ),
                 execute_tool=execute_tool,
+            )
+            await _publish_assistant_trace(
+                repository,
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+                entry=autoroute_trace_entry,
             )
             if autorouted_skill_context:
                 skill_context_prompt = "\n\n".join(

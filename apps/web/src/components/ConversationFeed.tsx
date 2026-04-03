@@ -683,7 +683,11 @@ function buildTranscriptFromGeneration(
 
   if (
     generation.status !== "completed" &&
-    !segments.some((segment) => segment.kind === "status" || segment.kind === "error")
+    !segments.some(
+      (segment) =>
+        (segment.kind === "status" || segment.kind === "error") &&
+        normalizeForBoilerplateCheck(segment.text) !== null,
+    )
   ) {
     segments.push({
       id: `${generation.id}:status`,

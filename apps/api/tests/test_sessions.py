@@ -14,6 +14,7 @@ from sqlmodel import Session as DBSession
 from starlette.testclient import WebSocketDenialResponse
 
 from app.compat.skills.models import SkillScanRoot
+from app.compat.skills.service import SkillContentReadError
 from app.db.models import (
     CompatibilityScope,
     CompatibilitySource,
@@ -1448,7 +1449,11 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         status_segments = [segment for segment in transcript if segment["kind"] == "status"]
         output_segments = [segment for segment in transcript if segment["kind"] == "output"]
         assert reasoning_segments
-        assert not status_segments
+        status_texts = [segment["text"] for segment in status_segments]
+        assert "开始生成回复" in status_texts
+        assert "正在评估可预载技能" in status_texts
+        assert any(text.startswith("未自动预载技能：") for text in status_texts)
+        assert "本轮生成已完成" in status_texts
         assert output_segments
         assert reasoning_segments[-1]["text"] == "<think>private</think>"
         assert output_segments[-1]["text"] == "<think>very secret</think>最终答复"
@@ -1836,7 +1841,7 @@ Use when performing Active Directory pentest orchestration without using ADscan 
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
-def test_chat_autoroutes_ctf_web_skill_context_before_generation(
+def test_chat_autoroutes_docx_skill_context_on_exact_skill_mention(
     client: TestClient,
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -1846,6 +1851,14 @@ def test_chat_autoroutes_ctf_web_skill_context_before_generation(
         monkeypatch,
         tmp_path,
         {
+            "docx": """---
+name: docx
+description: Word document editing helper
+---
+# docx
+
+Create and edit Word documents.
+""",
             "ctf-web": """---
 name: ctf-web
 description: Web CTF exploitation playbook
@@ -1854,18 +1867,10 @@ description: Web CTF exploitation playbook
 
 Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass.
 """,
-            "docx": """---
-name: docx
-description: Document helper
----
-# docx
-
-Create and edit Word documents.
-""",
         },
     )
 
-    class AutoRouteSkillRuntime:
+    class GenericAutoRouteSkillRuntime:
         async def generate_reply(
             self,
             content: str,
@@ -1879,27 +1884,27 @@ Create and edit Word documents.
             del content, attachments, conversation_messages, execute_tool, callbacks
             assert available_skills is not None
             assert any(
-                getattr(skill, "directory_name", None) == "ctf-web"
-                or getattr(skill, "name", None) == "ctf-web"
+                getattr(skill, "directory_name", None) == "docx"
+                or getattr(skill, "name", None) == "docx"
                 for skill in available_skills
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill: ctf-web" in skill_context_prompt
-            assert "# ctf-web" in skill_context_prompt
-            return "已收到 ctf-web 自动技能上下文"
+            assert "Auto-selected skill: docx" in skill_context_prompt
+            assert "# docx" in skill_context_prompt
+            return "已收到 docx 自动技能上下文"
 
     original_override = app.dependency_overrides[get_chat_runtime]
-    app.dependency_overrides[get_chat_runtime] = lambda: AutoRouteSkillRuntime()
+    app.dependency_overrides[get_chat_runtime] = lambda: GenericAutoRouteSkillRuntime()
 
     try:
-        session_response = client.post("/api/sessions", json={"title": "CTF Web Autoroute"})
+        session_response = client.post("/api/sessions", json={"title": "Docx Autoroute"})
         session_id = api_data(session_response)["id"]
 
         with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
             chat_response = client.post(
                 f"/api/sessions/{session_id}/chat",
                 json={
-                    "content": "这个 web ctf 题的 node5.buuoj.cn 登录绕过和 xss 怎么看？",
+                    "content": "帮我整理这份 docx 文档并补齐格式",
                     "attachments": [],
                     "wait_for_completion": True,
                 },
@@ -1918,24 +1923,26 @@ Create and edit Word documents.
         assert any(event["type"] == "tool.call.finished" for event in events)
 
         transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        status_segments = [segment for segment in transcript if segment["kind"] == "status"]
         relevant_segments = [
             segment
             for segment in transcript
             if segment["kind"] in {"tool_call", "tool_result", "output"}
         ]
+        assert any(segment["text"] == "已自动选择技能：docx" for segment in status_segments)
         assert [segment["kind"] for segment in relevant_segments[:3]] == [
             "tool_call",
             "tool_result",
             "output",
         ]
         assert relevant_segments[0]["tool_name"] == "read_skill_content"
-        assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
-        assert chat_payload["assistant_message"]["content"] == "已收到 ctf-web 自动技能上下文"
+        assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "docx"
+        assert chat_payload["assistant_message"]["content"] == "已收到 docx 自动技能上下文"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
-def test_chat_does_not_autoroute_ctf_web_for_unrelated_prompt(
+def test_chat_autoroutes_ctf_web_skill_context_from_contextual_match(
     client: TestClient,
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -1953,10 +1960,18 @@ description: Web CTF exploitation playbook
 
 Focus on web-CTF workflows.
 """,
+            "docx": """---
+name: docx
+description: Word document helper
+---
+# docx
+
+Create and edit Word documents.
+""",
         },
     )
 
-    class NoAutoRouteSkillRuntime:
+    class ContextualCtfWebAutoRouteRuntime:
         async def generate_reply(
             self,
             content: str,
@@ -1976,27 +1991,234 @@ Focus on web-CTF workflows.
                 callbacks,
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill: ctf-web" not in skill_context_prompt
-            return "未自动选择技能"
+            assert "Auto-selected skill: ctf-web" in skill_context_prompt
+            assert "# ctf-web" in skill_context_prompt
+            return "已收到 ctf-web 自动技能上下文"
 
     original_override = app.dependency_overrides[get_chat_runtime]
-    app.dependency_overrides[get_chat_runtime] = lambda: NoAutoRouteSkillRuntime()
+    app.dependency_overrides[get_chat_runtime] = lambda: ContextualCtfWebAutoRouteRuntime()
 
     try:
-        session_response = client.post("/api/sessions", json={"title": "No Autoroute Session"})
+        session_response = client.post("/api/sessions", json={"title": "CTF Web Autoroute"})
         session_id = api_data(session_response)["id"]
 
-        chat_response = client.post(
-            f"/api/sessions/{session_id}/chat",
-            json={
-                "content": "帮我整理这份 docx 文档",
-                "attachments": [],
-                "wait_for_completion": True,
-            },
-        )
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "这个 web ctf 题的 node5.buuoj.cn 登录绕过和 xss 怎么看？",
+                    "attachments": [],
+                    "wait_for_completion": True,
+                },
+            )
 
-        assert chat_response.status_code == 200
-        assert api_data(chat_response)["assistant_message"]["content"] == "未自动选择技能"
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        assert any(event["type"] == "tool.call.started" for event in events)
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        status_segments = [segment for segment in transcript if segment["kind"] == "status"]
+        relevant_segments = [
+            segment
+            for segment in transcript
+            if segment["kind"] in {"tool_call", "tool_result", "output"}
+        ]
+        assert any(segment["text"] == "已自动选择技能：ctf-web" for segment in status_segments)
+        assert relevant_segments[0]["tool_name"] == "read_skill_content"
+        assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
+        assert chat_payload["assistant_message"]["content"] == "已收到 ctf-web 自动技能上下文"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_skips_autoroute_when_skill_match_is_ambiguous(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "docx-helper": """---
+name: docx helper
+description: Docx helper for editing templates
+---
+# docx-helper
+
+Use for docx helper workflows.
+""",
+            "helper-docx": """---
+name: helper docx
+description: Docx helper for editing templates
+---
+# helper-docx
+
+Use for docx helper workflows.
+""",
+        },
+    )
+
+    class AmbiguousAutoRouteRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                execute_tool,
+                callbacks,
+            )
+            assert skill_context_prompt is not None
+            assert "Auto-selected skill:" not in skill_context_prompt
+            return "保持手动选择"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: AmbiguousAutoRouteRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Ambiguous Autoroute"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "我需要 helper 和 docx 来整理模板",
+                    "attachments": [],
+                    "wait_for_completion": True,
+                },
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        assert not any(event["type"] == "tool.call.started" for event in events)
+        status_segments = [
+            segment
+            for segment in chat_payload["assistant_message"]["assistant_transcript"]
+            if segment["kind"] == "status"
+        ]
+        assert any(
+            "存在多个高置信技能候选" in (segment["text"] or "") for segment in status_segments
+        )
+        assert chat_payload["assistant_message"]["content"] == "保持手动选择"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_reports_autoroute_preload_failure_and_continues_generation(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "docx": """---
+name: docx
+description: Word document editing helper
+---
+# docx
+
+Create and edit Word documents.
+""",
+        },
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.SkillService.read_skill_content_by_name_or_directory_name",
+        lambda self, name_or_slug: (_ for _ in ()).throw(
+            SkillContentReadError(f"无法读取 {name_or_slug} 内容")
+        ),
+    )
+
+    class FailedAutoRouteRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                execute_tool,
+                callbacks,
+            )
+            assert skill_context_prompt is not None
+            assert "Auto-selected skill: docx" not in skill_context_prompt
+            return "继续普通流程"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: FailedAutoRouteRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Autoroute Failure"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "请处理这个 docx 文件",
+                    "attachments": [],
+                    "wait_for_completion": True,
+                },
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        assert any(event["type"] == "tool.call.started" for event in events)
+        assert any(event["type"] == "tool.call.failed" for event in events)
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        autoroute_feedback_segments = [
+            segment for segment in transcript if segment["kind"] in {"status", "error"}
+        ]
+        assert any(
+            "自动预载技能失败：docx" in (segment["text"] or "")
+            for segment in autoroute_feedback_segments
+        )
+        assert any(segment["kind"] == "error" for segment in transcript)
+        assert chat_payload["assistant_message"]["content"] == "继续普通流程"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

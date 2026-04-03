@@ -319,6 +319,37 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("最终建议在下一跳前重新确认权限。")).toBeInTheDocument();
   });
 
+  it("falls back to generation lifecycle text when status steps exist but carry no visible text", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "",
+            assistant_transcript: [],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            status: "running",
+            steps: [
+              buildStep({
+                status: "running",
+                phase: "planning",
+                safe_summary: "",
+                delta_text: "",
+              }),
+            ],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("正在持续更新当前回复。")).toBeInTheDocument();
+    expect(document.querySelectorAll(".assistant-status-note")).toHaveLength(1);
+  });
+
   it("uses a single icon-only inline edit control for user messages", () => {
     const onEditMessage = vi.fn(async () => undefined);
 
