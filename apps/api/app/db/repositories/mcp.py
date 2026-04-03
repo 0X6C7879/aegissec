@@ -3,7 +3,14 @@ from __future__ import annotations
 from sqlmodel import Session as DBSession
 from sqlmodel import col, select
 
-from app.db.models import MCPCapability, MCPServer
+from app.db.models import (
+    CompatibilitySource,
+    MCPCapability,
+    MCPServer,
+    MCPServerStatus,
+)
+
+STALE_IMPORTED_SERVER_ERROR = "Server not found in the latest MCP import."
 
 
 class MCPRepository:
@@ -45,6 +52,16 @@ class MCPRepository:
         existing_servers = self.list_servers()
         for existing_server in existing_servers:
             if existing_server.id not in imported_ids:
+                if existing_server.source == CompatibilitySource.LOCAL:
+                    continue
+
+                existing_server.enabled = False
+                existing_server.status = MCPServerStatus.INACTIVE
+                existing_server.last_error = STALE_IMPORTED_SERVER_ERROR
+                existing_server.health_status = "error"
+                existing_server.health_latency_ms = None
+                existing_server.health_error = STALE_IMPORTED_SERVER_ERROR
+                self.db_session.add(existing_server)
                 continue
 
             imported = imported_by_id[existing_server.id]

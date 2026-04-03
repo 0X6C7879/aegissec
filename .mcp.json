@@ -7,12 +7,32 @@
         "stdio"
       ],
       "enabled": true,
-      "timeout_ms": 10000
+      "timeout_ms": 15000
     },
-    "aegissec-demo-http": {
-      "url": "http://127.0.0.1:8765/mcp",
+    "workspace-files": {
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ],
       "enabled": true,
       "timeout_ms": 10000
+    },
+    "http-client": {
+      "command": "REPLACE_WITH_YOUR_HTTP_MCP_COMMAND",
+      "args": [],
+      "enabled": true,
+      "timeout_ms": 10000
+    },
+    "burp-bridge": {
+      "url": "http://127.0.0.1:8787/mcp",
+      "enabled": false,
+      "timeout_ms": 10000
+    },
+    "recon-bridge": {
+      "url": "http://127.0.0.1:8790/mcp",
+      "enabled": false,
+      "timeout_ms": 15000
     }
   }
 }

@@ -23,6 +23,8 @@ import type {
 
 const MCP_SERVERS_QUERY_KEY = ["mcp", "servers"] as const;
 const EMPTY_MCP_SERVERS: MCPServer[] = [];
+const MCP_IMPORT_MISSING_ERROR = "Server not found in the latest MCP import.";
+const MCP_STALE_SERVER_COPY = "该服务器未在最近一次导入配置中出现，当前仅保留历史能力快照。";
 
 const MCP_VIEW_OPTIONS = [
   { key: "servers", label: "服务器", emptyTitle: "没有匹配的服务器" },
@@ -131,6 +133,18 @@ function getCapabilityTone(kind: string): string {
 
 function getCapabilityKey(capability: MCPCapability): string {
   return `${capability.kind}:${capability.name}`;
+}
+
+function isStaleImportedServer(server: MCPServer): boolean {
+  return (
+    !server.config_path.startsWith("manual://") &&
+    server.enabled === false &&
+    server.last_error === MCP_IMPORT_MISSING_ERROR
+  );
+}
+
+function isImportMissingMessage(message: string | null): boolean {
+  return message === MCP_IMPORT_MISSING_ERROR;
 }
 
 function groupCapabilities(capabilities: MCPCapability[]): Array<[string, MCPCapability[]]> {
@@ -395,6 +409,7 @@ export function McpWorkbench() {
   });
 
   const activeServer = serverDetailQuery.data ?? activeServerSummary;
+  const activeServerIsStale = activeServer ? isStaleImportedServer(activeServer) : false;
 
   const selectedCapability = useMemo(
     () =>
@@ -778,6 +793,7 @@ export function McpWorkbench() {
                       {filteredServers.map((server) => {
                         const isActive = server.id === selectedServerId;
                         const counts = getCapabilityCounts(server.capabilities);
+                        const isStale = isStaleImportedServer(server);
 
                         return (
                           <li key={server.id}>
@@ -832,6 +848,11 @@ export function McpWorkbench() {
                               </div>
 
                               <div className="action-row">
+                                {isStale ? (
+                                  <span className="management-status-badge tone-warning">
+                                    导入缺失
+                                  </span>
+                                ) : null}
                                 <span
                                   className={`management-status-badge ${server.enabled ? "tone-success" : "tone-neutral"}`}
                                 >
@@ -1111,6 +1132,9 @@ export function McpWorkbench() {
                   <div className="management-modal-header">
                     <div className="management-detail-copy">
                       <h3 className="panel-title">{activeServer.name}</h3>
+                      {activeServerIsStale ? (
+                        <span className="management-status-badge tone-warning">导入缺失</span>
+                      ) : null}
                     </div>
 
                     <div className="management-action-row">
@@ -1165,10 +1189,14 @@ export function McpWorkbench() {
                   {serverDetailQuery.isError ? (
                     <div className="management-error-banner">{serverDetailQuery.error.message}</div>
                   ) : null}
-                  {activeServer.last_error ? (
+                  {activeServerIsStale ? (
+                    <div className="management-inline-notice">{MCP_STALE_SERVER_COPY}</div>
+                  ) : null}
+                  {activeServer.last_error && !isImportMissingMessage(activeServer.last_error) ? (
                     <div className="management-error-banner">{activeServer.last_error}</div>
                   ) : null}
-                  {activeServer.health_error ? (
+                  {activeServer.health_error &&
+                  !isImportMissingMessage(activeServer.health_error) ? (
                     <div className="management-error-banner">{activeServer.health_error}</div>
                   ) : null}
 

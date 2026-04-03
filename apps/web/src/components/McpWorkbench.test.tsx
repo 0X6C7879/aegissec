@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MCPCapability, MCPServer } from "../types/mcp";
 import { McpWorkbench } from "./McpWorkbench";
 
+const IMPORT_MISSING_ERROR = "Server not found in the latest MCP import.";
+const STALE_SERVER_COPY = "该服务器未在最近一次导入配置中出现，当前仅保留历史能力快照。";
+
 const {
   mockCheckMcpServerHealth,
   mockGetMcpServer,
@@ -125,7 +128,9 @@ const betaServer = createServer({
   config_path: "D:/configs/second-config.json",
   enabled: false,
   status: "error",
+  last_error: IMPORT_MISSING_ERROR,
   health_status: "degraded",
+  health_error: IMPORT_MISSING_ERROR,
   source: "opencode",
   scope: "user",
   capabilities: [
@@ -233,6 +238,11 @@ describe("McpWorkbench", () => {
     expect(alphaWithin.getByText("资源 1")).toBeInTheDocument();
     expect(alphaWithin.getByText("Prompts 1")).toBeInTheDocument();
     expect(alphaWithin.getByText("健康 ok")).toBeInTheDocument();
+
+    const betaCard = screen.getByText("beta-server").closest("article");
+    expect(betaCard).not.toBeNull();
+
+    expect(within(betaCard!).getByText("导入缺失")).toBeInTheDocument();
   });
 
   it("shows a flattened all-tools view and filters by server fields", async () => {
@@ -280,7 +290,11 @@ describe("McpWorkbench", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "beta-server 详情" });
 
+    expect(within(dialog).getByText("导入缺失")).toBeInTheDocument();
+    expect(within(dialog).getByText(STALE_SERVER_COPY)).toBeInTheDocument();
+    expect(within(dialog).queryByText(IMPORT_MISSING_ERROR)).not.toBeInTheDocument();
     expect(within(dialog).getByText("deploy_report")).toBeInTheDocument();
+    expect(within(dialog).getByText("报告模板")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "执行工具" })).toBeInTheDocument();
   });
 });

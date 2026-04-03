@@ -639,6 +639,7 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
         MCPCapabilityKind,
         MCPServerStatus,
     )
+    from app.db.repositories.mcp import STALE_IMPORTED_SERVER_ERROR
 
     project_root = tmp_path / "project"
     config_path = project_root / "opencode.json"
@@ -694,6 +695,11 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
         second_server = next(
             server for server in api_data(second_import) if server["id"] == first_server["id"]
         )
+        assert second_server["enabled"] is False
+        assert second_server["status"] == MCPServerStatus.INACTIVE
+        assert second_server["last_error"] == STALE_IMPORTED_SERVER_ERROR
+        assert second_server["health_status"] == "error"
+        assert second_server["health_error"] == STALE_IMPORTED_SERVER_ERROR
         assert second_server["capabilities"][0]["name"] == "collect"
         assert second_server["imported_at"] == first_imported_at
 
@@ -701,18 +707,31 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
             config_path,
             {"mcp": {"open-local": {"type": "local", "command": ["node", "server.js"]}}},
         )
-        fake_manager.discover_failures["open-local"] = RuntimeError("discover boom")
-
         third_import = client.post("/api/mcp/import")
         assert third_import.status_code == 200
         third_server = next(
             server for server in api_data(third_import) if server["id"] == first_server["id"]
         )
-        assert third_server["status"] == MCPServerStatus.ERROR
-        assert third_server["last_error"] == "discover boom"
-        assert third_server["health_error"] == "discover boom"
+        assert third_server["enabled"] is True
+        assert third_server["status"] == MCPServerStatus.CONNECTED
+        assert third_server["last_error"] is None
+        assert third_server["health_status"] == "ok"
+        assert third_server["health_error"] is None
         assert third_server["capabilities"][0]["name"] == "collect"
         assert third_server["imported_at"] == first_imported_at
+
+        fake_manager.discover_failures["open-local"] = RuntimeError("discover boom")
+
+        fourth_import = client.post("/api/mcp/import")
+        assert fourth_import.status_code == 200
+        fourth_server = next(
+            server for server in api_data(fourth_import) if server["id"] == first_server["id"]
+        )
+        assert fourth_server["status"] == MCPServerStatus.ERROR
+        assert fourth_server["last_error"] == "discover boom"
+        assert fourth_server["health_error"] == "discover boom"
+        assert fourth_server["capabilities"][0]["name"] == "collect"
+        assert fourth_server["imported_at"] == first_imported_at
     finally:
         mcp_service_module.resolve_mcp_import_targets = original_resolver
         app.dependency_overrides.pop(get_mcp_client_manager, None)
@@ -902,6 +921,7 @@ def test_mcp_manual_registration_invocation_and_import_preserves_manual_servers(
     from app.compat.mcp.models import DiscoveredMCPCapability
     from app.compat.mcp.service import get_mcp_client_manager
     from app.db.models import CompatibilityScope, CompatibilitySource, MCPCapabilityKind
+    from app.db.repositories.mcp import STALE_IMPORTED_SERVER_ERROR
 
     project_root = tmp_path / "project"
     _write_json(
@@ -1001,6 +1021,26 @@ def test_mcp_manual_registration_invocation_and_import_preserves_manual_servers(
         names = [server["name"] for server in servers]
         assert "manual-demo" in names
         assert "open-local" in names
+
+        _write_json(project_root / "opencode.json", {"mcp": {}})
+        stale_import_response = client.post("/api/mcp/import")
+        assert stale_import_response.status_code == 200
+        stale_servers = api_data(stale_import_response)
+
+        stale_manual_server = next(
+            server for server in stale_servers if server["id"] == manual_server["id"]
+        )
+        assert stale_manual_server["config_path"].startswith("manual://")
+        assert stale_manual_server["enabled"] is True
+        assert stale_manual_server["last_error"] is None
+
+        stale_imported_server = next(
+            server for server in stale_servers if server["name"] == "open-local"
+        )
+        assert stale_imported_server["enabled"] is False
+        assert stale_imported_server["status"] == "inactive"
+        assert stale_imported_server["last_error"] == STALE_IMPORTED_SERVER_ERROR
+        assert stale_imported_server["health_error"] == STALE_IMPORTED_SERVER_ERROR
     finally:
         mcp_service_module.resolve_mcp_import_targets = original_resolver
         app.dependency_overrides.pop(get_mcp_client_manager, None)
