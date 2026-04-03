@@ -59,6 +59,10 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
             "compacted": True,
             "boundary_marker": "compact-boundary:1",
             "compact_summary": "Compact summary text.",
+            "retained_live_state": {
+                "current_stage": "restored-analysis",
+                "current_task": "restore.evidence",
+            },
         },
         retrieval_summary="Current retrieval summary.",
         session_memory_summary="Latest session memory summary.",
@@ -71,7 +75,9 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
 
     assert reinjection["compact_applied"] is True
     assert reinjection["boundary_marker"] == "compact-boundary:1"
-    assert "Current stage: analysis | Current task: analyze.evidence" in str(reinjection["summary"])
+    assert "Current stage: restored-analysis | Current task: restore.evidence" in str(
+        reinjection["summary"]
+    )
     assert "Current retrieval summary." in str(reinjection["summary"])
     assert "Latest session memory summary." in str(reinjection["summary"])
     assert "Loaded skills inventory:" in str(reinjection["summary"])
@@ -80,3 +86,9 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
     assert fragments["capability_schema_summary"]
     assert fragments["capability_prompt_fragment"]
     assert fragments["active_tool_summary"]
+    assert (
+        fragments["task_stage_marker"]
+        == "Current stage: restored-analysis | Current task: restore.evidence"
+    )
+    provenance = cast(dict[str, Any], reinjection["provenance"])
+    assert provenance["restored_from_boundary"] is True

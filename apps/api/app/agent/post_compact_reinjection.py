@@ -17,6 +17,15 @@ class PostCompactReinjectionService:
         compact_applied = bool(compact_runtime.get("compacted", False))
         boundary_marker = str(compact_runtime.get("boundary_marker") or "")
         compact_summary = str(compact_runtime.get("compact_summary") or "")
+        retained_live_state = self._dict(compact_runtime.get("retained_live_state"))
+        restored_stage = self._string_value(retained_live_state.get("current_stage"))
+        restored_task = self._string_value(retained_live_state.get("current_task"))
+        effective_stage = (
+            restored_stage if compact_applied and restored_stage is not None else current_stage
+        )
+        effective_task = (
+            restored_task if compact_applied and restored_task is not None else task_name
+        )
         active_tool_summary = self._active_tool_summary(
             capability_inventory_summary=capability_inventory_summary,
             capability_schema_summary=capability_schema_summary,
@@ -28,7 +37,7 @@ class PostCompactReinjectionService:
             "retrieval_summary": retrieval_summary,
             "session_memory_summary": session_memory_summary,
             "task_stage_marker": (
-                f"Current stage: {current_stage or 'unknown'} | Current task: {task_name}"
+                f"Current stage: {effective_stage or 'unknown'} | Current task: {effective_task}"
             ),
             "active_tool_summary": active_tool_summary,
             "compact_summary": compact_summary,
@@ -62,6 +71,7 @@ class PostCompactReinjectionService:
             "provenance": {
                 "source": "post_compact_reinjection",
                 "boundary_marker": boundary_marker,
+                "restored_from_boundary": compact_applied,
                 "reinjected_components": sorted(fragments.keys()),
             },
         }
@@ -77,3 +87,15 @@ class PostCompactReinjectionService:
         if capability_schema_summary.strip():
             return capability_schema_summary
         return "No active tool availability summary is currently available."
+
+    @staticmethod
+    def _dict(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): item for key, item in value.items()}
+
+    @staticmethod
+    def _string_value(value: object) -> str | None:
+        if isinstance(value, str) and value:
+            return value
+        return None
