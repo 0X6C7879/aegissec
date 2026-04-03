@@ -105,6 +105,36 @@ def test_importer_supports_opencode_and_agents_adjacent_variants(tmp_path: Path)
     assert by_name["agent-local"].env == {"MODE": "test"}
 
 
+def test_importer_normalizes_windows_package_manager_stdio_commands(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import app.compat.mcp.importer as importer
+    from app.compat.mcp.importer import MCPImportTarget, import_mcp_servers
+    from app.db.models import CompatibilityScope, CompatibilitySource
+
+    project_root = tmp_path / "repo"
+    _write_json(
+        project_root / "opencode.json",
+        {"mcp": {"shim-local": {"type": "local", "command": ["npx", "demo-mcp"]}}},
+    )
+
+    monkeypatch.setattr(importer.os, "name", "nt", raising=False)
+
+    imported = import_mcp_servers(
+        [
+            MCPImportTarget(
+                source=CompatibilitySource.OPENCODE,
+                scope=CompatibilityScope.PROJECT,
+                file_path=(project_root / "opencode.json").as_posix(),
+            )
+        ]
+    )
+
+    assert imported[0].command == "npx.cmd"
+    assert imported[0].args == ["demo-mcp"]
+
+
 def test_mcp_import_lists_servers_and_discovered_capabilities(
     client: TestClient,
     monkeypatch: MonkeyPatch,
@@ -720,7 +750,9 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
         assert third_server["capabilities"][0]["name"] == "collect"
         assert third_server["imported_at"] == first_imported_at
 
-        fake_manager.discover_failures["open-local"] = RuntimeError("discover boom")
+        fake_manager.discover_failures["open-local"] = RuntimeError(
+            "MCP server 'open-local' failed to discover capabilities: discover boom"
+        )
 
         fourth_import = client.post("/api/mcp/import")
         assert fourth_import.status_code == 200
@@ -728,8 +760,14 @@ def test_mcp_import_is_non_destructive_and_preserves_last_known_capabilities(
             server for server in api_data(fourth_import) if server["id"] == first_server["id"]
         )
         assert fourth_server["status"] == MCPServerStatus.ERROR
-        assert fourth_server["last_error"] == "discover boom"
-        assert fourth_server["health_error"] == "discover boom"
+        assert (
+            fourth_server["last_error"]
+            == "MCP server 'open-local' failed to discover capabilities: discover boom"
+        )
+        assert (
+            fourth_server["health_error"]
+            == "MCP server 'open-local' failed to discover capabilities: discover boom"
+        )
         assert fourth_server["capabilities"][0]["name"] == "collect"
         assert fourth_server["imported_at"] == first_imported_at
     finally:
@@ -878,7 +916,9 @@ def test_mcp_invoke_upstream_failure_preserves_error_and_health_updates(client: 
             ]
         }
     )
-    fake_manager.tool_failures[("manual-demo", "manual_tool")] = RuntimeError("upstream boom")
+    fake_manager.tool_failures[("manual-demo", "manual_tool")] = RuntimeError(
+        "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+    )
     app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
 
     try:
@@ -899,15 +939,24 @@ def test_mcp_invoke_upstream_failure_preserves_error_and_health_updates(client: 
             json={"arguments": {"target": "demo"}},
         )
         assert invoke_response.status_code == 502
-        assert api_data(invoke_response)["detail"] == "upstream boom"
+        assert (
+            api_data(invoke_response)["detail"]
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+        )
 
         server_detail = client.get(f"/api/mcp/servers/{server_id}")
         assert server_detail.status_code == 200
         detail_payload = api_data(server_detail)
         assert detail_payload["status"] == MCPServerStatus.ERROR
-        assert detail_payload["last_error"] == "upstream boom"
+        assert (
+            detail_payload["last_error"]
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+        )
         assert detail_payload["health_status"] == "error"
-        assert detail_payload["health_error"] == "upstream boom"
+        assert (
+            detail_payload["health_error"]
+            == "MCP server 'manual-demo' failed to call tool 'manual_tool': upstream boom"
+        )
     finally:
         app.dependency_overrides.pop(get_mcp_client_manager, None)
 
@@ -1230,6 +1279,9 @@ class _FakeMCPClientManager:
         if (server_name, tool_name) in self.tool_failures:
             raise self.tool_failures[(server_name, tool_name)]
         return dict(self._tool_results.get((server_name, tool_name), {"content": []}))
+
+    def error_message(self, exc: Exception) -> str:
+        return str(exc)
 
 
 def _write_json(path: Path, content: dict[str, object]) -> None:

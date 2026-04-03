@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -11,6 +12,17 @@ from app.db.models import CompatibilityScope, CompatibilitySource, MCPTransport
 from .models import ImportedMCPServer
 
 DEFAULT_TIMEOUT_MS = 5000
+WINDOWS_STDIO_PACKAGE_MANAGER_SHIMS = {
+    "bun",
+    "bunx",
+    "npm",
+    "npx",
+    "pnpm",
+    "pnpx",
+    "uvx",
+    "yarn",
+    "yarnpkg",
+}
 
 
 @dataclass(slots=True)
@@ -271,21 +283,33 @@ def _normalize_command(
         values = [item for item in command_payload if isinstance(item, str)]
         if not values:
             return None, []
-        return values[0], values[1:]
+        return _normalize_stdio_command(values[0]), values[1:]
 
     if isinstance(command_payload, list):
         values = [item for item in command_payload if isinstance(item, str)]
         if not values:
             return None, []
-        return values[0], values[1:]
+        return _normalize_stdio_command(values[0]), values[1:]
 
     if isinstance(command_payload, str):
         args_payload = raw_config.get("args")
         if args_payload is None:
             args_payload = raw_config.get("arguments")
-        return command_payload, _normalize_string_list(args_payload)
+        return _normalize_stdio_command(command_payload), _normalize_string_list(args_payload)
 
     return None, []
+
+
+def _normalize_stdio_command(command: str) -> str:
+    if os.name != "nt":
+        return command
+    if command.lower() not in WINDOWS_STDIO_PACKAGE_MANAGER_SHIMS:
+        return command
+    if "/" in command or "\\" in command:
+        return command
+    if Path(command).suffix:
+        return command
+    return f"{command}.cmd"
 
 
 def _normalize_string_list(value: object) -> list[str]:

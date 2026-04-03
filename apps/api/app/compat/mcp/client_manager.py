@@ -15,11 +15,18 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 _T = TypeVar("_T")
+_MAX_ERROR_DETAIL_LENGTH = 160
+
+
+class MCPClientOperationError(RuntimeError):
+    pass
 
 
 class MCPClientManager:
     async def discover(self, server: ImportedMCPServer) -> list[DiscoveredMCPCapability]:
-        return await self._with_session(server, self._discover_capabilities)
+        return await self._run_operation(
+            server, "discover capabilities", self._discover_capabilities
+        )
 
     async def call_tool(
         self,
@@ -36,7 +43,7 @@ class MCPClientManager:
             result = await call_tool_fn(tool_name, arguments)
             return self._payload_to_json_dict(result)
 
-        return await self._with_session(server, invoke)
+        return await self._run_operation(server, f"call tool '{tool_name}'", invoke)
 
     async def shutdown(self, server_id: str) -> None:
         del server_id
@@ -44,13 +51,40 @@ class MCPClientManager:
     async def check_health(self, server: ImportedMCPServer) -> MCPHealthCheckResult:
         started = perf_counter()
         try:
-            await self._with_session(server, self._noop)
+            await self._run_operation(server, "check health", self._noop)
         except Exception as exc:
             latency_ms = int((perf_counter() - started) * 1000)
-            return MCPHealthCheckResult(status="error", latency_ms=latency_ms, error=str(exc))
+            return MCPHealthCheckResult(
+                status="error",
+                latency_ms=latency_ms,
+                error=self.error_message(exc),
+            )
 
         latency_ms = int((perf_counter() - started) * 1000)
         return MCPHealthCheckResult(status="ok", latency_ms=latency_ms, error=None)
+
+    @staticmethod
+    def error_message(exc: Exception) -> str:
+        if isinstance(exc, MCPClientOperationError):
+            return str(exc)
+
+        detail = MCPClientManager._compact_error_detail(str(exc))
+        return detail or "MCP operation failed."
+
+    async def _run_operation(
+        self,
+        server: ImportedMCPServer,
+        operation_name: str,
+        operation: Callable[[Any], Awaitable[_T]],
+    ) -> _T:
+        try:
+            return await self._with_session(server, operation)
+        except MCPClientOperationError:
+            raise
+        except Exception as exc:
+            raise MCPClientOperationError(
+                self._format_operation_error(server, operation_name, exc)
+            ) from exc
 
     async def _with_session(
         self,
@@ -264,3 +298,22 @@ class MCPClientManager:
         if value is None:
             return None
         return value if isinstance(value, str) else str(value)
+
+    @classmethod
+    def _format_operation_error(
+        cls,
+        server: ImportedMCPServer,
+        operation_name: str,
+        exc: Exception,
+    ) -> str:
+        detail = cls._compact_error_detail(str(exc))
+        if not detail:
+            return f"MCP server '{server.name}' failed to {operation_name}."
+        return f"MCP server '{server.name}' failed to {operation_name}: {detail}"
+
+    @staticmethod
+    def _compact_error_detail(detail: str) -> str:
+        compact = " ".join(detail.split())
+        if len(compact) <= _MAX_ERROR_DETAIL_LENGTH:
+            return compact
+        return f"{compact[: _MAX_ERROR_DETAIL_LENGTH - 3].rstrip()}..."

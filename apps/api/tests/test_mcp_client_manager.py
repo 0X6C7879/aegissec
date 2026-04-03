@@ -157,6 +157,17 @@ class _FakeAsyncClient:
         self.timeout = timeout
 
 
+class _InitializeFailingSession(_FakeSession):
+    async def initialize(self) -> None:
+        raise RuntimeError("init boom\nTraceback: ignored noisy detail")
+
+
+class _CallToolFailingSession(_FakeSession):
+    async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
+        self.call_tool_calls.append((tool_name, dict(arguments)))
+        raise RuntimeError("upstream boom\nextra detail")
+
+
 @pytest.mark.anyio
 async def test_discover_stdio_server_initializes_session_and_maps_capabilities(
     monkeypatch: pytest.MonkeyPatch,
@@ -369,6 +380,124 @@ async def test_call_tool_opens_and_closes_a_session_per_call(
     assert second_session.initialize_calls == 1
     assert first_session.closed is True
     assert second_session.closed is True
+
+
+@pytest.mark.anyio
+async def test_discover_normalizes_initialize_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _InitializeFailingSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+
+    def fake_client_session(read_stream: object, write_stream: object) -> _InitializeFailingSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="discover-server",
+        name="discover-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.discover(server)
+
+    assert str(exc_info.value) == (
+        "MCP server 'discover-server' failed to discover capabilities: "
+        "init boom Traceback: ignored noisy detail"
+    )
+    assert session.closed is True
+
+
+@pytest.mark.anyio
+async def test_call_tool_normalizes_upstream_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _CallToolFailingSession(read_stream="stdio-read", write_stream="stdio-write")
+
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        yield ("stdio-read", "stdio-write")
+
+    def fake_client_session(read_stream: object, write_stream: object) -> _CallToolFailingSession:
+        assert read_stream == "stdio-read"
+        assert write_stream == "stdio-write"
+        return session
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="tool-server",
+        name="tool-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.call_tool(server, tool_name="scan", arguments={"target": "demo"})
+
+    assert str(exc_info.value) == (
+        "MCP server 'tool-server' failed to call tool 'scan': upstream boom extra detail"
+    )
+    assert session.call_tool_calls == [("scan", {"target": "demo"})]
+    assert session.closed is True
+
+
+@pytest.mark.anyio
+async def test_check_health_normalizes_transport_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    @asynccontextmanager
+    async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
+        del server_params
+        raise RuntimeError("launch boom\nstack trace detail")
+        yield ("stdio-read", "stdio-write")
+
+    monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
+
+    manager = MCPClientManager()
+    server = ImportedMCPServer(
+        id="health-server",
+        name="health-server",
+        source=CompatibilitySource.CLAUDE,
+        scope=CompatibilityScope.PROJECT,
+        transport=MCPTransport.STDIO,
+        enabled=True,
+        command="python",
+        args=["-m", "demo_stdio"],
+        env={},
+        timeout_ms=3000,
+        config_path="/tmp/.mcp.json",
+    )
+
+    result = await manager.check_health(server)
+
+    assert result.status == "error"
+    assert result.error == (
+        "MCP server 'health-server' failed to check health: launch boom stack trace detail"
+    )
+    assert isinstance(result.latency_ms, int)
 
 
 @pytest.mark.anyio
