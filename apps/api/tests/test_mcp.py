@@ -1046,6 +1046,154 @@ def test_mcp_manual_registration_invocation_and_import_preserves_manual_servers(
         app.dependency_overrides.pop(get_mcp_client_manager, None)
 
 
+def test_mcp_delete_manual_server_removes_it_and_returns_not_found_for_missing_detail(
+    client: TestClient,
+) -> None:
+    from app.compat.mcp.models import DiscoveredMCPCapability
+    from app.compat.mcp.service import get_mcp_client_manager
+    from app.db.models import MCPCapabilityKind
+
+    fake_manager = _FakeMCPClientManager(
+        capabilities_by_server={
+            "manual-demo": [
+                DiscoveredMCPCapability(
+                    kind=MCPCapabilityKind.TOOL,
+                    name="manual_tool",
+                    title="Manual Tool",
+                    description="Manual tool invocation",
+                    uri=None,
+                    metadata={},
+                    input_schema={"type": "object"},
+                    raw_payload={"name": "manual_tool"},
+                )
+            ]
+        }
+    )
+    app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
+
+    try:
+        register_response = client.post(
+            "/api/mcp/register",
+            json={
+                "name": "manual-demo",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["-m", "manual_mcp"],
+            },
+        )
+        assert register_response.status_code == 200
+        server_id = api_data(register_response)["id"]
+
+        delete_response = client.delete(f"/api/mcp/servers/{server_id}")
+        assert delete_response.status_code == 204
+        assert fake_manager.shutdown_calls == [server_id]
+
+        detail_response = client.get(f"/api/mcp/servers/{server_id}")
+        assert detail_response.status_code == 404
+
+        list_response = client.get("/api/mcp/servers")
+        assert list_response.status_code == 200
+        assert all(server["id"] != server_id for server in api_data(list_response))
+    finally:
+        app.dependency_overrides.pop(get_mcp_client_manager, None)
+
+
+def test_mcp_delete_imported_or_stale_servers_removes_them_completely(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.compat.mcp.importer import MCPImportTarget
+    from app.compat.mcp.models import DiscoveredMCPCapability
+    from app.compat.mcp.service import get_mcp_client_manager
+    from app.db.models import CompatibilityScope, CompatibilitySource, MCPCapabilityKind
+
+    project_root = tmp_path / "project"
+    config_path = project_root / "opencode.json"
+    _write_json(
+        config_path,
+        {"mcp": {"open-local": {"type": "local", "command": ["node", "server.js"]}}},
+    )
+
+    fake_manager = _FakeMCPClientManager(
+        capabilities_by_server={
+            "open-local": [
+                DiscoveredMCPCapability(
+                    kind=MCPCapabilityKind.TOOL,
+                    name="collect",
+                    title="Collect",
+                    description="Collect data",
+                    uri=None,
+                    metadata={},
+                    input_schema={"type": "object"},
+                    raw_payload={"name": "collect"},
+                )
+            ]
+        }
+    )
+    app.dependency_overrides[get_mcp_client_manager] = lambda: fake_manager
+
+    from app.compat.mcp import service as mcp_service_module
+
+    original_resolver = mcp_service_module.resolve_mcp_import_targets
+
+    try:
+        monkeypatch.setattr(
+            mcp_service_module,
+            "resolve_mcp_import_targets",
+            lambda _settings: [
+                MCPImportTarget(
+                    source=CompatibilitySource.OPENCODE,
+                    scope=CompatibilityScope.PROJECT,
+                    file_path=config_path.as_posix(),
+                )
+            ],
+        )
+
+        imported_response = client.post("/api/mcp/import")
+        assert imported_response.status_code == 200
+        active_server_id = api_data(imported_response)[0]["id"]
+
+        delete_active_response = client.delete(f"/api/mcp/servers/{active_server_id}")
+        assert delete_active_response.status_code == 204
+
+        detail_after_active_delete = client.get(f"/api/mcp/servers/{active_server_id}")
+        assert detail_after_active_delete.status_code == 404
+
+        reimport_response = client.post("/api/mcp/import")
+        assert reimport_response.status_code == 200
+        restored_server_id = api_data(reimport_response)[0]["id"]
+
+        _write_json(config_path, {"mcp": {}})
+        stale_import_response = client.post("/api/mcp/import")
+        assert stale_import_response.status_code == 200
+        stale_server = next(
+            server
+            for server in api_data(stale_import_response)
+            if server["id"] == restored_server_id
+        )
+        assert stale_server["status"] == "inactive"
+
+        delete_stale_response = client.delete(f"/api/mcp/servers/{restored_server_id}")
+        assert delete_stale_response.status_code == 204
+
+        detail_after_stale_delete = client.get(f"/api/mcp/servers/{restored_server_id}")
+        assert detail_after_stale_delete.status_code == 404
+
+        list_response = client.get("/api/mcp/servers")
+        assert list_response.status_code == 200
+        assert all(server["id"] != restored_server_id for server in api_data(list_response))
+    finally:
+        mcp_service_module.resolve_mcp_import_targets = original_resolver
+        app.dependency_overrides.pop(get_mcp_client_manager, None)
+
+
+def test_mcp_delete_missing_server_returns_not_found(client: TestClient) -> None:
+    delete_response = client.delete("/api/mcp/servers/missing-server")
+    assert delete_response.status_code == 404
+    assert api_data(delete_response)["detail"] == "MCP server not found"
+
+
 class _FakeMCPClientManager:
     def __init__(
         self,

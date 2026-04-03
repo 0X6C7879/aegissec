@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from app.agent.context_models import ContextProjection
 from app.agent.token_budget import estimate_token_count
+from app.agent.transcript_runtime import TranscriptRuntimeService
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class CompactRuntimeThresholds:
 class CompactRuntimeService:
     DEFAULT_THRESHOLDS = CompactRuntimeThresholds()
 
+    def __init__(self) -> None:
+        self._transcript_runtime = TranscriptRuntimeService()
+
     def build_runtime_state(
         self,
         *,
@@ -48,6 +52,7 @@ class CompactRuntimeService:
         projection: ContextProjection,
         active_task_name: str,
         current_stage: str | None,
+        cycle_id: str,
     ) -> dict[str, object]:
         thresholds = self._resolve_thresholds(mutable_state)
         metrics = self._build_metrics(
@@ -79,6 +84,13 @@ class CompactRuntimeService:
             runtime_store["boundaries"] = boundaries[-20:]
             runtime_store["latest_boundary"] = latest_boundary
             runtime_store["last_compacted_at"] = latest_boundary.get("created_at")
+            self._transcript_runtime.append_compact_boundary(
+                mutable_state=mutable_state,
+                boundary=latest_boundary,
+                cycle_id=cycle_id,
+                current_stage=current_stage,
+                task_name=active_task_name,
+            )
 
         runtime_store["last_metrics"] = metrics.to_state()
         runtime_store["triggered"] = triggered
@@ -127,15 +139,28 @@ class CompactRuntimeService:
     ) -> CompactRuntimeMetrics:
         messages = self._dict_list(mutable_state.get("messages"))
         archived_messages = self._dict_list(mutable_state.get("archived_messages"))
+        transcript_records = self._transcript_runtime.recent_tool_result_records(
+            mutable_state, limit=10_000
+        )
         execution_records = self._dict_list(mutable_state.get("execution_records"))
         archived_execution_records = self._dict_list(
             mutable_state.get("archived_execution_records")
+        )
+        execution_summaries = (
+            self._transcript_execution_text(transcript_records)
+            if transcript_records
+            else self._execution_text(execution_records + archived_execution_records)
+        )
+        execution_record_count = (
+            len(transcript_records)
+            if transcript_records
+            else len(execution_records) + len(archived_execution_records)
         )
         rough_text = "\n\n".join(
             part
             for part in [
                 self._message_text(messages + archived_messages),
-                self._execution_text(execution_records + archived_execution_records),
+                execution_summaries,
                 retrieval_summary,
                 memory_summary,
                 history_summary,
@@ -146,7 +171,7 @@ class CompactRuntimeService:
         return CompactRuntimeMetrics(
             rough_token_estimate=estimate_token_count(rough_text),
             message_count=len(messages) + len(archived_messages),
-            execution_record_count=len(execution_records) + len(archived_execution_records),
+            execution_record_count=execution_record_count,
         )
 
     @staticmethod
@@ -280,6 +305,28 @@ class CompactRuntimeService:
     def _recent_execution_previews(
         self, mutable_state: dict[str, object]
     ) -> list[dict[str, object]]:
+        transcript_records = self._transcript_runtime.recent_tool_result_records(
+            mutable_state, limit=3
+        )
+        if transcript_records:
+            return [
+                {
+                    "task_name": str(
+                        item.get("task_name")
+                        or item.get("task_id")
+                        or item.get("tool_name")
+                        or "unknown"
+                    ),
+                    "status": str(item.get("status") or "unknown"),
+                    "summary": str(
+                        item.get("command_or_action")
+                        or self._dict(item.get("output_payload")).get("stderr")
+                        or self._dict(item.get("output_payload")).get("stdout")
+                        or ""
+                    ),
+                }
+                for item in transcript_records
+            ]
         records = self._dict_list(mutable_state.get("execution_records"))
         return [
             {
@@ -289,6 +336,17 @@ class CompactRuntimeService:
             }
             for item in records[-3:]
         ]
+
+    @staticmethod
+    def _transcript_execution_text(items: list[dict[str, object]]) -> str:
+        return "\n".join(
+            (
+                f"{item.get('task_name') or item.get('tool_name') or 'unknown'}: "
+                f"{item.get('status') or item.get('command_or_action') or ''}"
+            )
+            for item in items
+            if isinstance(item, dict)
+        )
 
     @staticmethod
     def _dict(value: object) -> dict[str, object]:

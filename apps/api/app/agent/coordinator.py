@@ -10,6 +10,7 @@ from app.agent.loop_engine import WorkflowLoopEngine
 from app.agent.loop_models import WorkflowLoopState
 from app.agent.planner import PlannedWorkflow, Planner
 from app.agent.reflector import ReflectionResult, Reflector
+from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.agent.workflow import WorkflowGraphRuntime
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
@@ -39,6 +40,7 @@ class CoordinatorStepResult:
 class Coordinator:
     MAX_ACTIVE_EXECUTION_RECORDS = 40
     MAX_ACTIVE_MESSAGES = 30
+    _transcript_runtime = TranscriptRuntimeService()
 
     def __init__(
         self,
@@ -124,6 +126,7 @@ class Coordinator:
             "findings": [],
             "execution_records": [],
             "archived_execution_records": [],
+            "runtime_transcript": self._transcript_runtime.empty_state(),
             "hypothesis_updates": [],
             "graph_updates": [],
             "archived_messages": [],
@@ -181,6 +184,19 @@ class Coordinator:
             if isinstance(batch_state, dict) and isinstance(batch_state.get("cycle"), int)
             else None
         )
+        runtime_tool_records = self._transcript_runtime.recent_tool_result_records(
+            step_result.state, limit=10_000
+        )
+        transcript_cycle_id = f"cycle-{batch_cycle}" if isinstance(batch_cycle, int) else None
+        transcript_record_index = {
+            record.get("task_id"): record
+            for record in runtime_tool_records
+            if isinstance(record.get("task_id"), str)
+            and (
+                transcript_cycle_id is None
+                or str(record.get("cycle_id") or "") == transcript_cycle_id
+            )
+        }
         record_index = {
             record.get("task_node_id"): record
             for record in records
@@ -191,26 +207,56 @@ class Coordinator:
         for task in tasks:
             if task.id not in executed_task_ids:
                 continue
-            record = record_index.get(task.id)
-            if not isinstance(record, dict):
-                continue
-            execution = ExecutionResult(
-                trace_id=str(record.get("id") or ""),
-                source_type=str(record.get("source_type") or "runtime"),
-                source_name=str(record.get("source_name") or "workflow-engine"),
-                command_or_action=str(record.get("command_or_action") or f"execute:{task.name}"),
-                input_payload=(
-                    dict(payload) if isinstance((payload := record.get("input_json")), dict) else {}
-                ),
-                output_payload=(
-                    dict(payload)
-                    if isinstance((payload := record.get("output_json")), dict)
-                    else {}
-                ),
-                status=task.status,
-                started_at=datetime.fromisoformat(str(record.get("started_at"))),
-                ended_at=datetime.fromisoformat(str(record.get("ended_at"))),
-            )
+            transcript_record = transcript_record_index.get(task.id)
+            if isinstance(transcript_record, dict):
+                execution = ExecutionResult(
+                    trace_id=str(transcript_record.get("trace_id") or ""),
+                    source_type=str(transcript_record.get("source_type") or "runtime"),
+                    source_name=str(transcript_record.get("source_name") or "workflow-engine"),
+                    command_or_action=str(
+                        transcript_record.get("command_or_action") or f"execute:{task.name}"
+                    ),
+                    input_payload=(
+                        dict(payload)
+                        if isinstance((payload := transcript_record.get("input_payload")), dict)
+                        else {}
+                    ),
+                    output_payload=(
+                        dict(payload)
+                        if isinstance((payload := transcript_record.get("output_payload")), dict)
+                        else {}
+                    ),
+                    status=TaskNodeStatus(
+                        str(transcript_record.get("status") or task.status.value)
+                    ),
+                    started_at=datetime.fromisoformat(str(transcript_record.get("started_at"))),
+                    ended_at=datetime.fromisoformat(str(transcript_record.get("ended_at"))),
+                )
+            else:
+                record = record_index.get(task.id)
+                if not isinstance(record, dict):
+                    continue
+                execution = ExecutionResult(
+                    trace_id=str(record.get("id") or ""),
+                    source_type=str(record.get("source_type") or "runtime"),
+                    source_name=str(record.get("source_name") or "workflow-engine"),
+                    command_or_action=str(
+                        record.get("command_or_action") or f"execute:{task.name}"
+                    ),
+                    input_payload=(
+                        dict(payload)
+                        if isinstance((payload := record.get("input_json")), dict)
+                        else {}
+                    ),
+                    output_payload=(
+                        dict(payload)
+                        if isinstance((payload := record.get("output_json")), dict)
+                        else {}
+                    ),
+                    status=task.status,
+                    started_at=datetime.fromisoformat(str(record.get("started_at"))),
+                    ended_at=datetime.fromisoformat(str(record.get("ended_at"))),
+                )
             reflection = self._reflector.review(task=task, execution=execution)
             self._graph_manager.record_execution(
                 run=run,

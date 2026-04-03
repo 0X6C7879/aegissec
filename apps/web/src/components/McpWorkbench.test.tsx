@@ -11,6 +11,7 @@ const STALE_SERVER_COPY = "该服务器未在最近一次导入配置中出现�
 
 const {
   mockCheckMcpServerHealth,
+  mockDeleteMcpServer,
   mockGetMcpServer,
   mockImportMcpServers,
   mockInvokeMcpTool,
@@ -20,6 +21,7 @@ const {
   mockSetMcpServerEnabled,
 } = vi.hoisted(() => ({
   mockCheckMcpServerHealth: vi.fn(),
+  mockDeleteMcpServer: vi.fn(),
   mockGetMcpServer: vi.fn(),
   mockImportMcpServers: vi.fn(),
   mockInvokeMcpTool: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock("../lib/api", async () => {
   return {
     ...actual,
     checkMcpServerHealth: mockCheckMcpServerHealth,
+    deleteMcpServer: mockDeleteMcpServer,
     getMcpServer: mockGetMcpServer,
     importMcpServers: mockImportMcpServers,
     invokeMcpTool: mockInvokeMcpTool,
@@ -215,6 +218,7 @@ describe("McpWorkbench", () => {
     mockSetMcpServerEnabled.mockResolvedValue(alphaServer);
     mockRefreshMcpServer.mockResolvedValue(alphaServer);
     mockCheckMcpServerHealth.mockResolvedValue(alphaServer);
+    mockDeleteMcpServer.mockResolvedValue(undefined);
     mockInvokeMcpTool.mockResolvedValue({
       server_id: alphaServer.id,
       tool_name: "scan_hosts",
@@ -296,5 +300,66 @@ describe("McpWorkbench", () => {
     expect(within(dialog).getByText("deploy_report")).toBeInTheDocument();
     expect(within(dialog).getByText("报告模板")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "执行工具" })).toBeInTheDocument();
+  });
+
+  it("shows delete buttons and removes a server from the list after delete", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkbench();
+    await screen.findByText("服务器总览");
+
+    const alphaCard = screen.getByText("alpha-server").closest("article");
+    expect(alphaCard).not.toBeNull();
+
+    await user.click(within(alphaCard!).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("alpha-server")).not.toBeInTheDocument();
+    });
+
+    expect(mockDeleteMcpServer).toHaveBeenCalledWith("server-alpha");
+    expect(confirmSpy).toHaveBeenCalledWith("确认删除 MCP 服务器“alpha-server”吗？");
+    confirmSpy.mockRestore();
+  });
+
+  it("deletes the active server from detail view and closes the modal route", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkbench("/mcp/server-alpha");
+
+    const dialog = await screen.findByRole("dialog", { name: "alpha-server 详情" });
+    await user.click(within(dialog).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-display").textContent).toBe("/mcp");
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "alpha-server 详情" })).not.toBeInTheDocument();
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("shows an error banner when delete fails", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    mockDeleteMcpServer.mockRejectedValueOnce(new Error("delete boom"));
+
+    renderWorkbench();
+    await screen.findByText("服务器总览");
+
+    const betaCard = screen.getByText("beta-server").closest("article");
+    expect(betaCard).not.toBeNull();
+
+    await user.click(within(betaCard!).getByRole("button", { name: "删除" }));
+
+    expect(await screen.findByText("delete boom")).toBeInTheDocument();
+    expect(screen.getByText("beta-server")).toBeInTheDocument();
+
+    confirmSpy.mockRestore();
   });
 });

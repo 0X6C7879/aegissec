@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.agent.context_models import CitationPointer, ContextRecord, RetrievalPack, RetrievalState
 from app.agent.memory_recall import select_relevant_memory_entries
+from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.db.models import Session, TaskNode, WorkflowRun
 from app.db.repositories import RunLogRepository
 
@@ -9,6 +10,7 @@ from app.db.repositories import RunLogRepository
 class RetrievalPipeline:
     def __init__(self, *, run_log_repository: RunLogRepository) -> None:
         self._run_log_repository = run_log_repository
+        self._transcript_runtime = TranscriptRuntimeService()
 
     def build(
         self,
@@ -28,6 +30,87 @@ class RetrievalPipeline:
         self, *, run: WorkflowRun, state: dict[str, object]
     ) -> RetrievalPack:
         items: list[ContextRecord] = []
+        transcript_deltas = self._transcript_runtime.recent_deltas(state, limit=4)
+        for delta in transcript_deltas:
+            delta_id = str(delta.get("delta_id") or "")
+            metadata_raw = delta.get("metadata")
+            metadata = (
+                {str(key): value for key, value in metadata_raw.items()}
+                if isinstance(metadata_raw, dict)
+                else {}
+            )
+            summary = self._transcript_preview(delta)
+            if not summary:
+                continue
+            trace_id = str(metadata.get("trace_id") or "")
+            task_name = str(metadata.get("task_name") or metadata.get("tool_name") or "workflow")
+            items.append(
+                ContextRecord(
+                    record_id=f"transcript-delta:{delta_id}",
+                    title=f"Transcript {task_name}",
+                    summary=summary,
+                    kind="transcript_delta",
+                    citations=[
+                        CitationPointer(
+                            source_kind="transcript_delta",
+                            source_id=delta_id,
+                            label=task_name,
+                            trace_id=trace_id or None,
+                            task_node_id=(
+                                str(metadata.get("task_id"))
+                                if isinstance(metadata.get("task_id"), str)
+                                else None
+                            ),
+                        )
+                    ],
+                    metadata={
+                        "status": metadata.get("status"),
+                        "trace_id": trace_id,
+                    },
+                )
+            )
+        for event in self._transcript_runtime.recent_compact_events(state, limit=2):
+            event_id = str(event.get("event_id") or "")
+            summary = str(event.get("summary") or "")
+            if not summary:
+                continue
+            items.append(
+                ContextRecord(
+                    record_id=f"compact-event:{event_id}",
+                    title="Compact continuity",
+                    summary=summary,
+                    kind="compact_event",
+                    citations=[
+                        CitationPointer(
+                            source_kind="compact_event",
+                            source_id=event_id,
+                            label=str(event.get("boundary_marker") or "compact_boundary"),
+                        )
+                    ],
+                    metadata={"boundary_marker": event.get("boundary_marker")},
+                )
+            )
+        for event in self._transcript_runtime.recent_reinjection_events(state, limit=2):
+            event_id = str(event.get("event_id") or "")
+            summary = str(event.get("summary") or "")
+            if not summary:
+                continue
+            items.append(
+                ContextRecord(
+                    record_id=f"reinjection-event:{event_id}",
+                    title="Reinjection continuity",
+                    summary=summary,
+                    kind="reinjection_event",
+                    citations=[
+                        CitationPointer(
+                            source_kind="reinjection_event",
+                            source_id=event_id,
+                            label=str(event.get("boundary_marker") or "reinjection"),
+                        )
+                    ],
+                    metadata={"boundary_marker": event.get("boundary_marker")},
+                )
+            )
         records = self._dict_list(state.get("archived_execution_records")) + self._dict_list(
             state.get("execution_records")
         )
@@ -138,14 +221,23 @@ class RetrievalPipeline:
         current_task = " ".join(
             task.name for task in tasks if task.status.value in {"ready", "in_progress"}
         )
-        recent_tools = [
+        transcript_recent_tools = [
             str(record.get("command_or_action") or "")
-            for record in (
-                self._dict_list(state.get("archived_execution_records"))
-                + self._dict_list(state.get("execution_records"))
-            )[-6:]
+            for record in self._transcript_runtime.recent_tool_result_records(state, limit=6)
             if str(record.get("command_or_action") or "").strip()
         ]
+        recent_tools = (
+            transcript_recent_tools
+            if transcript_recent_tools
+            else [
+                str(record.get("command_or_action") or "")
+                for record in (
+                    self._dict_list(state.get("archived_execution_records"))
+                    + self._dict_list(state.get("execution_records"))
+                )[-6:]
+                if str(record.get("command_or_action") or "").strip()
+            ]
+        )
         already_surfaced = self._already_surfaced_entry_ids(state)
         entries = select_relevant_memory_entries(
             session.project_id,
@@ -255,12 +347,34 @@ class RetrievalPipeline:
         for item in self._dict_list(
             self._nested_list(context, "retrieval", "project", "items")
         ) + self._dict_list(self._nested_list(context, "memory", "project", "distilled_entries")):
+            record_id = item.get("record_id")
+            if isinstance(record_id, str) and record_id:
+                surfaced.add(record_id)
             metadata = item.get("metadata")
             if isinstance(metadata, dict):
                 entry_id = metadata.get("memory_entry_id")
                 if isinstance(entry_id, str) and entry_id:
                     surfaced.add(entry_id)
         return surfaced
+
+    def _transcript_preview(self, delta: dict[str, object]) -> str:
+        for key in (
+            "tool_result_blocks",
+            "tool_error_blocks",
+            "compact_boundary_blocks",
+            "reinjection_blocks",
+            "assistant_blocks",
+        ):
+            blocks = delta.get(key)
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                content = str(block.get("content") or "").strip()
+                if content:
+                    return content
+        return ""
 
     @staticmethod
     def _nested_list(container: dict[str, object], *keys: str) -> object:

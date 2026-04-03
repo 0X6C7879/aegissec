@@ -2,37 +2,15 @@
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": [
-        "@playwright/mcp@latest",
-        "stdio"
-      ],
+      "args": ["@playwright/mcp@latest", "stdio"],
       "enabled": true,
       "timeout_ms": 15000
     },
     "workspace-files": {
       "command": "npx",
-      "args": [
-        "@modelcontextprotocol/server-filesystem",
-        "."
-      ],
+      "args": ["@modelcontextprotocol/server-filesystem", "."],
       "enabled": true,
       "timeout_ms": 10000
-    },
-    "http-client": {
-      "command": "REPLACE_WITH_YOUR_HTTP_MCP_COMMAND",
-      "args": [],
-      "enabled": true,
-      "timeout_ms": 10000
-    },
-    "burp-bridge": {
-      "url": "http://127.0.0.1:8787/mcp",
-      "enabled": false,
-      "timeout_ms": 10000
-    },
-    "recon-bridge": {
-      "url": "http://127.0.0.1:8790/mcp",
-      "enabled": false,
-      "timeout_ms": 15000
     }
   }
 }

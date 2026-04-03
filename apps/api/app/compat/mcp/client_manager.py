@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import httpx
 
@@ -15,29 +14,12 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-
-@dataclass(slots=True)
-class _ManagedConnection:
-    exit_stack: AsyncExitStack
-    session: Any
+_T = TypeVar("_T")
 
 
 class MCPClientManager:
-    def __init__(self) -> None:
-        self._connections: dict[str, _ManagedConnection] = {}
-
     async def discover(self, server: ImportedMCPServer) -> list[DiscoveredMCPCapability]:
-        await self.shutdown(server.id)
-        connection = await self._open_connection(server)
-        self._connections[server.id] = connection
-
-        try:
-            await self._initialize(connection.session)
-            return await self._discover_capabilities(connection.session)
-        except Exception:
-            await connection.exit_stack.aclose()
-            self._connections.pop(server.id, None)
-            raise
+        return await self._with_session(server, self._discover_capabilities)
 
     async def call_tool(
         self,
@@ -46,27 +28,23 @@ class MCPClientManager:
         tool_name: str,
         arguments: dict[str, object],
     ) -> dict[str, object]:
-        connection = await self._get_or_open_connection(server)
-        call_tool = getattr(connection.session, "call_tool", None)
-        if not callable(call_tool):
-            raise RuntimeError("MCP client session does not support call_tool().")
-        call_tool_fn = cast(Callable[[str, dict[str, object]], Awaitable[object]], call_tool)
-        result = await call_tool_fn(tool_name, arguments)
-        return self._payload_to_json_dict(result)
+        async def invoke(session: Any) -> dict[str, object]:
+            call_tool = getattr(session, "call_tool", None)
+            if not callable(call_tool):
+                raise RuntimeError("MCP client session does not support call_tool().")
+            call_tool_fn = cast(Callable[[str, dict[str, object]], Awaitable[object]], call_tool)
+            result = await call_tool_fn(tool_name, arguments)
+            return self._payload_to_json_dict(result)
+
+        return await self._with_session(server, invoke)
 
     async def shutdown(self, server_id: str) -> None:
-        connection = self._connections.pop(server_id, None)
-        if connection is not None:
-            await connection.exit_stack.aclose()
+        del server_id
 
     async def check_health(self, server: ImportedMCPServer) -> MCPHealthCheckResult:
         started = perf_counter()
         try:
-            connection = await self._open_connection(server)
-            try:
-                await self._initialize(connection.session)
-            finally:
-                await connection.exit_stack.aclose()
+            await self._with_session(server, self._noop)
         except Exception as exc:
             latency_ms = int((perf_counter() - started) * 1000)
             return MCPHealthCheckResult(status="error", latency_ms=latency_ms, error=str(exc))
@@ -74,30 +52,27 @@ class MCPClientManager:
         latency_ms = int((perf_counter() - started) * 1000)
         return MCPHealthCheckResult(status="ok", latency_ms=latency_ms, error=None)
 
-    async def _open_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
+    async def _with_session(
+        self,
+        server: ImportedMCPServer,
+        operation: Callable[[Any], Awaitable[_T]],
+    ) -> _T:
+        async with AsyncExitStack() as exit_stack:
+            session = await self._open_session(server, exit_stack)
+            await self._initialize(session)
+            return await operation(session)
+
+    async def _open_session(self, server: ImportedMCPServer, exit_stack: AsyncExitStack) -> Any:
         if server.transport == MCPTransport.STDIO:
-            return await self._open_stdio_connection(server)
-        return await self._open_http_connection(server)
+            return await self._open_stdio_session(server, exit_stack)
+        return await self._open_http_session(server, exit_stack)
 
-    async def _get_or_open_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
-        existing = self._connections.get(server.id)
-        if existing is not None:
-            return existing
-        connection = await self._open_connection(server)
-        self._connections[server.id] = connection
-        try:
-            await self._initialize(connection.session)
-        except Exception:
-            await connection.exit_stack.aclose()
-            self._connections.pop(server.id, None)
-            raise
-        return connection
-
-    async def _open_stdio_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
+    async def _open_stdio_session(
+        self, server: ImportedMCPServer, exit_stack: AsyncExitStack
+    ) -> Any:
         if server.command is None:
             raise RuntimeError(f"MCP stdio server '{server.name}' is missing a command.")
 
-        exit_stack = AsyncExitStack()
         server_params = StdioServerParameters(
             command=server.command,
             args=list(server.args),
@@ -107,14 +82,14 @@ class MCPClientManager:
             stdio_client(server_params)
         )
         session = ClientSession(read_stream, write_stream)
-        managed_session = await self._maybe_enter_async_context(exit_stack, session)
-        return _ManagedConnection(exit_stack=exit_stack, session=managed_session)
+        return await self._maybe_enter_async_context(exit_stack, session)
 
-    async def _open_http_connection(self, server: ImportedMCPServer) -> _ManagedConnection:
+    async def _open_http_session(
+        self, server: ImportedMCPServer, exit_stack: AsyncExitStack
+    ) -> Any:
         if server.url is None:
             raise RuntimeError(f"MCP HTTP server '{server.name}' is missing a URL.")
 
-        exit_stack = AsyncExitStack()
         http_client = httpx.AsyncClient(
             headers=dict(server.headers),
             timeout=server.timeout_ms / 1000,
@@ -128,8 +103,11 @@ class MCPClientManager:
             )
         )
         session = ClientSession(read_stream, write_stream)
-        managed_session = await self._maybe_enter_async_context(exit_stack, session)
-        return _ManagedConnection(exit_stack=exit_stack, session=managed_session)
+        return await self._maybe_enter_async_context(exit_stack, session)
+
+    @staticmethod
+    async def _noop(session: Any) -> None:
+        del session
 
     @staticmethod
     async def _maybe_enter_async_context(exit_stack: AsyncExitStack, resource: Any) -> Any:

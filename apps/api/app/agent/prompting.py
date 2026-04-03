@@ -529,6 +529,7 @@ def build_workflow_prompting_state(
     capability_prompt_fragment: str,
     compact_summary: str = "",
     reinjection_summary: str = "",
+    transcript_delta_summary: str = "",
     continuity_metadata: dict[str, object] | None = None,
     total_budget: int = 4096,
 ) -> dict[str, object]:
@@ -545,7 +546,13 @@ def build_workflow_prompting_state(
         part for part in (role_prompt.strip(), sub_agent_role_prompt.strip()) if part
     )
     compact_reinjection_text = "\n\n".join(
-        part for part in (compact_summary.strip(), reinjection_summary.strip()) if part
+        part
+        for part in (
+            transcript_delta_summary.strip(),
+            compact_summary.strip(),
+            reinjection_summary.strip(),
+        )
+        if part
     )
     normalized_continuity_metadata = (
         {str(key): value for key, value in continuity_metadata.items()}
@@ -553,9 +560,21 @@ def build_workflow_prompting_state(
         else {}
     )
     raw_reinjected_components = normalized_continuity_metadata.get("reinjected_components")
+    raw_recent_delta_ids = normalized_continuity_metadata.get("recent_delta_ids")
+    raw_tool_result_delta_ids = normalized_continuity_metadata.get("tool_result_delta_ids")
     reinjected_components = (
         [str(item) for item in raw_reinjected_components if isinstance(item, str)]
         if isinstance(raw_reinjected_components, list)
+        else []
+    )
+    recent_delta_ids = (
+        [str(item) for item in raw_recent_delta_ids if isinstance(item, str)]
+        if isinstance(raw_recent_delta_ids, list)
+        else []
+    )
+    tool_result_delta_ids = (
+        [str(item) for item in raw_tool_result_delta_ids if isinstance(item, str)]
+        if isinstance(raw_tool_result_delta_ids, list)
         else []
     )
     budget = allocate_token_budget(
@@ -737,5 +756,7 @@ def build_workflow_prompting_state(
             "boundary_marker": str(normalized_continuity_metadata.get("boundary_marker") or ""),
             "source": str(normalized_continuity_metadata.get("source") or "workflow"),
             "reinjected_components": reinjected_components,
+            "recent_delta_ids": recent_delta_ids,
+            "tool_result_delta_ids": tool_result_delta_ids,
         },
     }

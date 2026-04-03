@@ -764,6 +764,12 @@ export async function getMcpServer(serverId: string, signal?: AbortSignal): Prom
   return apiRequest<MCPServer>(`/api/mcp/servers/${serverId}`, { signal });
 }
 
+export async function deleteMcpServer(serverId: string): Promise<void> {
+  return apiRequest<void>(`/api/mcp/servers/${serverId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function toggleMcpServer(serverId: string, enabled: boolean): Promise<MCPServer> {
   return apiRequest<MCPServer>(`/api/mcp/servers/${serverId}/toggle`, {
     method: "POST",

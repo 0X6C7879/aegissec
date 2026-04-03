@@ -341,6 +341,113 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     assert isinstance(first_input["prompting"], dict)
 
 
+def test_workflow_runtime_transcript_is_append_only_and_execution_records_are_projection_views(
+    client: TestClient,
+) -> None:
+    session_id = _create_session(client, goal="Drive workflow from transcript runtime state")
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    first_advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    assert first_advance.status_code == 200
+    first_payload = cast(dict[str, Any], api_data(first_advance))
+    first_state = cast(dict[str, Any], first_payload["state"])
+    first_runtime = cast(dict[str, Any], first_state["runtime_transcript"])
+
+    assert set(first_runtime.keys()) == {
+        "turns",
+        "deltas",
+        "tool_use_records",
+        "tool_result_records",
+        "compact_events",
+        "reinjection_events",
+        "last_directive",
+    }
+    assert cast(list[dict[str, Any]], first_runtime["turns"])
+    assert cast(list[dict[str, Any]], first_runtime["deltas"])
+    assert cast(list[dict[str, Any]], first_runtime["tool_use_records"])
+    assert cast(list[dict[str, Any]], first_runtime["tool_result_records"])
+    first_delta_ids = [
+        delta["delta_id"] for delta in cast(list[dict[str, Any]], first_runtime["deltas"])
+    ]
+
+    first_execution_record = cast(list[dict[str, Any]], first_state["execution_records"])[0]
+    assert first_execution_record["transcript_delta_id"] in first_delta_ids
+    first_delta = next(
+        delta
+        for delta in cast(list[dict[str, Any]], first_runtime["deltas"])
+        if delta["delta_id"] == first_execution_record["transcript_delta_id"]
+    )
+    assert cast(list[dict[str, Any]], first_delta["tool_use_blocks"])
+    assert cast(list[dict[str, Any]], first_delta["tool_result_blocks"]) or cast(
+        list[dict[str, Any]], first_delta["tool_error_blocks"]
+    )
+    assert first_runtime["last_directive"] in {
+        "continue",
+        "retry_same_wave",
+        "replan_subgraph",
+        "await_user_input",
+        "await_approval",
+        "finalize",
+        "stop_loop",
+    }
+
+    second_advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    assert second_advance.status_code == 200
+    second_payload = cast(dict[str, Any], api_data(second_advance))
+    second_state = cast(dict[str, Any], second_payload["state"])
+    second_runtime = cast(dict[str, Any], second_state["runtime_transcript"])
+    second_delta_ids = [
+        delta["delta_id"] for delta in cast(list[dict[str, Any]], second_runtime["deltas"])
+    ]
+
+    assert len(second_delta_ids) > len(first_delta_ids)
+    assert all(delta_id in second_delta_ids for delta_id in first_delta_ids)
+    assert cast(list[dict[str, Any]], second_runtime["reinjection_events"])
+
+
+def test_workflow_context_consumers_prefer_runtime_transcript_continuity(
+    client: TestClient,
+) -> None:
+    session_id = _create_session(client, goal="Use transcript continuity in retrieval and memory")
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+    assert advance.status_code == 200
+    payload = cast(dict[str, Any], api_data(advance))
+    state = cast(dict[str, Any], payload["state"])
+    context = cast(dict[str, Any], state["context"])
+    retrieval = cast(dict[str, Any], context["retrieval"])
+    memory = cast(dict[str, Any], context["memory"])
+    prompting = cast(dict[str, Any], context["prompting"])
+    runtime_transcript = cast(dict[str, Any], state["runtime_transcript"])
+
+    session_local_items = cast(
+        list[dict[str, Any]], cast(dict[str, Any], retrieval["session_local"])["items"]
+    )
+    assert any(item["kind"] == "transcript_delta" for item in session_local_items)
+
+    working_raw_entries = cast(
+        list[dict[str, Any]], cast(dict[str, Any], memory["working"])["raw_entries"]
+    )
+    assert any(
+        cast(list[dict[str, Any]], entry["citations"])
+        and cast(list[dict[str, Any]], entry["citations"])[0]["source_kind"]
+        == "transcript_tool_result"
+        for entry in working_raw_entries
+    )
+
+    continuity = cast(dict[str, Any], prompting["continuity"])
+    assert continuity["source"] == "runtime_transcript"
+    assert cast(list[str], continuity["recent_delta_ids"])
+    assert cast(list[str], continuity["tool_result_delta_ids"])
+    assert cast(list[dict[str, Any]], runtime_transcript["reinjection_events"])
+    assert cast(list[dict[str, Any]], runtime_transcript["compact_events"]) or cast(
+        list[dict[str, Any]], runtime_transcript["deltas"]
+    )
+
+
 def test_context_additions_preserve_export_replay_and_session_history_compatibility(
     client: TestClient,
 ) -> None:
@@ -928,6 +1035,7 @@ def test_workflow_preserves_blocked_tool_execution_as_blocked_runtime_state() ->
     result = asyncio.run(engine.advance(run=run, tasks=[blocked_task], approve=True))
     state = cast(dict[str, Any], result.state)
     execution_records = cast(list[dict[str, Any]], state["execution_records"])
+    runtime_transcript = cast(dict[str, Any], state["runtime_transcript"])
 
     assert result.status is WorkflowRunStatus.BLOCKED
     assert blocked_task.status is TaskNodeStatus.BLOCKED
@@ -937,6 +1045,131 @@ def test_workflow_preserves_blocked_tool_execution_as_blocked_runtime_state() ->
     assert execution_records[-1]["status"] == TaskNodeStatus.BLOCKED.value
     assert execution_records[-1]["output_json"]["execution_blocked"] is True
     assert execution_records[-1]["output_json"]["interrupt_behavior"] == "user_interaction"
+    assert runtime_transcript["last_directive"] == "await_user_input"
+    blocked_delta = next(
+        delta
+        for delta in cast(list[dict[str, Any]], runtime_transcript["deltas"])
+        if delta["delta_id"] == execution_records[-1]["transcript_delta_id"]
+    )
+    assert cast(list[dict[str, Any]], blocked_delta["tool_error_blocks"])
+
+
+def test_workflow_directive_stops_remaining_tasks_in_same_cycle() -> None:
+    import asyncio
+
+    executed_names: list[str] = []
+
+    class StubExecutor:
+        def execute(self, *, context: object, task: Any) -> ExecutionResult:
+            del context
+            from datetime import UTC, datetime
+
+            executed_names.append(cast(str, task.name))
+            now = datetime.now(UTC)
+            if task.name == "needs.input":
+                return ExecutionResult(
+                    trace_id=f"trace-{task.name}",
+                    source_type="runtime",
+                    source_name="test-executor",
+                    command_or_action=f"execute:{task.name}",
+                    input_payload={"task": task.name},
+                    output_payload={
+                        "stdout": "",
+                        "stderr": "tool execution blocked pending user interaction",
+                        "exit_code": 1,
+                        "execution_blocked": True,
+                        "interaction_required": True,
+                        "interrupt_behavior": "user_interaction",
+                        "block_reason": "user_interaction_required",
+                    },
+                    status=TaskNodeStatus.BLOCKED,
+                    started_at=now,
+                    ended_at=now,
+                )
+            raise AssertionError("loop should stop after await_user_input directive")
+
+        def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:
+            del task
+            return ToolSpec(
+                name="workflow.structured_runtime",
+                category=ToolCategory.EXECUTION,
+                capability=ToolCapability.STRUCTURED_RUNTIME,
+                safety_profile=ToolSafetyProfile(
+                    writes_state=True,
+                    is_concurrency_safe=False,
+                    is_read_only=False,
+                    is_destructive=True,
+                ),
+                access_mode=ToolAccessMode.WRITE,
+            )
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=cast(Any, StubExecutor()),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-1",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="validation",
+        state_json={
+            "goal": "directive stop test",
+            "runtime_policy": {},
+            "batch": {"max_nodes_per_cycle": 2},
+        },
+    )
+    blocked_task = TaskNode(
+        workflow_run_id=run.id,
+        name="needs.input",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
+    )
+    skipped_task = TaskNode(
+        workflow_run_id=run.id,
+        name="should.not.run",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=2,
+        metadata_json={"stage_key": "validation", "scheduler_access_mode": "write"},
+    )
+
+    result = asyncio.run(engine.advance(run=run, tasks=[blocked_task, skipped_task], approve=True))
+    state = cast(dict[str, Any], result.state)
+    execution_records = cast(list[dict[str, Any]], state["execution_records"])
+    runtime_transcript = cast(dict[str, Any], state["runtime_transcript"])
+
+    assert result.status is WorkflowRunStatus.BLOCKED
+    assert executed_names == ["needs.input"]
+    assert result.executed_task_ids == [blocked_task.id]
+    assert blocked_task.status is TaskNodeStatus.BLOCKED
+    assert skipped_task.status is TaskNodeStatus.READY
+    assert len(execution_records) == 1
+    assert execution_records[0]["task_node_id"] == blocked_task.id
+    assert execution_records[0]["output_json"]["execution_blocked"] is True
+    assert runtime_transcript["last_directive"] == "await_user_input"
+    assert len(cast(list[dict[str, Any]], runtime_transcript["tool_result_records"])) == 1
 
 
 def test_parallel_policy_denial_does_not_contaminate_sibling_read_task(

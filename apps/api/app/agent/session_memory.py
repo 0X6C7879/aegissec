@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from app.agent.context_models import RetrievalState
 from app.agent.token_budget import estimate_token_count
+from app.agent.transcript_runtime import TranscriptRuntimeService
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,9 @@ class SessionMemoryService:
     MIN_ROUGH_TOKEN_THRESHOLD = 120
     MIN_TOKENS_BETWEEN_UPDATES = 80
     MIN_TOOL_CALLS_BETWEEN_UPDATES = 2
+
+    def __init__(self) -> None:
+        self._transcript_runtime = TranscriptRuntimeService()
 
     def update_session_summary(
         self,
@@ -108,6 +112,10 @@ class SessionMemoryService:
         return [item for item in raw if isinstance(item, dict)]
 
     def _build_source_text(self, *, state: dict[str, object], retrieval: RetrievalState) -> str:
+        transcript_source = self._transcript_runtime.session_source_text(state, retrieval.summary)
+        transcript_tool_results = self._transcript_runtime.recent_tool_result_records(
+            state, limit=6
+        )
         execution_records = self._dict_list(state.get("execution_records"))[-6:]
         findings = self._dict_list(state.get("findings"))[-4:]
         messages = self._dict_list(state.get("messages"))[-4:]
@@ -115,15 +123,26 @@ class SessionMemoryService:
             f"Goal: {state.get('goal') or ''}",
             f"Stage: {state.get('current_stage') or ''}",
             f"Retrieval: {retrieval.summary}",
+            transcript_source,
         ]
-        parts.extend(
-            (
-                "Execution "
-                f"{record.get('command_or_action') or record.get('task_node_id')}: "
-                f"{record.get('summary') or record.get('status') or ''}"
+        if transcript_tool_results:
+            parts.extend(
+                (
+                    "Transcript tool "
+                    f"{record.get('command_or_action') or record.get('task_name')}: "
+                    f"{record.get('status') or ''}"
+                )
+                for record in transcript_tool_results
             )
-            for record in execution_records
-        )
+        else:
+            parts.extend(
+                (
+                    "Execution "
+                    f"{record.get('command_or_action') or record.get('task_node_id')}: "
+                    f"{record.get('summary') or record.get('status') or ''}"
+                )
+                for record in execution_records
+            )
         parts.extend(
             f"Finding {finding.get('title') or finding.get('id')}: {finding.get('summary') or ''}"
             for finding in findings
@@ -138,15 +157,28 @@ class SessionMemoryService:
         return "\n".join(part for part in parts if part.strip())
 
     def _summarize(self, *, state: dict[str, object], retrieval: RetrievalState) -> str:
+        transcript_deltas = self._transcript_runtime.recent_deltas(state, limit=3)
+        transcript_tool_results = self._transcript_runtime.recent_tool_result_records(
+            state, limit=5
+        )
         execution_records = self._dict_list(state.get("execution_records"))[-5:]
         findings = self._dict_list(state.get("findings"))[-3:]
-        recent_steps = "; ".join(
-            (
-                f"{record.get('command_or_action') or record.get('task_node_id')}: "
-                f"{record.get('status') or 'unknown'}"
+        if transcript_tool_results:
+            recent_steps = "; ".join(
+                (
+                    f"{record.get('command_or_action') or record.get('task_name')}: "
+                    f"{record.get('status') or 'unknown'}"
+                )
+                for record in transcript_tool_results
             )
-            for record in execution_records
-        )
+        else:
+            recent_steps = "; ".join(
+                (
+                    f"{record.get('command_or_action') or record.get('task_node_id')}: "
+                    f"{record.get('status') or 'unknown'}"
+                )
+                for record in execution_records
+            )
         finding_text = "; ".join(
             str(finding.get("title") or finding.get("id") or "finding") for finding in findings
         )
@@ -156,6 +188,15 @@ class SessionMemoryService:
         ]
         if recent_steps:
             summary_parts.append(f"Recent tool activity: {recent_steps}.")
+        if transcript_deltas:
+            summary_parts.append(
+                "Transcript continuity: "
+                + "; ".join(
+                    str(self._transcript_preview(delta) or delta.get("delta_id") or "runtime")
+                    for delta in transcript_deltas
+                )
+                + "."
+            )
         if finding_text:
             summary_parts.append(f"Recent findings: {finding_text}.")
         summary_parts.append(f"Retrieval status: {retrieval.summary}.")
@@ -185,9 +226,33 @@ class SessionMemoryService:
         return False, None
 
     def _tool_call_count(self, state: dict[str, object]) -> int:
+        transcript_count = len(
+            self._transcript_runtime.recent_tool_result_records(state, limit=10_000)
+        )
+        if transcript_count:
+            return transcript_count
         return len(self._dict_list(state.get("execution_records"))) + len(
             self._dict_list(state.get("archived_execution_records"))
         )
+
+    def _transcript_preview(self, delta: dict[str, object]) -> str:
+        for key in (
+            "tool_result_blocks",
+            "assistant_blocks",
+            "compact_boundary_blocks",
+            "reinjection_blocks",
+        ):
+            blocks = delta.get(key)
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if (
+                    isinstance(block, dict)
+                    and isinstance(block.get("content"), str)
+                    and block.get("content")
+                ):
+                    return str(block.get("content"))[:160]
+        return ""
 
     @staticmethod
     def _batch_cycle(state: dict[str, object]) -> int:

@@ -8,6 +8,15 @@ from app.agent.post_compact_reinjection import PostCompactReinjectionService
 def test_compact_runtime_triggers_and_creates_boundary() -> None:
     service = CompactRuntimeService()
     mutable_state: dict[str, object] = {
+        "runtime_transcript": {
+            "turns": [],
+            "deltas": [],
+            "tool_use_records": [],
+            "tool_result_records": [],
+            "compact_events": [],
+            "reinjection_events": [],
+            "last_directive": "continue",
+        },
         "messages": [
             {"role": "user", "content": "Need continuity after compact."},
             {"role": "assistant", "content": "Working through the evidence trail."},
@@ -38,6 +47,7 @@ def test_compact_runtime_triggers_and_creates_boundary() -> None:
         projection=ContextProjection.empty(),
         active_task_name="context_collect.attack_surface",
         current_stage="context_collect",
+        cycle_id="cycle-1",
     )
 
     assert runtime_state["triggered"] is True
@@ -51,9 +61,24 @@ def test_compact_runtime_triggers_and_creates_boundary() -> None:
     metrics = cast(dict[str, Any], compact_metadata["metrics"])
     assert metrics["message_count"] >= 1
     assert metrics["execution_record_count"] >= 1
+    runtime_transcript = cast(dict[str, Any], mutable_state["runtime_transcript"])
+    compact_events = cast(list[dict[str, Any]], runtime_transcript["compact_events"])
+    assert compact_events
+    assert compact_events[-1]["boundary_marker"] == runtime_state["boundary_marker"]
 
 
 def test_post_compact_reinjection_restores_required_fragments() -> None:
+    mutable_state: dict[str, object] = {
+        "runtime_transcript": {
+            "turns": [],
+            "deltas": [],
+            "tool_use_records": [],
+            "tool_result_records": [],
+            "compact_events": [],
+            "reinjection_events": [],
+            "last_directive": "continue",
+        }
+    }
     reinjection = PostCompactReinjectionService().build_reinjection(
         compact_runtime={
             "compacted": True,
@@ -71,6 +96,8 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
         capability_inventory_summary="Loaded skills inventory:\n- agent-browser",
         capability_schema_summary="Capability schema summary.",
         capability_prompt_fragment="Capability prompt fragment.",
+        mutable_state=mutable_state,
+        cycle_id="cycle-1",
     )
 
     assert reinjection["compact_applied"] is True
@@ -92,3 +119,7 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
     )
     provenance = cast(dict[str, Any], reinjection["provenance"])
     assert provenance["restored_from_boundary"] is True
+    runtime_transcript = cast(dict[str, Any], mutable_state["runtime_transcript"])
+    reinjection_events = cast(list[dict[str, Any]], runtime_transcript["reinjection_events"])
+    assert len(reinjection_events) == 1
+    assert reinjection_events[0]["boundary_marker"] == "compact-boundary:1"

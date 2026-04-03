@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from app.agent.transcript_runtime import TranscriptRuntimeService
+
 
 class PostCompactReinjectionService:
+    def __init__(self) -> None:
+        self._transcript_runtime = TranscriptRuntimeService()
+
     def build_reinjection(
         self,
         *,
@@ -13,6 +18,8 @@ class PostCompactReinjectionService:
         capability_inventory_summary: str,
         capability_schema_summary: str,
         capability_prompt_fragment: str,
+        mutable_state: dict[str, object],
+        cycle_id: str,
     ) -> dict[str, object]:
         compact_applied = bool(compact_runtime.get("compacted", False))
         boundary_marker = str(compact_runtime.get("boundary_marker") or "")
@@ -63,7 +70,7 @@ class PostCompactReinjectionService:
             ]
             if part
         )
-        return {
+        reinjection = {
             "compact_applied": compact_applied,
             "boundary_marker": boundary_marker,
             "summary": summary,
@@ -75,6 +82,14 @@ class PostCompactReinjectionService:
                 "reinjected_components": sorted(fragments.keys()),
             },
         }
+        self._transcript_runtime.append_reinjection_event(
+            mutable_state=mutable_state,
+            reinjection=reinjection,
+            cycle_id=cycle_id,
+            current_stage=current_stage,
+            task_name=effective_task,
+        )
+        return reinjection
 
     @staticmethod
     def _active_tool_summary(

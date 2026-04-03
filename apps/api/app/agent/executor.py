@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.agent.tool_registry import ToolRegistry, ToolSpec, build_default_tool_registry
+from app.agent.tool_runtime_models import ToolTranscriptBlock
 from app.agent.workflow import WorkflowExecutionContext
 from app.db.models import TaskNode, TaskNodeStatus
 from app.services.capabilities import CapabilityFacade
@@ -23,6 +24,8 @@ class ExecutionResult:
     tool_name: str | None = None
     tool_category: str | None = None
     tool_capability: str | None = None
+    transcript_blocks: tuple[ToolTranscriptBlock, ...] = ()
+    runtime_protocol: dict[str, object] | None = None
 
 
 class Executor:
@@ -34,9 +37,8 @@ class Executor:
         self._tool_registry = tool_registry or build_default_tool_registry(capability_facade)
 
     def execute(self, *, context: WorkflowExecutionContext, task: TaskNode) -> ExecutionResult:
-        tool_result = self._tool_registry.execute_envelope(
-            context=context, task=task
-        ).runtime_result
+        envelope = self._tool_registry.execute_envelope(context=context, task=task)
+        tool_result = envelope.runtime_result
         trace_id = tool_result.input_payload.get("trace_id")
         return ExecutionResult(
             trace_id=trace_id if isinstance(trace_id, str) else task.id,
@@ -51,6 +53,8 @@ class Executor:
             tool_name=tool_result.spec.name,
             tool_category=tool_result.spec.category.value,
             tool_capability=tool_result.spec.capability.value,
+            transcript_blocks=envelope.transcript_blocks,
+            runtime_protocol=dict(envelope.runtime_protocol),
         )
 
     def resolve_tool_spec(self, task: TaskNode) -> ToolSpec:

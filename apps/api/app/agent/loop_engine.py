@@ -22,6 +22,8 @@ from app.agent.tool_scheduler import (
     WorkflowToolScheduler,
     build_scheduler_summary,
 )
+from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.turn_models import NextTurnDirective
 from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
@@ -84,6 +86,7 @@ class WorkflowLoopEngine:
         self._context_projection_builder = ContextProjectionBuilder()
         self._compact_runtime = CompactRuntimeService()
         self._post_compact_reinjection = PostCompactReinjectionService()
+        self._transcript_runtime = TranscriptRuntimeService()
         self._runtime = runtime or WorkflowGraphRuntime()
         self._selector = selector or WorkflowRunnableSelector(
             self._runtime,
@@ -95,6 +98,7 @@ class WorkflowLoopEngine:
         self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
     ) -> LoopAdvanceResult:
         mutable_state = dict(run.state_json)
+        self._transcript_runtime.ensure_state(mutable_state)
         self._ensure_batch_contract(mutable_state)
         loop_state = WorkflowLoopState.from_state(mutable_state)
         session = self._session_repository.get_session(run.session_id)
@@ -137,7 +141,14 @@ class WorkflowLoopEngine:
                         partial_failures=[],
                     ),
                     partial_failures=[],
-                    next_action="await_approval",
+                    next_action=self._transcript_runtime.directive_to_next_action(
+                        self._transcript_runtime.set_last_directive(
+                            mutable_state,
+                            self._transcript_runtime.directive_for_run_status(
+                                WorkflowRunStatus.NEEDS_APPROVAL
+                            ),
+                        )
+                    ),
                 )
             )
             loop_state.apply_to_state(mutable_state)
@@ -187,7 +198,12 @@ class WorkflowLoopEngine:
                         partial_failures=[],
                     ),
                     partial_failures=[],
-                    next_action="complete" if resolved_status is WorkflowRunStatus.DONE else "idle",
+                    next_action=self._transcript_runtime.directive_to_next_action(
+                        self._transcript_runtime.set_last_directive(
+                            mutable_state,
+                            self._transcript_runtime.directive_for_run_status(resolved_status),
+                        )
+                    ),
                 )
             )
             loop_state.apply_to_state(mutable_state)
@@ -216,6 +232,7 @@ class WorkflowLoopEngine:
         last_failure_reason: str | None = None
         merge_events: list[dict[str, object]] = []
         partial_failures: list[dict[str, object]] = []
+        latest_directive = self._transcript_runtime.last_directive(mutable_state)
 
         for phase in schedule.phases:
             phase_tasks = [
@@ -256,6 +273,10 @@ class WorkflowLoopEngine:
                         executed_task_ids=executed_task_ids,
                         scheduler_group=phase.scheduler_group,
                     )
+                    latest_directive = self._directive_from_merge_result(
+                        merge_result, latest_directive
+                    )
+                    self._transcript_runtime.set_last_directive(mutable_state, latest_directive)
                     merge_events.append(merge_result)
                     merge_partial_failures = merge_result.get("partial_failures")
                     if isinstance(merge_partial_failures, list):
@@ -270,6 +291,31 @@ class WorkflowLoopEngine:
                     failure_reason = self._last_failure_reason(read_outcomes)
                     if failure_reason is not None:
                         last_failure_reason = failure_reason
+                    context_snapshot = self._build_context_snapshot(
+                        run=run,
+                        session=session,
+                        mutable_state=mutable_state,
+                        tasks=tasks,
+                    )
+                    directive_result = self._stop_after_directive(
+                        run=run,
+                        tasks=tasks,
+                        mutable_state=mutable_state,
+                        loop_state=loop_state,
+                        schedule=schedule,
+                        context_snapshot=context_snapshot,
+                        tool_results=tool_results,
+                        reflection_summaries=reflection_summaries,
+                        merge_events=merge_events,
+                        partial_failures=partial_failures,
+                        executed_task_ids=executed_task_ids,
+                        latest_directive=latest_directive,
+                        last_executed_task=last_executed_task,
+                        last_failure_reason=last_failure_reason,
+                        blocked_task_id=self._blocked_task_id_from_merge_result(merge_result),
+                    )
+                    if directive_result is not None:
+                        return directive_result
                 if isinstance(blocked_index, int):
                     blocked_task = phase_tasks[blocked_index]
                     blocked_task.status = TaskNodeStatus.BLOCKED
@@ -305,7 +351,14 @@ class WorkflowLoopEngine:
                                 partial_failures=partial_failures,
                             ),
                             partial_failures=partial_failures,
-                            next_action="await_approval",
+                            next_action=self._transcript_runtime.directive_to_next_action(
+                                self._transcript_runtime.set_last_directive(
+                                    mutable_state,
+                                    self._transcript_runtime.directive_for_run_status(
+                                        WorkflowRunStatus.NEEDS_APPROVAL
+                                    ),
+                                )
+                            ),
                         )
                     )
                     loop_state.apply_to_state(mutable_state)
@@ -353,7 +406,14 @@ class WorkflowLoopEngine:
                                 partial_failures=partial_failures,
                             ),
                             partial_failures=partial_failures,
-                            next_action="await_approval",
+                            next_action=self._transcript_runtime.directive_to_next_action(
+                                self._transcript_runtime.set_last_directive(
+                                    mutable_state,
+                                    self._transcript_runtime.directive_for_run_status(
+                                        WorkflowRunStatus.NEEDS_APPROVAL
+                                    ),
+                                )
+                            ),
                         )
                     )
                     loop_state.apply_to_state(mutable_state)
@@ -385,6 +445,8 @@ class WorkflowLoopEngine:
                     executed_task_ids=executed_task_ids,
                     scheduler_group=phase.scheduler_group,
                 )
+                latest_directive = self._directive_from_merge_result(merge_result, latest_directive)
+                self._transcript_runtime.set_last_directive(mutable_state, latest_directive)
                 merge_events.append(merge_result)
                 merge_partial_failures = merge_result.get("partial_failures")
                 if isinstance(merge_partial_failures, list):
@@ -394,6 +456,31 @@ class WorkflowLoopEngine:
                 last_executed_task = write_outcome.task
                 if write_outcome.reflection.replanning_suggestion is not None:
                     last_failure_reason = write_outcome.reflection.failure_reason
+                context_snapshot = self._build_context_snapshot(
+                    run=run,
+                    session=session,
+                    mutable_state=mutable_state,
+                    tasks=tasks,
+                )
+                directive_result = self._stop_after_directive(
+                    run=run,
+                    tasks=tasks,
+                    mutable_state=mutable_state,
+                    loop_state=loop_state,
+                    schedule=schedule,
+                    context_snapshot=context_snapshot,
+                    tool_results=tool_results,
+                    reflection_summaries=reflection_summaries,
+                    merge_events=merge_events,
+                    partial_failures=partial_failures,
+                    executed_task_ids=executed_task_ids,
+                    latest_directive=latest_directive,
+                    last_executed_task=last_executed_task,
+                    last_failure_reason=last_failure_reason,
+                    blocked_task_id=self._blocked_task_id_from_merge_result(merge_result),
+                )
+                if directive_result is not None:
+                    return directive_result
 
         resolved_status = self._runtime.resolve_run_status(tasks)
         ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
@@ -425,8 +512,15 @@ class WorkflowLoopEngine:
                     partial_failures=partial_failures,
                 ),
                 partial_failures=partial_failures,
-                next_action=(
-                    "complete" if resolved_status is WorkflowRunStatus.DONE else "continue"
+                next_action=self._transcript_runtime.directive_to_next_action(
+                    self._transcript_runtime.set_last_directive(
+                        mutable_state,
+                        (
+                            self._transcript_runtime.directive_for_run_status(resolved_status)
+                            if resolved_status is not WorkflowRunStatus.RUNNING
+                            else latest_directive
+                        ),
+                    )
                 ),
             )
         )
@@ -466,7 +560,8 @@ class WorkflowLoopEngine:
         reflection: ReflectionResult,
         mutable_state: dict[str, object],
         tasks: list[TaskNode],
-    ) -> None:
+        scheduler_group: str | None,
+    ) -> NextTurnDirective:
         if execution.status is TaskNodeStatus.COMPLETED and reflection.conclusion == "success":
             task.status = TaskNodeStatus.COMPLETED
         elif execution.status is TaskNodeStatus.BLOCKED:
@@ -486,28 +581,31 @@ class WorkflowLoopEngine:
         }
         self._runtime.sync_execution_state(task)
 
+        cycle_id = f"cycle-{self._batch_cycle(mutable_state)}"
+        transcript_append = self._transcript_runtime.append_execution(
+            mutable_state=mutable_state,
+            task=task,
+            execution=execution,
+            reflection=reflection,
+            cycle_id=cycle_id,
+            scheduler_group=scheduler_group,
+        )
+
         execution_records = mutable_state.get("execution_records", [])
         if not isinstance(execution_records, list):
             execution_records = []
         execution_records.append(
-            {
-                "id": execution.trace_id,
-                "session_id": run.session_id,
-                "task_node_id": task.id,
-                "source_type": execution.source_type,
-                "source_name": execution.source_name,
-                "command_or_action": execution.command_or_action,
-                "input_json": dict(execution.input_payload),
-                "output_json": dict(execution.output_payload),
-                "status": task.status.value,
-                "batch_cycle": self._batch_cycle(mutable_state),
-                "retry_attempt": attempts,
-                "retry_count": self._metadata_int(task.metadata_json, "retry_count", default=0),
-                "summary": task.metadata_json.get("summary"),
-                "evidence_confidence": reflection.evidence_confidence,
-                "started_at": execution.started_at.isoformat(),
-                "ended_at": execution.ended_at.isoformat(),
-            }
+            self._transcript_runtime.project_execution_record(
+                session_id=run.session_id,
+                task=task,
+                execution=execution,
+                reflection=reflection,
+                batch_cycle=self._batch_cycle(mutable_state),
+                retry_attempt=attempts,
+                retry_count=self._metadata_int(task.metadata_json, "retry_count", default=0),
+                transcript_delta_id=transcript_append.delta.delta_id,
+                tool_result_record=transcript_append.tool_result_record,
+            )
         )
         mutable_state["execution_records"] = execution_records
         self._trim_execution_context(mutable_state)
@@ -541,6 +639,7 @@ class WorkflowLoopEngine:
         mutable_state["graph_updates"] = graph_updates
 
         self._runtime.materialize_ready_tasks(tasks)
+        return transcript_append.directive
 
     async def _execute_parallel_read_wave(
         self,
@@ -783,18 +882,21 @@ class WorkflowLoopEngine:
     ) -> dict[str, object]:
         merged_task_ids: list[str] = []
         partial_failures: list[dict[str, object]] = []
+        directives: list[str] = []
         for outcome in outcomes:
             task = outcome.task
             execution_result = outcome.execution
             reflection_result = outcome.reflection
-            self._apply_execution_result(
+            directive = self._apply_execution_result(
                 run=run,
                 task=task,
                 execution=execution_result,
                 reflection=reflection_result,
                 mutable_state=mutable_state,
                 tasks=tasks,
+                scheduler_group=scheduler_group,
             )
+            directives.append(directive.value)
             tool_results.append(dict(outcome.merge_candidate.tool_result))
             reflection_summaries.append(
                 f"{task.name}:{reflection_result.conclusion}:{reflection_result.evidence_confidence:.2f}"
@@ -839,6 +941,7 @@ class WorkflowLoopEngine:
             "merged_count": len(merged_task_ids),
             "merged_after_batch_completion": True,
             "partial_failures": partial_failures,
+            "directives": directives,
         }
 
     @staticmethod
@@ -1197,6 +1300,7 @@ class WorkflowLoopEngine:
             projection=projection,
             active_task_name=active_task_name,
             current_stage=current_stage,
+            cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
         )
         reinjection = self._post_compact_reinjection.build_reinjection(
             compact_runtime=compact_runtime,
@@ -1207,11 +1311,20 @@ class WorkflowLoopEngine:
             capability_inventory_summary=capability_fragments["inventory_summary"],
             capability_schema_summary=capability_fragments["schema_summary"],
             capability_prompt_fragment=capability_fragments["prompt_fragment"],
+            mutable_state=mutable_state,
+            cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
         )
+        transcript_continuity = self._transcript_runtime.prompt_continuity(mutable_state)
         raw_reinjection_provenance = reinjection.get("provenance")
         reinjection_provenance = (
             {str(key): value for key, value in raw_reinjection_provenance.items()}
             if isinstance(raw_reinjection_provenance, dict)
+            else {}
+        )
+        raw_transcript_provenance = transcript_continuity.get("provenance")
+        transcript_provenance = (
+            {str(key): value for key, value in raw_transcript_provenance.items()}
+            if isinstance(raw_transcript_provenance, dict)
             else {}
         )
         prompting = build_workflow_prompting_state(
@@ -1229,9 +1342,13 @@ class WorkflowLoopEngine:
             capability_inventory_summary=capability_fragments["inventory_summary"],
             capability_schema_summary=capability_fragments["schema_summary"],
             capability_prompt_fragment=capability_fragments["prompt_fragment"],
-            compact_summary=str(compact_runtime.get("compact_summary") or ""),
-            reinjection_summary=str(reinjection.get("summary") or ""),
+            compact_summary=str(transcript_continuity.get("compact_continuity") or ""),
+            reinjection_summary=str(transcript_continuity.get("reinjection_continuity") or ""),
+            transcript_delta_summary=str(
+                transcript_continuity.get("recent_tool_result_continuity") or ""
+            ),
             continuity_metadata=reinjection_provenance
+            | transcript_provenance
             | {"compact_applied": bool(reinjection.get("compact_applied", False))},
         )
         snapshot = ContextSnapshot(
@@ -1246,19 +1363,138 @@ class WorkflowLoopEngine:
 
     @staticmethod
     def _history_summary(mutable_state: dict[str, object]) -> str:
-        records_raw = mutable_state.get("execution_records")
-        records = records_raw if isinstance(records_raw, list) else []
-        if not records:
-            return "No prior workflow execution records are currently active."
-        lines = ["Recent workflow execution history:"]
-        for item in records[-5:]:
+        return TranscriptRuntimeService().history_summary(mutable_state)
+
+    @staticmethod
+    def _directive_from_merge_result(
+        merge_result: dict[str, object], current: NextTurnDirective
+    ) -> NextTurnDirective:
+        directives = merge_result.get("directives")
+        if isinstance(directives, list) and directives:
+            parsed_directives: list[NextTurnDirective] = []
+            for item in directives:
+                if not isinstance(item, str):
+                    continue
+                try:
+                    parsed_directives.append(NextTurnDirective(item))
+                except ValueError:
+                    continue
+            if parsed_directives:
+                return TranscriptRuntimeService.preferred_directive(
+                    parsed_directives,
+                    current=current,
+                )
+        return current
+
+    def _stop_after_directive(
+        self,
+        *,
+        run: WorkflowRun,
+        tasks: list[TaskNode],
+        mutable_state: dict[str, object],
+        loop_state: WorkflowLoopState,
+        schedule: WorkflowToolSchedule,
+        context_snapshot: ContextSnapshot,
+        tool_results: list[dict[str, object]],
+        reflection_summaries: list[str],
+        merge_events: list[dict[str, object]],
+        partial_failures: list[dict[str, object]],
+        executed_task_ids: list[str],
+        latest_directive: NextTurnDirective,
+        last_executed_task: TaskNode | None,
+        last_failure_reason: str | None,
+        blocked_task_id: str | None,
+    ) -> LoopAdvanceResult | None:
+        if not self._transcript_runtime.should_stop_current_cycle(latest_directive):
+            return None
+
+        resolved_status = self._status_for_directive(latest_directive, tasks=tasks)
+        current_stage = (
+            self._runtime.task_stage(last_executed_task)
+            if last_executed_task is not None
+            else run.current_stage
+        )
+        mutable_state["current_stage"] = current_stage
+        approval_required = resolved_status is WorkflowRunStatus.NEEDS_APPROVAL
+        mutable_state["approval"] = {
+            "required": approval_required,
+            "pending_task_id": blocked_task_id if approval_required else None,
+        }
+        self._update_batch_state(
+            mutable_state,
+            status=(
+                "waiting_approval"
+                if approval_required
+                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
+            ),
+            selected_task_ids=[task.task_id for task in schedule.selected_tasks],
+            executed_task_ids=executed_task_ids,
+        )
+        ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
+        last_error = last_failure_reason if resolved_status is WorkflowRunStatus.ERROR else None
+        loop_state = loop_state.append_cycle(
+            self._build_cycle_artifact(
+                mutable_state,
+                schedule=schedule,
+                context_snapshot=context_snapshot,
+                tool_results=tool_results,
+                reflection_summaries=reflection_summaries,
+                merge_summary=self._build_merge_summary(
+                    merge_events=merge_events,
+                    executed_task_ids=executed_task_ids,
+                    partial_failures=partial_failures,
+                ),
+                partial_failures=partial_failures,
+                next_action=self._transcript_runtime.directive_to_next_action(
+                    self._transcript_runtime.set_last_directive(mutable_state, latest_directive)
+                ),
+            )
+        )
+        loop_state.apply_to_state(mutable_state)
+        return LoopAdvanceResult(
+            status=resolved_status,
+            current_stage=current_stage,
+            state=mutable_state,
+            last_error=last_error,
+            ended_at=ended_at,
+            approval_required=approval_required,
+            executed_task_id=(executed_task_ids[-1] if executed_task_ids else None),
+            executed_task_ids=executed_task_ids,
+        )
+
+    def _status_for_directive(
+        self,
+        directive: NextTurnDirective,
+        *,
+        tasks: list[TaskNode],
+    ) -> WorkflowRunStatus:
+        if directive is NextTurnDirective.AWAIT_APPROVAL:
+            return WorkflowRunStatus.NEEDS_APPROVAL
+        if directive is NextTurnDirective.AWAIT_USER_INPUT:
+            return WorkflowRunStatus.BLOCKED
+        if directive is NextTurnDirective.FINALIZE:
+            return WorkflowRunStatus.DONE
+        resolved_status = self._runtime.resolve_run_status(tasks)
+        if (
+            directive is NextTurnDirective.STOP_LOOP
+            and resolved_status is WorkflowRunStatus.RUNNING
+        ):
+            return WorkflowRunStatus.BLOCKED
+        return resolved_status
+
+    @staticmethod
+    def _blocked_task_id_from_merge_result(merge_result: dict[str, object]) -> str | None:
+        partial_failures = merge_result.get("partial_failures")
+        if not isinstance(partial_failures, list):
+            return None
+        for item in partial_failures:
             if not isinstance(item, dict):
                 continue
-            task_name = str(item.get("task_name") or item.get("task_node_id") or "unknown-task")
-            status = str(item.get("status") or "unknown")
-            summary = str(item.get("summary") or "")
-            lines.append(f"- {task_name}: {status} {summary}".strip())
-        return "\n".join(lines)
+            if item.get("reason") == "tool execution blocked pending user interaction":
+                task_id = item.get("task_id")
+                if isinstance(task_id, str):
+                    return task_id
+        return None
 
     @staticmethod
     def _active_task_name(tasks: list[TaskNode]) -> str:

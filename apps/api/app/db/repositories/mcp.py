@@ -118,3 +118,14 @@ class MCPRepository:
         self.db_session.commit()
         self.db_session.refresh(server)
         return server
+
+    def delete_server(self, server_id: str) -> bool:
+        server = self.get_server(server_id)
+        if server is None:
+            return False
+
+        for capability in self.list_capabilities(server_id):
+            self.db_session.delete(capability)
+        self.db_session.delete(server)
+        self.db_session.commit()
+        return True

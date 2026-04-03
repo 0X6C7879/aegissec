@@ -220,12 +220,11 @@ async def test_discover_stdio_server_initializes_session_and_maps_capabilities(
     assert capabilities[2].uri == "workspace://{name}"
     assert capabilities[3].name == "report"
 
-    await manager.shutdown(server.id)
     assert session.closed is True
 
 
 @pytest.mark.anyio
-async def test_discover_http_server_uses_streamable_http_transport_and_replaces_existing_session(
+async def test_discover_http_server_uses_streamable_http_transport_per_operation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     http_calls: list[dict[str, object]] = []
@@ -290,10 +289,11 @@ async def test_discover_http_server_uses_streamable_http_transport_and_replaces_
 
     await manager.discover(server)
     assert first_session.initialize_calls == 1
+    assert first_session.closed is True
 
     await manager.discover(server)
-    assert first_session.closed is True
     assert second_session.initialize_calls == 1
+    assert second_session.closed is True
     assert created_clients[0].headers == {"Authorization": "Bearer demo-token"}
     assert created_clients[0].timeout == 7.2
     assert http_calls == [
@@ -312,14 +312,15 @@ async def test_discover_http_server_uses_streamable_http_transport_and_replaces_
     ]
 
     await manager.shutdown(server.id)
-    assert second_session.closed is True
 
 
 @pytest.mark.anyio
-async def test_call_tool_reuses_existing_connection(
+async def test_call_tool_opens_and_closes_a_session_per_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = _FakeSession(read_stream="stdio-read", write_stream="stdio-write")
+    first_session = _FakeSession(read_stream="stdio-read", write_stream="stdio-write")
+    second_session = _FakeSession(read_stream="stdio-read", write_stream="stdio-write")
+    sessions = [first_session, second_session]
 
     @asynccontextmanager
     async def fake_stdio_client(server_params: object) -> AsyncIterator[tuple[object, object]]:
@@ -329,7 +330,7 @@ async def test_call_tool_reuses_existing_connection(
     def fake_client_session(read_stream: object, write_stream: object) -> _FakeSession:
         assert read_stream == "stdio-read"
         assert write_stream == "stdio-write"
-        return session
+        return sessions.pop(0)
 
     monkeypatch.setattr("app.compat.mcp.client_manager.stdio_client", fake_stdio_client)
     monkeypatch.setattr("app.compat.mcp.client_manager.ClientSession", fake_client_session)
@@ -349,11 +350,30 @@ async def test_call_tool_reuses_existing_connection(
         config_path="/tmp/.mcp.json",
     )
 
-    result = await manager.call_tool(server, tool_name="scan", arguments={"target": "demo"})
-    content = cast(list[dict[str, object]], result["content"])
-    first_item = content[0]
+    first_result = await manager.call_tool(server, tool_name="scan", arguments={"target": "demo"})
+    second_result = await manager.call_tool(
+        server, tool_name="scan", arguments={"target": "demo-2"}
+    )
 
-    assert result["isError"] is False
-    assert first_item["text"] == "ok"
-    assert session.call_tool_calls == [("scan", {"target": "demo"})]
-    assert session.initialize_calls == 1
+    first_content = cast(list[dict[str, object]], first_result["content"])
+    second_content = cast(list[dict[str, object]], second_result["content"])
+
+    assert first_result["isError"] is False
+    assert first_content[0]["text"] == "ok"
+    assert second_result["isError"] is False
+    assert second_content[0]["text"] == "ok"
+    assert sessions == []
+    assert first_session.call_tool_calls == [("scan", {"target": "demo"})]
+    assert second_session.call_tool_calls == [("scan", {"target": "demo-2"})]
+    assert first_session.initialize_calls == 1
+    assert second_session.initialize_calls == 1
+    assert first_session.closed is True
+    assert second_session.closed is True
+
+
+@pytest.mark.anyio
+async def test_shutdown_is_a_safe_noop_for_missing_or_closed_servers() -> None:
+    manager = MCPClientManager()
+
+    await manager.shutdown("missing-server")
+    await manager.shutdown("missing-server")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from app.compat.mcp.service import (
@@ -92,6 +92,17 @@ async def get_mcp_server(
     if server is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     return server
+
+
+@router.delete("/servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_mcp_server(
+    server_id: str,
+    mcp_service: MCPService = Depends(get_mcp_service),
+) -> Response:
+    deleted = await mcp_service.delete_server(server_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/servers/{server_id}/toggle", response_model=MCPServerRead)

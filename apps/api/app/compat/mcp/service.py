@@ -117,6 +117,10 @@ class MCPService:
             return None
         return self._read_server(server)
 
+    async def delete_server(self, server_id: str) -> bool:
+        await self._client_manager.shutdown(server_id)
+        return self._repository.delete_server(server_id)
+
     async def toggle_server(self, server_id: str, enabled: bool) -> MCPServerRead | None:
         server = self._repository.get_server(server_id)
         if server is None:

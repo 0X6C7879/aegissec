@@ -12,12 +12,14 @@ from app.agent.context_models import (
 )
 from app.agent.memory_store import write_memory_entry
 from app.agent.session_memory import SessionMemoryService
+from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.db.models import Session
 
 
 class MemoryManager:
     def __init__(self) -> None:
         self._session_memory = SessionMemoryService()
+        self._transcript_runtime = TranscriptRuntimeService()
 
     def build(
         self,
@@ -150,6 +152,37 @@ class MemoryManager:
     def _build_working_raw_entries(
         self, *, state: dict[str, object], batch_cycle: int
     ) -> list[ContextRecord]:
+        transcript_entries: list[ContextRecord] = []
+        cycle_id = f"cycle-{batch_cycle}"
+        for record in self._transcript_runtime.recent_tool_result_records(state, limit=12):
+            if str(record.get("cycle_id") or "") != cycle_id:
+                continue
+            trace_id = str(record.get("trace_id") or "")
+            task_name = str(record.get("task_name") or "workflow")
+            transcript_entries.append(
+                ContextRecord(
+                    record_id=f"memory:working:raw:{trace_id}",
+                    title=task_name,
+                    summary=f"Transcript runtime {task_name}: {record.get('status') or 'recorded'}",
+                    kind="working_raw",
+                    citations=[
+                        CitationPointer(
+                            source_kind="transcript_tool_result",
+                            source_id=trace_id,
+                            label=task_name,
+                            trace_id=trace_id,
+                            task_node_id=(
+                                str(record.get("task_id"))
+                                if isinstance(record.get("task_id"), str)
+                                else None
+                            ),
+                        )
+                    ],
+                    metadata={"batch_cycle": batch_cycle, "status": record.get("status")},
+                )
+            )
+        if transcript_entries:
+            return transcript_entries
         records = self._dict_list(state.get("execution_records"))
         matched = [record for record in records if record.get("batch_cycle") == batch_cycle]
         entries: list[ContextRecord] = []

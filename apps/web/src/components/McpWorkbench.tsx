@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   checkMcpServerHealth,
+  deleteMcpServer,
   getMcpServer,
   importMcpServers,
   invokeMcpTool,
@@ -225,6 +226,17 @@ function upsertServerList(
   }
 
   return currentValue.map((server) => (server.id === updatedServer.id ? updatedServer : server));
+}
+
+function removeServerFromList(
+  currentValue: MCPServer[] | undefined,
+  serverId: string,
+): MCPServer[] {
+  if (!currentValue) {
+    return [];
+  }
+
+  return currentValue.filter((server) => server.id !== serverId);
 }
 
 function getCapabilityCounts(capabilities: MCPCapability[]): CapabilityCounts {
@@ -627,6 +639,34 @@ export function McpWorkbench() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const confirmed = window.confirm(`确认删除 MCP 服务器“${name}”吗？`);
+      if (!confirmed) {
+        return false;
+      }
+
+      await deleteMcpServer(id);
+      return true;
+    },
+    onSuccess: async (deleted, variables) => {
+      if (!deleted) {
+        return;
+      }
+
+      queryClient.setQueryData<MCPServer[] | undefined>(MCP_SERVERS_QUERY_KEY, (currentValue) =>
+        removeServerFromList(currentValue, variables.id),
+      );
+      queryClient.removeQueries({ queryKey: ["mcp", "server", variables.id] });
+
+      if (selectedServerId === variables.id) {
+        navigate("/mcp", { replace: true });
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["mcp", "server"] });
+    },
+  });
+
   const invokeMutation = useMutation({
     mutationFn: ({ server, capability }: { server: MCPServer; capability: MCPCapability }) =>
       invokeMcpTool(server.id, capability.name, {
@@ -647,9 +687,11 @@ export function McpWorkbench() {
       ? refreshMutation.error.message
       : healthMutation.isError
         ? healthMutation.error.message
-        : importMutation.isError
-          ? importMutation.error.message
-          : null;
+        : deleteMutation.isError
+          ? deleteMutation.error.message
+          : importMutation.isError
+            ? importMutation.error.message
+            : null;
 
   return (
     <main className="management-workbench management-workbench-single">
@@ -880,6 +922,19 @@ export function McpWorkbench() {
                                   onClick={() => navigate(`/mcp/${server.id}`)}
                                 >
                                   查看详情
+                                </button>
+                                <button
+                                  className="text-button"
+                                  type="button"
+                                  disabled={deleteMutation.isPending}
+                                  onClick={() =>
+                                    deleteMutation.mutate({
+                                      id: server.id,
+                                      name: server.name,
+                                    })
+                                  }
+                                >
+                                  {deleteMutation.isPending ? "删除中" : "删除"}
                                 </button>
                               </div>
                             </article>
@@ -1172,6 +1227,19 @@ export function McpWorkbench() {
                           : activeServer.enabled
                             ? "禁用"
                             : "启用"}
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        disabled={deleteMutation.isPending}
+                        onClick={() =>
+                          deleteMutation.mutate({
+                            id: activeServer.id,
+                            name: activeServer.name,
+                          })
+                        }
+                      >
+                        {deleteMutation.isPending ? "删除中" : "删除"}
                       </button>
                       <button
                         className="button button-secondary"
