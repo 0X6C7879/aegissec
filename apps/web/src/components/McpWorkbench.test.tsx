@@ -249,7 +249,7 @@ describe("McpWorkbench", () => {
     expect(within(betaCard!).getByText("导入缺失")).toBeInTheDocument();
   });
 
-  it("shows a flattened all-tools view and filters by server fields", async () => {
+  it("shows a lean flattened all-tools view and still filters by hidden server fields", async () => {
     const user = userEvent.setup();
 
     renderWorkbench();
@@ -258,21 +258,23 @@ describe("McpWorkbench", () => {
     await user.click(screen.getByRole("tab", { name: /工具/i }));
 
     expect(screen.getByText("全部工具")).toBeInTheDocument();
-    expect(screen.getByText("scan_hosts")).toBeInTheDocument();
-    expect(screen.getByText("collect_logs")).toBeInTheDocument();
-    expect(screen.getByText("deploy_report")).toBeInTheDocument();
+    expect(screen.getByText("主机扫描")).toBeInTheDocument();
+    expect(screen.getByText("日志采集")).toBeInTheDocument();
+    expect(screen.getByText("报告下发")).toBeInTheDocument();
     expect(screen.getByText("beta-server")).toBeInTheDocument();
+    expect(screen.getByText("导入缺失")).toBeInTheDocument();
+    expect(screen.queryByText("D:/configs/second-config.json")).not.toBeInTheDocument();
 
     await user.clear(screen.getByRole("searchbox"));
     await user.type(screen.getByRole("searchbox"), "second-config.json");
 
     await waitFor(() => {
-      expect(screen.queryByText("scan_hosts")).not.toBeInTheDocument();
+      expect(screen.queryByText("主机扫描")).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText("deploy_report")).toBeInTheDocument();
+    expect(screen.getByText("报告下发")).toBeInTheDocument();
     expect(screen.getByText("beta-server")).toBeInTheDocument();
-    expect(screen.getByText("D:/configs/second-config.json")).toBeInTheDocument();
+    expect(screen.queryByText("D:/configs/second-config.json")).not.toBeInTheDocument();
   });
 
   it("jumps from the flat tool list into the existing route-driven detail modal", async () => {
@@ -283,7 +285,7 @@ describe("McpWorkbench", () => {
 
     await user.click(screen.getByRole("tab", { name: /工具/i }));
 
-    const deployCard = screen.getByText("deploy_report").closest("article");
+    const deployCard = screen.getByText("报告下发").closest("article");
     expect(deployCard).not.toBeNull();
 
     await user.click(within(deployCard!).getByRole("button", { name: "查看并调用" }));
@@ -297,7 +299,8 @@ describe("McpWorkbench", () => {
     expect(within(dialog).getByText("导入缺失")).toBeInTheDocument();
     expect(within(dialog).getByText(STALE_SERVER_COPY)).toBeInTheDocument();
     expect(within(dialog).queryByText(IMPORT_MISSING_ERROR)).not.toBeInTheDocument();
-    expect(within(dialog).getByText("deploy_report")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("报告下发").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText("标识：deploy_report")).toBeInTheDocument();
     expect(within(dialog).getByText("报告模板")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "执行工具" })).toBeInTheDocument();
   });

@@ -2,7 +2,7 @@
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "stdio"],
+      "args": ["@playwright/mcp@latest"],
       "enabled": true,
       "timeout_ms": 15000
     },

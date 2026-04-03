@@ -109,7 +109,8 @@ def test_importer_normalizes_windows_package_manager_stdio_commands(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import app.compat.mcp.importer as importer
+    import os
+
     from app.compat.mcp.importer import MCPImportTarget, import_mcp_servers
     from app.db.models import CompatibilityScope, CompatibilitySource
 
@@ -119,7 +120,7 @@ def test_importer_normalizes_windows_package_manager_stdio_commands(
         {"mcp": {"shim-local": {"type": "local", "command": ["npx", "demo-mcp"]}}},
     )
 
-    monkeypatch.setattr(importer.os, "name", "nt", raising=False)
+    monkeypatch.setattr(os, "name", "nt", raising=False)
 
     imported = import_mcp_servers(
         [

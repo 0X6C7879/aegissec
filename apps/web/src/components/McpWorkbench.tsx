@@ -270,6 +270,10 @@ function hasCapabilityInputSchema(capability: MCPCapability): boolean {
   return Object.keys(capability.input_schema).length > 0;
 }
 
+function getCapabilityDisplayName(capability: MCPCapability): string {
+  return capability.title?.trim() || capability.name;
+}
+
 function flattenCapabilities(servers: MCPServer[]): FlattenedCapability[] {
   return servers.flatMap((server) =>
     server.capabilities.map((capability) => ({
@@ -961,11 +965,9 @@ export function McpWorkbench() {
                           <div className="management-list-card-header">
                             <div className="management-detail-copy">
                               <strong className="management-list-title">
-                                {entry.capability.name}
+                                {getCapabilityDisplayName(entry.capability)}
                               </strong>
-                              <p className="management-list-subtitle">
-                                {entry.capability.title ?? "未提供标题"}
-                              </p>
+                              <p className="management-list-subtitle">来自 {entry.server.name}</p>
                             </div>
                             <span
                               className={`management-status-badge ${getCapabilityTone(entry.capability.kind)}`}
@@ -978,41 +980,13 @@ export function McpWorkbench() {
                             {entry.capability.description ?? "暂无描述。"}
                           </p>
 
-                          <div className="mcp-flat-meta-grid">
-                            <div className="mcp-flat-meta-item">
-                              <span className="mcp-flat-meta-label">所属服务器</span>
-                              <strong className="mcp-flat-meta-value">{entry.server.name}</strong>
-                            </div>
-                            <div className="mcp-flat-meta-item">
-                              <span className="mcp-flat-meta-label">状态</span>
-                              <strong className="mcp-flat-meta-value">{entry.server.status}</strong>
-                            </div>
-                            <div className="mcp-flat-meta-item">
-                              <span className="mcp-flat-meta-label">传输方式</span>
-                              <strong className="mcp-flat-meta-value">
-                                {entry.server.transport}
-                              </strong>
-                            </div>
-                            <div className="mcp-flat-meta-item">
-                              <span className="mcp-flat-meta-label">来源 / 范围</span>
-                              <strong className="mcp-flat-meta-value">
-                                {entry.server.source}/{entry.server.scope}
-                              </strong>
-                            </div>
-                            <div className="mcp-flat-meta-item mcp-flat-meta-item-full">
-                              <span className="mcp-flat-meta-label">配置路径</span>
-                              <strong className="mcp-flat-meta-value">
-                                {entry.server.config_path}
-                              </strong>
-                            </div>
-                          </div>
-
                           <div className="action-row">
-                            <span
-                              className={`management-status-badge ${getServerTone(entry.server.status)}`}
-                            >
-                              服务器 {entry.server.status}
+                            <span className="management-status-badge tone-neutral">
+                              {entry.server.name}
                             </span>
+                            {isStaleImportedServer(entry.server) ? (
+                              <span className="management-status-badge tone-warning">导入缺失</span>
+                            ) : null}
                             <span className="management-status-badge tone-neutral">
                               {entry.hasInputSchema ? "有输入 Schema" : "无输入 Schema"}
                             </span>
@@ -1187,9 +1161,30 @@ export function McpWorkbench() {
                   <div className="management-modal-header">
                     <div className="management-detail-copy">
                       <h3 className="panel-title">{activeServer.name}</h3>
-                      {activeServerIsStale ? (
-                        <span className="management-status-badge tone-warning">导入缺失</span>
-                      ) : null}
+                      <div className="action-row">
+                        {activeServerIsStale ? (
+                          <span className="management-status-badge tone-warning">导入缺失</span>
+                        ) : null}
+                        <span
+                          className={`management-status-badge ${activeServer.enabled ? "tone-success" : "tone-neutral"}`}
+                        >
+                          {activeServer.enabled ? "已启用" : "已禁用"}
+                        </span>
+                        <span
+                          className={`management-status-badge ${getServerTone(activeServer.status)}`}
+                        >
+                          {activeServer.status}
+                        </span>
+                        <span
+                          className={`management-status-badge ${getHealthTone(activeServer.health_status)}`}
+                        >
+                          健康 {activeServer.health_status ?? "未检测"}
+                        </span>
+                        <span className="management-status-badge tone-neutral">
+                          {activeServer.transport}
+                        </span>
+                      </div>
+                      <p className="management-list-copy">{getPrimaryServerValue(activeServer)}</p>
                     </div>
 
                     <div className="management-action-row">
@@ -1270,22 +1265,6 @@ export function McpWorkbench() {
 
                   <div className="management-info-grid">
                     <div className="management-info-card">
-                      <span className="management-info-label">状态</span>
-                      <strong
-                        className={`management-status-badge ${getServerTone(activeServer.status)}`}
-                      >
-                        {activeServer.status}
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">启用状态</span>
-                      <strong
-                        className={`management-status-badge ${activeServer.enabled ? "tone-success" : "tone-neutral"}`}
-                      >
-                        {activeServer.enabled ? "已启用" : "已禁用"}
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
                       <span className="management-info-label">传输方式</span>
                       <strong className="management-info-value">{activeServer.transport}</strong>
                     </div>
@@ -1293,14 +1272,6 @@ export function McpWorkbench() {
                       <span className="management-info-label">超时</span>
                       <strong className="management-info-value">
                         {activeServer.timeout_ms} ms
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">健康状态</span>
-                      <strong
-                        className={`management-status-badge ${getHealthTone(activeServer.health_status)}`}
-                      >
-                        {activeServer.health_status ?? "未检测"}
                       </strong>
                     </div>
                     <div className="management-info-card">
@@ -1445,38 +1416,40 @@ export function McpWorkbench() {
                     <section className="management-section-card management-section-card-compact">
                       <div className="management-section-header">
                         <h4 className="management-section-title">能力详情</h4>
-                        <span
-                          className={`management-status-badge ${getCapabilityTone(selectedCapability.kind)}`}
-                        >
-                          {selectedCapability.kind}
-                        </span>
+                        <div className="action-row">
+                          <span
+                            className={`management-status-badge ${getCapabilityTone(selectedCapability.kind)}`}
+                          >
+                            {selectedCapability.kind}
+                          </span>
+                          <span className="management-status-badge tone-neutral">
+                            {hasCapabilityInputSchema(selectedCapability)
+                              ? "有输入 Schema"
+                              : "无输入 Schema"}
+                          </span>
+                        </div>
                       </div>
 
-                      <div className="management-info-grid">
-                        <div className="management-info-card">
-                          <span className="management-info-label">名称</span>
-                          <strong className="management-info-value">
-                            {selectedCapability.name}
-                          </strong>
-                        </div>
-                        <div className="management-info-card">
-                          <span className="management-info-label">标题</span>
-                          <strong className="management-info-value">
-                            {selectedCapability.title ?? "未提供"}
-                          </strong>
-                        </div>
-                        <div className="management-info-card management-info-card-full">
-                          <span className="management-info-label">URI</span>
-                          <strong className="management-info-value management-info-code">
-                            {selectedCapability.uri ?? "未提供"}
-                          </strong>
-                        </div>
+                      <div className="management-detail-copy">
+                        <strong className="management-list-title">
+                          {getCapabilityDisplayName(selectedCapability)}
+                        </strong>
+                        {selectedCapability.title &&
+                        selectedCapability.title.trim() !== selectedCapability.name ? (
+                          <p className="management-list-copy">标识：{selectedCapability.name}</p>
+                        ) : null}
                       </div>
 
                       {selectedCapability.description ? (
                         <p className="management-unified-description">
                           {selectedCapability.description}
                         </p>
+                      ) : null}
+                      {selectedCapability.uri ? (
+                        <div className="management-subcard">
+                          <span className="management-info-label">URI</span>
+                          <pre className="management-code-block">{selectedCapability.uri}</pre>
+                        </div>
                       ) : null}
                       {Object.keys(selectedCapability.input_schema).length > 0 ? (
                         <div className="management-subcard">
