@@ -61,9 +61,9 @@ class PromptFragment:
             "cache_event_type": self.cache_event_type,
             "optional": self.optional,
             "requested_tokens": self.token_count,
-            "allocated_tokens": allocated_tokens
-            if allocated_tokens is not None
-            else self.token_count,
+            "allocated_tokens": (
+                allocated_tokens if allocated_tokens is not None else self.token_count
+            ),
             "floor_tokens": self.floor_tokens,
             "preview": preview[:160],
         }

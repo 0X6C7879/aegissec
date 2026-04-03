@@ -51,6 +51,9 @@ class Planner:
                         "template_kinds": list(template.template_kinds),
                         "role_prompt": ordered_stage_role_prompts[stage_key],
                         "sub_agent_role_prompt": ordered_stage_sub_agent_prompts[stage_key],
+                        "scheduler_access_mode": "write",
+                        "scheduler_side_effect_level": "low",
+                        "scheduler_resource_keys": [f"stage:{stage_key}"],
                     },
                 )
             )
@@ -188,7 +191,21 @@ class Planner:
                     "template_kinds": list(template.template_kinds),
                     "role_prompt": ordered_stage_role_prompts[stage_key],
                     "sub_agent_role_prompt": ordered_stage_sub_agent_prompts[stage_key],
+                    "scheduler_access_mode": "read",
+                    "scheduler_side_effect_level": "none",
+                    "scheduler_resource_keys": [f"stage:{stage_key}"],
                 }
+                if stage_key in {
+                    "safe_validation",
+                    "findings_merge",
+                    "causal_graph_update",
+                    "report_export",
+                }:
+                    metadata["scheduler_access_mode"] = "write"
+                    metadata["scheduler_side_effect_level"] = (
+                        "high" if stage_key == "safe_validation" else "low"
+                    )
+                    metadata["scheduler_resource_keys"] = [f"stage:{stage_key}", "workflow.state"]
                 priority_raw = raw_task.get("priority", 50)
                 priority = priority_raw if isinstance(priority_raw, int) else 50
                 nodes.append(

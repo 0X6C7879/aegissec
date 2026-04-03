@@ -13,6 +13,9 @@ class LoopSelectedTask:
     tool_name: str | None = None
     writes_state: bool = False
     scheduler_group: str | None = None
+    access_mode: str | None = None
+    side_effect_level: str | None = None
+    resource_keys: tuple[str, ...] = ()
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -24,6 +27,9 @@ class LoopSelectedTask:
             "tool_name": self.tool_name,
             "writes_state": self.writes_state,
             "scheduler_group": self.scheduler_group,
+            "access_mode": self.access_mode,
+            "side_effect_level": self.side_effect_level,
+            "resource_keys": list(self.resource_keys),
         }
 
     @classmethod
@@ -49,6 +55,19 @@ class LoopSelectedTask:
             if isinstance(raw_dict.get("scheduler_group"), str)
             else None
         )
+        access_mode = (
+            raw_dict.get("access_mode") if isinstance(raw_dict.get("access_mode"), str) else None
+        )
+        side_effect_level = (
+            raw_dict.get("side_effect_level")
+            if isinstance(raw_dict.get("side_effect_level"), str)
+            else None
+        )
+        resource_keys = (
+            tuple(item for item in raw_dict.get("resource_keys", []) if isinstance(item, str))
+            if isinstance(raw_dict.get("resource_keys", []), list)
+            else ()
+        )
         return cls(
             task_id=task_id,
             task_name=task_name,
@@ -58,6 +77,9 @@ class LoopSelectedTask:
             tool_name=tool_name,
             writes_state=writes_state,
             scheduler_group=scheduler_group,
+            access_mode=access_mode,
+            side_effect_level=side_effect_level,
+            resource_keys=resource_keys,
         )
 
 
@@ -196,9 +218,9 @@ class WorkflowCycleArtifact:
             started_at=(
                 raw_dict.get("started_at") if isinstance(raw_dict.get("started_at"), str) else None
             ),
-            ended_at=raw_dict.get("ended_at")
-            if isinstance(raw_dict.get("ended_at"), str)
-            else None,
+            ended_at=(
+                raw_dict.get("ended_at") if isinstance(raw_dict.get("ended_at"), str) else None
+            ),
         )
 
 

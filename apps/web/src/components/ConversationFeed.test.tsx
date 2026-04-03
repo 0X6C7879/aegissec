@@ -61,10 +61,12 @@ function buildGeneration(overrides: Partial<ChatGeneration> = {}): ChatGeneratio
   };
 }
 
-function buildMessages(overrides: {
-  user?: Partial<SessionMessage>;
-  assistant?: Partial<SessionMessage>;
-} = {}): SessionMessage[] {
+function buildMessages(
+  overrides: {
+    user?: Partial<SessionMessage>;
+    assistant?: Partial<SessionMessage>;
+  } = {},
+): SessionMessage[] {
   return [
     {
       id: "message-user",
@@ -84,14 +86,28 @@ function buildMessages(overrides: {
       content: "<think>very secret</think>最终答复",
       assistant_transcript: [
         buildTranscriptSegment({
+          id: "segment-reasoning-noise",
+          kind: "reasoning",
+          title: "思路进展",
+          text: "Assistant is analyzing the request and preparing a response.",
+        }),
+        buildTranscriptSegment({
           id: "segment-reasoning",
+          sequence: 2,
           kind: "reasoning",
           title: "思路进展",
           text: "<think>private</think>分析中",
         }),
         buildTranscriptSegment({
+          id: "segment-status",
+          sequence: 3,
+          kind: "status",
+          title: "运行状态",
+          text: "Generation completed",
+        }),
+        buildTranscriptSegment({
           id: "segment-tool-call",
-          sequence: 2,
+          sequence: 4,
           kind: "tool_call",
           title: "开始调用工具",
           tool_name: "bash",
@@ -100,7 +116,7 @@ function buildMessages(overrides: {
         }),
         buildTranscriptSegment({
           id: "segment-tool-result",
-          sequence: 3,
+          sequence: 5,
           kind: "tool_result",
           title: "工具执行结果",
           tool_name: "bash",
@@ -118,7 +134,7 @@ function buildMessages(overrides: {
         }),
         buildTranscriptSegment({
           id: "segment-output",
-          sequence: 4,
+          sequence: 6,
           kind: "output",
           title: "正文输出",
           text: "<think>very secret</think>最终答复",
@@ -132,7 +148,7 @@ function buildMessages(overrides: {
 }
 
 describe("ConversationFeed", () => {
-  it("renders the persisted assistant transcript inside one bubble and keeps think blocks visible", () => {
+  it("renders native think blocks inline, strips noisy boilerplate, and keeps shell output compact", () => {
     const { container } = render(
       <ConversationFeed
         messages={buildMessages()}
@@ -150,17 +166,33 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("工具结果")).not.toBeInTheDocument();
     expect(screen.queryByText("正文输出")).not.toBeInTheDocument();
     expect(screen.queryByText("运行状态")).not.toBeInTheDocument();
-    expect(screen.getByText("展开")).toBeInTheDocument();
-    expect(container.querySelector("details.assistant-reasoning-stream")).not.toHaveAttribute("open");
+    expect(
+      screen.queryByText("Assistant is analyzing the request and preparing a response."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Generation completed")).not.toBeInTheDocument();
+    expect(screen.getAllByText("思考过程").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("details.assistant-reasoning-stream").length).toBeGreaterThan(
+      0,
+    );
+    expect(container.querySelector("details.assistant-reasoning-stream")).toHaveAttribute("open");
+    expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(0);
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("<think>private</think>分析中").length).toBeGreaterThan(0);
-    expect(screen.getByText("<think>very secret</think>最终答复")).toBeInTheDocument();
+    expect(screen.getAllByText("private").length).toBeGreaterThan(0);
+    expect(screen.getByText("分析中")).toBeInTheDocument();
+    expect(screen.getAllByText("very secret").length).toBeGreaterThan(0);
+    expect(screen.getByText("最终答复")).toBeInTheDocument();
+    expect(
+      container.querySelector(".assistant-output-block-final details.assistant-reasoning-stream"),
+    ).not.toBeNull();
+    expect(screen.queryByText("<think>private</think>分析中")).not.toBeInTheDocument();
+    expect(screen.queryByText("<think>very secret</think>最终答复")).not.toBeInTheDocument();
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
     expect(screen.getByText("reports/auto.txt")).toBeInTheDocument();
-    expect(screen.getByText(/"status": "success"/)).toBeInTheDocument();
+    expect(screen.queryByText(/"status": "success"/)).not.toBeInTheDocument();
   });
 
-  it("naturalizes skill blocks and renders inline errors without debug-section headers", () => {
+  it("renders skill calls as lightweight inline names and keeps errors inline", () => {
     render(
       <ConversationFeed
         messages={buildMessages({
@@ -223,17 +255,15 @@ describe("ConversationFeed", () => {
     );
 
     expect(screen.getByText("Movement Tmux")).toBeInTheDocument();
-    expect(screen.getAllByText("Use tmux to move laterally.").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Use tmux to move laterally.")).not.toBeInTheDocument();
+    expect(screen.queryByText("# movement_tmux\nDetailed instructions")).not.toBeInTheDocument();
     expect(screen.queryByText("Read skill content for movement_tmux.")).not.toBeInTheDocument();
-    expect(screen.getByText("执行失败")).toBeInTheDocument();
     expect(screen.getByText("连接目标失败。")).toBeInTheDocument();
     expect(screen.getByText("最终建议在下一跳前重新确认权限。")).toBeInTheDocument();
   });
 
-  it("keeps rollback primary and moves edit or retry actions into the overflow menu", () => {
-    const onEditMessage = vi.fn();
-    const onRegenerateMessage = vi.fn();
-    const onForkMessage = vi.fn();
+  it("uses a single icon-only inline edit control for user messages", () => {
+    const onEditMessage = vi.fn(async () => undefined);
 
     render(
       <ConversationFeed
@@ -242,26 +272,36 @@ describe("ConversationFeed", () => {
         events={[]}
         runtimeRuns={[]}
         onEditMessage={onEditMessage}
-        onRegenerateMessage={onRegenerateMessage}
-        onForkMessage={onForkMessage}
-        onRollbackMessage={vi.fn()}
       />,
     );
 
-    expect(screen.getAllByRole("button", { name: "回溯到此" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "回溯到此" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开消息操作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "分叉" })).not.toBeInTheDocument();
+    expect(screen.queryByText("返回并编辑消息")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "返回并编辑消息" })).toHaveLength(1);
 
-    const overflowButtons = screen.getAllByRole("button", { name: "打开消息操作" });
-    fireEvent.click(overflowButtons[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回并编辑消息" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "暂存改写内容" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText("请继续追踪当前思路")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回并编辑消息" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "请继续追踪新的思路" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
     expect(onEditMessage).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(overflowButtons[1]!);
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(onRegenerateMessage).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(overflowButtons[1]!);
-    fireEvent.click(screen.getByRole("button", { name: "分叉" }));
-    expect(onForkMessage).toHaveBeenCalledTimes(1);
+    expect(onEditMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "message-user" }),
+      "请继续追踪新的思路",
+    );
   });
 
   it("renders queued generations inline as assistant bubbles and forwards cancel", () => {

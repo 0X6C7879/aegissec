@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  isApiError,
   advanceWorkflow,
   cancelGeneration,
   cancelSession,
@@ -20,11 +21,8 @@ import {
   getWorkflow,
   getWorkflowExport,
   getWorkflowReplay,
-  forkSessionMessage,
   listSessions,
   listWorkflowTemplates,
-  regenerateSessionMessage,
-  rollbackSessionMessage,
   startWorkflow,
   updateSession,
   sendChatMessage,
@@ -75,6 +73,11 @@ type TimelineItem = {
   value: string;
 };
 
+type InvalidSessionState = {
+  sessionId: string;
+  message: string;
+};
+
 const EMPTY_SESSION_EVENTS: ReturnType<typeof useUiStore.getState>["eventsBySession"][string] = [];
 const WORKSPACE_SIDEBAR_STORAGE_KEY = "aegissec.workspace.sidebar.collapsed.v1";
 
@@ -88,6 +91,16 @@ function getStoredWorkspaceSidebarState(): boolean {
 
 function getSessionDisplayTitle(title: string): string {
   return title === "New Session" ? "新对话" : title;
+}
+
+function buildInvalidSessionState(sessionId: string, message?: string): InvalidSessionState {
+  return {
+    sessionId,
+    message:
+      message && message.trim().length > 0
+        ? message
+        : `未找到 ID 为 ${sessionId} 的对话，已返回对话列表。`,
+  };
 }
 
 function visibleSessionsForSidebar(
@@ -260,7 +273,10 @@ function buildOptimisticAssistantMessage(
         kind: "status",
         status: "queued",
         title: queuePosition > 1 ? `排队 #${queuePosition}` : "等待开始",
-        text: queuePosition > 1 ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。` : "已进入队列，等待开始。",
+        text:
+          queuePosition > 1
+            ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。`
+            : "已进入队列，等待开始。",
         recorded_at: createdAt,
         updated_at: createdAt,
       },
@@ -290,7 +306,9 @@ function buildOptimisticGeneration(
     state: "queued",
     label: "已加入队列",
     safe_summary:
-      queuePosition > 1 ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。` : "已进入队列，等待开始。",
+      queuePosition > 1
+        ? `已进入队列，前方还有 ${queuePosition - 1} 条等待。`
+        : "已进入队列，等待开始。",
     delta_text: "",
     started_at: createdAt,
     ended_at: null,
@@ -1108,7 +1126,8 @@ function NodeDetailPanel({
 export function SessionWorkspaceWorkbench() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { sessionId } = useParams<{ sessionId?: string }>();
+  const { sessionId: routeSessionIdParam } = useParams<{ sessionId?: string }>();
+  const routeSessionId = routeSessionIdParam ?? null;
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() =>
     getStoredWorkspaceSidebarState(),
   );
@@ -1132,12 +1151,39 @@ export function SessionWorkspaceWorkbench() {
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [policyDraft, setPolicyDraft] = useState<Record<string, unknown>>({});
   const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
+  const [invalidSessionState, setInvalidSessionState] = useState<InvalidSessionState | null>(null);
+  const suppressRouteAutonavigateRef = useRef(false);
 
   const lastVisitedSessionId = useUiStore((state) => state.lastVisitedSessionId);
   const setLastVisitedSessionId = useUiStore((state) => state.setLastVisitedSessionId);
   const appendEvent = useUiStore((state) => state.appendEvent);
   const sessionEvents = useUiStore((state) =>
-    sessionId ? (state.eventsBySession[sessionId] ?? EMPTY_SESSION_EVENTS) : EMPTY_SESSION_EVENTS,
+    routeSessionId
+      ? (state.eventsBySession[routeSessionId] ?? EMPTY_SESSION_EVENTS)
+      : EMPTY_SESSION_EVENTS,
+  );
+
+  const invalidateStaleSessionSelection = useCallback(
+    (staleSessionId: string, message?: string): void => {
+      suppressRouteAutonavigateRef.current = true;
+      setInvalidSessionState(buildInvalidSessionState(staleSessionId, message));
+      setLastVisitedSessionId(null);
+      setPinnedWorkflowRunId(null);
+      setIsInsightsOpen(false);
+      setIsPlanDialogOpen(false);
+      setIsReplayPanelOpen(false);
+      setSelectedDrawerTab("outline");
+      setSelectedNode(null);
+      void queryClient.cancelQueries({ queryKey: ["conversation", staleSessionId] });
+      void queryClient.cancelQueries({ queryKey: ["session-queue", staleSessionId] });
+      void queryClient.cancelQueries({ queryKey: ["session", staleSessionId, "graph", "task"] });
+      void queryClient.cancelQueries({
+        queryKey: ["session", staleSessionId, "graph", "evidence"],
+      });
+      void queryClient.cancelQueries({ queryKey: ["session", staleSessionId, "graph", "causal"] });
+      navigate("/sessions", { replace: true });
+    },
+    [navigate, queryClient, setLastVisitedSessionId],
   );
 
   useEffect(() => {
@@ -1166,9 +1212,27 @@ export function SessionWorkspaceWorkbench() {
     () => sortSessions(sessionsQuery.data ?? []),
     [sessionsQuery.data],
   );
+  const routeSessionExists = useMemo(
+    () =>
+      routeSessionId !== null && sortedSessions.some((session) => session.id === routeSessionId),
+    [routeSessionId, sortedSessions],
+  );
+  const routeSessionMissingFromList =
+    routeSessionId !== null &&
+    sessionsQuery.data !== undefined &&
+    !sessionsQuery.isError &&
+    !routeSessionExists;
   const activeSessionId = useMemo(() => {
-    if (sessionId) {
-      return sessionId;
+    if (routeSessionId) {
+      if (routeSessionMissingFromList || invalidSessionState?.sessionId === routeSessionId) {
+        return null;
+      }
+
+      return routeSessionId;
+    }
+
+    if (invalidSessionState) {
+      return null;
     }
 
     if (
@@ -1181,7 +1245,13 @@ export function SessionWorkspaceWorkbench() {
     return (
       sortedSessions.find((session) => !session.deleted_at)?.id ?? sortedSessions[0]?.id ?? null
     );
-  }, [lastVisitedSessionId, sessionId, sortedSessions]);
+  }, [
+    invalidSessionState,
+    lastVisitedSessionId,
+    routeSessionId,
+    routeSessionMissingFromList,
+    sortedSessions,
+  ]);
 
   const activeSession = useMemo(
     () => sortedSessions.find((session) => session.id === activeSessionId) ?? null,
@@ -1194,16 +1264,40 @@ export function SessionWorkspaceWorkbench() {
   );
 
   useEffect(() => {
-    if (!sessionId && activeSessionId) {
+    if (
+      !routeSessionId &&
+      activeSessionId &&
+      !invalidSessionState &&
+      !suppressRouteAutonavigateRef.current
+    ) {
       navigate(`/sessions/${activeSessionId}/chat`, { replace: true });
     }
-  }, [activeSessionId, navigate, sessionId]);
+  }, [activeSessionId, invalidSessionState, navigate, routeSessionId]);
 
   useEffect(() => {
     if (activeSessionId) {
       setLastVisitedSessionId(activeSessionId);
     }
   }, [activeSessionId, setLastVisitedSessionId]);
+
+  useEffect(() => {
+    if (!routeSessionId || !routeSessionMissingFromList) {
+      return;
+    }
+
+    invalidateStaleSessionSelection(
+      routeSessionId,
+      `未找到 ID 为 ${routeSessionId} 的对话，已停止当前会话同步。`,
+    );
+  }, [invalidateStaleSessionSelection, routeSessionId, routeSessionMissingFromList]);
+
+  useEffect(() => {
+    if (routeSessionId && invalidSessionState?.sessionId !== routeSessionId) {
+      suppressRouteAutonavigateRef.current = false;
+      setInvalidSessionState(null);
+      return;
+    }
+  }, [invalidSessionState?.sessionId, routeSessionId]);
 
   const shouldLoadEvidenceGraph = isInsightsOpen && selectedDrawerTab === "evidence";
   const shouldLoadReplayArtifacts = isReplayPanelOpen;
@@ -1249,6 +1343,38 @@ export function SessionWorkspaceWorkbench() {
     queryFn: ({ signal }) => getCausalGraph(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
+
+  const staleSessionNotFoundMessage = useMemo(() => {
+    const candidateErrors = [
+      conversationQuery.error,
+      sessionQueueQuery.error,
+      sessionTaskGraphQuery.error,
+      sessionEvidenceGraphQuery.error,
+      sessionCausalGraphQuery.error,
+    ];
+
+    for (const error of candidateErrors) {
+      if (isApiError(error) && error.status === 404) {
+        return error.message;
+      }
+    }
+
+    return null;
+  }, [
+    conversationQuery.error,
+    sessionCausalGraphQuery.error,
+    sessionEvidenceGraphQuery.error,
+    sessionQueueQuery.error,
+    sessionTaskGraphQuery.error,
+  ]);
+
+  useEffect(() => {
+    if (!routeSessionId || !staleSessionNotFoundMessage) {
+      return;
+    }
+
+    invalidateStaleSessionSelection(routeSessionId, staleSessionNotFoundMessage);
+  }, [invalidateStaleSessionSelection, routeSessionId, staleSessionNotFoundMessage]);
 
   const inferredWorkflowRunId = sessionTaskGraphQuery.data?.workflow_run_id ?? null;
 
@@ -1382,6 +1508,8 @@ export function SessionWorkspaceWorkbench() {
     onSuccess: async (createdSession) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setLastVisitedSessionId(createdSession.id);
+      suppressRouteAutonavigateRef.current = false;
+      setInvalidSessionState(null);
       navigate(`/sessions/${createdSession.id}/chat`);
     },
   });
@@ -1391,7 +1519,8 @@ export function SessionWorkspaceWorkbench() {
     onSuccess: (updatedSession) => {
       queryClient.setQueryData<SessionConversation | undefined>(
         ["conversation", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
+        (currentValue) =>
+          currentValue ? { ...currentValue, session: updatedSession } : currentValue,
       );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, updatedSession),
@@ -1403,7 +1532,7 @@ export function SessionWorkspaceWorkbench() {
     mutationFn: (id: string) => deleteSession(id),
     onSuccess: async (_value, deletedId) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      if (sessionId === deletedId) {
+      if (routeSessionId === deletedId) {
         navigate("/sessions");
       }
     },
@@ -1413,6 +1542,8 @@ export function SessionWorkspaceWorkbench() {
     mutationFn: (id: string) => updateSession(id, {}),
     onSuccess: async (_value, restoredId) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      suppressRouteAutonavigateRef.current = false;
+      setInvalidSessionState(null);
       navigate(`/sessions/${restoredId}/chat`);
     },
     onError: async (_error, restoredId) => {
@@ -1430,6 +1561,8 @@ export function SessionWorkspaceWorkbench() {
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, restoredSession),
       );
+      suppressRouteAutonavigateRef.current = false;
+      setInvalidSessionState(null);
       navigate(`/sessions/${restoredSession.id}/chat`);
     },
   });
@@ -1448,7 +1581,8 @@ export function SessionWorkspaceWorkbench() {
       );
       queryClient.setQueryData<SessionConversation | undefined>(
         ["conversation", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
+        (currentValue) =>
+          currentValue ? { ...currentValue, session: updatedSession } : currentValue,
       );
     },
   });
@@ -1470,7 +1604,8 @@ export function SessionWorkspaceWorkbench() {
       );
       queryClient.setQueryData<SessionConversation | undefined>(
         ["conversation", updatedSession.id],
-        (currentValue) => (currentValue ? { ...currentValue, session: updatedSession } : currentValue),
+        (currentValue) =>
+          currentValue ? { ...currentValue, session: updatedSession } : currentValue,
       );
       void queryClient.invalidateQueries({ queryKey: ["session-queue", updatedSession.id] });
     },
@@ -1499,7 +1634,10 @@ export function SessionWorkspaceWorkbench() {
         "conversation",
         id,
       ]);
-      const previousQueue = queryClient.getQueryData<SessionQueue | undefined>(["session-queue", id]);
+      const previousQueue = queryClient.getQueryData<SessionQueue | undefined>([
+        "session-queue",
+        id,
+      ]);
       const optimisticMessage = buildOptimisticUserMessage(id, content);
       const createdAt = optimisticMessage.created_at;
       const branchId = previousDetail?.active_branch?.id ?? null;
@@ -1529,31 +1667,35 @@ export function SessionWorkspaceWorkbench() {
         message_id: optimisticAssistantMessage.id,
       }));
 
-      queryClient.setQueryData<SessionConversation | undefined>(["conversation", id], (currentValue) => {
-        const targetDetail = currentValue ?? previousDetail;
-        if (!targetDetail) {
-          return targetDetail;
-        }
+      queryClient.setQueryData<SessionConversation | undefined>(
+        ["conversation", id],
+        (currentValue) => {
+          const targetDetail = currentValue ?? previousDetail;
+          if (!targetDetail) {
+            return targetDetail;
+          }
 
-        const nextMessages =
-          mergeSessionMessages(
-            { ...targetDetail.session, messages: targetDetail.messages },
-            [optimisticMessage, optimisticAssistantMessage],
-          )?.messages ?? targetDetail.messages;
+          const nextMessages =
+            mergeSessionMessages({ ...targetDetail.session, messages: targetDetail.messages }, [
+              optimisticMessage,
+              optimisticAssistantMessage,
+            ])?.messages ?? targetDetail.messages;
 
-        return {
-          ...targetDetail,
-          session: {
-            ...targetDetail.session,
-            status: "running",
-            updated_at: createdAt,
-          },
-          messages: nextMessages,
-          generations: [...targetDetail.generations, optimisticGeneration],
-          active_generation_id: targetDetail.active_generation_id ?? activeGenerationId,
-          queued_generation_count: (targetDetail.queued_generation_count ?? queuedGenerationCount) + 1,
-        };
-      });
+          return {
+            ...targetDetail,
+            session: {
+              ...targetDetail.session,
+              status: "running",
+              updated_at: createdAt,
+            },
+            messages: nextMessages,
+            generations: [...targetDetail.generations, optimisticGeneration],
+            active_generation_id: targetDetail.active_generation_id ?? activeGenerationId,
+            queued_generation_count:
+              (targetDetail.queued_generation_count ?? queuedGenerationCount) + 1,
+          };
+        },
+      );
 
       queryClient.setQueryData<SessionQueue | undefined>(["session-queue", id], (currentValue) => {
         const targetQueue = currentValue ?? previousQueue;
@@ -1635,45 +1777,53 @@ export function SessionWorkspaceWorkbench() {
           };
 
           return response.generation
-            ? mergeConversationGeneration(nextConversation, response.generation) ?? nextConversation
+            ? (mergeConversationGeneration(nextConversation, response.generation) ??
+                nextConversation)
             : nextConversation;
         },
       );
-      queryClient.setQueryData<SessionQueue | undefined>(["session-queue", response.session.id], (currentValue) => {
-        const targetQueue = currentValue ?? context?.previousQueue;
-        if (!targetQueue) {
-          return targetQueue;
-        }
+      queryClient.setQueryData<SessionQueue | undefined>(
+        ["session-queue", response.session.id],
+        (currentValue) => {
+          const targetQueue = currentValue ?? context?.previousQueue;
+          if (!targetQueue) {
+            return targetQueue;
+          }
 
-        const filteredQueued = targetQueue.queued_generations.filter(
-          (generation) => generation.id !== context?.optimisticGenerationId,
-        );
-        const activeGenerationId = response.active_generation_id ?? targetQueue.active_generation_id ?? null;
-        const nextQueuedGenerations = response.generation
-          ? activeGenerationId === response.generation.id || response.generation.status !== "queued"
-            ? filteredQueued.filter((generation) => generation.id !== response.generation?.id)
-            : [
-                ...filteredQueued.filter((generation) => generation.id !== response.generation?.id),
-                response.generation,
-              ]
-          : filteredQueued;
-        const nextActiveGeneration =
-          response.generation && activeGenerationId === response.generation.id
-            ? response.generation
-            : targetQueue.active_generation?.id === context?.optimisticGenerationId
-              ? null
-              : targetQueue.active_generation;
+          const filteredQueued = targetQueue.queued_generations.filter(
+            (generation) => generation.id !== context?.optimisticGenerationId,
+          );
+          const activeGenerationId =
+            response.active_generation_id ?? targetQueue.active_generation_id ?? null;
+          const nextQueuedGenerations = response.generation
+            ? activeGenerationId === response.generation.id ||
+              response.generation.status !== "queued"
+              ? filteredQueued.filter((generation) => generation.id !== response.generation?.id)
+              : [
+                  ...filteredQueued.filter(
+                    (generation) => generation.id !== response.generation?.id,
+                  ),
+                  response.generation,
+                ]
+            : filteredQueued;
+          const nextActiveGeneration =
+            response.generation && activeGenerationId === response.generation.id
+              ? response.generation
+              : targetQueue.active_generation?.id === context?.optimisticGenerationId
+                ? null
+                : targetQueue.active_generation;
 
-        return {
-          ...targetQueue,
-          session: response.session,
-          active_generation: nextActiveGeneration,
-          queued_generations: nextQueuedGenerations,
-          active_generation_id: activeGenerationId,
-          queued_generation_count:
-            response.queued_generation_count ?? nextQueuedGenerations.length,
-        };
-      });
+          return {
+            ...targetQueue,
+            session: response.session,
+            active_generation: nextActiveGeneration,
+            queued_generations: nextQueuedGenerations,
+            active_generation_id: activeGenerationId,
+            queued_generation_count:
+              response.queued_generation_count ?? nextQueuedGenerations.length,
+          };
+        },
+      );
       queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
         upsertSession(currentValue, response.session),
       );
@@ -1696,20 +1846,22 @@ export function SessionWorkspaceWorkbench() {
       );
 
       if (hasPersistedUserMessage && context?.optimisticMessageId) {
-        queryClient.setQueryData<SessionConversation | undefined>(["conversation", variables.id], (detail) =>
-          detail
-            ? {
-                ...detail,
-                messages: detail.messages.filter(
-                  (message) =>
-                    message.id !== context.optimisticMessageId &&
-                    message.id !== context.optimisticAssistantMessageId,
-                ),
-                generations: detail.generations.filter(
-                  (generation) => generation.id !== context.optimisticGenerationId,
-                ),
-              }
-            : detail,
+        queryClient.setQueryData<SessionConversation | undefined>(
+          ["conversation", variables.id],
+          (detail) =>
+            detail
+              ? {
+                  ...detail,
+                  messages: detail.messages.filter(
+                    (message) =>
+                      message.id !== context.optimisticMessageId &&
+                      message.id !== context.optimisticAssistantMessageId,
+                  ),
+                  generations: detail.generations.filter(
+                    (generation) => generation.id !== context.optimisticGenerationId,
+                  ),
+                }
+              : detail,
         );
       } else if (previousDetail) {
         queryClient.setQueryData<SessionConversation | undefined>(
@@ -1722,7 +1874,10 @@ export function SessionWorkspaceWorkbench() {
       }
 
       if (context?.previousQueue) {
-        queryClient.setQueryData<SessionQueue | undefined>(["session-queue", variables.id], context.previousQueue);
+        queryClient.setQueryData<SessionQueue | undefined>(
+          ["session-queue", variables.id],
+          context.previousQueue,
+        );
       }
 
       if (!isCancelledError) {
@@ -1743,8 +1898,13 @@ export function SessionWorkspaceWorkbench() {
   });
 
   const cancelGenerationMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, generationId }: { sessionId: string; generationId: string }) =>
-      cancelGeneration(targetSessionId, generationId),
+    mutationFn: ({
+      sessionId: targetSessionId,
+      generationId,
+    }: {
+      sessionId: string;
+      generationId: string;
+    }) => cancelGeneration(targetSessionId, generationId),
     onSuccess: async (_generation, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
@@ -1755,7 +1915,15 @@ export function SessionWorkspaceWorkbench() {
   });
 
   const editMessageMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, messageId, content }: { sessionId: string; messageId: string; content: string }) =>
+    mutationFn: ({
+      sessionId: targetSessionId,
+      messageId,
+      content,
+    }: {
+      sessionId: string;
+      messageId: string;
+      content: string;
+    }) =>
       editSessionMessage(targetSessionId, messageId, {
         content,
         attachments: [],
@@ -1764,46 +1932,6 @@ export function SessionWorkspaceWorkbench() {
     onSuccess: async (_response, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-      ]);
-    },
-  });
-
-  const regenerateMessageMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, messageId }: { sessionId: string; messageId: string }) =>
-      regenerateSessionMessage(targetSessionId, messageId, {
-        branch_id: activeConversation?.active_branch?.id ?? null,
-      }),
-    onSuccess: async (_response, variables) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["conversation", variables.sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-      ]);
-    },
-  });
-
-  const forkMessageMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, messageId, name }: { sessionId: string; messageId: string; name?: string | null }) =>
-      forkSessionMessage(targetSessionId, messageId, { name: name ?? null }),
-    onSuccess: async (response, variables) => {
-      queryClient.setQueryData(["conversation", variables.sessionId], response);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-      ]);
-    },
-  });
-
-  const rollbackMessageMutation = useMutation({
-    mutationFn: ({ sessionId: targetSessionId, messageId }: { sessionId: string; messageId: string }) =>
-      rollbackSessionMessage(targetSessionId, messageId, {
-        branch_id: activeConversation?.active_branch?.id ?? null,
-      }),
-    onSuccess: async (response, variables) => {
-      queryClient.setQueryData(["conversation", variables.sessionId], response);
-      await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["session-queue", variables.sessionId] }),
         queryClient.invalidateQueries({ queryKey: ["sessions"] }),
       ]);
@@ -1947,7 +2075,9 @@ export function SessionWorkspaceWorkbench() {
     0;
   const isGenerationActive =
     activeGeneration !== null ||
-    Boolean(sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id) ||
+    Boolean(
+      sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id,
+    ) ||
     activeSession?.status === "running";
 
   function handleToggleSidebarCollapsed(): void {
@@ -1955,6 +2085,8 @@ export function SessionWorkspaceWorkbench() {
   }
 
   function handleSelectSession(nextSessionId: string): void {
+    suppressRouteAutonavigateRef.current = false;
+    setInvalidSessionState(null);
     navigate(`/sessions/${nextSessionId}/chat`);
   }
 
@@ -2035,21 +2167,41 @@ export function SessionWorkspaceWorkbench() {
             <p className="conversation-empty-state-copy">{sessionsQuery.error.message}</p>
           </section>
         ) : !activeSession ? (
-          <section className="conversation-empty-state workspace-empty-state-card">
-            <p className="conversation-empty-state-title">还没有 Workspace</p>
-            <p className="conversation-empty-state-copy">
-              新建一个对话后，这里会进入聊天主视图，并按需展开执行进度。
-            </p>
-            <div className="management-action-row">
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => void createSessionMutation.mutateAsync()}
-              >
-                新建对话
-              </button>
-            </div>
-          </section>
+          invalidSessionState ? (
+            <section className="conversation-empty-state workspace-empty-state-card">
+              <p className="conversation-empty-state-title">对话不存在或已失效</p>
+              <p className="conversation-empty-state-copy">{invalidSessionState.message}</p>
+              <div className="management-action-row">
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => {
+                    suppressRouteAutonavigateRef.current = true;
+                    setInvalidSessionState(null);
+                    navigate("/sessions", { replace: true });
+                  }}
+                >
+                  返回对话列表
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="conversation-empty-state workspace-empty-state-card">
+              <p className="conversation-empty-state-title">还没有 Workspace</p>
+              <p className="conversation-empty-state-copy">
+                新建一个对话后，这里会进入聊天主视图，并按需展开执行进度。
+              </p>
+              <div className="management-action-row">
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => void createSessionMutation.mutateAsync()}
+                >
+                  新建对话
+                </button>
+              </div>
+            </section>
+          )
         ) : activeSession && conversationQuery.isLoading && !activeConversation ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">正在打开对话</p>
@@ -2097,7 +2249,6 @@ export function SessionWorkspaceWorkbench() {
                     runtimeRuns={sessionRuns}
                     activeGeneration={activeGeneration}
                     queuedGenerations={sessionQueueQuery.data?.queued_generations ?? []}
-                    activeBranchId={activeConversation.active_branch?.id ?? null}
                     messageActionBusyId={messageActionBusyId}
                     cancelGenerationBusy={cancelGenerationMutation.isPending}
                     onCancelGeneration={(generationId) => {
@@ -2106,53 +2257,28 @@ export function SessionWorkspaceWorkbench() {
                         generationId,
                       });
                     }}
-                    onEditMessage={(message) => {
-                      const nextContent = window.prompt("编辑这条用户消息", message.content);
-                      if (nextContent === null) {
-                        return;
-                      }
-                      const trimmed = nextContent.trim();
-                      if (!trimmed || trimmed === message.content.trim()) {
-                        return;
-                      }
+                    onEditMessage={async (message, content) => {
                       setMessageActionBusyId(message.id);
-                      void editMessageMutation
-                        .mutateAsync({
+                      try {
+                        await editMessageMutation.mutateAsync({
                           sessionId: activeSession.id,
                           messageId: message.id,
-                          content: trimmed,
-                        })
-                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
-                    }}
-                    onRegenerateMessage={(message) => {
-                      setMessageActionBusyId(message.id);
-                      void regenerateMessageMutation
-                        .mutateAsync({ sessionId: activeSession.id, messageId: message.id })
-                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
-                    }}
-                    onForkMessage={(message) => {
-                      const branchName = window.prompt("新分支名称", `Branch from ${message.id.slice(0, 8)}`);
-                      setMessageActionBusyId(message.id);
-                      void forkMessageMutation
-                        .mutateAsync({
-                          sessionId: activeSession.id,
-                          messageId: message.id,
-                          name: branchName,
-                        })
-                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
-                    }}
-                    onRollbackMessage={(message) => {
-                      setMessageActionBusyId(message.id);
-                      void rollbackMessageMutation
-                        .mutateAsync({ sessionId: activeSession.id, messageId: message.id })
-                        .finally(() => setMessageActionBusyId((currentValue) => (currentValue === message.id ? null : currentValue)));
+                          content,
+                        });
+                      } finally {
+                        setMessageActionBusyId((currentValue) =>
+                          currentValue === message.id ? null : currentValue,
+                        );
+                      }
                     }}
                   />
                   <WorkbenchComposer
                     sessionId={activeSession.id}
                     disabled={activeSession.deleted_at !== null}
                     isGenerating={isGenerationActive}
-                    isInterrupting={cancelGenerationMutation.isPending || cancelSessionMutation.isPending}
+                    isInterrupting={
+                      cancelGenerationMutation.isPending || cancelSessionMutation.isPending
+                    }
                     queuedCount={queuedGenerationCount}
                     onSend={async (content) => {
                       await sendChatMutation.mutateAsync({ id: activeSession.id, content });
@@ -2330,7 +2456,9 @@ export function SessionWorkspaceWorkbench() {
                   <div className="workspace-plan-modal-header">
                     <div>
                       <h3 className="workspace-plan-modal-title">计划与推进</h3>
-                      <p className="workspace-plan-modal-copy">放到弹窗层，避免持续占用聊天正文。</p>
+                      <p className="workspace-plan-modal-copy">
+                        放到弹窗层，避免持续占用聊天正文。
+                      </p>
                     </div>
                     <button
                       className="workspace-plan-modal-close"

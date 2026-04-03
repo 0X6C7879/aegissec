@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.agent.tool_registry import ToolSpec
+from app.agent.tool_registry import ToolAccessMode, ToolSpec
 from app.agent.workflow import WorkflowGraphRuntime
 from app.db.models import TaskNode
 
@@ -18,6 +18,9 @@ class SelectedTask:
     tool_name: str | None = None
     writes_state: bool = False
     scheduler_group: str | None = None
+    access_mode: str | None = None
+    side_effect_level: str | None = None
+    resource_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,7 +67,10 @@ class WorkflowRunnableSelector:
 
     def _build_selected_task(self, task: TaskNode) -> SelectedTask:
         tool_spec = self._tool_spec_resolver(task) if self._tool_spec_resolver is not None else None
-        writes_state = tool_spec.safety_profile.writes_state if tool_spec is not None else False
+        access_mode = self._resolve_access_mode(task, tool_spec)
+        writes_state = access_mode == ToolAccessMode.WRITE.value
+        side_effect_level = self._resolve_side_effect_level(task, tool_spec)
+        resource_keys = self._resolve_resource_keys(task, tool_spec)
         return SelectedTask(
             task_id=task.id,
             task_name=task.name,
@@ -74,4 +80,39 @@ class WorkflowRunnableSelector:
             tool_name=tool_spec.name if tool_spec is not None else None,
             writes_state=writes_state,
             scheduler_group=("serialized_write_group" if writes_state else "parallel_read_group"),
+            access_mode=access_mode,
+            side_effect_level=side_effect_level,
+            resource_keys=resource_keys,
         )
+
+    @staticmethod
+    def _resolve_access_mode(task: TaskNode, tool_spec: ToolSpec | None) -> str:
+        scheduler_access_mode = task.metadata_json.get("scheduler_access_mode")
+        if isinstance(scheduler_access_mode, str) and scheduler_access_mode in {
+            ToolAccessMode.READ.value,
+            ToolAccessMode.WRITE.value,
+        }:
+            return scheduler_access_mode
+        if tool_spec is not None and tool_spec.access_mode is not None:
+            return tool_spec.access_mode.value
+        if tool_spec is not None and tool_spec.safety_profile.writes_state:
+            return ToolAccessMode.WRITE.value
+        return ToolAccessMode.READ.value
+
+    @staticmethod
+    def _resolve_side_effect_level(task: TaskNode, tool_spec: ToolSpec | None) -> str | None:
+        side_effect_level = task.metadata_json.get("scheduler_side_effect_level")
+        if isinstance(side_effect_level, str):
+            return side_effect_level
+        if tool_spec is None:
+            return None
+        return tool_spec.side_effect_level.value
+
+    @staticmethod
+    def _resolve_resource_keys(task: TaskNode, tool_spec: ToolSpec | None) -> tuple[str, ...]:
+        resource_keys = task.metadata_json.get("scheduler_resource_keys")
+        if isinstance(resource_keys, list):
+            return tuple(item for item in resource_keys if isinstance(item, str))
+        if tool_spec is not None and tool_spec.resource_keys:
+            return tool_spec.resource_keys
+        return ()

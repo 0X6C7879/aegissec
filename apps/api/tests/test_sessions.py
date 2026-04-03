@@ -6,10 +6,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from pytest import MonkeyPatch
 from sqlmodel import Session as DBSession
+from starlette.testclient import WebSocketDenialResponse
 
 from app.compat.skills.models import SkillScanRoot
 from app.db.models import (
@@ -670,14 +672,14 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
         assert chat_response.status_code == 200
 
     event_types = [event["type"] for event in events]
-    assert event_types[:5] == [
+    assert event_types[:4] == [
         "session.updated",
         "message.created",
         "message.created",
         "generation.started",
-        "assistant.summary",
     ]
     assert event_types[-1] == "session.updated"
+    assert "assistant.summary" not in event_types
     assert "message.delta" in event_types
     assert "message.updated" in event_types
     assert "message.completed" in event_types
@@ -691,10 +693,6 @@ def test_websocket_streams_session_events(client: TestClient) -> None:
     assert events[2]["payload"]["content"] == ""
     assert events[3]["payload"]["user_message_id"] == events[1]["payload"]["message_id"]
     assert events[3]["payload"]["message_id"] == events[2]["payload"]["message_id"]
-    assert events[4]["payload"] == {
-        "message_id": events[2]["payload"]["message_id"],
-        "summary": "Assistant is analyzing the request and preparing a response.",
-    }
     completed_index = event_types.index("message.completed")
     assert (
         events[completed_index]["payload"]["content"]
@@ -747,6 +745,16 @@ def test_websocket_supports_replay_cursor(client: TestClient) -> None:
     assert replay_event["payload"]["status"] == "paused"
     assert isinstance(replay_event.get("cursor"), int)
     assert int(replay_event["cursor"]) > max_cursor
+
+
+def test_websocket_rejects_invalid_session_before_accept(client: TestClient) -> None:
+    with pytest.raises(WebSocketDenialResponse) as exc_info:
+        with client.websocket_connect("/api/sessions/nonexistent-session/events"):
+            pass
+
+    response = exc_info.value
+    assert response.status_code == 404
+    assert "Session not found" in response.text
 
 
 def test_cancel_session_interrupts_active_generation(client: TestClient) -> None:
@@ -1019,14 +1027,14 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
                     break
 
         event_types = [event["type"] for event in events]
-        assert event_types[:5] == [
+        assert event_types[:4] == [
             "session.updated",
             "message.created",
             "message.created",
             "generation.started",
-            "assistant.summary",
         ]
         assert event_types[-1] == "session.updated"
+        assert "assistant.summary" not in event_types
         assert "assistant.trace" in event_types
         assert "tool.call.started" in event_types
         assert "tool.call.finished" in event_types
@@ -1321,7 +1329,7 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
             assert callbacks is not None
             assert callbacks.on_summary is not None
             assert callbacks.on_text_delta is not None
-            await callbacks.on_summary("<think>private</think>分析中")
+            await callbacks.on_summary("<think>private</think>")
             await callbacks.on_text_delta("<thi")
             await callbacks.on_text_delta("nk>hidden</thi")
             await callbacks.on_text_delta("nk>")
@@ -1365,7 +1373,7 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         update_events = [event for event in events if event["type"] == "message.updated"]
 
         assert summary_events
-        assert summary_events[-1]["payload"]["summary"] == "<think>private</think>分析中"
+        assert summary_events[-1]["payload"]["summary"] == "<think>private</think>"
         assert trace_events
         assert all(isinstance(event["payload"].get("sequence"), int) for event in trace_events)
         assert all(isinstance(event["payload"].get("recorded_at"), str) for event in trace_events)
@@ -1400,10 +1408,7 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         ]
         assert summary_trace_entries
         assert all(entry["event"] == "assistant.summary" for entry in summary_trace_entries)
-        assert summary_trace_entries[0]["summary"] == (
-            "Assistant is analyzing the request and preparing a response."
-        )
-        assert summary_trace_entries[-1]["summary"] == "<think>private</think>分析中"
+        assert [entry["summary"] for entry in summary_trace_entries] == ["<think>private</think>"]
         steps = chat_payload["generation"]["steps"]
         assert [step["sequence"] for step in steps] == list(range(1, len(steps) + 1))
 
@@ -1423,11 +1428,11 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
             return []
 
         step_values = [text for step in steps for text in _step_string_values(step)]
-        assert any("<think>private</think>分析中" in value for value in step_values)
+        assert any("<think>private</think>" in value for value in step_values)
         assert all("invoke" not in value for value in step_values)
         assert all("tool_call" not in value for value in step_values)
         assert any(
-            step["kind"] == "reasoning" and step["safe_summary"] == "<think>private</think>分析中"
+            step["kind"] == "reasoning" and step["safe_summary"] == "<think>private</think>"
             for step in steps
         )
         assert any(
@@ -1443,9 +1448,9 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         status_segments = [segment for segment in transcript if segment["kind"] == "status"]
         output_segments = [segment for segment in transcript if segment["kind"] == "output"]
         assert reasoning_segments
-        assert status_segments
+        assert not status_segments
         assert output_segments
-        assert reasoning_segments[-1]["text"] == "<think>private</think>分析中"
+        assert reasoning_segments[-1]["text"] == "<think>private</think>"
         assert output_segments[-1]["text"] == "<think>very secret</think>最终答复"
 
         detail_response = client.get(f"/api/sessions/{session_id}")

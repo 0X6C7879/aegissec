@@ -67,6 +67,34 @@ type ApiEnvelope<T> = {
   } | null;
 };
 
+type ApiErrorOptions = {
+  message: string;
+  status: number;
+  statusText: string;
+  path: string;
+  body?: unknown;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly path: string;
+  readonly body: unknown;
+
+  constructor({ message, status, statusText, path, body = null }: ApiErrorOptions) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.statusText = statusText;
+    this.path = path;
+    this.body = body;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
 type ChatRequestPayload = {
   content: string;
   attachments?: AttachmentMetadata[];
@@ -98,11 +126,7 @@ type MessageRollbackPayload = {
   branch_id?: string | null;
 };
 
-async function readErrorMessage(response: Response): Promise<string> {
-  const fallbackMessage = `Request failed (HTTP ${response.status})`;
-  const clonedResponse = response.clone();
-  const payload = await clonedResponse.json().catch((): unknown => null);
-
+function readErrorMessageFromPayload(payload: unknown, fallbackMessage: string): string {
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = payload.detail;
     if (typeof detail === "string") {
@@ -122,11 +146,33 @@ async function readErrorMessage(response: Response): Promise<string> {
     }
   }
 
+  return fallbackMessage;
+}
+
+async function readErrorResponse(response: Response): Promise<{ message: string; body: unknown }> {
+  const fallbackMessage = `Request failed (HTTP ${response.status})`;
+  const clonedResponse = response.clone();
+  const payload = await clonedResponse.json().catch((): unknown => null);
+
+  const payloadMessage = readErrorMessageFromPayload(payload, fallbackMessage);
+  if (payloadMessage !== fallbackMessage) {
+    return {
+      message: payloadMessage,
+      body: payload,
+    };
+  }
+
   try {
     const text = await response.text();
-    return text || fallbackMessage;
+    return {
+      message: text || fallbackMessage,
+      body: payload ?? (text || null),
+    };
   } catch {
-    return fallbackMessage;
+    return {
+      message: fallbackMessage,
+      body: payload,
+    };
   }
 }
 
@@ -144,7 +190,14 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    const { message, body } = await readErrorResponse(response);
+    throw new ApiError({
+      message,
+      status: response.status,
+      statusText: response.statusText,
+      path,
+      body,
+    });
   }
 
   if (response.status === 204) {
@@ -663,7 +716,14 @@ export async function downloadRuntimeArtifact(path: string): Promise<Blob> {
   });
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    const { message, body } = await readErrorResponse(response);
+    throw new ApiError({
+      message,
+      status: response.status,
+      statusText: response.statusText,
+      path: `/api/runtime/download${buildQueryString({ path })}`,
+      body,
+    });
   }
 
   return response.blob();

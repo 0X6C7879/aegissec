@@ -128,7 +128,10 @@ _SQLITE_INDEX_STATEMENTS = (
         "CREATE INDEX IF NOT EXISTS ix_chat_generation_lease_expires_at "
         "ON chat_generation (lease_expires_at)"
     ),
-    "CREATE INDEX IF NOT EXISTS ix_generation_step_generation_id ON generation_step (generation_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_generation_step_generation_id "
+        "ON generation_step (generation_id)"
+    ),
     "CREATE INDEX IF NOT EXISTS ix_generation_step_session_id ON generation_step (session_id)",
     "CREATE INDEX IF NOT EXISTS ix_generation_step_message_id ON generation_step (message_id)",
     "CREATE INDEX IF NOT EXISTS ix_generation_step_sequence ON generation_step (sequence)",

@@ -599,10 +599,10 @@ async def stream_session_events(
     finally:
         db_session.close()
 
-    await websocket.accept()
     if session is None:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session not found")
-        return
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    await websocket.accept()
 
     queue = await event_broker.subscribe(session_id)
     replay_cursor = cursor

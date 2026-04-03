@@ -6,7 +6,11 @@ from typing import cast
 from fastapi import Depends
 from sqlmodel import Session as DBSession
 
-from app.agent import Coordinator, Executor, GraphManager, Planner, Reflector
+from app.agent.coordinator import Coordinator
+from app.agent.executor import Executor
+from app.agent.graph_manager import GraphManager
+from app.agent.planner import Planner
+from app.agent.reflector import Reflector
 from app.agent.workflow import PlannedTaskNode, WorkflowGraphRuntime
 from app.compat.mcp.client_manager import MCPClientManager
 from app.compat.mcp.service import MCPService
@@ -192,14 +196,16 @@ class WorkflowService:
         tasks = self._workflow_repository.list_task_nodes(run.id)
         return to_workflow_run_detail_read(run, tasks)
 
-    def advance_workflow(self, run_id: str, *, approve: bool) -> WorkflowRunDetailRead:
+    async def advance_workflow(self, run_id: str, *, approve: bool) -> WorkflowRunDetailRead:
         run = self._workflow_repository.get_run(run_id)
         if run is None:
             raise WorkflowRunNotFoundError
 
         tasks = self._workflow_repository.list_task_nodes(run.id)
 
-        step_result = self._coordinator.advance_workflow(run=run, tasks=tasks, approve=approve)
+        step_result = await self._coordinator.advance_workflow(
+            run=run, tasks=tasks, approve=approve
+        )
         for task in tasks:
             self._workflow_repository.patch_task_node(
                 task,

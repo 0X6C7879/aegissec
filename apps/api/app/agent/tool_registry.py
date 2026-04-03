@@ -24,6 +24,17 @@ class ToolCapability(str, Enum):
     STRUCTURED_RUNTIME = "structured_runtime"
 
 
+class ToolAccessMode(str, Enum):
+    READ = "read"
+    WRITE = "write"
+
+
+class ToolSideEffectLevel(str, Enum):
+    NONE = "none"
+    LOW = "low"
+    HIGH = "high"
+
+
 @dataclass(frozen=True)
 class ToolSafetyProfile:
     requires_approval: bool = False
@@ -40,6 +51,9 @@ class ToolSpec:
     capability: ToolCapability
     safety_profile: ToolSafetyProfile = field(default_factory=ToolSafetyProfile)
     description: str = ""
+    access_mode: ToolAccessMode | None = None
+    side_effect_level: ToolSideEffectLevel = ToolSideEffectLevel.NONE
+    resource_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -264,12 +278,18 @@ def build_default_tool_registry(
         name="workflow.stage_transition",
         category=ToolCategory.ORCHESTRATION,
         capability=ToolCapability.STAGE_TRANSITION,
+        access_mode=ToolAccessMode.WRITE,
+        side_effect_level=ToolSideEffectLevel.LOW,
+        resource_keys=("workflow.stage",),
         description="Record workflow stage transitions.",
     )
     capability_spec = ToolSpec(
         name="workflow.capability_snapshot",
         category=ToolCategory.DISCOVERY,
         capability=ToolCapability.CAPABILITY_SNAPSHOT,
+        access_mode=ToolAccessMode.WRITE,
+        side_effect_level=ToolSideEffectLevel.LOW,
+        resource_keys=("workflow.capability_snapshot",),
         description="Capture Skill and MCP capability snapshots.",
     )
     runtime_spec = ToolSpec(
@@ -277,6 +297,9 @@ def build_default_tool_registry(
         category=ToolCategory.EXECUTION,
         capability=ToolCapability.STRUCTURED_RUNTIME,
         safety_profile=ToolSafetyProfile(writes_state=True, uses_runtime=True),
+        access_mode=ToolAccessMode.WRITE,
+        side_effect_level=ToolSideEffectLevel.HIGH,
+        resource_keys=("workflow.runtime",),
         description="Produce structured workflow runtime observations.",
     )
 

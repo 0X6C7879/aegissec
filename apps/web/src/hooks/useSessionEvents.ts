@@ -57,7 +57,8 @@ function normalizeEventEnvelope(value: unknown): SessionEventEnvelope {
         ? value.timestamp
         : new Date().toISOString();
 
-  const cursor = typeof value.cursor === "number" && Number.isFinite(value.cursor) ? value.cursor : null;
+  const cursor =
+    typeof value.cursor === "number" && Number.isFinite(value.cursor) ? value.cursor : null;
 
   return {
     type,
@@ -162,7 +163,11 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
                   return currentValue;
                 }
 
-                const updatedSession = toSessionSummaryUpdate(currentValue, envelope.data, createdAt);
+                const updatedSession = toSessionSummaryUpdate(
+                  currentValue,
+                  envelope.data,
+                  createdAt,
+                );
                 return updatedSession ? { ...currentValue, ...updatedSession } : currentValue;
               },
             );
@@ -174,7 +179,11 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
                   return currentValue;
                 }
 
-                const updatedSession = toSessionSummaryUpdate(currentValue.session, envelope.data, createdAt);
+                const updatedSession = toSessionSummaryUpdate(
+                  currentValue.session,
+                  envelope.data,
+                  createdAt,
+                );
                 return updatedSession ? { ...currentValue, session: updatedSession } : currentValue;
               },
             );
@@ -188,8 +197,14 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
                   return currentValue;
                 }
 
-                const updatedSession = toSessionSummaryUpdate(currentSession, envelope.data, createdAt);
-                return updatedSession ? updateSessionLists(currentValue, updatedSession) : currentValue;
+                const updatedSession = toSessionSummaryUpdate(
+                  currentSession,
+                  envelope.data,
+                  createdAt,
+                );
+                return updatedSession
+                  ? updateSessionLists(currentValue, updatedSession)
+                  : currentValue;
               },
             );
           }
@@ -285,10 +300,11 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
       };
 
       websocket.onclose = () => {
-        if (isDisposed) {
+        if (isDisposed || currentSocket !== websocket) {
           return;
         }
 
+        currentSocket = null;
         setConnectionState((currentValue) => (currentValue === "error" ? "error" : "closed"));
         clearReconnectTimer();
         reconnectTimer = setTimeout(() => {

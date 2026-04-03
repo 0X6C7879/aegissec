@@ -84,13 +84,22 @@ from app.services.session_generation import (
 
 router = APIRouter(prefix="/api/sessions", tags=["chat"])
 
-SAFE_THINKING_SUMMARY = "Assistant is analyzing the request and preparing a response."
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
 _HIDDEN_STREAM_TAG_NAMES = {"think", "invoke", "tool_call"}
 _HIDDEN_STREAM_TAG_NAME_RE = re.compile(
     r"^<\s*(/)?\s*(?:[\w-]+:)?([a-z_]+)",
     re.IGNORECASE,
 )
+_VISIBLE_TRANSCRIPT_NOISE_PATTERNS = [
+    re.compile(r"^assistant is analy[sz]ing", re.IGNORECASE),
+    re.compile(r"^generation (started|completed|cancelled|canceled)\b", re.IGNORECASE),
+    re.compile(r"^running\s+.+\.$", re.IGNORECASE),
+    re.compile(r"^completed\s+.+\.$", re.IGNORECASE),
+    re.compile(r"^命令已完成，状态：", re.IGNORECASE),
+    re.compile(r"^已列出当前可用技能。$", re.IGNORECASE),
+    re.compile(r"^已读取\s+.+\s+的技能内容。$", re.IGNORECASE),
+]
 CHAT_EXPOSE_THINKING = get_settings().chat_expose_thinking
 
 
@@ -158,6 +167,19 @@ def _sanitize_persisted_assistant_text(content: str, *, fallback: str = "") -> s
         strip_thinking=not CHAT_EXPOSE_THINKING,
         fallback_text=fallback,
     )
+
+
+def _is_visible_transcript_noise(content: str | None) -> bool:
+    if not content:
+        return True
+    normalized = THINK_BLOCK_RE.sub(
+        lambda match: THINK_TAG_RE.sub("", match.group(0)).strip() or " ",
+        content,
+    )
+    collapsed = re.sub(r"\s+", " ", normalized).strip()
+    if not collapsed:
+        return True
+    return any(pattern.search(collapsed) for pattern in _VISIBLE_TRANSCRIPT_NOISE_PATTERNS)
 
 
 def _message_transcript_segments(
@@ -444,8 +466,8 @@ async def _publish_assistant_summary(
     summary: str,
 ) -> None:
     sanitized_summary = _sanitize_persisted_assistant_text(summary)
-    if not sanitized_summary:
-        sanitized_summary = SAFE_THINKING_SUMMARY
+    if not sanitized_summary or _is_visible_transcript_noise(sanitized_summary):
+        return
     repository.update_message_summary(assistant_message, sanitized_summary)
     transcript_segments = _message_transcript_segments(repository, assistant_message)
     reasoning_segment = _find_transcript_segment(
@@ -549,7 +571,8 @@ async def _publish_assistant_trace(
         metadata_json={key: value for key, value in persisted_entry.items() if key != "summary"},
     )
     trace_state = str(sanitized_entry.get("state") or "")
-    if trace_state.startswith("generation."):
+    visible_trace_summary = _infer_trace_summary(sanitized_entry)
+    if trace_state.startswith("generation.") and visible_trace_summary:
         transcript_kind = (
             AssistantTranscriptSegmentKind.ERROR
             if trace_state == "generation.failed"
@@ -561,7 +584,7 @@ async def _publish_assistant_trace(
             kind=transcript_kind,
             status=_infer_trace_status(sanitized_entry),
             title=None,
-            text=_infer_trace_summary(sanitized_entry),
+            text=visible_trace_summary,
             metadata_json={key: value for key, value in persisted_entry.items()},
         )
     payload = {"message_id": assistant_message.id, **persisted_entry}
@@ -572,7 +595,7 @@ async def _publish_assistant_trace(
             payload=payload,
         )
     )
-    if trace_state.startswith("generation."):
+    if trace_state.startswith("generation.") and visible_trace_summary:
         await _publish_message_event(
             event_broker,
             event_type=SessionEventType.MESSAGE_UPDATED,
@@ -829,11 +852,11 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
     tool_name = entry.get("tool")
     tool_display = str(tool_name) if isinstance(tool_name, str) and tool_name else "tool"
     if state == "generation.started":
-        return "Generation started."
+        return None
     if state == "generation.completed":
-        return "Generation completed."
+        return None
     if state == "generation.cancelled":
-        return "Generation cancelled."
+        return None
     if state == "generation.failed":
         error_value = entry.get("error")
         return (
@@ -842,9 +865,9 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
             else "Generation failed."
         )
     if state == "tool.started":
-        return f"Running {tool_display}."
+        return None
     if state == "tool.finished":
-        return f"Completed {tool_display}."
+        return None
     if state == "tool.failed":
         error_value = entry.get("error")
         if isinstance(error_value, str) and error_value:
@@ -1091,7 +1114,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status=run.status.value,
                 title=tool_request.tool_name,
-                text=f"命令已完成，状态：{run.status.value}。",
+                text=None,
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={
@@ -1189,7 +1212,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status="completed",
                 title=tool_request.tool_name,
-                text="已列出当前可用技能。",
+                text=None,
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={"result": skills_result_payload},
@@ -1273,7 +1296,7 @@ def _build_tool_executor(
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
                 status="completed",
                 title=tool_request.tool_name,
-                text=f"已读取 {skill_name_or_id} 的技能内容。",
+                text=None,
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
                 metadata_json={"result": skill_result_payload},
@@ -1482,16 +1505,9 @@ async def _process_generation(
                 phase="planning",
                 status="running",
                 state="started",
-                label="Generation started",
-                safe_summary="Generation started.",
+                label="开始生成",
+                safe_summary=None,
                 metadata_json={"generation_id": generation.id},
-            )
-            await _publish_assistant_summary(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                summary=SAFE_THINKING_SUMMARY,
             )
             await _publish_assistant_trace(
                 repository,
@@ -1659,8 +1675,8 @@ async def _process_generation(
                 phase="completed",
                 status="completed",
                 state="completed",
-                label="Generation completed",
-                safe_summary="Generation completed.",
+                label="生成完成",
+                safe_summary=None,
                 ended_at=utc_now(),
                 metadata_json={"generation_id": generation.id},
             )
@@ -1709,8 +1725,8 @@ async def _process_generation(
                     phase="cancelled",
                     status="cancelled",
                     state="cancelled",
-                    label="Generation cancelled",
-                    safe_summary="Generation cancelled.",
+                    label="生成已取消",
+                    safe_summary=None,
                     ended_at=utc_now(),
                     metadata_json={"generation_id": generation_id},
                 )

@@ -1,9 +1,15 @@
+from typing import cast
+
 from app.agent.prompting import (
     build_chat_capability_prompt,
     build_openai_prompt_assembly,
     build_workflow_prompting_state,
 )
+from app.compat.mcp.service import MCPService
+from app.compat.skills.service import SkillService
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
+from app.prompt import PromptFragmentBuilder, PromptFragmentCacheContext, build_fragment_cache_key
+from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import ConversationMessage
 
 
@@ -81,3 +87,72 @@ def test_build_workflow_prompting_state_returns_budget_and_fragment_provenance()
     fragment_names = {fragment["name"] for fragment in prompting["fragments"]}
     assert "core_immutable" in fragment_names
     assert "capability_schema" in fragment_names
+
+
+def test_prompt_fragment_cache_keys_are_layer_specific() -> None:
+    context = PromptFragmentCacheContext(
+        session_id="session-1",
+        role="Analyst",
+        task_name="context_collect.attack_surface",
+    )
+
+    core_key = build_fragment_cache_key(layer="core", context=context)
+    role_key = build_fragment_cache_key(layer="role", context=context)
+    capability_key = build_fragment_cache_key(layer="capability", context=context)
+    task_local_key = build_fragment_cache_key(layer="task-local", context=context)
+
+    assert core_key != role_key
+    assert role_key != capability_key
+    assert capability_key != task_local_key
+
+
+def test_prompt_fragment_builder_builds_core_role_capability_and_task_local_layers() -> None:
+    builder = PromptFragmentBuilder()
+    bundle = builder.build_by_role_and_task(
+        core_text="core",
+        role_text="role",
+        capability_text="capability",
+        task_local_text="task-local",
+        session_id="session-1",
+        role="analyst",
+        task_name="task-1",
+    )
+
+    assert bundle.core.layer == "core"
+    assert bundle.role.layer == "role"
+    assert bundle.capability.layer == "capability"
+    assert bundle.task_local.layer == "task-local"
+    assert bundle.capability.content == "capability"
+    assert "layer:capability" in bundle.capability.cache_key
+
+
+def test_capability_prompt_fragment_builder_coexists_with_existing_prompt_behavior() -> None:
+    class _SkillServiceStub:
+        def build_skill_context_payload(self) -> dict[str, object]:
+            return {
+                "skills": [
+                    {
+                        "directory_name": "agent-browser",
+                        "name": "agent-browser",
+                        "description": "Browser automation skill",
+                        "parameter_schema": {"type": "object"},
+                    }
+                ]
+            }
+
+    class _MCPServiceStub:
+        def list_servers(self) -> list[object]:
+            return []
+
+    facade = CapabilityFacade(
+        skill_service=cast(SkillService, _SkillServiceStub()),
+        mcp_service=cast(MCPService, _MCPServiceStub()),
+    )
+    fragment = facade.build_skill_prompt_fragment(
+        session_id="session-1",
+        role_prompt="Collect evidence",
+        task_name="context_collect.attack_surface",
+    )
+
+    assert "Loaded skills inventory:" in fragment
+    assert "Never call a skill slug or skill name directly as a tool." in fragment

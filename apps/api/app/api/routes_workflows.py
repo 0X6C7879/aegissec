@@ -145,7 +145,7 @@ async def advance_workflow(
     event_broker: SessionEventBroker = Depends(get_event_broker),
 ) -> WorkflowRunDetailRead:
     try:
-        workflow = workflow_service.advance_workflow(
+        workflow = await workflow_service.advance_workflow(
             run_id=run_id,
             approve=payload.approve,
         )

@@ -29,12 +29,7 @@ export type GenerationStatus =
   | "cancelled"
   | (string & {});
 
-export type GenerationStepKind =
-  | "reasoning"
-  | "tool"
-  | "output"
-  | "status"
-  | (string & {});
+export type GenerationStepKind = "reasoning" | "tool" | "output" | "status" | (string & {});
 
 export type GenerationStepStatus =
   | "pending"

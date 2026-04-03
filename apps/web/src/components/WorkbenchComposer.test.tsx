@@ -16,15 +16,15 @@ describe("WorkbenchComposer", () => {
     useUiStore.getState().setDraftContent("session-send", "继续分析当前结果");
 
     render(
-        <WorkbenchComposer
-          sessionId="session-send"
-          disabled={false}
-          isGenerating={false}
-          isInterrupting={false}
-          queuedCount={0}
-          onSend={onSend}
-          onInterrupt={vi.fn().mockResolvedValue(undefined)}
-        />,
+      <WorkbenchComposer
+        sessionId="session-send"
+        disabled={false}
+        isGenerating={false}
+        isInterrupting={false}
+        queuedCount={0}
+        onSend={onSend}
+        onInterrupt={vi.fn().mockResolvedValue(undefined)}
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: "发送" }));
@@ -72,15 +72,15 @@ describe("WorkbenchComposer", () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
 
     render(
-        <WorkbenchComposer
-          sessionId="session-enter"
-          disabled={false}
-          isGenerating={false}
-          isInterrupting={false}
-          queuedCount={0}
-          onSend={onSend}
-          onInterrupt={vi.fn().mockResolvedValue(undefined)}
-        />,
+      <WorkbenchComposer
+        sessionId="session-enter"
+        disabled={false}
+        isGenerating={false}
+        isInterrupting={false}
+        queuedCount={0}
+        onSend={onSend}
+        onInterrupt={vi.fn().mockResolvedValue(undefined)}
+      />,
     );
 
     await user.type(screen.getByRole("textbox"), "第一行");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
@@ -239,7 +240,7 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(latest_cycle["compaction_summary"], dict)
     assert latest_cycle["next_action"] in {"continue", "complete", "await_approval", "idle"}
     scheduler_summary = cast(dict[str, Any], latest_cycle["scheduler_summary"])
-    assert scheduler_summary["mode"] == "phase2_sequential"
+    assert scheduler_summary["mode"] == "phase3_read_parallel_write_serial"
     assert scheduler_summary["selected_task_ids"] == [
         task["task_id"] for task in cast(list[dict[str, Any]], latest_cycle["selected_tasks"])
     ]
@@ -441,6 +442,109 @@ def test_batch_execution_logs_all_records_to_session_history(client: TestClient)
     assert len(history_entries) == 3
     assert all(entry["source"] == "workflow.executor" for entry in history_entries)
     assert all(cast(dict[str, Any], entry["payload"]).get("trace_id") for entry in history_entries)
+
+
+def test_workflow_executes_read_tasks_with_async_parallelism_and_merges_state_in_selection_order(
+    client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    def delayed_execute(self: object, *, context: object, task: Any) -> ExecutionResult:
+        del self, context
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
+        if task.name in {"context_collect.attack_surface", "context_collect.existing_evidence"}:
+            time.sleep(0.20)
+        ended_at = datetime.now(UTC)
+        return ExecutionResult(
+            trace_id=f"trace-delay-{task.name}",
+            source_type="runtime",
+            source_name="test-executor",
+            command_or_action=f"execute:{task.name}",
+            input_payload={"task": task.name},
+            output_payload={"status": "completed"},
+            status=TaskNodeStatus.COMPLETED,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+
+    monkeypatch.setattr("app.agent.executor.Executor.execute", delayed_execute)
+
+    session_id = _create_session(client, goal="Verify parallel read execution")
+    workflow = _start_workflow(client, session_id)
+    run_id = cast(str, workflow["id"])
+
+    payload: dict[str, Any] | None = None
+    task_index: dict[str, str] = {}
+    target_batch_cycle: int | None = None
+    target_task_ids: list[str] = []
+    target_task_set = {"context_collect.attack_surface", "context_collect.existing_evidence"}
+    for _ in range(12):
+        advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
+        assert advance.status_code == 200
+        payload = cast(dict[str, Any], api_data(advance))
+        state = cast(dict[str, Any], payload["state"])
+        task_index = {
+            cast(str, task["id"]): cast(str, task["name"])
+            for task in cast(list[dict[str, Any]], payload["tasks"])
+        }
+        execution_records = cast(list[dict[str, Any]], state["execution_records"])
+        records_by_cycle: dict[int, list[dict[str, Any]]] = {}
+        for record in execution_records:
+            cycle = record.get("batch_cycle")
+            if not isinstance(cycle, int):
+                continue
+            records_by_cycle.setdefault(cycle, []).append(record)
+        for cycle, cycle_records in records_by_cycle.items():
+            cycle_task_ids = [
+                cast(str, record.get("task_node_id"))
+                for record in cycle_records
+                if isinstance(record.get("task_node_id"), str)
+            ]
+            cycle_task_names = {
+                task_index[task_id] for task_id in cycle_task_ids if task_id in task_index
+            }
+            if target_task_set.issubset(cycle_task_names):
+                target_batch_cycle = cycle
+                target_task_ids = [
+                    task_id
+                    for task_id in cycle_task_ids
+                    if task_index.get(task_id) in target_task_set
+                ]
+                break
+        if target_batch_cycle is not None:
+            break
+    else:
+        assert False, "context_collect read batch was not observed"
+
+    assert payload is not None
+    state = cast(dict[str, Any], payload["state"])
+    assert target_batch_cycle is not None
+
+    batch_cycle = target_batch_cycle
+    execution_records = cast(list[dict[str, Any]], state["execution_records"])
+    batch_records = [
+        record
+        for record in execution_records
+        if record.get("batch_cycle") == batch_cycle
+        and record.get("task_node_id") in set(target_task_ids)
+    ]
+    assert [record["task_node_id"] for record in batch_records] == target_task_ids
+
+    read_records = [
+        record
+        for record in batch_records
+        if task_index.get(cast(str, record.get("task_node_id")), "").startswith("context_collect.")
+    ]
+    assert len(read_records) == 2
+    from datetime import datetime
+
+    started_times = [
+        datetime.fromisoformat(cast(str, record["started_at"])) for record in read_records
+    ]
+    ended_times = [datetime.fromisoformat(cast(str, record["ended_at"])) for record in read_records]
+    elapsed_window_seconds = (max(ended_times) - min(started_times)).total_seconds()
+    assert elapsed_window_seconds < 0.33
 
 
 def test_start_workflow_carries_session_runtime_policy_into_workflow_state(
@@ -747,6 +851,7 @@ def test_runnable_selector_groups_read_and_write_tasks_without_changing_flat_ord
         "serialized_write_group",
         "parallel_read_group",
     ]
+    assert [task.access_mode for task in selection.selected_tasks] == ["read", "write", "read"]
 
 
 def test_tool_registry_policy_denial_returns_failed_result_without_approval_state() -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -29,6 +31,13 @@ class LoopAdvanceResult:
     approval_required: bool
     executed_task_id: str | None
     executed_task_ids: list[str]
+
+
+@dataclass(frozen=True)
+class _TaskExecutionOutcome:
+    task: TaskNode
+    execution: ExecutionResult
+    reflection: ReflectionResult
 
 
 class WorkflowLoopEngine:
@@ -62,7 +71,7 @@ class WorkflowLoopEngine:
             self._executor.resolve_tool_spec,
         )
 
-    def advance(
+    async def advance(
         self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
     ) -> LoopAdvanceResult:
         mutable_state = dict(run.state_json)
@@ -170,8 +179,47 @@ class WorkflowLoopEngine:
         last_executed_task: TaskNode | None = None
         last_failure_reason: str | None = None
 
+        selected_task_by_id = {task.task_id: task for task in selection.selected_tasks}
+        pending_read_wave: list[TaskNode] = []
+
         for runnable_task in runnable_tasks:
+            selected_metadata = selected_task_by_id.get(runnable_task.id)
+            if selected_metadata is None:
+                continue
+
             if self._runtime.approval_required(runnable_task) and not approve:
+                if pending_read_wave:
+                    read_outcomes = await self._execute_parallel_read_wave(
+                        run=run,
+                        session=session,
+                        mutable_state=mutable_state,
+                        context_snapshot=context_snapshot,
+                        read_tasks=pending_read_wave,
+                    )
+                    self._merge_execution_outcomes(
+                        run=run,
+                        outcomes=read_outcomes,
+                        mutable_state=mutable_state,
+                        tasks=tasks,
+                        tool_results=tool_results,
+                        reflection_summaries=reflection_summaries,
+                        executed_task_ids=executed_task_ids,
+                    )
+                    last_executed_task = read_outcomes[-1].task
+                    if any(
+                        outcome.reflection.replanning_suggestion is not None
+                        for outcome in read_outcomes
+                    ):
+                        last_failure_reason = next(
+                            (
+                                outcome.reflection.failure_reason
+                                for outcome in reversed(read_outcomes)
+                                if outcome.reflection.replanning_suggestion is not None
+                            ),
+                            last_failure_reason,
+                        )
+                    pending_read_wave = []
+
                 runnable_task.status = TaskNodeStatus.BLOCKED
                 self._runtime.sync_execution_state(runnable_task)
                 stage_key = self._runtime.task_stage(runnable_task)
@@ -211,62 +259,91 @@ class WorkflowLoopEngine:
                     executed_task_ids=executed_task_ids,
                 )
 
-            runnable_task.status = TaskNodeStatus.IN_PROGRESS
-            self._runtime.sync_execution_state(runnable_task)
-            execution_context = WorkflowExecutionContext(
-                session_id=run.session_id,
-                workflow_run_id=run.id,
-                project_id=session.project_id if session is not None else None,
-                goal=str(mutable_state.get("goal") or "authorized assessment"),
-                template_name=run.template_name,
-                current_stage=self._runtime.task_stage(runnable_task),
-                runtime_policy=(
-                    dict(policy)
-                    if isinstance((policy := mutable_state.get("runtime_policy")), dict)
-                    else {}
-                ),
-                retrieval=context_snapshot.retrieval.to_state(),
-                memory=context_snapshot.memory.to_state(),
-                context_projection=context_snapshot.projection.to_state(),
-                prompting=dict(context_snapshot.prompting),
-            )
-            execution_result = self._executor.execute(context=execution_context, task=runnable_task)
-            reflection_result = self._reflector.review(
-                task=runnable_task, execution=execution_result
-            )
-            self._apply_execution_result(
+            if selected_metadata.writes_state:
+                if pending_read_wave:
+                    read_outcomes = await self._execute_parallel_read_wave(
+                        run=run,
+                        session=session,
+                        mutable_state=mutable_state,
+                        context_snapshot=context_snapshot,
+                        read_tasks=pending_read_wave,
+                    )
+                    self._merge_execution_outcomes(
+                        run=run,
+                        outcomes=read_outcomes,
+                        mutable_state=mutable_state,
+                        tasks=tasks,
+                        tool_results=tool_results,
+                        reflection_summaries=reflection_summaries,
+                        executed_task_ids=executed_task_ids,
+                    )
+                    last_executed_task = read_outcomes[-1].task
+                    if any(
+                        outcome.reflection.replanning_suggestion is not None
+                        for outcome in read_outcomes
+                    ):
+                        last_failure_reason = next(
+                            (
+                                outcome.reflection.failure_reason
+                                for outcome in reversed(read_outcomes)
+                                if outcome.reflection.replanning_suggestion is not None
+                            ),
+                            last_failure_reason,
+                        )
+                    pending_read_wave = []
+
+                write_outcome = await self._execute_task(
+                    run=run,
+                    session=session,
+                    mutable_state=mutable_state,
+                    context_snapshot=context_snapshot,
+                    task=runnable_task,
+                    allow_parallel=False,
+                )
+                self._merge_execution_outcomes(
+                    run=run,
+                    outcomes=[write_outcome],
+                    mutable_state=mutable_state,
+                    tasks=tasks,
+                    tool_results=tool_results,
+                    reflection_summaries=reflection_summaries,
+                    executed_task_ids=executed_task_ids,
+                )
+                last_executed_task = write_outcome.task
+                if write_outcome.reflection.replanning_suggestion is not None:
+                    last_failure_reason = write_outcome.reflection.failure_reason
+            else:
+                pending_read_wave.append(runnable_task)
+
+        if pending_read_wave:
+            read_outcomes = await self._execute_parallel_read_wave(
                 run=run,
-                task=runnable_task,
-                execution=execution_result,
-                reflection=reflection_result,
+                session=session,
+                mutable_state=mutable_state,
+                context_snapshot=context_snapshot,
+                read_tasks=pending_read_wave,
+            )
+            self._merge_execution_outcomes(
+                run=run,
+                outcomes=read_outcomes,
                 mutable_state=mutable_state,
                 tasks=tasks,
+                tool_results=tool_results,
+                reflection_summaries=reflection_summaries,
+                executed_task_ids=executed_task_ids,
             )
-            tool_results.append(self._build_tool_result(execution_result, runnable_task))
-            reflection_summaries.append(
-                f"{runnable_task.name}:{reflection_result.conclusion}:{reflection_result.evidence_confidence:.2f}"
-            )
-            if reflection_result.replanning_suggestion is not None:
-                last_failure_reason = reflection_result.failure_reason
-                self._append_replan_record(
-                    mutable_state,
-                    task=runnable_task,
-                    execution=execution_result,
-                    reflection=reflection_result,
+            last_executed_task = read_outcomes[-1].task
+            if any(
+                outcome.reflection.replanning_suggestion is not None for outcome in read_outcomes
+            ):
+                last_failure_reason = next(
+                    (
+                        outcome.reflection.failure_reason
+                        for outcome in reversed(read_outcomes)
+                        if outcome.reflection.replanning_suggestion is not None
+                    ),
+                    last_failure_reason,
                 )
-            executed_task_ids.append(runnable_task.id)
-            last_executed_task = runnable_task
-
-            retry_limit = self._retry_limit(runnable_task)
-            retry_count = self._retry_count(runnable_task)
-            if runnable_task.status is TaskNodeStatus.FAILED and retry_count < retry_limit:
-                runnable_task.metadata_json = {
-                    **dict(runnable_task.metadata_json),
-                    "retry_count": retry_count + 1,
-                    "retry_scheduled": True,
-                }
-                runnable_task.status = TaskNodeStatus.READY
-                self._runtime.sync_execution_state(runnable_task)
 
         resolved_status = self._runtime.resolve_run_status(tasks)
         ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
@@ -406,6 +483,146 @@ class WorkflowLoopEngine:
         mutable_state["graph_updates"] = graph_updates
 
         self._runtime.materialize_ready_tasks(tasks)
+
+    async def _execute_parallel_read_wave(
+        self,
+        *,
+        run: WorkflowRun,
+        session: Session | None,
+        mutable_state: dict[str, object],
+        context_snapshot: ContextSnapshot,
+        read_tasks: list[TaskNode],
+    ) -> list[_TaskExecutionOutcome]:
+        if not read_tasks:
+            return []
+        outcomes = await asyncio.gather(
+            *[
+                self._execute_task(
+                    run=run,
+                    session=session,
+                    mutable_state=mutable_state,
+                    context_snapshot=context_snapshot,
+                    task=task,
+                    allow_parallel=True,
+                )
+                for task in read_tasks
+            ]
+        )
+        return list(outcomes)
+
+    async def _execute_task(
+        self,
+        *,
+        run: WorkflowRun,
+        session: Session | None,
+        mutable_state: dict[str, object],
+        context_snapshot: ContextSnapshot,
+        task: TaskNode,
+        allow_parallel: bool,
+    ) -> _TaskExecutionOutcome:
+        task.status = TaskNodeStatus.IN_PROGRESS
+        self._runtime.sync_execution_state(task)
+        execution_context = self._build_execution_context(
+            run=run,
+            session=session,
+            mutable_state=mutable_state,
+            context_snapshot=context_snapshot,
+            task=task,
+        )
+        if allow_parallel:
+            execution_result = await asyncio.to_thread(
+                self._executor.execute,
+                context=execution_context,
+                task=task,
+            )
+            if inspect.isawaitable(execution_result):
+                execution_result = await execution_result
+        else:
+            execution_result = self._executor.execute(context=execution_context, task=task)
+            if inspect.isawaitable(execution_result):
+                execution_result = await execution_result
+        reflection_result = self._reflector.review(task=task, execution=execution_result)
+        if inspect.isawaitable(reflection_result):
+            reflection_result = await reflection_result
+        return _TaskExecutionOutcome(
+            task=task,
+            execution=execution_result,
+            reflection=reflection_result,
+        )
+
+    def _build_execution_context(
+        self,
+        *,
+        run: WorkflowRun,
+        session: Session | None,
+        mutable_state: dict[str, object],
+        context_snapshot: ContextSnapshot,
+        task: TaskNode,
+    ) -> WorkflowExecutionContext:
+        return WorkflowExecutionContext(
+            session_id=run.session_id,
+            workflow_run_id=run.id,
+            project_id=session.project_id if session is not None else None,
+            goal=str(mutable_state.get("goal") or "authorized assessment"),
+            template_name=run.template_name,
+            current_stage=self._runtime.task_stage(task),
+            runtime_policy=(
+                dict(policy)
+                if isinstance((policy := mutable_state.get("runtime_policy")), dict)
+                else {}
+            ),
+            retrieval=context_snapshot.retrieval.to_state(),
+            memory=context_snapshot.memory.to_state(),
+            context_projection=context_snapshot.projection.to_state(),
+            prompting=dict(context_snapshot.prompting),
+        )
+
+    def _merge_execution_outcomes(
+        self,
+        *,
+        run: WorkflowRun,
+        outcomes: list[_TaskExecutionOutcome],
+        mutable_state: dict[str, object],
+        tasks: list[TaskNode],
+        tool_results: list[dict[str, object]],
+        reflection_summaries: list[str],
+        executed_task_ids: list[str],
+    ) -> None:
+        for outcome in outcomes:
+            task = outcome.task
+            execution_result = outcome.execution
+            reflection_result = outcome.reflection
+            self._apply_execution_result(
+                run=run,
+                task=task,
+                execution=execution_result,
+                reflection=reflection_result,
+                mutable_state=mutable_state,
+                tasks=tasks,
+            )
+            tool_results.append(self._build_tool_result(execution_result, task))
+            reflection_summaries.append(
+                f"{task.name}:{reflection_result.conclusion}:{reflection_result.evidence_confidence:.2f}"
+            )
+            if reflection_result.replanning_suggestion is not None:
+                self._append_replan_record(
+                    mutable_state,
+                    task=task,
+                    execution=execution_result,
+                    reflection=reflection_result,
+                )
+            executed_task_ids.append(task.id)
+
+            retry_limit = self._retry_limit(task)
+            retry_count = self._retry_count(task)
+            if task.status is TaskNodeStatus.FAILED and retry_count < retry_limit:
+                task.metadata_json = {
+                    **dict(task.metadata_json),
+                    "retry_count": retry_count + 1,
+                    "retry_scheduled": True,
+                }
+                task.status = TaskNodeStatus.READY
+                self._runtime.sync_execution_state(task)
 
     @staticmethod
     def _metadata_int(metadata: dict[str, object], key: str, *, default: int) -> int:
@@ -642,13 +859,16 @@ class WorkflowLoopEngine:
                     tool_name=task.tool_name,
                     writes_state=task.writes_state,
                     scheduler_group=task.scheduler_group,
+                    access_mode=task.access_mode,
+                    side_effect_level=task.side_effect_level,
+                    resource_keys=task.resource_keys,
                 )
                 for task in selection.selected_tasks
             ],
             parallel_read_group=[task.task_id for task in selection.parallel_read_group],
             serialized_write_group=[task.task_id for task in selection.serialized_write_group],
             scheduler_summary={
-                "mode": "phase2_sequential",
+                "mode": "phase3_read_parallel_write_serial",
                 "selected_task_ids": selection.selected_task_ids,
                 "parallel_read_group": [task.task_id for task in selection.parallel_read_group],
                 "serialized_write_group": [
@@ -713,14 +933,20 @@ class WorkflowLoopEngine:
             retrieval=retrieval,
             memory=memory,
         )
+        active_task_name = self._active_task_name(tasks)
         capability_fragments = self._capability_facade.build_prompt_fragments(
-            session_id=run.session_id
+            session_id=run.session_id,
+            role_prompt=self._active_task_metadata(tasks, "role_prompt"),
+            sub_agent_role_prompt=self._active_task_metadata(tasks, "sub_agent_role_prompt"),
+            task_name=active_task_name,
+            task_description=self._active_task_metadata(tasks, "description"),
+            projection_summary=projection.summary,
         )
         prompting = build_workflow_prompting_state(
             goal=str(mutable_state.get("goal") or "authorized assessment"),
             template_name=run.template_name,
             current_stage=str(mutable_state.get("current_stage") or "") or None,
-            task_name=self._active_task_name(tasks),
+            task_name=active_task_name,
             role_prompt=self._active_task_metadata(tasks, "role_prompt"),
             sub_agent_role_prompt=self._active_task_metadata(tasks, "sub_agent_role_prompt"),
             task_description=self._active_task_metadata(tasks, "description"),

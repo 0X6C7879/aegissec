@@ -20,8 +20,8 @@ from app.db.models import (
     Session,
     SessionEventLog,
     SessionStatus,
+    assistant_transcript_from_storage,
     assistant_transcript_to_storage,
-    resolve_message_assistant_transcript,
     utc_now,
 )
 
@@ -391,7 +391,7 @@ class SessionRepository:
         return message
 
     def get_message_transcript(self, message: Message) -> list[AssistantTranscriptSegment]:
-        return resolve_message_assistant_transcript(message)
+        return assistant_transcript_from_storage(message.assistant_transcript_json)
 
     def replace_message_transcript(
         self,

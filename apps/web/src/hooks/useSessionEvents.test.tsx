@@ -238,8 +238,49 @@ describe("useSessionEvents", () => {
         ?.reasoning_trace,
     ).toHaveLength(205);
     expect(
-      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]?.steps,
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]
+        ?.steps,
     ).toHaveLength(205);
+
+    unmount();
+  });
+
+  it("stops reconnecting after the session selection is cleared", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const initialProps: { sessionId: string | null } = { sessionId: "session-1" };
+
+    const { result, rerender, unmount } = renderHook(
+      ({ sessionId }: { sessionId: string | null }) => useSessionEvents(sessionId),
+      {
+        initialProps,
+        wrapper: createWrapper(queryClient),
+      },
+    );
+
+    const socket = MockWebSocket.instances[0]!;
+
+    act(() => {
+      socket.emitOpen();
+      socket.emitClose();
+    });
+
+    expect(result.current).toBe("closed");
+
+    act(() => {
+      rerender({ sessionId: null });
+    });
+
+    expect(result.current).toBe("closed");
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
 
     unmount();
   });
@@ -363,7 +404,8 @@ describe("useSessionEvents", () => {
       },
     ]);
     expect(
-      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]?.steps,
+      queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.generations[0]
+        ?.steps,
     ).toMatchObject([
       {
         kind: "tool",

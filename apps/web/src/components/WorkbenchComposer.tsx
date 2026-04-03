@@ -127,10 +127,10 @@ export function WorkbenchComposer({
               {isInterrupting ? "停止中" : "中断"}
             </button>
           ) : null}
-            <button
-              className={`workbench-primary-action${isLocallySending ? " workbench-primary-action-running" : ""}`}
-              type="submit"
-              disabled={isPrimaryDisabled}
+          <button
+            className={`workbench-primary-action${isLocallySending ? " workbench-primary-action-running" : ""}`}
+            type="submit"
+            disabled={isPrimaryDisabled}
             aria-label={primaryActionLabel}
           >
             {isLocallySending ? (

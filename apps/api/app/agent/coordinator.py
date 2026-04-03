@@ -156,10 +156,10 @@ class Coordinator:
         WorkflowLoopState.empty().apply_to_state(state)
         return CoordinatorStartResult(plan=plan, state=state, current_stage=current_stage)
 
-    def advance_workflow(
+    async def advance_workflow(
         self, *, run: WorkflowRun, tasks: list[TaskNode], approve: bool
     ) -> CoordinatorStepResult:
-        step_result = self._loop_engine.advance(run=run, tasks=tasks, approve=approve)
+        step_result = await self._loop_engine.advance(run=run, tasks=tasks, approve=approve)
         executed_task_ids = list(step_result.executed_task_ids)
         active_records = step_result.state.get("execution_records")
         archived_records = step_result.state.get("archived_execution_records")

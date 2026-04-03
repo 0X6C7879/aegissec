@@ -996,6 +996,135 @@
         }
       }
     },
+    "/api/sessions/{session_id}/conversation": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get session conversation",
+        "description": "Return the active branch conversation, branch metadata, and visible messages.",
+        "operationId": "get_session_conversation_api_sessions__session_id__conversation_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionConversationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/queue": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get generation queue",
+        "description": "Return the active generation and queued durable chat generations for the session.",
+        "operationId": "get_session_queue_api_sessions__session_id__queue_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionQueueRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/replay": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get session replay",
+        "description": "Return all branches, messages, and generation records for replay/history tooling.",
+        "operationId": "get_session_replay_api_sessions__session_id__replay_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionReplayRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sessions/{session_id}/history": {
       "get": {
         "tags": [
@@ -1285,6 +1414,322 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages/{message_id}/edit": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Edit Message",
+        "operationId": "edit_message_api_sessions__session_id__messages__message_id__edit_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageMutationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages/{message_id}/regenerate": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Regenerate Message",
+        "operationId": "regenerate_message_api_sessions__session_id__messages__message_id__regenerate_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MessageRegenerateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageMutationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages/{message_id}/fork": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Fork From Message",
+        "operationId": "fork_from_message_api_sessions__session_id__messages__message_id__fork_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BranchForkRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionConversationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages/{message_id}/rollback": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Rollback To Message",
+        "operationId": "rollback_to_message_api_sessions__session_id__messages__message_id__rollback_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MessageRollbackRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionConversationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/generations/{generation_id}/cancel": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Cancel Generation",
+        "operationId": "cancel_generation_api_sessions__session_id__generations__generation_id__cancel_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "generation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Generation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatGenerationRead"
                 }
               }
             }
@@ -3209,6 +3654,113 @@
   },
   "components": {
     "schemas": {
+      "AssistantTranscriptSegment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AssistantTranscriptSegmentKind"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "kind",
+          "recorded_at",
+          "updated_at"
+        ],
+        "title": "AssistantTranscriptSegment"
+      },
+      "AssistantTranscriptSegmentKind": {
+        "type": "string",
+        "enum": [
+          "reasoning",
+          "tool_call",
+          "tool_result",
+          "output",
+          "error",
+          "status"
+        ],
+        "title": "AssistantTranscriptSegmentKind"
+      },
       "AttachmentMetadata": {
         "properties": {
           "id": {
@@ -3294,6 +3846,183 @@
         ],
         "title": "Body_upload_runtime_artifact_api_runtime_upload_post"
       },
+      "BranchForkRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "title": "BranchForkRequest"
+      },
+      "ChatGenerationRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "branch_id": {
+            "type": "string",
+            "title": "Branch Id"
+          },
+          "action": {
+            "$ref": "#/components/schemas/GenerationAction"
+          },
+          "user_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Message Id"
+          },
+          "assistant_message_id": {
+            "type": "string",
+            "title": "Assistant Message Id"
+          },
+          "target_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Message Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GenerationStatus"
+          },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
+          },
+          "reasoning_trace": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Reasoning Trace"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationStepRead"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "queue_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Position"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "branch_id",
+          "action",
+          "assistant_message_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatGenerationRead"
+      },
       "ChatRequest": {
         "properties": {
           "content": {
@@ -3307,6 +4036,45 @@
             },
             "type": "array",
             "title": "Attachments"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "parent_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Message Id"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "title": "Wait For Completion",
+            "default": false
           }
         },
         "type": "object",
@@ -3325,6 +4093,53 @@
           },
           "assistant_message": {
             "$ref": "#/components/schemas/MessageRead"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatGenerationRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationBranchRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queue_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Position"
+          },
+          "active_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Generation Id"
+          },
+          "queued_generation_count": {
+            "type": "integer",
+            "title": "Queued Generation Count",
+            "default": 0
           }
         },
         "type": "object",
@@ -3353,6 +4168,63 @@
         ],
         "title": "CompatibilitySource"
       },
+      "ConversationBranchRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "parent_branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Branch Id"
+          },
+          "forked_from_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forked From Message Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ConversationBranchRead"
+      },
       "ExecutionStatus": {
         "type": "string",
         "enum": [
@@ -3361,6 +4233,182 @@
           "timeout"
         ],
         "title": "ExecutionStatus"
+      },
+      "GenerationAction": {
+        "type": "string",
+        "enum": [
+          "reply",
+          "edit",
+          "regenerate",
+          "fork",
+          "rollback"
+        ],
+        "title": "GenerationAction"
+      },
+      "GenerationStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "GenerationStatus"
+      },
+      "GenerationStepRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "generation_id": {
+            "type": "string",
+            "title": "Generation Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "safe_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safe Summary"
+          },
+          "delta_text": {
+            "type": "string",
+            "title": "Delta Text",
+            "default": ""
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "generation_id",
+          "session_id",
+          "sequence",
+          "kind",
+          "status",
+          "started_at"
+        ],
+        "title": "GenerationStepRead"
       },
       "GraphType": {
         "type": "string",
@@ -3765,6 +4813,106 @@
         ],
         "title": "ManualMCPServerRegisterRequest"
       },
+      "MessageEditRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Content"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMetadata"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "MessageEditRequest"
+      },
+      "MessageKind": {
+        "type": "string",
+        "enum": [
+          "message",
+          "summary",
+          "trace",
+          "event_note"
+        ],
+        "title": "MessageKind"
+      },
+      "MessageMutationResponse": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionRead"
+          },
+          "branch": {
+            "$ref": "#/components/schemas/ConversationBranchRead"
+          },
+          "user_message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assistant_message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatGenerationRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "session",
+          "branch"
+        ],
+        "title": "MessageMutationResponse"
+      },
       "MessageRead": {
         "properties": {
           "id": {
@@ -3775,12 +4923,104 @@
             "type": "string",
             "title": "Session Id"
           },
+          "parent_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Message Id"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Id"
+          },
           "role": {
             "$ref": "#/components/schemas/MessageRole"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus"
+          },
+          "message_kind": {
+            "$ref": "#/components/schemas/MessageKind"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "turn_index": {
+            "type": "integer",
+            "title": "Turn Index"
+          },
+          "edited_from_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited From Message Id"
+          },
+          "version_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Group Id"
           },
           "content": {
             "type": "string",
             "title": "Content"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "assistant_transcript": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantTranscriptSegment"
+            },
+            "type": "array",
+            "title": "Assistant Transcript"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
           },
           "attachments": {
             "items": {
@@ -3793,6 +5033,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           }
         },
         "type": "object",
@@ -3800,18 +5052,83 @@
           "id",
           "session_id",
           "role",
+          "status",
+          "message_kind",
+          "sequence",
+          "turn_index",
           "content",
           "created_at"
         ],
         "title": "MessageRead"
       },
+      "MessageRegenerateRequest": {
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          }
+        },
+        "type": "object",
+        "title": "MessageRegenerateRequest"
+      },
       "MessageRole": {
         "type": "string",
         "enum": [
           "user",
-          "assistant"
+          "assistant",
+          "system",
+          "tool"
         ],
         "title": "MessageRole"
+      },
+      "MessageRollbackRequest": {
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          }
+        },
+        "type": "object",
+        "title": "MessageRollbackRequest"
+      },
+      "MessageStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "queued",
+          "streaming",
+          "completed",
+          "superseded",
+          "failed",
+          "cancelled"
+        ],
+        "title": "MessageStatus"
       },
       "ModelAPISettingsResponse": {
         "properties": {
@@ -4565,6 +5882,65 @@
         ],
         "title": "RuntimeStatusRead"
       },
+      "SessionConversationRead": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionRead"
+          },
+          "active_branch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationBranchRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationBranchRead"
+            },
+            "type": "array",
+            "title": "Branches"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageRead"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "generations": {
+            "items": {
+              "$ref": "#/components/schemas/ChatGenerationRead"
+            },
+            "type": "array",
+            "title": "Generations"
+          },
+          "active_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Generation Id"
+          },
+          "queued_generation_count": {
+            "type": "integer",
+            "title": "Queued Generation Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "session"
+        ],
+        "title": "SessionConversationRead"
+      },
       "SessionCreate": {
         "properties": {
           "title": {
@@ -4676,6 +6052,17 @@
               }
             ],
             "title": "Project Id"
+          },
+          "active_branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Branch Id"
           },
           "goal": {
             "anyOf": [
@@ -4895,6 +6282,51 @@
         ],
         "title": "SessionGraphRead"
       },
+      "SessionQueueRead": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionRead"
+          },
+          "active_generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatGenerationRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued_generations": {
+            "items": {
+              "$ref": "#/components/schemas/ChatGenerationRead"
+            },
+            "type": "array",
+            "title": "Queued Generations"
+          },
+          "active_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Generation Id"
+          },
+          "queued_generation_count": {
+            "type": "integer",
+            "title": "Queued Generation Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "session"
+        ],
+        "title": "SessionQueueRead"
+      },
       "SessionRead": {
         "properties": {
           "title": {
@@ -4917,6 +6349,17 @@
               }
             ],
             "title": "Project Id"
+          },
+          "active_branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Branch Id"
           },
           "goal": {
             "anyOf": [
@@ -5013,6 +6456,39 @@
         ],
         "title": "SessionRead"
       },
+      "SessionReplayRead": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionRead"
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationBranchRead"
+            },
+            "type": "array",
+            "title": "Branches"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageRead"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "generations": {
+            "items": {
+              "$ref": "#/components/schemas/ChatGenerationRead"
+            },
+            "type": "array",
+            "title": "Generations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session"
+        ],
+        "title": "SessionReplayRead"
+      },
       "SessionStatus": {
         "type": "string",
         "enum": [
@@ -5059,6 +6535,17 @@
               }
             ],
             "title": "Project Id"
+          },
+          "active_branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Branch Id"
           },
           "goal": {
             "anyOf": [

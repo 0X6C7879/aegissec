@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { formatBytes } from "../lib/format";
 import type { RuntimeExecutionRun } from "../types/runtime";
@@ -11,18 +12,23 @@ import type {
 } from "../types/sessions";
 import { StatusBadge } from "./StatusBadge";
 
+const BOILERPLATE_REASONING_PATTERNS = [
+  /^assistant is analy[sz]ing/i,
+  /^generation (started|completed|cancelled|canceled)\b/i,
+  /^running tool\b/i,
+  /^completed tool\b/i,
+  /^tool (running|completed)\b/i,
+  /^当前生成已完成[。.!]?$/,
+  /^正在持续更新当前回复[。.!]?$/,
+  /^generation status/i,
+];
+
 type TranscriptToolBlock = {
   type: "tool";
   key: string;
   call: AssistantTranscriptSegment | null;
   result: AssistantTranscriptSegment | null;
   error: AssistantTranscriptSegment | null;
-};
-
-type TranscriptReasoningBlock = {
-  type: "reasoning";
-  key: string;
-  segments: AssistantTranscriptSegment[];
 };
 
 type TranscriptOutputBlock = {
@@ -37,11 +43,17 @@ type TranscriptErrorBlock = {
   segment: AssistantTranscriptSegment;
 };
 
+type TranscriptStatusBlock = {
+  type: "status";
+  key: string;
+  segment: AssistantTranscriptSegment;
+};
+
 type TranscriptRenderableBlock =
   | TranscriptToolBlock
-  | TranscriptReasoningBlock
   | TranscriptOutputBlock
-  | TranscriptErrorBlock;
+  | TranscriptErrorBlock
+  | TranscriptStatusBlock;
 
 type ConversationFeedProps = {
   messages: SessionMessage[];
@@ -54,10 +66,7 @@ type ConversationFeedProps = {
   messageActionBusyId?: string | null;
   cancelGenerationBusy?: boolean;
   onCancelGeneration?: (generationId: string) => void;
-  onEditMessage?: (message: SessionMessage) => void;
-  onRegenerateMessage?: (message: SessionMessage) => void;
-  onForkMessage?: (message: SessionMessage) => void;
-  onRollbackMessage?: (message: SessionMessage) => void;
+  onEditMessage?: (message: SessionMessage, content: string) => Promise<void> | void;
 };
 
 type GenerationRun = {
@@ -84,7 +93,8 @@ function toTimestamp(value: string | null | undefined): number {
 
 function compareMessages(left: SessionMessage, right: SessionMessage): number {
   const leftSequence = typeof left.sequence === "number" ? left.sequence : Number.MAX_SAFE_INTEGER;
-  const rightSequence = typeof right.sequence === "number" ? right.sequence : Number.MAX_SAFE_INTEGER;
+  const rightSequence =
+    typeof right.sequence === "number" ? right.sequence : Number.MAX_SAFE_INTEGER;
 
   if (leftSequence !== rightSequence) {
     return leftSequence - rightSequence;
@@ -100,7 +110,8 @@ function compareMessages(left: SessionMessage, right: SessionMessage): number {
 
 function compareGenerations(left: ChatGeneration, right: ChatGeneration): number {
   const timestampDifference =
-    toTimestamp(left.started_at ?? left.created_at) - toTimestamp(right.started_at ?? right.created_at);
+    toTimestamp(left.started_at ?? left.created_at) -
+    toTimestamp(right.started_at ?? right.created_at);
 
   if (timestampDifference !== 0) {
     return timestampDifference;
@@ -129,6 +140,75 @@ function renderUserMessage(content: string) {
   return <div className="chat-bubble-plain">{content}</div>;
 }
 
+function normalizeForBoilerplateCheck(content: string | null | undefined): string | null {
+  if (!content) {
+    return null;
+  }
+
+  const normalized = content
+    .replace(/<\/?think\b[^>]*>/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeMarkdownSpacing(content: string | null | undefined): string | null {
+  if (!content) {
+    return null;
+  }
+  const normalized = content
+    .replace(/<think\b[^>]*>/gi, "\n<think>\n")
+    .replace(/<\/think>/gi, "\n</think>\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+const markdownComponents = {
+  think: ({ children }: { children?: ReactNode }) => (
+    <details className="assistant-reasoning-stream" open>
+      <summary className="assistant-reasoning-toggle">
+        <span className="assistant-reasoning-preview">思考过程</span>
+        <span className="assistant-reasoning-toggle-label" aria-hidden="true" />
+      </summary>
+      <div className="assistant-reasoning-body">{children}</div>
+    </details>
+  ),
+} as Components;
+
+function isBoilerplateReasoningText(content: string | null | undefined): boolean {
+  const normalized = normalizeForBoilerplateCheck(content);
+  if (!normalized) {
+    return true;
+  }
+  return BOILERPLATE_REASONING_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function shouldRenderReasoningSegment(segment: AssistantTranscriptSegment): boolean {
+  const normalized = normalizeForBoilerplateCheck(segment.text);
+  if (!normalized) {
+    return false;
+  }
+
+  return !isBoilerplateReasoningText(normalized);
+}
+
+function shouldRenderStatusSegment(segment: AssistantTranscriptSegment): boolean {
+  if (segment.kind !== "status") {
+    return false;
+  }
+  const normalized = normalizeForBoilerplateCheck(segment.text);
+  if (!normalized) {
+    return false;
+  }
+  return !isBoilerplateReasoningText(normalized);
+}
+
+function renderAssistantMarkdownMessage(content: string) {
+  const normalized = normalizeMarkdownSpacing(content);
+  return renderMarkdownMessage(normalized ?? "");
+}
+
 function renderMarkdownMessage(content: string) {
   if (!content.trim()) {
     return (
@@ -142,7 +222,13 @@ function renderMarkdownMessage(content: string) {
 
   return (
     <div className="chat-bubble-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
+        components={markdownComponents}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -189,7 +275,9 @@ function buildConversationRows(
   const turns = userMessages.map((userMessage, index) => {
     const nextUserMessage = userMessages[index + 1] ?? null;
     const turnStart = toTimestamp(userMessage.created_at);
-    const turnEnd = nextUserMessage ? toTimestamp(nextUserMessage.created_at) : Number.POSITIVE_INFINITY;
+    const turnEnd = nextUserMessage
+      ? toTimestamp(nextUserMessage.created_at)
+      : Number.POSITIVE_INFINITY;
     const turnMessages = nonUserMessages.filter((message) => {
       const timestamp = toTimestamp(message.created_at);
       return timestamp >= turnStart && timestamp < turnEnd;
@@ -233,7 +321,9 @@ function buildConversationRows(
         } satisfies GenerationRun;
       });
 
-    const supplementalMessages = turnMessages.filter((message) => !matchedMessageIds.has(message.id));
+    const supplementalMessages = turnMessages.filter(
+      (message) => !matchedMessageIds.has(message.id),
+    );
     supplementalMessages.forEach((message) => {
       matchedMessageIds.add(message.id);
     });
@@ -259,23 +349,6 @@ function buildConversationRows(
     }));
 
   return { turns, orphanMessages, orphanGenerationRuns };
-}
-
-function getGenerationActionLabel(action: string): string {
-  switch (action) {
-    case "reply":
-      return "回复";
-    case "edit":
-      return "编辑后重答";
-    case "regenerate":
-      return "重新生成";
-    case "fork":
-      return "分叉生成";
-    case "rollback":
-      return "回溯生成";
-    default:
-      return "生成";
-  }
 }
 
 function mergeGenerations(
@@ -391,82 +464,63 @@ function inferSkillTitle(segment: AssistantTranscriptSegment): string | null {
   return rawName ? humanizeIdentifier(rawName) : null;
 }
 
-function inferToolBlockTitle(
-  call: AssistantTranscriptSegment | null,
-  result: AssistantTranscriptSegment | null,
-  error: AssistantTranscriptSegment | null,
-): { eyebrow: string; title: string; summary: string | null } {
-  const reference = result ?? error ?? call;
-  const toolName = reference?.tool_name ?? "";
-  const commandSource = call ?? reference;
-  const command = commandSource ? readSegmentCommand(commandSource) : null;
-  const skillTitle = reference ? inferSkillTitle(reference) : null;
-  const skillPayload = reference ? readSkillPayload(reference) : null;
-  const skillSummary =
-    readFirstString(skillPayload ?? undefined, ["description"]) ??
-    (result?.text?.trim() && !/^Read skill content/i.test(result.text) ? result.text.trim() : null);
-
-  if (toolName === "execute_kali_command" || command) {
-    return {
-      eyebrow: "Shell",
-      title: command ?? "Shell",
-      summary:
-        result?.status && result.status !== "running"
-          ? `状态：${result.status}`
-          : error?.text?.trim() ?? null,
-    };
-  }
-
-  if (toolName === "read_skill_content") {
-    return {
-      eyebrow: "技能",
-      title: skillTitle ?? "Skill",
-      summary: skillSummary,
-    };
-  }
-
-  if (toolName === "list_available_skills") {
-    return {
-      eyebrow: "技能",
-      title: "技能目录",
-      summary: result?.text?.trim() ?? null,
-    };
-  }
-
-  return {
-    eyebrow: "工具",
-    title: skillTitle ?? (toolName ? humanizeIdentifier(toolName) : "Tool"),
-    summary: result?.text?.trim() ?? error?.text?.trim() ?? null,
-  };
+function readShellRecord(
+  segment: AssistantTranscriptSegment | null,
+): Record<string, unknown> | undefined {
+  return segment?.metadata;
 }
 
-function buildTranscriptBlocks(segments: AssistantTranscriptSegment[]): TranscriptRenderableBlock[] {
+function readShellResultRecord(
+  segment: AssistantTranscriptSegment | null,
+): Record<string, unknown> | undefined {
+  return readNestedRecord(segment?.metadata, "result");
+}
+
+function readShellTextValue(
+  segment: AssistantTranscriptSegment | null,
+  keys: readonly string[],
+): string | null {
+  return (
+    readFirstString(readShellRecord(segment), keys) ??
+    readFirstString(readShellResultRecord(segment), keys)
+  );
+}
+
+function readShellExitCode(segment: AssistantTranscriptSegment | null): string | null {
+  const value =
+    readShellRecord(segment)?.exit_code ?? readShellResultRecord(segment)?.exit_code ?? null;
+  return typeof value === "number" || typeof value === "string" ? String(value) : null;
+}
+
+function buildTranscriptBlocks(
+  segments: AssistantTranscriptSegment[],
+): TranscriptRenderableBlock[] {
   const ordered = [...segments].sort(compareTranscriptSegments);
   const blocks: TranscriptRenderableBlock[] = [];
-
   for (let index = 0; index < ordered.length; index += 1) {
     const segment = ordered[index]!;
 
-    if (segment.kind === "reasoning" || segment.kind === "status") {
-      const reasoningSegments: AssistantTranscriptSegment[] = [];
-      let cursor = index;
-      while (
-        cursor < ordered.length &&
-        (ordered[cursor]!.kind === "reasoning" || ordered[cursor]!.kind === "status")
-      ) {
-        if (ordered[cursor]!.text?.trim()) {
-          reasoningSegments.push(ordered[cursor]!);
+    if (segment.kind === "reasoning") {
+      if (shouldRenderReasoningSegment(segment)) {
+        const normalizedText = normalizeMarkdownSpacing(segment.text);
+        if (normalizedText) {
+          blocks.push({
+            type: "output",
+            key: `reasoning:${segment.id}`,
+            segment: {
+              ...segment,
+              text: normalizedText,
+            },
+          });
         }
-        cursor += 1;
       }
-      if (reasoningSegments.length > 0) {
-        blocks.push({
-          type: "reasoning",
-          key: reasoningSegments.map((item) => item.id).join(":"),
-          segments: reasoningSegments,
-        });
+      continue;
+    }
+
+    if (segment.kind === "status") {
+      if (shouldRenderStatusSegment(segment)) {
+        blocks.push({ type: "status", key: segment.id, segment });
       }
-      index = cursor - 1;
       continue;
     }
 
@@ -527,7 +581,17 @@ function buildTranscriptBlocks(segments: AssistantTranscriptSegment[]): Transcri
     }
 
     if (segment.kind === "output") {
-      blocks.push({ type: "output", key: segment.id, segment });
+      const normalizedText = normalizeMarkdownSpacing(segment.text);
+      if (normalizedText) {
+        blocks.push({
+          type: "output",
+          key: segment.id,
+          segment: {
+            ...segment,
+            text: normalizedText,
+          },
+        });
+      }
       continue;
     }
 
@@ -755,35 +819,19 @@ function readArtifactLabels(value: unknown): string[] {
   });
 }
 
-function hasStructuredMetadata(value: Record<string, unknown> | undefined): boolean {
-  return Boolean(value && Object.keys(value).length > 0);
-}
-
-function AssistantReasoningStream({
-  segments,
-}: {
-  segments: AssistantTranscriptSegment[];
-}) {
-  const preview = segments
-    .map((segment) => segment.text?.trim() ?? "")
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(" · ");
+function readInlineToolLabel(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): string {
+  const reference = result ?? call ?? error;
+  if (!reference) {
+    return "Tool";
+  }
 
   return (
-    <details className="assistant-reasoning-stream">
-      <summary className="assistant-reasoning-toggle">
-        <span className="assistant-reasoning-preview">{preview || "查看思路"}</span>
-        <span className="assistant-reasoning-toggle-label">展开</span>
-      </summary>
-      <div className="assistant-reasoning-body">
-        {segments.map((segment) => (
-          <div key={segment.id} className="assistant-reasoning-line">
-            {segment.text?.trim() ? renderMarkdownMessage(segment.text) : null}
-          </div>
-        ))}
-      </div>
-    </details>
+    inferSkillTitle(reference) ??
+    (reference.tool_name ? humanizeIdentifier(reference.tool_name) : "Tool")
   );
 }
 
@@ -801,13 +849,14 @@ function AssistantShellBlock({
     return null;
   }
 
-  const metadata = reference.metadata;
-  const command = readSegmentCommand(reference) ?? "Shell";
-  const stdout = readFirstString(metadata, ["stdout"]);
-  const stderr = readFirstString(metadata, ["stderr"]);
-  const exitCode = metadata?.exit_code ?? readNestedRecord(metadata, "result")?.exit_code ?? null;
-  const artifacts = readArtifactLabels(metadata?.artifacts);
-  const resultPayload = isRecord(metadata?.result) ? metadata.result : null;
+  const command = readSegmentCommand(call ?? reference) ?? "Shell";
+  const stdout = readShellTextValue(result ?? reference, ["stdout"]);
+  const stderr = readShellTextValue(error ?? result ?? reference, ["stderr", "error", "message"]);
+  const exitCode = readShellExitCode(result ?? reference);
+  const artifacts = [
+    ...readArtifactLabels(readShellRecord(result ?? reference)?.artifacts),
+    ...readArtifactLabels(readShellResultRecord(result ?? reference)?.artifacts),
+  ];
   const status = error ? "failed" : (result?.status ?? call?.status ?? null);
 
   return (
@@ -843,13 +892,7 @@ function AssistantShellBlock({
           </div>
         ) : null}
         {exitCode !== null ? (
-          <p className="assistant-tool-inline-meta">exit_code: {String(exitCode)}</p>
-        ) : null}
-        {resultPayload ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">result</span>
-            <pre className="assistant-terminal-output">{JSON.stringify(resultPayload, null, 2)}</pre>
-          </div>
+          <p className="assistant-tool-inline-meta">exit_code: {exitCode}</p>
         ) : null}
         {artifacts.length > 0 ? (
           <div className="assistant-tool-detail-group">
@@ -863,78 +906,50 @@ function AssistantShellBlock({
             </div>
           </div>
         ) : null}
-        {error?.text?.trim() ? <p className="assistant-tool-error-copy">{error.text.trim()}</p> : null}
+        {error?.text?.trim() ? (
+          <p className="assistant-tool-error-copy">{error.text.trim()}</p>
+        ) : null}
       </div>
     </details>
   );
 }
 
-function AssistantSkillBlock({
-  call,
-  result,
-  error,
-}: {
-  call: AssistantTranscriptSegment | null;
-  result: AssistantTranscriptSegment | null;
-  error: AssistantTranscriptSegment | null;
-}) {
+function AssistantInlineSkillTag({ label }: { label: string }) {
+  return <strong className="assistant-inline-skill-tag">{label}</strong>;
+}
+
+function AssistantStatusNote({ segment }: { segment: AssistantTranscriptSegment }) {
+  const text = normalizeMarkdownSpacing(segment.text);
+  if (!text) {
+    return null;
+  }
+
+  return <p className="assistant-status-note">{text}</p>;
+}
+
+function renderInlineSkillLabel(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+) {
   const reference = result ?? error ?? call;
   if (!reference) {
     return null;
   }
 
-  const { eyebrow, title, summary } = inferToolBlockTitle(call, result, error);
-  const skillPayload = readSkillPayload(reference);
-  const skillContent = readFirstString(skillPayload ?? undefined, ["content"]);
-  const skillDescription = readFirstString(skillPayload ?? undefined, ["description"]);
-  const metadata = reference.metadata;
-
-  return (
-    <details className="assistant-tool-block assistant-skill-block">
-      <summary className="assistant-tool-summary">
-        <div className="assistant-tool-summary-copy">
-          <span className="assistant-tool-eyebrow">{eyebrow}</span>
-          <strong className="assistant-tool-title">{title}</strong>
-          {summary ? <span className="assistant-tool-summary-text">{summary}</span> : null}
-        </div>
-        <div className="assistant-tool-summary-side">
-          {reference.status ? <StatusBadge status={reference.status} /> : null}
-        </div>
-      </summary>
-      <div className="assistant-tool-body">
-        {skillDescription ? <p className="assistant-tool-inline-copy">{skillDescription}</p> : null}
-        {skillContent ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">skill</span>
-            <pre className="assistant-terminal-output">{skillContent}</pre>
-          </div>
-        ) : null}
-        {!skillContent && hasStructuredMetadata(metadata) ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">details</span>
-            <pre className="assistant-terminal-output">{JSON.stringify(metadata, null, 2)}</pre>
-          </div>
-        ) : null}
-        {error?.text?.trim() ? <p className="assistant-tool-error-copy">{error.text.trim()}</p> : null}
-      </div>
-    </details>
-  );
+  return <AssistantInlineSkillTag label={readInlineToolLabel(call, result, error)} />;
 }
 
 function AssistantErrorBlock({ segment }: { segment: AssistantTranscriptSegment }) {
+  const detail =
+    normalizeMarkdownSpacing(segment.text) ??
+    readFirstString(segment.metadata, ["detail", "error", "message"]);
+
   return (
-    <details className="assistant-error-block" open>
-      <summary className="assistant-error-summary">
-        <strong className="assistant-error-title">执行失败</strong>
-        {segment.status ? <StatusBadge status={segment.status} /> : null}
-      </summary>
-      {segment.text?.trim() ? <p className="assistant-error-copy">{segment.text.trim()}</p> : null}
-      {hasStructuredMetadata(segment.metadata) ? (
-        <pre className="assistant-terminal-output assistant-terminal-output-error">
-          {JSON.stringify(segment.metadata, null, 2)}
-        </pre>
-      ) : null}
-    </details>
+    <div className="assistant-error-block" role="status">
+      <strong className="assistant-error-title">执行失败</strong>
+      {detail ? <p className="assistant-error-copy">{detail}</p> : null}
+    </div>
   );
 }
 
@@ -947,7 +962,9 @@ function AssistantPrimaryOutput({
 }) {
   return (
     <div className={`assistant-output-block${isFinal ? " assistant-output-block-final" : ""}`}>
-      {segment.text?.trim() ? renderMarkdownMessage(segment.text) : renderMarkdownMessage("")}
+      {normalizeMarkdownSpacing(segment.text)
+        ? renderAssistantMarkdownMessage(segment.text ?? "")
+        : renderMarkdownMessage("")}
     </div>
   );
 }
@@ -971,7 +988,12 @@ function AssistantToolInvocationBlock({
     return <AssistantShellBlock call={call} result={result} error={error} />;
   }
 
-  return <AssistantSkillBlock call={call} result={result} error={error} />;
+  return (
+    <>
+      {renderInlineSkillLabel(call, result, error)}
+      {error ? <AssistantErrorBlock segment={error} /> : null}
+    </>
+  );
 }
 
 export function ConversationFeed(props: ConversationFeedProps) {
@@ -980,18 +1002,16 @@ export function ConversationFeed(props: ConversationFeedProps) {
     generations,
     activeGeneration = null,
     queuedGenerations = [],
-    activeBranchId,
     messageActionBusyId,
     cancelGenerationBusy = false,
     onCancelGeneration,
     onEditMessage,
-    onRegenerateMessage,
-    onForkMessage,
-    onRollbackMessage,
   } = props;
   const feedRef = useRef<HTMLElement | null>(null);
   const previousLastItemSignature = useRef<string | null>(null);
-  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState("");
 
   const mergedGenerations = useMemo(
     () => mergeGenerations(generations, activeGeneration, queuedGenerations),
@@ -1046,12 +1066,35 @@ export function ConversationFeed(props: ConversationFeedProps) {
     previousLastItemSignature.current = lastItemSignature;
   }, [lastItemSignature]);
 
+  useEffect(() => {
+    if (!editingMessageId) {
+      return;
+    }
+
+    editTextareaRef.current?.focus();
+  }, [editingMessageId]);
+
+  useEffect(() => {
+    if (!editingMessageId) {
+      return;
+    }
+
+    if (!messages.some((message) => message.id === editingMessageId)) {
+      setEditingMessageId(null);
+      setEditingContent("");
+    }
+  }, [editingMessageId, messages]);
+
   function renderTranscriptSegments(segments: AssistantTranscriptSegment[]) {
     if (segments.length === 0) {
       return renderMarkdownMessage("");
     }
 
     const blocks = buildTranscriptBlocks(segments);
+    if (blocks.length === 0) {
+      return renderMarkdownMessage("");
+    }
+
     const lastOutputBlockIndex = (() => {
       for (let index = blocks.length - 1; index >= 0; index -= 1) {
         if (blocks[index]?.type === "output") {
@@ -1064,10 +1107,6 @@ export function ConversationFeed(props: ConversationFeedProps) {
     return (
       <div className="assistant-transcript">
         {blocks.map((block, index) => {
-          if (block.type === "reasoning") {
-            return <AssistantReasoningStream key={block.key} segments={block.segments} />;
-          }
-
           if (block.type === "tool") {
             return (
               <AssistantToolInvocationBlock
@@ -1083,6 +1122,10 @@ export function ConversationFeed(props: ConversationFeedProps) {
             return <AssistantErrorBlock key={block.key} segment={block.segment} />;
           }
 
+          if (block.type === "status") {
+            return <AssistantStatusNote key={block.key} segment={block.segment} />;
+          }
+
           return (
             <AssistantPrimaryOutput
               key={block.key}
@@ -1095,91 +1138,97 @@ export function ConversationFeed(props: ConversationFeedProps) {
     );
   }
 
-  function renderOverflowActions(message: SessionMessage) {
+  function startInlineEdit(message: SessionMessage) {
+    setEditingMessageId(message.id);
+    setEditingContent(message.content);
+  }
+
+  function cancelInlineEdit() {
+    setEditingMessageId(null);
+    setEditingContent("");
+  }
+
+  async function saveInlineEdit(message: SessionMessage): Promise<void> {
+    if (typeof onEditMessage !== "function") {
+      return;
+    }
+
+    const trimmed = editingContent.trim();
+    if (!trimmed || trimmed === message.content.trim()) {
+      cancelInlineEdit();
+      return;
+    }
+
+    await onEditMessage(message, trimmed);
+    cancelInlineEdit();
+  }
+
+  function renderUserEditTrigger(message: SessionMessage) {
     const isBusy = messageActionBusyId === message.id;
-    const secondaryActions: Array<{ label: string; onSelect: () => void }> = [];
-
-    if (message.role === "user" && typeof onEditMessage === "function") {
-      secondaryActions.push({
-        label: "编辑",
-        onSelect: () => onEditMessage(message),
-      });
-    }
-
-    if (message.role === "assistant" && typeof onRegenerateMessage === "function") {
-      secondaryActions.push({
-        label: "重试",
-        onSelect: () => onRegenerateMessage(message),
-      });
-    }
-
-    if (typeof onForkMessage === "function") {
-      secondaryActions.push({
-        label: "分叉",
-        onSelect: () => onForkMessage(message),
-      });
-    }
-
-    const canRollback = typeof onRollbackMessage === "function";
-    const hasVisibleActions = canRollback || secondaryActions.length > 0;
-
-    if (!hasVisibleActions) {
+    if (message.role !== "user" || typeof onEditMessage !== "function") {
       return null;
     }
 
-    const isMenuOpen = openActionMenuId === message.id;
-
     return (
       <div className="chat-bubble-action-shell">
-        {canRollback ? (
-          <button
-            className="chat-bubble-rollback-button"
-            type="button"
-            disabled={isBusy}
-            onClick={() => onRollbackMessage?.(message)}
-          >
-            回溯到此
-          </button>
-        ) : null}
-        {secondaryActions.length > 0 ? (
-          <div className="chat-bubble-overflow-shell">
-            <button
-              className="chat-bubble-overflow-button"
-              type="button"
-              aria-label="打开消息操作"
-              aria-expanded={isMenuOpen}
-              onClick={() =>
-                setOpenActionMenuId((currentValue) =>
-                  currentValue === message.id ? null : message.id,
-                )
-              }
-            >
-              ···
-            </button>
-            {isMenuOpen ? (
-              <div className="chat-bubble-overflow-menu">
-                {secondaryActions.map((action) => (
-                  <button
-                    key={action.label}
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => {
-                      setOpenActionMenuId(null);
-                      action.onSelect();
-                    }}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        <button
+          className="chat-bubble-edit-trigger"
+          type="button"
+          aria-label="返回并编辑消息"
+          disabled={isBusy}
+          onClick={() => startInlineEdit(message)}
+        >
+          <span aria-hidden="true" className="chat-bubble-edit-trigger-icon">
+            ↩
+          </span>
+        </button>
       </div>
     );
   }
 
-  function renderAssistantBubble(message: SessionMessage, generation: ChatGeneration | null = null) {
+  function renderInlineEditComposer(message: SessionMessage) {
+    const isBusy = messageActionBusyId === message.id;
+    const trimmedContent = editingContent.trim();
+    const isSaveDisabled =
+      isBusy || trimmedContent.length === 0 || trimmedContent === message.content.trim();
+
+    return (
+      <form
+        className="chat-bubble-inline-editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveInlineEdit(message);
+        }}
+      >
+        <textarea
+          ref={editTextareaRef}
+          className="field-textarea chat-bubble-inline-editor-input"
+          value={editingContent}
+          rows={Math.max(3, message.content.split(/\r?\n/).length)}
+          disabled={isBusy}
+          onChange={(event) => setEditingContent(event.target.value)}
+        />
+        <div className="chat-bubble-inline-editor-actions">
+          <button className="inline-button" type="submit" disabled={isSaveDisabled}>
+            保存
+          </button>
+          <button
+            className="text-button"
+            type="button"
+            disabled={isBusy}
+            onClick={cancelInlineEdit}
+          >
+            取消
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  function renderAssistantBubble(
+    message: SessionMessage,
+    generation: ChatGeneration | null = null,
+  ) {
     const transcript = buildAssistantTranscript(message, generation);
     const generationStatus = generation?.status ?? message.status ?? null;
     const canCancelGeneration =
@@ -1188,18 +1237,15 @@ export function ConversationFeed(props: ConversationFeedProps) {
       (generation.status === "queued" || generation.status === "running");
 
     return (
-      <article key={message.id} className="chat-bubble chat-bubble-assistant chat-bubble-assistant-transcript">
+      <article
+        key={message.id}
+        className="chat-bubble chat-bubble-assistant chat-bubble-assistant-transcript"
+      >
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">{formatMessageRole(message.role)}</strong>
           <div className="chat-bubble-meta-actions">
-            {generation && generation.action !== "reply" ? (
-              <span className="management-token-chip">{getGenerationActionLabel(generation.action)}</span>
-            ) : null}
             {generation?.status === "queued" && generation.queue_position ? (
               <span className="management-token-chip">排队 #{generation.queue_position}</span>
-            ) : null}
-            {message.branch_id && activeBranchId && message.branch_id !== activeBranchId ? (
-              <span className="management-token-chip">分支消息</span>
             ) : null}
             {generationStatus && generationStatus !== "completed" ? (
               <StatusBadge status={generationStatus} />
@@ -1226,7 +1272,6 @@ export function ConversationFeed(props: ConversationFeedProps) {
             ))}
           </div>
         ) : null}
-        {renderOverflowActions(message)}
       </article>
     );
   }
@@ -1245,9 +1290,6 @@ export function ConversationFeed(props: ConversationFeedProps) {
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">助手</strong>
           <div className="chat-bubble-meta-actions">
-            {generation.action !== "reply" ? (
-              <span className="management-token-chip">{getGenerationActionLabel(generation.action)}</span>
-            ) : null}
             {generation.status === "queued" && generation.queue_position ? (
               <span className="management-token-chip">排队 #{generation.queue_position}</span>
             ) : null}
@@ -1274,20 +1316,20 @@ export function ConversationFeed(props: ConversationFeedProps) {
       return renderAssistantBubble(message, null);
     }
 
+    const isEditing = editingMessageId === message.id;
+
     return (
       <article key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">{formatMessageRole(message.role)}</strong>
           <div className="chat-bubble-meta-actions">
-            {message.branch_id && activeBranchId && message.branch_id !== activeBranchId ? (
-              <span className="management-token-chip">分支消息</span>
-            ) : null}
             {message.status && message.status !== "completed" ? (
               <StatusBadge status={message.status} />
             ) : null}
+            {!isEditing ? renderUserEditTrigger(message) : null}
           </div>
         </div>
-        {renderUserMessage(message.content)}
+        {isEditing ? renderInlineEditComposer(message) : renderUserMessage(message.content)}
         {message.attachments.length > 0 ? (
           <div className="chat-bubble-artifacts">
             {message.attachments.map((attachment) => (
@@ -1297,7 +1339,6 @@ export function ConversationFeed(props: ConversationFeedProps) {
             ))}
           </div>
         ) : null}
-        {renderOverflowActions(message)}
       </article>
     );
   }

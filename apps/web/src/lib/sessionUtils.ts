@@ -43,7 +43,8 @@ function isFiniteCursor(value: number | null | undefined): value is number {
 }
 
 function getMessageSortKey(message: SessionMessage): [number, number] {
-  const sequence = typeof message.sequence === "number" ? message.sequence : Number.MAX_SAFE_INTEGER;
+  const sequence =
+    typeof message.sequence === "number" ? message.sequence : Number.MAX_SAFE_INTEGER;
   return [sequence, toTimestamp(message.created_at)];
 }
 
@@ -85,7 +86,8 @@ export function mergeSessionMessage(
             ? message.attachments
             : existingMessage.attachments,
         assistant_transcript:
-          message.assistant_transcript.length > 0 || existingMessage.assistant_transcript.length === 0
+          message.assistant_transcript.length > 0 ||
+          existingMessage.assistant_transcript.length === 0
             ? message.assistant_transcript
             : existingMessage.assistant_transcript,
       }
@@ -243,9 +245,7 @@ function isAssistantTraceErrorPayload(payload: Record<string, unknown>): boolean
   );
 }
 
-function getPersistedReasoningPayload(
-  entry: Record<string, unknown>,
-): Record<string, unknown> {
+function getPersistedReasoningPayload(entry: Record<string, unknown>): Record<string, unknown> {
   if (isRecord(entry.payload)) {
     return entry.payload;
   }
@@ -417,7 +417,11 @@ export function extractGenerationReasoningEntries(
     const payload = getPersistedReasoningPayload(rawEntry);
     const type = getPersistedReasoningType(rawEntry, payload);
     const createdAt = getPersistedReasoningCreatedAt(generation, rawEntry, payload);
-    const assistantMessageId = getPersistedReasoningAssistantMessageId(generation, rawEntry, payload);
+    const assistantMessageId = getPersistedReasoningAssistantMessageId(
+      generation,
+      rawEntry,
+      payload,
+    );
     const cursor = getPersistedReasoningCursor(rawEntry, payload);
     const sequence = getPersistedReasoningSequence(rawEntry, payload);
     const persistedId = `${generation.id}:reasoning:${index}`;
@@ -573,7 +577,10 @@ function compareGenerations(left: ChatGeneration, right: ChatGeneration): number
 }
 
 function nextGenerationStepSequence(generation: ChatGeneration): number {
-  return (generation.steps ?? []).reduce((currentMax, step) => Math.max(currentMax, step.sequence), 0) + 1;
+  return (
+    (generation.steps ?? []).reduce((currentMax, step) => Math.max(currentMax, step.sequence), 0) +
+    1
+  );
 }
 
 function inferTracePhase(data: Record<string, unknown>): string | null {
@@ -734,8 +741,7 @@ function buildLiveGenerationStep(
   cursor: number | null,
   generation: ChatGeneration | null,
 ): GenerationStep | null {
-  const generationId =
-    readFirstNonEmptyString(data, ["generation_id"]) ?? generation?.id ?? null;
+  const generationId = readFirstNonEmptyString(data, ["generation_id"]) ?? generation?.id ?? null;
   const messageId =
     readFirstNonEmptyString(data, ["assistant_message_id", "message_id"]) ??
     generation?.assistant_message_id ??
@@ -752,7 +758,8 @@ function buildLiveGenerationStep(
   const baseStep = {
     id: buildGenerationStepId(type, data, createdAt, cursor),
     generation_id: generationId,
-    session_id: typeof data.session_id === "string" ? data.session_id : generation?.session_id ?? "",
+    session_id:
+      typeof data.session_id === "string" ? data.session_id : (generation?.session_id ?? ""),
     message_id: messageId,
     sequence,
     tool_name: readFirstNonEmptyString(data, ["tool_name", "tool"]),
@@ -763,7 +770,9 @@ function buildLiveGenerationStep(
     ended_at:
       readFirstNonEmptyString(data, ["ended_at", "completed_at"]) ??
       (type === "message.completed" ? createdAt : null),
-  } satisfies Omit<GenerationStep, "kind" | "status" | "delta_text"> & { metadata?: Record<string, unknown> };
+  } satisfies Omit<GenerationStep, "kind" | "status" | "delta_text"> & {
+    metadata?: Record<string, unknown>;
+  };
 
   if (type === "assistant.summary") {
     const safeSummary = extractSafeSessionSummary(type, data)?.summary;
@@ -829,11 +838,19 @@ function buildLiveGenerationStep(
       label: "正文输出",
       safe_summary: buildOutputStepSummary(data),
       delta_text:
-        typeof data.delta === "string" ? data.delta : typeof data.content === "string" ? data.content : "",
+        typeof data.delta === "string"
+          ? data.delta
+          : typeof data.content === "string"
+            ? data.content
+            : "",
     };
   }
 
-  if (type === "generation.started" || type === "generation.cancelled" || type === "generation.failed") {
+  if (
+    type === "generation.started" ||
+    type === "generation.cancelled" ||
+    type === "generation.failed"
+  ) {
     return {
       ...baseStep,
       kind: "status",
@@ -893,7 +910,8 @@ function mergeGenerationStepList(
   const existingStep = steps[existingIndex];
   const nextDeltaText =
     incomingStep.kind === "output"
-      ? incomingStep.status === "completed" && incomingStep.delta_text.length >= existingStep.delta_text.length
+      ? incomingStep.status === "completed" &&
+        incomingStep.delta_text.length >= existingStep.delta_text.length
         ? incomingStep.delta_text
         : incomingStep.delta_text && !existingStep.delta_text.endsWith(incomingStep.delta_text)
           ? `${existingStep.delta_text}${incomingStep.delta_text}`
@@ -932,13 +950,13 @@ function mergeGenerationState(generation: ChatGeneration, step: GenerationStep):
     updated_at: step.ended_at ?? step.started_at,
     started_at:
       inferredStatus === "running"
-        ? generation.started_at ?? step.started_at
+        ? (generation.started_at ?? step.started_at)
         : generation.started_at,
     ended_at:
       inferredStatus === "completed" ||
       inferredStatus === "failed" ||
       inferredStatus === "cancelled"
-        ? step.ended_at ?? step.started_at
+        ? (step.ended_at ?? step.started_at)
         : generation.ended_at,
     steps: mergeGenerationStepList(generation.steps, step),
   };
@@ -952,7 +970,8 @@ function createLiveGeneration(
   return {
     id: step.generation_id,
     session_id: conversation.session.id,
-    branch_id: conversation.active_branch?.id ?? conversation.session.active_branch_id ?? "default-branch",
+    branch_id:
+      conversation.active_branch?.id ?? conversation.session.active_branch_id ?? "default-branch",
     action: "reply",
     assistant_message_id: step.message_id ?? "",
     status:
@@ -972,7 +991,7 @@ function createLiveGeneration(
     started_at: step.status === "running" ? step.started_at : null,
     ended_at:
       step.status === "completed" || step.status === "failed" || step.status === "cancelled"
-        ? step.ended_at ?? step.started_at
+        ? (step.ended_at ?? step.started_at)
         : null,
   };
 }
@@ -1052,7 +1071,9 @@ function mergeConversationGenerationLifecycle(
             status: nextStatus,
             updated_at: createdAt,
             started_at:
-              nextStatus === "running" ? generation.started_at ?? createdAt : generation.started_at,
+              nextStatus === "running"
+                ? (generation.started_at ?? createdAt)
+                : generation.started_at,
             ended_at:
               nextStatus === "completed" || nextStatus === "failed" || nextStatus === "cancelled"
                 ? createdAt
@@ -1082,7 +1103,8 @@ export function mergeConversationGenerationEvent(
 
   let nextConversation =
     type === "assistant.summary" || type === "assistant.trace"
-      ? mergeConversationReasoningEvent(conversation, type, data, createdAt, cursor) ?? conversation
+      ? (mergeConversationReasoningEvent(conversation, type, data, createdAt, cursor) ??
+        conversation)
       : conversation;
 
   const generationId = readFirstNonEmptyString(data, ["generation_id"]);
@@ -1096,13 +1118,17 @@ export function mergeConversationGenerationEvent(
         return true;
       }
 
-      const assistantMessageId = readFirstNonEmptyString(data, ["assistant_message_id", "message_id"]);
+      const assistantMessageId = readFirstNonEmptyString(data, [
+        "assistant_message_id",
+        "message_id",
+      ]);
       return assistantMessageId ? generation.assistant_message_id === assistantMessageId : false;
     }) ?? null,
   );
 
   if (liveStep) {
-    nextConversation = mergeConversationGenerationStep(nextConversation, liveStep) ?? nextConversation;
+    nextConversation =
+      mergeConversationGenerationStep(nextConversation, liveStep) ?? nextConversation;
   }
 
   if (type === "session.updated") {
@@ -1130,16 +1156,31 @@ export function mergeConversationGenerationEvent(
   }
 
   if (type === "generation.cancelled") {
-    return mergeConversationGenerationLifecycle(nextConversation, generationId, "cancelled", createdAt);
+    return mergeConversationGenerationLifecycle(
+      nextConversation,
+      generationId,
+      "cancelled",
+      createdAt,
+    );
   }
 
   if (type === "generation.failed") {
-    return mergeConversationGenerationLifecycle(nextConversation, generationId, "failed", createdAt);
+    return mergeConversationGenerationLifecycle(
+      nextConversation,
+      generationId,
+      "failed",
+      createdAt,
+    );
   }
 
   if (type === "assistant.trace") {
     const inferredStatus = inferGenerationStatusFromTrace(data);
-    return mergeConversationGenerationLifecycle(nextConversation, generationId, inferredStatus as ChatGeneration["status"] | null, createdAt);
+    return mergeConversationGenerationLifecycle(
+      nextConversation,
+      generationId,
+      inferredStatus as ChatGeneration["status"] | null,
+      createdAt,
+    );
   }
 
   return nextConversation;
@@ -1176,13 +1217,22 @@ export function mergeQueueState(
 
   if (type === "generation.started") {
     const activeGeneration =
-      queue.queued_generations.find((generation) => generation.id === generationId) ?? queue.active_generation;
+      queue.queued_generations.find((generation) => generation.id === generationId) ??
+      queue.active_generation;
     return {
       ...queue,
-      active_generation: activeGeneration && activeGeneration.id === generationId ? { ...activeGeneration, status: "running" } : queue.active_generation,
+      active_generation:
+        activeGeneration && activeGeneration.id === generationId
+          ? { ...activeGeneration, status: "running" }
+          : queue.active_generation,
       active_generation_id: generationId,
-      queued_generations: queue.queued_generations.filter((generation) => generation.id !== generationId),
-      queued_generation_count: Math.max(0, queue.queued_generations.filter((generation) => generation.id !== generationId).length),
+      queued_generations: queue.queued_generations.filter(
+        (generation) => generation.id !== generationId,
+      ),
+      queued_generation_count: Math.max(
+        0,
+        queue.queued_generations.filter((generation) => generation.id !== generationId).length,
+      ),
     };
   }
 
@@ -1193,7 +1243,9 @@ export function mergeQueueState(
         queue.active_generation?.id === generationId ? null : queue.active_generation,
       active_generation_id:
         queue.active_generation_id === generationId ? null : queue.active_generation_id,
-      queued_generations: queue.queued_generations.filter((generation) => generation.id !== generationId),
+      queued_generations: queue.queued_generations.filter(
+        (generation) => generation.id !== generationId,
+      ),
       queued_generation_count: Math.max(
         0,
         queue.queued_generations.filter((generation) => generation.id !== generationId).length,
@@ -1263,13 +1315,16 @@ function mergeGenerationReasoningTrace(
   cursor: number | null,
 ): ChatGeneration {
   const safeSummary = extractSafeSessionSummary(type, data);
-  const nextSequence = getPersistedReasoningSequence(data, data) ?? getNextReasoningSequence(generation);
+  const nextSequence =
+    getPersistedReasoningSequence(data, data) ?? getNextReasoningSequence(generation);
   const traceEntry = cloneReasoningTraceEntry(type, data, createdAt, cursor, nextSequence);
 
   return {
     ...generation,
     reasoning_summary:
-      type === "assistant.summary" && safeSummary ? safeSummary.summary : generation.reasoning_summary,
+      type === "assistant.summary" && safeSummary
+        ? safeSummary.summary
+        : generation.reasoning_summary,
     reasoning_trace: [...(generation.reasoning_trace ?? []), traceEntry],
     updated_at: createdAt,
   };
@@ -1282,7 +1337,11 @@ export function mergeConversationReasoningEvent(
   createdAt: string,
   cursor: number | null,
 ): SessionConversation | undefined {
-  if (!conversation || !isRecord(data) || (type !== "assistant.summary" && type !== "assistant.trace")) {
+  if (
+    !conversation ||
+    !isRecord(data) ||
+    (type !== "assistant.summary" && type !== "assistant.trace")
+  ) {
     return conversation;
   }
 
@@ -1711,7 +1770,8 @@ function toAssistantTranscriptSegmentList(
         return [];
       }
 
-      const recordedAt = typeof entry.recorded_at === "string" ? entry.recorded_at : fallbackTimestamp;
+      const recordedAt =
+        typeof entry.recorded_at === "string" ? entry.recorded_at : fallbackTimestamp;
       const updatedAt = typeof entry.updated_at === "string" ? entry.updated_at : recordedAt;
 
       return [
@@ -1719,8 +1779,7 @@ function toAssistantTranscriptSegmentList(
           id: typeof entry.id === "string" ? entry.id : `assistant-transcript-${index + 1}`,
           sequence: typeof entry.sequence === "number" ? entry.sequence : index + 1,
           kind: typeof entry.kind === "string" ? entry.kind : "status",
-          status:
-            typeof entry.status === "string" || entry.status === null ? entry.status : null,
+          status: typeof entry.status === "string" || entry.status === null ? entry.status : null,
           title: typeof entry.title === "string" || entry.title === null ? entry.title : null,
           text: typeof entry.text === "string" || entry.text === null ? entry.text : null,
           tool_name:

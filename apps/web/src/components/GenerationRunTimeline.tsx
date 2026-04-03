@@ -216,11 +216,13 @@ function buildTimelineSummary(
 
   if (kind === "output") {
     const outputLength = step.deltaText?.length ?? assistantMessage?.content.trim().length ?? 0;
-    return outputLength > 0 ? `正在整理回复，当前可见输出约 ${outputLength} 字。` : "正在整理可见回复。";
+    return outputLength > 0
+      ? `正在整理回复，当前可见输出约 ${outputLength} 字。`
+      : "正在整理可见回复。";
   }
 
   if (kind === "status") {
-      return step.state ? `运行状态更新：${step.state.replace(/[_.]+/g, " · ")}` : "运行状态已更新。";
+    return step.state ? `运行状态更新：${step.state.replace(/[_.]+/g, " · ")}` : "运行状态已更新。";
   }
 
   if (step.phase) {
@@ -264,7 +266,11 @@ function buildTimelineItems(
     const charCount = step.deltaText?.length ?? 0;
     const previousItem = timelineItems[timelineItems.length - 1] ?? null;
 
-    if (kind === "tool" && previousItem?.kind === "tool" && previousItem.toolCallId === step.toolCallId) {
+    if (
+      kind === "tool" &&
+      previousItem?.kind === "tool" &&
+      previousItem.toolCallId === step.toolCallId
+    ) {
       previousItem.summary = summary;
       previousItem.status = status;
       previousItem.phase = formatPhaseLabel(step.phase) ?? previousItem.phase;
@@ -397,7 +403,9 @@ function GenerationQueueItem({
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <strong className="text-sm text-[var(--text-strong)]">{title}</strong>
-            <span className="management-token-chip">{formatGenerationAction(generation.action)}</span>
+            <span className="management-token-chip">
+              {formatGenerationAction(generation.action)}
+            </span>
           </div>
           <p className="m-0 text-xs text-[var(--text-secondary)]">{subtitle}</p>
         </div>
@@ -460,7 +468,7 @@ export function GenerationQueuePanel({
             subtitle="助手正在生成这条回复。"
             prompt={getPromptPreview(
               activeGeneration.user_message_id
-                ? messagesById.get(activeGeneration.user_message_id) ?? null
+                ? (messagesById.get(activeGeneration.user_message_id) ?? null)
                 : null,
             )}
             cancelDisabled={cancelDisabled}
@@ -478,7 +486,9 @@ export function GenerationQueuePanel({
               title={`排队 #${queuePosition}`}
               subtitle="等待当前运行结束后自动开始。"
               prompt={getPromptPreview(
-                generation.user_message_id ? messagesById.get(generation.user_message_id) ?? null : null,
+                generation.user_message_id
+                  ? (messagesById.get(generation.user_message_id) ?? null)
+                  : null,
               )}
               cancelDisabled={cancelDisabled}
               onCancelGeneration={onCancelGeneration}

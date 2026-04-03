@@ -14,6 +14,7 @@ from app.db.models import (
     SkillRecordRead,
 )
 from app.db.repositories import RunLogRepository
+from app.prompt import CAPABILITY_LAYER, PromptFragmentBuilder
 
 
 class CapabilityFacade:
@@ -38,6 +39,7 @@ class CapabilityFacade:
         self._mcp_service = mcp_service
         self._runtime_runner = runtime_runner
         self._run_log_repository = run_log_repository
+        self._prompt_fragment_builder = PromptFragmentBuilder()
 
     def list_skills(self) -> list[SkillRecordRead]:
         records = self._skill_service.list_skills()
@@ -290,12 +292,38 @@ class CapabilityFacade:
         use_cache: bool = True,
         max_cache_age_seconds: int = 120,
         session_id: str | None = None,
+        role_prompt: str | None = None,
+        sub_agent_role_prompt: str | None = None,
+        task_name: str | None = None,
+        task_description: str | None = None,
+        projection_summary: str | None = None,
     ) -> str:
+        role_text = "\n".join(
+            part
+            for part in ((role_prompt or "").strip(), (sub_agent_role_prompt or "").strip())
+            if part
+        )
+        task_local_text = (
+            f"Task: {task_name or 'workflow-context'}. "
+            f"Description: {task_description or 'N/A'}. "
+            f"Projection summary: {projection_summary or 'N/A'}."
+        )
+        cache_bundle = self._prompt_fragment_builder.build_by_role_and_task(
+            core_text="",
+            role_text=role_text,
+            capability_text="",
+            task_local_text=task_local_text,
+            session_id=session_id,
+            role=role_prompt,
+            task_name=task_name,
+        )
+        cache_key = cache_bundle.capability.cache_key
         if use_cache:
             cached = self._load_cached_fragment(
                 event_type=self.PROMPT_FRAGMENT_CACHE_EVENT,
                 max_cache_age_seconds=max_cache_age_seconds,
                 session_id=session_id,
+                cache_key=cache_key,
             )
             if cached is not None:
                 self._log_capability_event(
@@ -328,18 +356,32 @@ class CapabilityFacade:
                 ),
             ]
         )
+        prompt_bundle = self._prompt_fragment_builder.build_by_role_and_task(
+            core_text="",
+            role_text=role_text,
+            capability_text=prompt_fragment,
+            task_local_text=task_local_text,
+            session_id=session_id,
+            role=role_prompt,
+            task_name=task_name,
+        )
         self._log_capability_event(
             event_type="capability.skills.context_prompt",
             message="Built skill context prompt fragment.",
-            payload={"length": len(prompt_fragment)},
+            payload={
+                "length": len(prompt_bundle.capability.content),
+                "layer": CAPABILITY_LAYER,
+                "cache_key": prompt_bundle.capability.cache_key,
+            },
             session_id=session_id,
         )
         self._save_cached_fragment(
             event_type=self.PROMPT_FRAGMENT_CACHE_EVENT,
-            content=prompt_fragment,
+            content=prompt_bundle.capability.content,
             session_id=session_id,
+            cache_key=prompt_bundle.capability.cache_key,
         )
-        return prompt_fragment
+        return prompt_bundle.capability.content
 
     def build_prompt_fragments(
         self,
@@ -347,6 +389,11 @@ class CapabilityFacade:
         use_cache: bool = True,
         max_cache_age_seconds: int = 120,
         session_id: str | None = None,
+        role_prompt: str | None = None,
+        sub_agent_role_prompt: str | None = None,
+        task_name: str | None = None,
+        task_description: str | None = None,
+        projection_summary: str | None = None,
     ) -> dict[str, str]:
         return {
             "inventory_summary": self.build_skill_inventory_summary(
@@ -363,6 +410,11 @@ class CapabilityFacade:
                 use_cache=use_cache,
                 max_cache_age_seconds=max_cache_age_seconds,
                 session_id=session_id,
+                role_prompt=role_prompt,
+                sub_agent_role_prompt=sub_agent_role_prompt,
+                task_name=task_name,
+                task_description=task_description,
+                projection_summary=projection_summary,
             ),
         }
 
@@ -407,11 +459,12 @@ class CapabilityFacade:
         event_type: str,
         content: str,
         session_id: str | None,
+        cache_key: str | None = None,
     ) -> None:
         self._log_capability_event(
             event_type=event_type,
             message=f"Persisted latest capability fragment cache for {event_type}.",
-            payload={"content": content},
+            payload={"content": content, "cache_key": cache_key},
             session_id=session_id,
         )
 
@@ -421,6 +474,7 @@ class CapabilityFacade:
         event_type: str,
         max_cache_age_seconds: int,
         session_id: str | None,
+        cache_key: str | None = None,
     ) -> str | None:
         if self._run_log_repository is None:
             return None
@@ -438,6 +492,10 @@ class CapabilityFacade:
             created_at = created_at.astimezone(UTC)
         if created_at < datetime.now(UTC) - timedelta(seconds=max_cache_age_seconds):
             return None
+        if cache_key is not None:
+            payload_cache_key = latest_log.payload_json.get("cache_key")
+            if payload_cache_key != cache_key:
+                return None
         content = latest_log.payload_json.get("content")
         if isinstance(content, str):
             return content
