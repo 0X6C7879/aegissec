@@ -135,9 +135,9 @@ class WorkflowLoopEngine:
             self._transcript_runtime.append_protocol_resolution_event(
                 mutable_state=mutable_state,
                 cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
-                current_stage=self._runtime.task_stage(resolved_task)
-                if resolved_task
-                else run.current_stage,
+                current_stage=(
+                    self._runtime.task_stage(resolved_task) if resolved_task else run.current_stage
+                ),
                 task_name=resolved_task.name if resolved_task is not None else "workflow-protocol",
                 resolved_entry=resolved_protocol,
             )
@@ -1794,9 +1794,7 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked"
-                if resolved_status is WorkflowRunStatus.BLOCKED
-                else "completed"
+                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,

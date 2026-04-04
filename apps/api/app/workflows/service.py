@@ -43,9 +43,20 @@ from app.db.repositories import (
     WorkflowRepository,
 )
 from app.db.session import get_db_session
-from app.graphs.builders import CausalGraphBuilder, SnapshotGraphBuilder, TaskGraphBuilder
+from app.graphs.builders import (
+    AttackGraphBuilder,
+    CausalGraphBuilder,
+    SnapshotGraphBuilder,
+    TaskGraphBuilder,
+)
 from app.services.capabilities import CapabilityFacade
-from app.services.workflow_queue import WorkflowQueueBackend, get_workflow_queue_backend
+from app.services.runtime import RuntimeBackend, get_runtime_backend
+from app.services.workflow_queue import (
+    InProcessWorkflowQueueBackend,
+    RedisWorkflowQueueBackend,
+    WorkflowQueueBackend,
+    get_workflow_queue_backend,
+)
 from app.workflows.template_loader import WorkflowTemplateLoader
 
 
@@ -103,6 +114,7 @@ class WorkflowService:
         self._template_loader = template_loader or WorkflowTemplateLoader()
         self._task_graph_builder = TaskGraphBuilder()
         self._causal_graph_builder = CausalGraphBuilder()
+        self._attack_graph_builder = AttackGraphBuilder()
         self._snapshot_graph_builder = SnapshotGraphBuilder()
         self._coordinator = Coordinator(
             planner=Planner(),
@@ -307,6 +319,9 @@ class WorkflowService:
             ),
             causal_graph=self._build_graph_snapshot(
                 run=run, graph_type=GraphType.CAUSAL, tasks=tasks
+            ),
+            attack_graph=self._build_graph_snapshot(
+                run=run, graph_type=GraphType.ATTACK, tasks=tasks
             ),
             execution_records=self._execution_records_with_archived(run.state_json),
             replan_records=self._extract_dict_list(run.state_json.get("replan_records")),
@@ -539,7 +554,36 @@ class WorkflowService:
                 nodes=[],
                 edges=[],
             )
-        return self._causal_graph_builder.build(run=run)
+        if graph_type is GraphType.CAUSAL:
+            return self._causal_graph_builder.build(run=run)
+        evidence_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        evidence_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        causal_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        causal_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        return self._attack_graph_builder.build(
+            run=run,
+            tasks=tasks,
+            evidence_nodes=evidence_nodes,
+            evidence_edges=evidence_edges,
+            causal_nodes=causal_nodes,
+            causal_edges=causal_edges,
+        )
 
     @staticmethod
     def _extract_dict_list(raw: object) -> list[dict[str, object]]:
@@ -590,5 +634,23 @@ class WorkflowService:
 def get_workflow_service(
     db_session: DBSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    runtime_backend: RuntimeBackend = Depends(get_runtime_backend),
 ) -> WorkflowService:
-    return WorkflowService(db_session, settings=settings)
+    runtime_repository = RuntimeRepository(db_session)
+    run_log_repository = RunLogRepository(db_session)
+    queue_backend: WorkflowQueueBackend
+    if settings.queue_backend == "redis":
+        queue_backend = RedisWorkflowQueueBackend(
+            settings=settings,
+            runtime_repository=runtime_repository,
+            run_log_repository=run_log_repository,
+            runtime_backend=runtime_backend,
+        )
+    else:
+        queue_backend = InProcessWorkflowQueueBackend(
+            settings=settings,
+            runtime_repository=runtime_repository,
+            run_log_repository=run_log_repository,
+            runtime_backend=runtime_backend,
+        )
+    return WorkflowService(db_session, settings=settings, queue_backend=queue_backend)

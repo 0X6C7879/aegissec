@@ -4,11 +4,17 @@ from app.agent.executor import ExecutionResult
 from app.agent.reflector import ReflectionResult
 from app.db.models import GraphType, TaskNode, WorkflowRun
 from app.db.repositories import GraphRepository
+from app.graphs.builders import AttackGraphBuilder
 
 
 class GraphManager:
-    def __init__(self, graph_repository: GraphRepository) -> None:
+    def __init__(
+        self,
+        graph_repository: GraphRepository,
+        attack_graph_builder: AttackGraphBuilder | None = None,
+    ) -> None:
         self._graph_repository = graph_repository
+        self._attack_graph_builder = attack_graph_builder or AttackGraphBuilder()
 
     def sync_task_graph(self, *, run: WorkflowRun, tasks: list[TaskNode]) -> None:
         for task in tasks:
@@ -173,4 +179,78 @@ class GraphManager:
                 relation="supports",
                 payload={"trace_id": execution.trace_id},
                 stable_key=relation_key,
+            )
+
+    def sync_attack_graph(self, *, run: WorkflowRun, tasks: list[TaskNode]) -> None:
+        evidence_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        evidence_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        causal_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        causal_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        attack_graph = self._attack_graph_builder.build(
+            run=run,
+            tasks=tasks,
+            evidence_nodes=evidence_nodes,
+            evidence_edges=evidence_edges,
+            causal_nodes=causal_nodes,
+            causal_edges=causal_edges,
+        )
+        self._graph_repository.delete_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+        )
+        self._graph_repository.delete_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+        )
+        attack_nodes_by_id: dict[str, str] = {}
+        for node in attack_graph.nodes:
+            stable_key = f"attack-node:{node.id}"
+            payload = {
+                "attack_id": node.id,
+                **dict(node.data),
+            }
+            created = self._graph_repository.create_node(
+                session_id=run.session_id,
+                workflow_run_id=run.id,
+                graph_type=GraphType.ATTACK,
+                node_type=node.node_type,
+                label=node.label,
+                payload=payload,
+                stable_key=stable_key,
+            )
+            attack_nodes_by_id[node.id] = created.id
+
+        for edge in attack_graph.edges:
+            source_node_id = attack_nodes_by_id.get(edge.source)
+            target_node_id = attack_nodes_by_id.get(edge.target)
+            if source_node_id is None or target_node_id is None:
+                continue
+            stable_key = f"attack-edge:{edge.source}:{edge.relation}:{edge.target}"
+            self._graph_repository.create_edge(
+                session_id=run.session_id,
+                workflow_run_id=run.id,
+                graph_type=GraphType.ATTACK,
+                source_node_id=source_node_id,
+                target_node_id=target_node_id,
+                relation=edge.relation,
+                payload=dict(edge.data),
+                stable_key=stable_key,
             )

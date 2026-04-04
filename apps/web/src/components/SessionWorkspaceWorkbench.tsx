@@ -4,30 +4,28 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   isApiError,
   advanceWorkflow,
+  forkSessionMessage,
+  getAttackGraph,
+  getAttackGraphForRun,
   cancelGeneration,
   cancelSession,
   createSession,
   deleteSession,
   editSessionMessage,
-  getCausalGraph,
-  getCausalGraphForRun,
-  getEvidenceGraph,
-  getEvidenceGraphForRun,
   getRuntimeStatus,
   getSessionConversation,
   getSessionQueue,
-  getTaskGraph,
-  getTaskGraphForRun,
   getWorkflow,
   getWorkflowExport,
   getWorkflowReplay,
   listSessions,
   listWorkflowTemplates,
+  regenerateSessionMessage,
+  rollbackSessionMessage,
   startWorkflow,
   updateSession,
   sendChatMessage,
 } from "../lib/api";
-import { formatDateTime } from "../lib/format";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import {
   mergeConversationGeneration,
@@ -36,7 +34,7 @@ import {
   upsertSession,
 } from "../lib/sessionUtils";
 import { useUiStore } from "../store/uiStore";
-import type { SessionGraph, SessionGraphEdge, SessionGraphNode } from "../types/graphs";
+import type { SessionGraphNode } from "../types/graphs";
 import type {
   ChatGeneration,
   GenerationStep,
@@ -47,31 +45,11 @@ import type {
 } from "../types/sessions";
 import type {
   WorkflowRunDetail,
-  WorkflowRunExport,
-  WorkflowRunReplay,
-  WorkflowTaskNode,
-  WorkflowTemplate,
 } from "../types/workflows";
+import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { WorkbenchComposer } from "./WorkbenchComposer";
-
-type WorkspaceDrawerTab = "outline" | "task" | "evidence";
-type EvidenceMode = "evidence" | "causal";
-type GraphFilterState = {
-  search: string;
-  status: string;
-  nodeType: string;
-};
-type SelectedNode = {
-  graphType: "task" | "evidence" | "causal";
-  nodeId: string;
-};
-type TimelineItem = {
-  id: string;
-  label: string;
-  value: string;
-};
 
 type InvalidSessionState = {
   sessionId: string;
@@ -114,22 +92,6 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-}
-
 function formatWorkflowStatus(status: string | null): string {
   switch (status) {
     case "queued":
@@ -151,91 +113,8 @@ function formatWorkflowStatus(status: string | null): string {
   }
 }
 
-function formatTaskStatusLabel(status: string | null): string {
-  switch (status) {
-    case "completed":
-      return "已完成";
-    case "in_progress":
-      return "进行中";
-    case "blocked":
-      return "待审批";
-    case "failed":
-      return "异常";
-    case "ready":
-      return "就绪";
-    case "pending":
-      return "待执行";
-    case "skipped":
-      return "已跳过";
-    default:
-      return status ?? "未知";
-  }
-}
-
-function getTaskStatusTone(status: string | null): string {
-  switch (status) {
-    case "completed":
-      return "tone-success";
-    case "in_progress":
-      return "tone-connected";
-    case "blocked":
-      return "tone-warning";
-    case "failed":
-      return "tone-error";
-    default:
-      return "tone-neutral";
-  }
-}
-
-function formatConfidence(value: number | null): string | null {
-  if (value === null) {
-    return null;
-  }
-
-  if (value >= 0 && value <= 1) {
-    return `${Math.round(value * 100)}%`;
-  }
-
-  return value.toFixed(2);
-}
-
-function getConfidenceTone(value: number | null): string {
-  if (value === null) {
-    return "tone-neutral";
-  }
-
-  if (value >= 0.75) {
-    return "tone-success";
-  }
-
-  if (value >= 0.4) {
-    return "tone-warning";
-  }
-
-  return "tone-error";
-}
-
 function getConnectionTone(state: string): string {
   return state === "open" ? "在线" : state === "connecting" ? "连接中" : "离线";
-}
-
-function getRelationLabel(relation: string): string {
-  switch (relation) {
-    case "depends_on":
-      return "依赖";
-    case "precedes":
-      return "前置";
-    case "supports":
-      return "支持";
-    case "contradicts":
-      return "矛盾";
-    case "validates":
-      return "验证";
-    case "causes":
-      return "导致";
-    default:
-      return relation;
-  }
 }
 
 function buildOptimisticUserMessage(sessionId: string, content: string): SessionMessage {
@@ -343,785 +222,6 @@ function downloadJson(fileName: string, payload: unknown): void {
   window.URL.revokeObjectURL(objectUrl);
 }
 
-function getNodeStatus(node: SessionGraphNode): string | null {
-  return readString(node.data.status);
-}
-
-function buildTaskChildren(tasks: WorkflowTaskNode[]): Map<string | null, WorkflowTaskNode[]> {
-  const taskChildren = new Map<string | null, WorkflowTaskNode[]>();
-
-  for (const task of tasks) {
-    const current = taskChildren.get(task.parent_id) ?? [];
-    current.push(task);
-    taskChildren.set(task.parent_id, current);
-  }
-
-  for (const group of taskChildren.values()) {
-    group.sort(
-      (left, right) =>
-        left.sequence - right.sequence || left.created_at.localeCompare(right.created_at),
-    );
-  }
-
-  return taskChildren;
-}
-
-function flattenTaskTree(
-  tasks: WorkflowTaskNode[],
-): Array<{ task: WorkflowTaskNode; depth: number }> {
-  const taskChildren = buildTaskChildren(tasks);
-  const flattened: Array<{ task: WorkflowTaskNode; depth: number }> = [];
-
-  function visit(parentId: string | null, depth: number): void {
-    const children = taskChildren.get(parentId) ?? [];
-    for (const child of children) {
-      flattened.push({ task: child, depth });
-      visit(child.id, depth + 1);
-    }
-  }
-
-  visit(null, 0);
-  return flattened;
-}
-
-function buildTimelineItems(
-  selectedNode: SessionGraphNode | null,
-  workflowTask: WorkflowTaskNode | null,
-  replay: WorkflowRunReplay | undefined,
-): TimelineItem[] {
-  if (!selectedNode) {
-    return [];
-  }
-
-  const items: TimelineItem[] = [];
-  const createdAt =
-    readString(workflowTask?.created_at) ?? readString(selectedNode.data.created_at);
-  const startedAt = readString(selectedNode.data.started_at);
-  const endedAt = readString(selectedNode.data.ended_at);
-
-  if (createdAt) {
-    items.push({
-      id: `${selectedNode.id}-created`,
-      label: "创建",
-      value: formatDateTime(createdAt),
-    });
-  }
-  if (startedAt) {
-    items.push({
-      id: `${selectedNode.id}-started`,
-      label: "开始",
-      value: formatDateTime(startedAt),
-    });
-  }
-  if (endedAt) {
-    items.push({ id: `${selectedNode.id}-ended`, label: "结束", value: formatDateTime(endedAt) });
-  }
-
-  const replayStep = replay?.replay_steps.find((step) => step.task_node_id === selectedNode.id);
-  if (replayStep?.started_at) {
-    items.push({
-      id: `${selectedNode.id}-replay-start`,
-      label: "回放开始",
-      value: formatDateTime(replayStep.started_at),
-    });
-  }
-  if (replayStep?.ended_at) {
-    items.push({
-      id: `${selectedNode.id}-replay-end`,
-      label: "回放结束",
-      value: formatDateTime(replayStep.ended_at),
-    });
-  }
-
-  return items;
-}
-
-function getSelectedGraphNode(
-  selectedNode: SelectedNode | null,
-  taskGraph: SessionGraph | undefined,
-  evidenceGraph: SessionGraph | undefined,
-  causalGraph: SessionGraph | undefined,
-): SessionGraphNode | null {
-  if (!selectedNode) {
-    return null;
-  }
-
-  const graph =
-    selectedNode.graphType === "task"
-      ? taskGraph
-      : selectedNode.graphType === "evidence"
-        ? evidenceGraph
-        : causalGraph;
-
-  return graph?.nodes.find((node) => node.id === selectedNode.nodeId) ?? null;
-}
-
-function getSelectedGraphEdges(
-  selectedNode: SelectedNode | null,
-  taskGraph: SessionGraph | undefined,
-  evidenceGraph: SessionGraph | undefined,
-  causalGraph: SessionGraph | undefined,
-): SessionGraphEdge[] {
-  if (!selectedNode) {
-    return [];
-  }
-
-  const graph =
-    selectedNode.graphType === "task"
-      ? taskGraph
-      : selectedNode.graphType === "evidence"
-        ? evidenceGraph
-        : causalGraph;
-
-  return (graph?.edges ?? []).filter(
-    (edge) => edge.source === selectedNode.nodeId || edge.target === selectedNode.nodeId,
-  );
-}
-
-function NodeFieldList({ node }: { node: SessionGraphNode }) {
-  const entries = Object.entries(node.data).filter(([, value]) => {
-    return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-  });
-
-  if (entries.length === 0) {
-    return <p className="management-empty-copy">当前节点没有额外标量字段。</p>;
-  }
-
-  return (
-    <dl className="session-graph-data-list">
-      {entries.map(([key, value]) => (
-        <div key={`${node.id}-${key}`}>
-          <dt>{key}</dt>
-          <dd>{String(value)}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function WorkspaceSidebarSections({
-  tasks,
-  onSelectTask,
-}: {
-  tasks: WorkflowTaskNode[];
-  onSelectTask: (taskId: string) => void;
-}) {
-  const flattenedTasks = useMemo(() => flattenTaskTree(tasks), [tasks]);
-
-  return (
-    <section className="conversation-sidebar-section conversation-sidebar-section-stacked">
-      <div className="conversation-sidebar-section-header">
-        <h3>任务树</h3>
-        <span className="management-status-badge tone-neutral">{tasks.length}</span>
-      </div>
-
-      {flattenedTasks.length === 0 ? (
-        <div className="conversation-empty-list conversation-empty-list-panel">
-          <p>工作流启动后，这里会出现任务树。</p>
-        </div>
-      ) : (
-        <ul className="workspace-task-tree-list">
-          {flattenedTasks.map(({ task, depth }) => (
-            <li key={task.id}>
-              <button
-                type="button"
-                className={`workspace-task-tree-item workspace-task-tree-item-depth-${Math.min(depth, 4)}`}
-                onClick={() => onSelectTask(task.id)}
-              >
-                <span
-                  className={`workspace-task-tree-dot ${getTaskStatusTone(task.status)}`}
-                  aria-hidden="true"
-                />
-                <span className="workspace-task-tree-copy">
-                  <span className="workspace-task-tree-title">
-                    {task.metadata.title ?? task.name}
-                  </span>
-                  <span className="workspace-task-tree-meta">
-                    {formatTaskStatusLabel(task.status)}
-                  </span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function WorkflowPlanCard({
-  templates,
-  selectedTemplateName,
-  workflow,
-  canAdvanceWorkflow,
-  workflowNeedsApproval,
-  isStarting,
-  isAdvancing,
-  onSelectTemplate,
-  onStartWorkflow,
-  onAdvanceWorkflow,
-  onOpenReplay,
-  onExport,
-}: {
-  templates: WorkflowTemplate[] | undefined;
-  selectedTemplateName: string;
-  workflow: WorkflowRunDetail | undefined;
-  canAdvanceWorkflow: boolean;
-  workflowNeedsApproval: boolean;
-  isStarting: boolean;
-  isAdvancing: boolean;
-  onSelectTemplate: (templateName: string) => void;
-  onStartWorkflow: () => Promise<void>;
-  onAdvanceWorkflow: () => Promise<void>;
-  onOpenReplay: () => void;
-  onExport: () => void;
-}) {
-  const selectedTemplate =
-    templates?.find((template) => template.name === selectedTemplateName) ?? null;
-  const planSummary = readString(workflow?.state.plan?.summary);
-  const stageOrder = readStringArray(workflow?.state.plan?.stage_order);
-  const activeTemplate = workflow
-    ? (templates?.find((template) => template.name === workflow.template_name) ?? null)
-    : selectedTemplate;
-
-  return (
-    <section className="management-section-card workspace-plan-card">
-      <div className="management-section-header">
-        <h3 className="management-section-title">计划与推进</h3>
-        {workflow ? (
-          <span className="management-status-badge tone-neutral">
-            {formatWorkflowStatus(workflow.status)}
-          </span>
-        ) : null}
-      </div>
-
-      <div className="workspace-inline-field-grid">
-        <label className="field-label workspace-inline-field">
-          工作流模板
-          <select
-            className="field-input"
-            value={selectedTemplateName}
-            onChange={(event) => onSelectTemplate(event.target.value)}
-          >
-            {(templates ?? []).map((template) => (
-              <option key={template.name} value={template.name}>
-                {template.title}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <div className="session-graph-token-row">
-        {(activeTemplate?.stages ?? []).map((stage) => (
-          <span key={stage.key} className="management-token-chip">
-            {stage.title}
-          </span>
-        ))}
-      </div>
-
-      {planSummary ? <p className="session-graph-body-copy">{planSummary}</p> : null}
-      {stageOrder.length > 0 ? (
-        <p className="management-unified-description">
-          顺序：{stageOrder.map((stage) => stage.replace(/_/g, " · ")).join(" → ")}
-        </p>
-      ) : null}
-
-      <div className="management-action-row">
-        <button
-          className="button button-primary"
-          type="button"
-          disabled={isStarting}
-          onClick={() => void onStartWorkflow()}
-        >
-          {isStarting ? "启动中" : workflow ? "重新启动" : "启动工作流"}
-        </button>
-        <button
-          className="button button-secondary"
-          type="button"
-          disabled={!canAdvanceWorkflow || workflowNeedsApproval || isAdvancing}
-          onClick={() => void onAdvanceWorkflow()}
-        >
-          {isAdvancing ? "推进中" : "推进下一步"}
-        </button>
-        <button className="text-button" type="button" onClick={onOpenReplay}>
-          回放
-        </button>
-        <button className="text-button" type="button" onClick={onExport}>
-          导出
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function ApprovalCard({
-  workflow,
-  policyDraft,
-  isSavingPolicy,
-  onChangePolicy,
-  onSavePolicy,
-  onApprove,
-  onReject,
-}: {
-  workflow: WorkflowRunDetail;
-  policyDraft: Record<string, unknown>;
-  isSavingPolicy: boolean;
-  onChangePolicy: (key: string, value: unknown) => void;
-  onSavePolicy: () => Promise<void>;
-  onApprove: () => Promise<void>;
-  onReject: () => Promise<void>;
-}) {
-  const pendingTaskId = readString(workflow.state.approval?.pending_task_id);
-  const pendingTask = workflow.tasks.find((task) => task.id === pendingTaskId) ?? null;
-  const allowNetwork = readBoolean(policyDraft.allow_network);
-  const allowWrite = readBoolean(policyDraft.allow_write);
-  const maxExecutionSeconds = readNumber(policyDraft.max_execution_seconds) ?? 120;
-
-  return (
-    <section className="management-section-card workspace-approval-card">
-      <div className="management-section-header">
-        <h3 className="management-section-title">审批卡</h3>
-        <span className="management-status-badge tone-warning">等待确认</span>
-      </div>
-
-      <p className="session-graph-body-copy">
-        当前工作流在 <strong>{workflow.current_stage ?? "未知阶段"}</strong> 暂停。
-        {pendingTask ? ` 待确认节点：${pendingTask.metadata.title ?? pendingTask.name}。` : ""}
-      </p>
-
-      <div className="workspace-inline-field-grid workspace-inline-field-grid-tight">
-        <label className="settings-inline-toggle">
-          <input
-            type="checkbox"
-            checked={allowNetwork}
-            onChange={(event) => onChangePolicy("allow_network", event.target.checked)}
-          />
-          允许联网
-        </label>
-        <label className="settings-inline-toggle">
-          <input
-            type="checkbox"
-            checked={allowWrite}
-            onChange={(event) => onChangePolicy("allow_write", event.target.checked)}
-          />
-          允许写文件
-        </label>
-        <label className="field-label workspace-inline-field">
-          最大执行秒数
-          <input
-            className="field-input"
-            type="number"
-            min={30}
-            step={30}
-            value={String(maxExecutionSeconds)}
-            onChange={(event) =>
-              onChangePolicy("max_execution_seconds", Number(event.target.value))
-            }
-          />
-        </label>
-      </div>
-
-      <div className="management-action-row">
-        <button className="button button-primary" type="button" onClick={() => void onApprove()}>
-          审批并继续
-        </button>
-        <button
-          className="button button-secondary"
-          type="button"
-          disabled={isSavingPolicy}
-          onClick={() => void onSavePolicy()}
-        >
-          {isSavingPolicy ? "保存中" : "保存策略"}
-        </button>
-        <button className="button button-danger" type="button" onClick={() => void onReject()}>
-          拒绝并暂停
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function GraphCanvasWrapper({
-  title,
-  graph,
-  filters,
-  selectedNodeId,
-  onFilterChange,
-  onSelectNode,
-}: {
-  title: string;
-  graph: SessionGraph | undefined;
-  filters: GraphFilterState;
-  selectedNodeId: string | null;
-  onFilterChange: (next: GraphFilterState) => void;
-  onSelectNode: (nodeId: string) => void;
-}) {
-  const statusOptions = useMemo(() => {
-    const values = new Set<string>();
-    for (const node of graph?.nodes ?? []) {
-      const status = getNodeStatus(node);
-      if (status) {
-        values.add(status);
-      }
-    }
-    return [...values];
-  }, [graph]);
-
-  const nodeTypeOptions = useMemo(() => {
-    return [...new Set((graph?.nodes ?? []).map((node) => node.node_type))];
-  }, [graph]);
-
-  const visibleNodes = useMemo(() => {
-    const searchKeyword = filters.search.trim().toLowerCase();
-
-    return (graph?.nodes ?? []).filter((node) => {
-      if (filters.status !== "all") {
-        const status = getNodeStatus(node);
-        if (status !== filters.status) {
-          return false;
-        }
-      }
-
-      if (filters.nodeType !== "all" && node.node_type !== filters.nodeType) {
-        return false;
-      }
-
-      if (searchKeyword.length === 0) {
-        return true;
-      }
-
-      const haystack = [node.label, ...Object.values(node.data).map((value) => String(value))]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(searchKeyword);
-    });
-  }, [filters.nodeType, filters.search, filters.status, graph]);
-
-  const visibleNodeIds = useMemo(
-    () => new Set(visibleNodes.map((node) => node.id)),
-    [visibleNodes],
-  );
-  const visibleEdges = useMemo(
-    () =>
-      (graph?.edges ?? []).filter(
-        (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
-      ),
-    [graph?.edges, visibleNodeIds],
-  );
-
-  if (!graph) {
-    return (
-      <section className="management-section-card">
-        <div className="management-section-header">
-          <h3 className="management-section-title">{title}</h3>
-        </div>
-        <div className="management-empty-state session-graph-inline-empty">
-          <p className="management-empty-title">暂无图谱数据</p>
-          <p className="management-empty-copy">工作流开始执行后，这里会展示图谱视图。</p>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="management-section-card workspace-graph-canvas-panel">
-      <div className="management-section-header">
-        <h3 className="management-section-title">{title}</h3>
-        <span className="management-status-badge tone-neutral">
-          {visibleNodes.length} / {graph.nodes.length} 节点
-        </span>
-      </div>
-
-      <div className="workspace-graph-toolbar">
-        <input
-          className="management-search-input"
-          type="search"
-          value={filters.search}
-          onChange={(event) => onFilterChange({ ...filters, search: event.target.value })}
-          placeholder="搜索节点"
-        />
-        <select
-          className="field-input workspace-graph-select"
-          value={filters.status}
-          onChange={(event) => onFilterChange({ ...filters, status: event.target.value })}
-        >
-          <option value="all">全部状态</option>
-          {statusOptions.map((status) => (
-            <option key={status} value={status}>
-              {formatTaskStatusLabel(status)}
-            </option>
-          ))}
-        </select>
-        <select
-          className="field-input workspace-graph-select"
-          value={filters.nodeType}
-          onChange={(event) => onFilterChange({ ...filters, nodeType: event.target.value })}
-        >
-          <option value="all">全部类型</option>
-          {nodeTypeOptions.map((nodeType) => (
-            <option key={nodeType} value={nodeType}>
-              {nodeType}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="workspace-graph-canvas">
-        {visibleNodes.length === 0 ? (
-          <div className="management-empty-state session-graph-inline-empty">
-            <p className="management-empty-title">筛选后没有节点</p>
-            <p className="management-empty-copy">调整状态、类型或搜索条件后重试。</p>
-          </div>
-        ) : (
-          <div className="workspace-graph-card-grid">
-            {visibleNodes.map((node) => {
-              const confidence =
-                readNumber(node.data.confidence) ?? readNumber(node.data.evidence_confidence);
-              return (
-                <button
-                  key={node.id}
-                  type="button"
-                  className={`management-subcard workspace-graph-node-card${selectedNodeId === node.id ? " workspace-graph-node-card-active" : ""}`}
-                  onClick={() => onSelectNode(node.id)}
-                >
-                  <div className="management-list-card-header">
-                    <strong className="management-list-title">{node.label}</strong>
-                    <span
-                      className={`management-status-badge ${getTaskStatusTone(getNodeStatus(node))}`}
-                    >
-                      {formatTaskStatusLabel(getNodeStatus(node))}
-                    </span>
-                  </div>
-                  <div className="session-graph-token-row">
-                    <span className="management-token-chip">{node.node_type}</span>
-                    {confidence !== null ? (
-                      <span className={`management-status-badge ${getConfidenceTone(confidence)}`}>
-                        {`置信度 ${formatConfidence(confidence)}`}
-                      </span>
-                    ) : null}
-                  </div>
-                  {readString(node.data.summary) ? (
-                    <p className="session-graph-body-copy">{readString(node.data.summary)}</p>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="workspace-graph-edge-list">
-        <div className="management-section-header workspace-graph-edge-header">
-          <h4 className="management-section-title">关系</h4>
-          <span className="management-status-badge tone-neutral">{visibleEdges.length}</span>
-        </div>
-        {visibleEdges.length === 0 ? (
-          <p className="management-empty-copy">当前筛选范围内没有关系连线。</p>
-        ) : (
-          <ul className="management-list">
-            {visibleEdges.slice(0, 8).map((edge) => (
-              <li key={edge.id} className="management-subcard workspace-graph-edge-card">
-                <strong className="management-list-title">
-                  {edge.source} → {edge.target}
-                </strong>
-                <span className="management-status-badge tone-neutral">
-                  {getRelationLabel(edge.relation)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ReplayExportPanel({
-  session,
-  exportData,
-  replayData,
-}: {
-  session: SessionSummary;
-  exportData: WorkflowRunExport | undefined;
-  replayData: WorkflowRunReplay | undefined;
-}) {
-  const replayStepCount = replayData?.replay_steps.length ?? 0;
-  const executionRecordCount = exportData?.execution_records.length ?? 0;
-  const taskNodeCount = exportData?.task_graph.nodes.length ?? 0;
-  const evidenceNodeCount = exportData?.evidence_graph.nodes.length ?? 0;
-
-  return (
-    <section className="management-section-card workspace-export-panel">
-      <div className="management-section-header">
-        <h3 className="management-section-title">回放 / 导出</h3>
-        <span className="management-status-badge tone-neutral">{session.id}</span>
-      </div>
-
-      <div className="management-action-row">
-        <button
-          className="button button-secondary"
-          type="button"
-          disabled={!replayData}
-          onClick={() => {
-            if (!replayData) {
-              return;
-            }
-            downloadJson(`session-${session.id}-replay.json`, replayData);
-          }}
-        >
-          导出回放 JSON
-        </button>
-        <button
-          className="button button-secondary"
-          type="button"
-          disabled={!exportData}
-          onClick={() => {
-            if (!exportData) {
-              return;
-            }
-            downloadJson(`session-${session.id}-export.json`, exportData);
-          }}
-        >
-          导出快照 JSON
-        </button>
-      </div>
-
-      <p className="management-unified-description">
-        回放 {replayStepCount} 步，执行记录 {executionRecordCount} 条，图谱共{" "}
-        {taskNodeCount + evidenceNodeCount} 个节点。
-      </p>
-
-      {replayData?.replay_steps.length ? (
-        <ul className="management-list">
-          {replayData.replay_steps.slice(0, 6).map((step) => (
-            <li key={`${step.trace_id}-${step.index}`} className="management-subcard">
-              <div className="management-list-card-header">
-                <strong className="management-list-title">{step.task_name}</strong>
-                <span className={`management-status-badge ${getTaskStatusTone(step.status)}`}>
-                  {formatTaskStatusLabel(step.status)}
-                </span>
-              </div>
-              {step.summary ? <p className="session-graph-body-copy">{step.summary}</p> : null}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="management-empty-copy">当前 run 还没有可导出的回放步骤。</p>
-      )}
-    </section>
-  );
-}
-
-function NodeDetailPanel({
-  selectedNode,
-  relatedEdges,
-  workflowTask,
-  timeline,
-}: {
-  selectedNode: SessionGraphNode | null;
-  relatedEdges: SessionGraphEdge[];
-  workflowTask: WorkflowTaskNode | null;
-  timeline: TimelineItem[];
-}) {
-  if (!selectedNode) {
-    return (
-      <section className="management-section-card">
-        <div className="management-section-header">
-          <h3 className="management-section-title">节点详情</h3>
-        </div>
-        <div className="management-empty-state session-graph-inline-empty">
-          <p className="management-empty-title">尚未选择节点</p>
-          <p className="management-empty-copy">
-            从任务图、证据图或任务树点击任意节点后，这里会显示时间线与关系详情。
-          </p>
-        </div>
-      </section>
-    );
-  }
-
-  const confidence =
-    readNumber(selectedNode.data.confidence) ?? readNumber(selectedNode.data.evidence_confidence);
-
-  return (
-    <section className="management-section-card workspace-node-detail-panel">
-      <div className="management-section-header">
-        <h3 className="management-section-title">节点详情</h3>
-        <span className="management-status-badge tone-neutral">{selectedNode.graph_type}</span>
-      </div>
-
-      <div className="management-subcard">
-        <div className="management-list-card-header">
-          <strong className="management-list-title">{selectedNode.label}</strong>
-          {confidence !== null ? (
-            <span className={`management-status-badge ${getConfidenceTone(confidence)}`}>
-              {`置信度 ${formatConfidence(confidence)}`}
-            </span>
-          ) : null}
-        </div>
-        <div className="session-graph-token-row">
-          <span className="management-token-chip">{selectedNode.node_type}</span>
-          {workflowTask?.metadata.role ? (
-            <span className="management-token-chip">{workflowTask.metadata.role}</span>
-          ) : null}
-          {workflowTask?.metadata.approval_required ? (
-            <span className="management-token-chip">需审批</span>
-          ) : null}
-        </div>
-        {readString(selectedNode.data.summary) ? (
-          <p className="session-graph-body-copy">{readString(selectedNode.data.summary)}</p>
-        ) : null}
-      </div>
-
-      <div className="management-subcard workspace-node-detail-section">
-        <div className="management-list-card-header">
-          <strong className="management-list-title">节点时间线</strong>
-          <span className="management-status-badge tone-neutral">{timeline.length}</span>
-        </div>
-        {timeline.length === 0 ? (
-          <p className="management-empty-copy">当前节点没有时间线字段。</p>
-        ) : (
-          <ul className="workspace-node-timeline-list">
-            {timeline.map((item) => (
-              <li key={item.id} className="workspace-node-timeline-item">
-                <span className="workspace-node-timeline-label">{item.label}</span>
-                <strong className="workspace-node-timeline-value">{item.value}</strong>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="management-subcard workspace-node-detail-section">
-        <div className="management-list-card-header">
-          <strong className="management-list-title">关联关系</strong>
-          <span className="management-status-badge tone-neutral">{relatedEdges.length}</span>
-        </div>
-        {relatedEdges.length === 0 ? (
-          <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p>
-        ) : (
-          <ul className="management-list">
-            {relatedEdges.map((edge) => (
-              <li key={edge.id} className="management-subcard workspace-graph-edge-card">
-                <strong className="management-list-title">
-                  {edge.source} → {edge.target}
-                </strong>
-                <span className="management-token-chip">{getRelationLabel(edge.relation)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="management-subcard workspace-node-detail-section">
-        <div className="management-list-card-header">
-          <strong className="management-list-title">字段</strong>
-        </div>
-        <NodeFieldList node={selectedNode} />
-      </div>
-    </section>
-  );
-}
 
 export function SessionWorkspaceWorkbench() {
   const navigate = useNavigate();
@@ -1133,23 +233,8 @@ export function SessionWorkspaceWorkbench() {
   );
   const [selectedTemplateName, setSelectedTemplateName] = useState("");
   const [pinnedWorkflowRunId, setPinnedWorkflowRunId] = useState<string | null>(null);
-  const [selectedDrawerTab, setSelectedDrawerTab] = useState<WorkspaceDrawerTab>("outline");
-  const [isInsightsOpen, setIsInsightsOpen] = useState(false);
-  const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false);
-  const [isReplayPanelOpen, setIsReplayPanelOpen] = useState(false);
-  const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("evidence");
-  const [taskFilters, setTaskFilters] = useState<GraphFilterState>({
-    search: "",
-    status: "all",
-    nodeType: "all",
-  });
-  const [evidenceFilters, setEvidenceFilters] = useState<GraphFilterState>({
-    search: "",
-    status: "all",
-    nodeType: "all",
-  });
-  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
-  const [policyDraft, setPolicyDraft] = useState<Record<string, unknown>>({});
+  const [isInsightsOpen, setIsInsightsOpen] = useState(true);
+  const [selectedAttackNodeId, setSelectedAttackNodeId] = useState<string | null>(null);
   const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
   const [invalidSessionState, setInvalidSessionState] = useState<InvalidSessionState | null>(null);
   const suppressRouteAutonavigateRef = useRef(false);
@@ -1170,17 +255,10 @@ export function SessionWorkspaceWorkbench() {
       setLastVisitedSessionId(null);
       setPinnedWorkflowRunId(null);
       setIsInsightsOpen(false);
-      setIsPlanDialogOpen(false);
-      setIsReplayPanelOpen(false);
-      setSelectedDrawerTab("outline");
-      setSelectedNode(null);
+      setSelectedAttackNodeId(null);
       void queryClient.cancelQueries({ queryKey: ["conversation", staleSessionId] });
       void queryClient.cancelQueries({ queryKey: ["session-queue", staleSessionId] });
-      void queryClient.cancelQueries({ queryKey: ["session", staleSessionId, "graph", "task"] });
-      void queryClient.cancelQueries({
-        queryKey: ["session", staleSessionId, "graph", "evidence"],
-      });
-      void queryClient.cancelQueries({ queryKey: ["session", staleSessionId, "graph", "causal"] });
+      void queryClient.cancelQueries({ queryKey: ["session", staleSessionId, "graph", "attack"] });
       navigate("/sessions", { replace: true });
     },
     [navigate, queryClient, setLastVisitedSessionId],
@@ -1299,9 +377,6 @@ export function SessionWorkspaceWorkbench() {
     }
   }, [invalidSessionState?.sessionId, routeSessionId]);
 
-  const shouldLoadEvidenceGraph = isInsightsOpen && selectedDrawerTab === "evidence";
-  const shouldLoadReplayArtifacts = isReplayPanelOpen;
-
   const conversationQuery = useQuery({
     enabled: Boolean(activeSessionId),
     queryKey: ["conversation", activeSessionId],
@@ -1323,24 +398,10 @@ export function SessionWorkspaceWorkbench() {
     },
   });
 
-  const sessionTaskGraphQuery = useQuery({
+  const sessionAttackGraphQuery = useQuery({
     enabled: Boolean(activeSessionId),
-    queryKey: ["session", activeSessionId, "graph", "task"],
-    queryFn: ({ signal }) => getTaskGraph(activeSessionId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const sessionEvidenceGraphQuery = useQuery({
-    enabled: Boolean(activeSessionId) && shouldLoadEvidenceGraph && evidenceMode === "evidence",
-    queryKey: ["session", activeSessionId, "graph", "evidence"],
-    queryFn: ({ signal }) => getEvidenceGraph(activeSessionId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const sessionCausalGraphQuery = useQuery({
-    enabled: Boolean(activeSessionId) && shouldLoadEvidenceGraph && evidenceMode === "causal",
-    queryKey: ["session", activeSessionId, "graph", "causal"],
-    queryFn: ({ signal }) => getCausalGraph(activeSessionId!, signal),
+    queryKey: ["session", activeSessionId, "graph", "attack"],
+    queryFn: ({ signal }) => getAttackGraph(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
@@ -1348,9 +409,7 @@ export function SessionWorkspaceWorkbench() {
     const candidateErrors = [
       conversationQuery.error,
       sessionQueueQuery.error,
-      sessionTaskGraphQuery.error,
-      sessionEvidenceGraphQuery.error,
-      sessionCausalGraphQuery.error,
+      sessionAttackGraphQuery.error,
     ];
 
     for (const error of candidateErrors) {
@@ -1362,10 +421,8 @@ export function SessionWorkspaceWorkbench() {
     return null;
   }, [
     conversationQuery.error,
-    sessionCausalGraphQuery.error,
-    sessionEvidenceGraphQuery.error,
     sessionQueueQuery.error,
-    sessionTaskGraphQuery.error,
+    sessionAttackGraphQuery.error,
   ]);
 
   useEffect(() => {
@@ -1376,7 +433,7 @@ export function SessionWorkspaceWorkbench() {
     invalidateStaleSessionSelection(routeSessionId, staleSessionNotFoundMessage);
   }, [invalidateStaleSessionSelection, routeSessionId, staleSessionNotFoundMessage]);
 
-  const inferredWorkflowRunId = sessionTaskGraphQuery.data?.workflow_run_id ?? null;
+  const inferredWorkflowRunId = sessionAttackGraphQuery.data?.workflow_run_id ?? null;
 
   useEffect(() => {
     if (inferredWorkflowRunId) {
@@ -1391,15 +448,11 @@ export function SessionWorkspaceWorkbench() {
       return;
     }
 
-    setIsInsightsOpen(false);
-    setIsPlanDialogOpen(false);
-    setIsReplayPanelOpen(false);
-    setSelectedDrawerTab("outline");
-    setSelectedNode(null);
+    setSelectedAttackNodeId(null);
   }, [workflowRunId]);
 
   useEffect(() => {
-    if (!isPlanDialogOpen && !isInsightsOpen) {
+    if (!isInsightsOpen) {
       return;
     }
 
@@ -1408,9 +461,7 @@ export function SessionWorkspaceWorkbench() {
         return;
       }
 
-      if (isPlanDialogOpen) {
-        setIsPlanDialogOpen(false);
-      } else if (isInsightsOpen) {
+      if (isInsightsOpen) {
         setIsInsightsOpen(false);
       }
     }
@@ -1419,7 +470,7 @@ export function SessionWorkspaceWorkbench() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isInsightsOpen, isPlanDialogOpen]);
+  }, [isInsightsOpen]);
 
   const workflowQuery = useQuery({
     enabled: Boolean(workflowRunId),
@@ -1428,36 +479,22 @@ export function SessionWorkspaceWorkbench() {
     placeholderData: (previousValue) => previousValue,
   });
 
-  const runTaskGraphQuery = useQuery({
+  const runAttackGraphQuery = useQuery({
     enabled: Boolean(workflowRunId),
-    queryKey: ["workflow", workflowRunId, "graph", "task"],
-    queryFn: ({ signal }) => getTaskGraphForRun(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const runEvidenceGraphQuery = useQuery({
-    enabled: Boolean(workflowRunId) && shouldLoadEvidenceGraph && evidenceMode === "evidence",
-    queryKey: ["workflow", workflowRunId, "graph", "evidence"],
-    queryFn: ({ signal }) => getEvidenceGraphForRun(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const runCausalGraphQuery = useQuery({
-    enabled: Boolean(workflowRunId) && shouldLoadEvidenceGraph && evidenceMode === "causal",
-    queryKey: ["workflow", workflowRunId, "graph", "causal"],
-    queryFn: ({ signal }) => getCausalGraphForRun(workflowRunId!, signal),
+    queryKey: ["workflow", workflowRunId, "graph", "attack"],
+    queryFn: ({ signal }) => getAttackGraphForRun(workflowRunId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
   const workflowExportQuery = useQuery({
-    enabled: Boolean(workflowRunId) && shouldLoadReplayArtifacts,
+    enabled: Boolean(workflowRunId),
     queryKey: ["workflow", workflowRunId, "export"],
     queryFn: ({ signal }) => getWorkflowExport(workflowRunId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
   const workflowReplayQuery = useQuery({
-    enabled: Boolean(workflowRunId) && shouldLoadReplayArtifacts,
+    enabled: Boolean(workflowRunId),
     queryKey: ["workflow", workflowRunId, "replay"],
     queryFn: ({ signal }) => getWorkflowReplay(workflowRunId!, signal),
     placeholderData: (previousValue) => previousValue,
@@ -1471,15 +508,6 @@ export function SessionWorkspaceWorkbench() {
       ),
     [activeSessionId, runtimeStatusQuery.data?.recent_runs],
   );
-
-  useEffect(() => {
-    if (!activeSession) {
-      setPolicyDraft({});
-      return;
-    }
-
-    setPolicyDraft(activeSession.runtime_policy_json ?? {});
-  }, [activeSession]);
 
   useEffect(() => {
     const templateNames = new Set((templatesQuery.data ?? []).map((template) => template.name));
@@ -1564,26 +592,6 @@ export function SessionWorkspaceWorkbench() {
       suppressRouteAutonavigateRef.current = false;
       setInvalidSessionState(null);
       navigate(`/sessions/${restoredSession.id}/chat`);
-    },
-  });
-
-  const updatePolicyMutation = useMutation({
-    mutationFn: ({
-      id,
-      runtime_policy_json,
-    }: {
-      id: string;
-      runtime_policy_json: Record<string, unknown>;
-    }) => updateSession(id, { runtime_policy_json }),
-    onSuccess: (updatedSession) => {
-      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
-        upsertSession(currentValue, updatedSession),
-      );
-      queryClient.setQueryData<SessionConversation | undefined>(
-        ["conversation", updatedSession.id],
-        (currentValue) =>
-          currentValue ? { ...currentValue, session: updatedSession } : currentValue,
-      );
     },
   });
 
@@ -1936,49 +944,76 @@ export function SessionWorkspaceWorkbench() {
     },
   });
 
+  const regenerateMessageMutation = useMutation({
+    mutationFn: ({
+      sessionId: targetSessionId,
+      messageId,
+      branchId,
+    }: {
+      sessionId: string;
+      messageId: string;
+      branchId: string | null;
+    }) =>
+      regenerateSessionMessage(targetSessionId, messageId, {
+        branch_id: branchId,
+      }),
+    onSuccess: async (_response, variables) => {
+      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+    },
+  });
+
+  const forkMessageMutation = useMutation({
+    mutationFn: ({
+      sessionId: targetSessionId,
+      messageId,
+    }: {
+      sessionId: string;
+      messageId: string;
+    }) => forkSessionMessage(targetSessionId, messageId),
+    onSuccess: async (_response, variables) => {
+      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+    },
+  });
+
+  const rollbackMessageMutation = useMutation({
+    mutationFn: ({
+      sessionId: targetSessionId,
+      messageId,
+      branchId,
+    }: {
+      sessionId: string;
+      messageId: string;
+      branchId: string | null;
+    }) =>
+      rollbackSessionMessage(targetSessionId, messageId, {
+        branch_id: branchId,
+      }),
+    onSuccess: async (_response, variables) => {
+      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+    },
+  });
+
   const invalidateWorkflowViews = useCallback(
     async (targetSessionId: string, targetRunId: string | null): Promise<void> => {
       const invalidations = [
         queryClient.invalidateQueries({ queryKey: ["conversation", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-        queryClient.invalidateQueries({ queryKey: ["session", targetSessionId, "graph", "task"] }),
+        queryClient.invalidateQueries({ queryKey: ["session", targetSessionId, "graph", "attack"] }),
       ];
 
       if (targetRunId) {
         invalidations.push(
           queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId] }),
-          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "graph", "task"] }),
+          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "graph", "attack"] }),
+          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "export"] }),
+          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "replay"] }),
         );
-
-        if (shouldLoadEvidenceGraph) {
-          invalidations.push(
-            queryClient.invalidateQueries({
-              queryKey: ["session", targetSessionId, "graph", "evidence"],
-            }),
-            queryClient.invalidateQueries({
-              queryKey: ["session", targetSessionId, "graph", "causal"],
-            }),
-            queryClient.invalidateQueries({
-              queryKey: ["workflow", targetRunId, "graph", "evidence"],
-            }),
-            queryClient.invalidateQueries({
-              queryKey: ["workflow", targetRunId, "graph", "causal"],
-            }),
-          );
-        }
-
-        if (shouldLoadReplayArtifacts) {
-          invalidations.push(
-            queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "export"] }),
-            queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "replay"] }),
-          );
-        }
       }
 
       await Promise.all(invalidations);
     },
-    [queryClient, shouldLoadEvidenceGraph, shouldLoadReplayArtifacts],
+    [queryClient],
   );
 
   const startWorkflowMutation = useMutation({
@@ -2017,7 +1052,17 @@ export function SessionWorkspaceWorkbench() {
     const shouldRefresh =
       eventType.startsWith("workflow.") ||
       eventType.startsWith("task.") ||
-      eventType === "graph.updated";
+      eventType.startsWith("graph.") ||
+      eventType === "message.created" ||
+      eventType === "message.updated" ||
+      eventType === "message.completed" ||
+      eventType === "generation.started" ||
+      eventType === "generation.cancelled" ||
+      eventType === "generation.failed" ||
+      eventType === "assistant.summary" ||
+      eventType === "assistant.trace" ||
+      eventType.startsWith("tool.call.") ||
+      eventType === "session.updated";
 
     if (!shouldRefresh) {
       return;
@@ -2032,34 +1077,12 @@ export function SessionWorkspaceWorkbench() {
     };
   }, [activeSessionId, invalidateWorkflowViews, latestEvent, workflowRunId]);
 
-  const taskGraph = runTaskGraphQuery.data ?? sessionTaskGraphQuery.data;
-  const evidenceGraph = runEvidenceGraphQuery.data ?? sessionEvidenceGraphQuery.data;
-  const causalGraph = runCausalGraphQuery.data ?? sessionCausalGraphQuery.data;
+  const attackGraph = runAttackGraphQuery.data ?? sessionAttackGraphQuery.data;
   const activeConversation = conversationQuery.data ?? null;
 
   const workflowNeedsApproval =
     workflowQuery.data?.status === "needs_approval" ||
     workflowQuery.data?.state.approval?.required === true;
-  const selectedGraphNode = getSelectedGraphNode(
-    selectedNode,
-    taskGraph,
-    evidenceGraph,
-    causalGraph,
-  );
-  const selectedGraphEdges = getSelectedGraphEdges(
-    selectedNode,
-    taskGraph,
-    evidenceGraph,
-    causalGraph,
-  );
-  const selectedWorkflowTask = selectedNode
-    ? (workflowQuery.data?.tasks.find((task) => task.id === selectedNode.nodeId) ?? null)
-    : null;
-  const selectedNodeTimeline = buildTimelineItems(
-    selectedGraphNode,
-    selectedWorkflowTask,
-    workflowReplayQuery.data,
-  );
 
   const canAdvanceWorkflow =
     Boolean(workflowRunId) &&
@@ -2107,17 +1130,117 @@ export function SessionWorkspaceWorkbench() {
     await renameSessionMutation.mutateAsync({ id: targetSessionId, title: trimmed });
   }
 
-  function handleSelectNode(graphType: "task" | "evidence" | "causal", nodeId: string): void {
+  function handleSelectNode(nodeId: string): void {
     setIsInsightsOpen(true);
-    setSelectedDrawerTab(graphType === "task" ? "task" : "evidence");
-    if (graphType !== "task") {
-      setEvidenceMode(graphType === "causal" ? "causal" : "evidence");
-    }
-    setSelectedNode({ graphType, nodeId });
+    setSelectedAttackNodeId(nodeId);
   }
 
-  function handleChangePolicy(key: string, value: unknown): void {
-    setPolicyDraft((currentValue) => ({ ...currentValue, [key]: value }));
+  async function handleEditAttackNode(node: SessionGraphNode): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+
+    const sourceMessageId = readString(node.data.source_message_id);
+    if (!sourceMessageId) {
+      return;
+    }
+
+    const initialContent =
+      readString(node.data.message_content) ?? readString(node.data.summary) ?? node.label;
+    const nextContent = window.prompt("编辑节点对应的对话内容", initialContent);
+    if (nextContent === null) {
+      return;
+    }
+
+    const trimmed = nextContent.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    setMessageActionBusyId(sourceMessageId);
+    try {
+      await editMessageMutation.mutateAsync({
+        sessionId: activeSession.id,
+        messageId: sourceMessageId,
+        content: trimmed,
+      });
+      await invalidateWorkflowViews(activeSession.id, workflowRunId);
+    } finally {
+      setMessageActionBusyId((currentValue) =>
+        currentValue === sourceMessageId ? null : currentValue,
+      );
+    }
+  }
+
+  async function handleRegenerateAttackNode(node: SessionGraphNode): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+
+    const sourceMessageId = readString(node.data.source_message_id);
+    if (!sourceMessageId) {
+      return;
+    }
+
+    setMessageActionBusyId(sourceMessageId);
+    try {
+      await regenerateMessageMutation.mutateAsync({
+        sessionId: activeSession.id,
+        messageId: sourceMessageId,
+        branchId: readString(node.data.branch_id) ?? activeConversation?.active_branch?.id ?? null,
+      });
+    } finally {
+      setMessageActionBusyId((currentValue) =>
+        currentValue === sourceMessageId ? null : currentValue,
+      );
+    }
+  }
+
+  async function handleForkAttackNode(node: SessionGraphNode): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+
+    const sourceMessageId = readString(node.data.source_message_id);
+    if (!sourceMessageId) {
+      return;
+    }
+
+    setMessageActionBusyId(sourceMessageId);
+    try {
+      await forkMessageMutation.mutateAsync({
+        sessionId: activeSession.id,
+        messageId: sourceMessageId,
+      });
+    } finally {
+      setMessageActionBusyId((currentValue) =>
+        currentValue === sourceMessageId ? null : currentValue,
+      );
+    }
+  }
+
+  async function handleRollbackAttackNode(node: SessionGraphNode): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+
+    const sourceMessageId = readString(node.data.source_message_id);
+    if (!sourceMessageId) {
+      return;
+    }
+
+    setMessageActionBusyId(sourceMessageId);
+    try {
+      await rollbackMessageMutation.mutateAsync({
+        sessionId: activeSession.id,
+        messageId: sourceMessageId,
+        branchId: readString(node.data.branch_id) ?? activeConversation?.active_branch?.id ?? null,
+      });
+    } finally {
+      setMessageActionBusyId((currentValue) =>
+        currentValue === sourceMessageId ? null : currentValue,
+      );
+    }
   }
 
   if (sessionsQuery.isLoading && sessionsQuery.data === undefined && !activeSession) {
@@ -2157,7 +1280,7 @@ export function SessionWorkspaceWorkbench() {
       />
 
       <section
-        className={`conversation-main-shell workspace-session-shell${workflowRunId ? " workspace-session-shell-drawer-active" : ""}`}
+        className={`conversation-main-shell workspace-session-shell${activeSession ? " workspace-session-shell-drawer-active" : ""}`}
       >
         {sessionsQuery.isError ? (
           <section className="conversation-empty-state">
@@ -2215,13 +1338,96 @@ export function SessionWorkspaceWorkbench() {
               </div>
 
               <div className="conversation-header-actions workspace-session-header-actions">
+                {(templatesQuery.data?.length ?? 0) > 0 ? (
+                  <label className="workspace-inline-field" aria-label="选择工作流模板">
+                    <select
+                      className="field-input"
+                      value={selectedTemplateName}
+                      onChange={(event) => setSelectedTemplateName(event.target.value)}
+                    >
+                      {(templatesQuery.data ?? []).map((template) => (
+                        <option key={template.name} value={template.name}>
+                          {template.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <button
                   className="button button-secondary"
                   type="button"
-                  onClick={() => setIsPlanDialogOpen(true)}
+                  disabled={startWorkflowMutation.isPending}
+                  onClick={() => {
+                    void startWorkflowMutation.mutateAsync({
+                      activeSessionId: activeSession.id,
+                      templateName: selectedTemplateName || null,
+                    });
+                  }}
                 >
-                  计划与推进
+                  {startWorkflowMutation.isPending ? "启动中" : workflowRunId ? "重新启动" : "启动工作流"}
                 </button>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  disabled={!canAdvanceWorkflow || workflowNeedsApproval || advanceWorkflowMutation.isPending}
+                  onClick={() => {
+                    if (!workflowRunId) {
+                      return;
+                    }
+                    void advanceWorkflowMutation.mutateAsync({ runId: workflowRunId });
+                  }}
+                >
+                  {advanceWorkflowMutation.isPending ? "推进中" : "推进下一步"}
+                </button>
+                {workflowNeedsApproval ? (
+                  <>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      disabled={!workflowRunId || advanceWorkflowMutation.isPending}
+                      onClick={() => {
+                        if (!workflowRunId) {
+                          return;
+                        }
+                        void advanceWorkflowMutation.mutateAsync({ runId: workflowRunId, approve: true });
+                      }}
+                    >
+                      批准继续
+                    </button>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      disabled={pauseSessionMutation.isPending}
+                      onClick={() => {
+                        void pauseSessionMutation.mutateAsync({ id: activeSession.id });
+                      }}
+                    >
+                      暂停
+                    </button>
+                  </>
+                ) : null}
+                {workflowReplayQuery.data ? (
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => {
+                      downloadJson(`session-${activeSession.id}-replay.json`, workflowReplayQuery.data);
+                    }}
+                  >
+                    回放
+                  </button>
+                ) : null}
+                {workflowExportQuery.data ? (
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => {
+                      downloadJson(`session-${activeSession.id}-export.json`, workflowExportQuery.data);
+                    }}
+                  >
+                    导出
+                  </button>
+                ) : null}
                 <span className="management-status-badge tone-neutral">
                   {formatWorkflowStatus(workflowQuery.data?.status ?? activeSession.status)}
                 </span>
@@ -2295,273 +1501,55 @@ export function SessionWorkspaceWorkbench() {
                 </section>
               </section>
 
-              {workflowRunId ? (
-                <aside
-                  className={`workspace-graph-drawer${isInsightsOpen ? " workspace-graph-drawer-open" : ""}`}
-                >
-                  <button
-                    className="workspace-graph-drawer-handle"
-                    type="button"
-                    onClick={() => setIsInsightsOpen((currentValue) => !currentValue)}
-                    aria-expanded={isInsightsOpen}
-                    aria-label={isInsightsOpen ? "收起图谱抽屉" : "展开图谱抽屉"}
-                  >
-                    <span className="workspace-graph-drawer-handle-indicator" aria-hidden="true" />
-                  </button>
-
-                  <section className="management-section-card workspace-graph-drawer-panel">
-                    <div className="workspace-graph-drawer-panel-header">
-                      <div>
-                        <strong className="workspace-graph-drawer-title">任务与图谱</strong>
-                        <p className="workspace-graph-drawer-copy">右侧抽屉，随时展开和收起。</p>
-                      </div>
-                      <button
-                        className="workspace-graph-drawer-close"
-                        type="button"
-                        onClick={() => setIsInsightsOpen(false)}
-                        aria-label="关闭图谱抽屉"
-                      >
-                        关闭
-                      </button>
-                    </div>
-
-                    <div className="workspace-right-tabs">
-                      <button
-                        type="button"
-                        className={`workspace-right-tab${selectedDrawerTab === "outline" ? " workspace-right-tab-active" : ""}`}
-                        onClick={() => setSelectedDrawerTab("outline")}
-                      >
-                        任务树
-                      </button>
-                      <button
-                        type="button"
-                        className={`workspace-right-tab${selectedDrawerTab === "task" ? " workspace-right-tab-active" : ""}`}
-                        onClick={() => setSelectedDrawerTab("task")}
-                      >
-                        任务图
-                      </button>
-                      <button
-                        type="button"
-                        className={`workspace-right-tab${selectedDrawerTab === "evidence" ? " workspace-right-tab-active" : ""}`}
-                        onClick={() => setSelectedDrawerTab("evidence")}
-                      >
-                        {evidenceMode === "evidence" ? "证据图" : "因果图"}
-                      </button>
-                    </div>
-
-                    <div className="workspace-graph-drawer-body">
-                      {selectedDrawerTab === "outline" ? (
-                        <WorkspaceSidebarSections
-                          tasks={workflowQuery.data?.tasks ?? []}
-                          onSelectTask={(taskId) => handleSelectNode("task", taskId)}
-                        />
-                      ) : null}
-
-                      {selectedDrawerTab === "task" ? (
-                        <div className="workspace-right-stack">
-                          <GraphCanvasWrapper
-                            title="任务图"
-                            graph={taskGraph}
-                            filters={taskFilters}
-                            selectedNodeId={
-                              selectedNode?.graphType === "task" ? selectedNode.nodeId : null
-                            }
-                            onFilterChange={setTaskFilters}
-                            onSelectNode={(nodeId) => handleSelectNode("task", nodeId)}
-                          />
-                          {selectedNode?.graphType === "task" ? (
-                            <NodeDetailPanel
-                              selectedNode={selectedGraphNode}
-                              relatedEdges={selectedGraphEdges}
-                              workflowTask={selectedWorkflowTask}
-                              timeline={selectedNodeTimeline}
-                            />
-                          ) : null}
-                        </div>
-                      ) : null}
-
-                      {selectedDrawerTab === "evidence" ? (
-                        <div className="workspace-right-stack">
-                          <div className="session-graph-token-row workspace-evidence-mode-row">
-                            <button
-                              type="button"
-                              className={`workspace-evidence-mode-chip${evidenceMode === "evidence" ? " workspace-evidence-mode-chip-active" : ""}`}
-                              onClick={() => setEvidenceMode("evidence")}
-                            >
-                              证据图
-                            </button>
-                            <button
-                              type="button"
-                              className={`workspace-evidence-mode-chip${evidenceMode === "causal" ? " workspace-evidence-mode-chip-active" : ""}`}
-                              onClick={() => setEvidenceMode("causal")}
-                            >
-                              因果图
-                            </button>
-                          </div>
-
-                          <GraphCanvasWrapper
-                            title={evidenceMode === "evidence" ? "证据图" : "因果图"}
-                            graph={evidenceMode === "evidence" ? evidenceGraph : causalGraph}
-                            filters={evidenceFilters}
-                            selectedNodeId={
-                              selectedNode?.graphType ===
-                              (evidenceMode === "evidence" ? "evidence" : "causal")
-                                ? selectedNode.nodeId
-                                : null
-                            }
-                            onFilterChange={setEvidenceFilters}
-                            onSelectNode={(nodeId) =>
-                              handleSelectNode(
-                                evidenceMode === "evidence" ? "evidence" : "causal",
-                                nodeId,
-                              )
-                            }
-                          />
-
-                          {selectedNode &&
-                          selectedNode.graphType ===
-                            (evidenceMode === "evidence" ? "evidence" : "causal") ? (
-                            <NodeDetailPanel
-                              selectedNode={selectedGraphNode}
-                              relatedEdges={selectedGraphEdges}
-                              workflowTask={selectedWorkflowTask}
-                              timeline={selectedNodeTimeline}
-                            />
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </section>
-                </aside>
-              ) : null}
-            </section>
-
-            {isPlanDialogOpen ? (
-              <div className="workspace-plan-modal-layer" role="presentation">
+              <aside
+                className={`workspace-graph-drawer${isInsightsOpen ? " workspace-graph-drawer-open" : ""}`}
+              >
                 <button
-                  className="workspace-plan-modal-backdrop"
+                  className="workspace-graph-drawer-handle"
                   type="button"
-                  aria-label="关闭计划弹窗"
-                  onClick={() => setIsPlanDialogOpen(false)}
-                />
-
-                <section
-                  className="workspace-plan-modal"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="计划与推进"
+                  onClick={() => setIsInsightsOpen((currentValue) => !currentValue)}
+                  aria-expanded={isInsightsOpen}
+                  aria-label={isInsightsOpen ? "收起攻击图抽屉" : "展开攻击图抽屉"}
                 >
-                  <div className="workspace-plan-modal-header">
+                  <span className="workspace-graph-drawer-handle-indicator" aria-hidden="true" />
+                </button>
+
+                <section className="management-section-card workspace-graph-drawer-panel">
+                  <div className="workspace-graph-drawer-panel-header">
                     <div>
-                      <h3 className="workspace-plan-modal-title">计划与推进</h3>
-                      <p className="workspace-plan-modal-copy">
-                        放到弹窗层，避免持续占用聊天正文。
+                      <strong className="workspace-graph-drawer-title">攻击图工作台</strong>
+                      <p className="workspace-graph-drawer-copy">
+                        统一查看攻击路径、推进工作流，并直接回到对应会话消息。
                       </p>
                     </div>
                     <button
-                      className="workspace-plan-modal-close"
+                      className="workspace-graph-drawer-close"
                       type="button"
-                      onClick={() => setIsPlanDialogOpen(false)}
+                      onClick={() => setIsInsightsOpen(false)}
+                      aria-label="关闭攻击图抽屉"
                     >
                       关闭
                     </button>
                   </div>
 
-                  <div className="workspace-plan-modal-body">
-                    <WorkflowPlanCard
-                      templates={templatesQuery.data}
-                      selectedTemplateName={selectedTemplateName}
-                      workflow={workflowQuery.data}
-                      canAdvanceWorkflow={canAdvanceWorkflow}
-                      workflowNeedsApproval={workflowNeedsApproval}
-                      isStarting={startWorkflowMutation.isPending}
-                      isAdvancing={advanceWorkflowMutation.isPending}
-                      onSelectTemplate={setSelectedTemplateName}
-                      onStartWorkflow={async () => {
-                        setIsInsightsOpen(true);
-                        await startWorkflowMutation.mutateAsync({
-                          activeSessionId: activeSession.id,
-                          templateName: selectedTemplateName || null,
-                        });
-                      }}
-                      onAdvanceWorkflow={async () => {
-                        if (!workflowRunId) {
-                          return;
-                        }
-                        await advanceWorkflowMutation.mutateAsync({ runId: workflowRunId });
-                      }}
-                      onOpenReplay={() => setIsReplayPanelOpen(true)}
-                      onExport={() => {
-                        setIsReplayPanelOpen(true);
-                        if (workflowExportQuery.data) {
-                          downloadJson(
-                            `session-${activeSession.id}-export.json`,
-                            workflowExportQuery.data,
-                          );
-                        }
-                      }}
+                  <div className="workspace-graph-drawer-body">
+                    <AttackGraphWorkbench
+                      graph={attackGraph}
+                      tasks={workflowQuery.data?.tasks ?? []}
+                      replay={workflowReplayQuery.data}
+                      selectedNodeId={selectedAttackNodeId}
+                      actionBusyId={messageActionBusyId}
+                      onSelectNode={handleSelectNode}
+                      onEditNode={handleEditAttackNode}
+                      onRegenerateNode={handleRegenerateAttackNode}
+                      onForkNode={handleForkAttackNode}
+                      onRollbackNode={handleRollbackAttackNode}
                     />
-
-                    {workflowNeedsApproval && workflowQuery.data ? (
-                      <ApprovalCard
-                        workflow={workflowQuery.data}
-                        policyDraft={policyDraft}
-                        isSavingPolicy={updatePolicyMutation.isPending}
-                        onChangePolicy={handleChangePolicy}
-                        onSavePolicy={async () => {
-                          await updatePolicyMutation.mutateAsync({
-                            id: activeSession.id,
-                            runtime_policy_json: policyDraft,
-                          });
-                        }}
-                        onApprove={async () => {
-                          if (!workflowRunId) {
-                            return;
-                          }
-                          await advanceWorkflowMutation.mutateAsync({
-                            runId: workflowRunId,
-                            approve: true,
-                          });
-                        }}
-                        onReject={async () => {
-                          await pauseSessionMutation.mutateAsync({ id: activeSession.id });
-                        }}
-                      />
-                    ) : null}
-
-                    {workflowRunId ? (
-                      <details
-                        className="management-section-card workspace-collapsible-panel"
-                        open={isReplayPanelOpen}
-                        onToggle={(event) =>
-                          setIsReplayPanelOpen((event.currentTarget as HTMLDetailsElement).open)
-                        }
-                      >
-                        <summary className="workspace-collapsible-summary">
-                          <div>
-                            <strong>回放与导出</strong>
-                            <p>只在需要时加载，避免默认刷新和界面干扰。</p>
-                          </div>
-                          <span className="management-status-badge tone-neutral">
-                            {workflowQuery.data?.status
-                              ? formatWorkflowStatus(workflowQuery.data.status)
-                              : "未开始"}
-                          </span>
-                        </summary>
-
-                        <div className="workspace-collapsible-body">
-                          <ReplayExportPanel
-                            session={activeSession}
-                            exportData={workflowExportQuery.data}
-                            replayData={workflowReplayQuery.data}
-                          />
-                        </div>
-                      </details>
-                    ) : null}
                   </div>
                 </section>
-              </div>
-            ) : null}
+              </aside>
+              
+            </section>
           </>
         ) : conversationQuery.isError ? (
           <section className="conversation-empty-state">

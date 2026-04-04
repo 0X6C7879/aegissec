@@ -31,6 +31,7 @@ _GRAPH_TYPE_SORT_ORDER = {
     GraphType.TASK: 0,
     GraphType.EVIDENCE: 1,
     GraphType.CAUSAL: 2,
+    GraphType.ATTACK: 3,
 }
 
 
@@ -278,6 +279,23 @@ class GraphRepository:
             key=lambda node: (_GRAPH_TYPE_SORT_ORDER.get(node.graph_type, 99), node.id),
         )[0]
 
+    def delete_nodes(
+        self,
+        session_id: str,
+        *,
+        workflow_run_id: str | None = None,
+        graph_type: GraphType | None = None,
+    ) -> int:
+        nodes = self.list_nodes(
+            session_id,
+            workflow_run_id=workflow_run_id,
+            graph_type=graph_type,
+        )
+        for node in nodes:
+            self.db_session.delete(node)
+        self.db_session.commit()
+        return len(nodes)
+
     def create_edge(
         self,
         *,
@@ -347,3 +365,20 @@ class GraphRepository:
             edges,
             key=lambda edge: (_GRAPH_TYPE_SORT_ORDER.get(edge.graph_type, 99), edge.id),
         )[0]
+
+    def delete_edges(
+        self,
+        session_id: str,
+        *,
+        workflow_run_id: str | None = None,
+        graph_type: GraphType | None = None,
+    ) -> int:
+        edges = self.list_edges(
+            session_id,
+            workflow_run_id=workflow_run_id,
+            graph_type=graph_type,
+        )
+        for edge in edges:
+            self.db_session.delete(edge)
+        self.db_session.commit()
+        return len(edges)

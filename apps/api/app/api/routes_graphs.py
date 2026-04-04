@@ -68,6 +68,24 @@ async def get_evidence_graph(
         ) from error
 
 
+@router.get("/attack", response_model=SessionGraphRead)
+async def get_attack_graph(
+    session_id: str,
+    graph_service: GraphService = Depends(get_graph_service),
+) -> SessionGraphRead:
+    try:
+        return graph_service.get_graph(session_id=session_id, graph_type=GraphType.ATTACK)
+    except SessionNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+        ) from error
+    except WorkflowGraphNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow run not found.",
+        ) from error
+
+
 @run_router.get("/task", response_model=SessionGraphRead)
 async def get_task_graph_for_run(
     run_id: str,
@@ -103,6 +121,20 @@ async def get_evidence_graph_for_run(
 ) -> SessionGraphRead:
     try:
         return graph_service.get_graph_for_run(run_id=run_id, graph_type=GraphType.EVIDENCE)
+    except WorkflowGraphNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow run not found.",
+        ) from error
+
+
+@run_router.get("/attack", response_model=SessionGraphRead)
+async def get_attack_graph_for_run(
+    run_id: str,
+    graph_service: GraphService = Depends(get_graph_service),
+) -> SessionGraphRead:
+    try:
+        return graph_service.get_graph_for_run(run_id=run_id, graph_type=GraphType.ATTACK)
     except WorkflowGraphNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

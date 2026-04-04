@@ -541,20 +541,25 @@ def test_workflow_execution_records_and_graph_snapshots_are_persisted(client: Te
     task_graph = client.get(f"/api/sessions/{session_id}/graphs/task")
     evidence_graph = client.get(f"/api/sessions/{session_id}/graphs/evidence")
     causal_graph = client.get(f"/api/sessions/{session_id}/graphs/causal")
+    attack_graph = client.get(f"/api/sessions/{session_id}/graphs/attack")
 
     assert task_graph.status_code == 200
     assert evidence_graph.status_code == 200
     assert causal_graph.status_code == 200
+    assert attack_graph.status_code == 200
 
     task_payload = cast(dict[str, Any], api_data(task_graph))
     evidence_payload = cast(dict[str, Any], api_data(evidence_graph))
     causal_payload = cast(dict[str, Any], api_data(causal_graph))
+    attack_payload = cast(dict[str, Any], api_data(attack_graph))
 
     assert task_payload["graph_type"] == "task"
     assert evidence_payload["graph_type"] == "evidence"
     assert causal_payload["graph_type"] == "causal"
+    assert attack_payload["graph_type"] == "attack"
     assert len(cast(list[Any], evidence_payload["nodes"])) > 0
     assert len(cast(list[Any], causal_payload["nodes"])) > 0
+    assert len(cast(list[Any], attack_payload["nodes"])) > 0
 
 
 def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_state(
@@ -896,6 +901,7 @@ def test_context_additions_preserve_export_replay_and_session_history_compatibil
         "task_graph",
         "evidence_graph",
         "causal_graph",
+        "attack_graph",
         "execution_records",
         "replan_records",
         "batch_state",
@@ -941,14 +947,14 @@ def test_start_workflow_publishes_graph_events_for_task_evidence_and_causal(
         )
 
         assert response.status_code == 201
-        events = [websocket.receive_json() for _ in range(43)]
+        events = [websocket.receive_json() for _ in range(44)]
 
     event_types = [cast(str, event["type"]) for event in events]
     assert event_types[0] == "workflow.run.started"
     assert event_types[1] == "workflow.stage.changed"
     assert event_types.count("workflow.task.updated") == 19
     assert event_types.count("task.planned") == 19
-    assert event_types.count("graph.updated") == 3
+    assert event_types.count("graph.updated") == 4
 
 
 def test_advance_workflow_publishes_started_and_finished_events_for_each_batch_task(
@@ -973,7 +979,7 @@ def test_advance_workflow_publishes_started_and_finished_events_for_each_batch_t
             1
             + len(cast(list[dict[str, Any]], second_payload["tasks"]))
             + (2 * len(executed_task_ids))
-            + 3
+            + 4
         )
         events = [websocket.receive_json() for _ in range(event_count)]
 
@@ -982,7 +988,7 @@ def test_advance_workflow_publishes_started_and_finished_events_for_each_batch_t
     assert event_types.count("workflow.task.updated") == 19
     assert event_types.count("task.started") == 2
     assert event_types.count("task.finished") == 2
-    assert event_types.count("graph.updated") == 3
+    assert event_types.count("graph.updated") == 4
 
 
 def test_batch_execution_logs_all_records_to_session_history(client: TestClient) -> None:
@@ -1778,6 +1784,7 @@ def test_run_scoped_export_and_replay_endpoints_return_structured_payloads(
     assert cast(dict[str, Any], export_payload["task_graph"])["workflow_run_id"] == run_id
     assert cast(dict[str, Any], export_payload["evidence_graph"])["workflow_run_id"] == run_id
     assert cast(dict[str, Any], export_payload["causal_graph"])["workflow_run_id"] == run_id
+    assert cast(dict[str, Any], export_payload["attack_graph"])["workflow_run_id"] == run_id
     assert isinstance(export_payload["execution_records"], list)
     assert "batch_state" in export_payload
 

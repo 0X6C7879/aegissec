@@ -159,6 +159,7 @@ class GraphType(str, Enum):
     TASK = "task"
     EVIDENCE = "evidence"
     CAUSAL = "causal"
+    ATTACK = "attack"
 
 
 class ProjectBase(SQLModel):
@@ -1056,6 +1057,7 @@ class WorkflowRunExportRead(SQLModel):
     task_graph: SessionGraphRead
     evidence_graph: SessionGraphRead
     causal_graph: SessionGraphRead
+    attack_graph: SessionGraphRead
     execution_records: list[dict[str, object]] = Field(default_factory=list)
     replan_records: list[dict[str, object]] = Field(default_factory=list)
     batch_state: dict[str, object] = Field(default_factory=dict)

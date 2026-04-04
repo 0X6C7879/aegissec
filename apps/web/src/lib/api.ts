@@ -358,6 +358,13 @@ export async function getTaskGraph(sessionId: string, signal?: AbortSignal): Pro
   return apiRequest<SessionGraph>(`/api/sessions/${sessionId}/graphs/task`, { signal });
 }
 
+export async function getAttackGraph(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionGraph> {
+  return apiRequest<SessionGraph>(`/api/sessions/${sessionId}/graphs/attack`, { signal });
+}
+
 export async function getCausalGraph(
   sessionId: string,
   signal?: AbortSignal,
@@ -377,6 +384,13 @@ export async function getTaskGraphForRun(
   signal?: AbortSignal,
 ): Promise<SessionGraph> {
   return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/task`, { signal });
+}
+
+export async function getAttackGraphForRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<SessionGraph> {
+  return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/attack`, { signal });
 }
 
 export async function getCausalGraphForRun(

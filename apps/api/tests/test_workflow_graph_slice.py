@@ -96,6 +96,15 @@ def test_graph_slice_reads_nodes_and_edges_deterministically() -> None:
             payload={"status": "ready"},
             stable_key="task-enumerate",
         )
+        attack_node = repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            node_type="outcome",
+            label="Attack Path",
+            payload={"status": "running"},
+            stable_key="attack-path",
+        )
 
         repository.create_edge(
             session_id=session.id,
@@ -117,13 +126,31 @@ def test_graph_slice_reads_nodes_and_edges_deterministically() -> None:
             payload={"kind": "task"},
             stable_key="edge-task",
         )
+        repository.create_edge(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            source_node_id=second_node.id,
+            target_node_id=attack_node.id,
+            relation="confirms",
+            payload={"kind": "attack"},
+            stable_key="edge-attack",
+        )
 
         all_nodes = repository.list_nodes(session.id, workflow_run_id=run.id)
         all_edges = repository.list_edges(session.id, workflow_run_id=run.id)
         fetched_edge = repository.get_edge_by_stable_key(session.id, "edge-task")
 
-        assert [node.stable_key for node in all_nodes] == ["task-enumerate", "finding-impact"]
-        assert [edge.stable_key for edge in all_edges] == ["edge-task", "edge-causal"]
+        assert [node.stable_key for node in all_nodes] == [
+            "task-enumerate",
+            "finding-impact",
+            "attack-path",
+        ]
+        assert [edge.stable_key for edge in all_edges] == [
+            "edge-task",
+            "edge-causal",
+            "edge-attack",
+        ]
         assert fetched_edge is not None
         assert fetched_edge.id == first_edge.id
 

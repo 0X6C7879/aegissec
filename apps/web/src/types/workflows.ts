@@ -222,6 +222,7 @@ export type WorkflowRunExport = {
   task_graph: SessionGraph;
   evidence_graph: SessionGraph;
   causal_graph: SessionGraph;
+  attack_graph: SessionGraph;
   execution_records: WorkflowExecutionRecord[];
   replan_records: WorkflowReplanRecord[];
   batch_state: WorkflowBatchState;

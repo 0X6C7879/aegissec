@@ -297,7 +297,7 @@ async def _publish_workflow_start_events(
             )
         )
 
-    for graph_type in ("task", "evidence", "causal"):
+    for graph_type in ("task", "evidence", "causal", "attack"):
         await event_broker.publish(
             SessionEvent(
                 type=SessionEventType.GRAPH_UPDATED,
@@ -385,7 +385,7 @@ async def _publish_workflow_progress_events(
                 },
             )
         )
-    for graph_type in ("task", "evidence", "causal"):
+    for graph_type in ("task", "evidence", "causal", "attack"):
         await event_broker.publish(
             SessionEvent(
                 type=SessionEventType.GRAPH_UPDATED,

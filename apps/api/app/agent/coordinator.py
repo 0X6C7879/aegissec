@@ -279,6 +279,7 @@ class Coordinator:
                 reflection=reflection,
             )
         self._graph_manager.sync_task_graph(run=run, tasks=tasks)
+        self._graph_manager.sync_attack_graph(run=run, tasks=tasks)
         return CoordinatorStepResult(
             status=step_result.status,
             current_stage=step_result.current_stage,
@@ -292,6 +293,7 @@ class Coordinator:
 
     def sync_graph_snapshots(self, *, run: WorkflowRun, tasks: list[TaskNode]) -> None:
         self._graph_manager.sync_task_graph(run=run, tasks=tasks)
+        self._graph_manager.sync_attack_graph(run=run, tasks=tasks)
 
     def _apply_execution_result(
         self,

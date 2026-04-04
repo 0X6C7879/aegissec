@@ -59,6 +59,142 @@
   --transition-base: 220ms ease;
 }
 
+.workspace-attack-graph-panel {
+  gap: var(--space-4);
+}
+
+.attack-graph-canvas-shell {
+  height: clamp(22rem, 52vh, 34rem);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(36, 88, 69, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 252, 0.9), rgba(246, 246, 241, 0.96));
+}
+
+.attack-graph-canvas-shell .react-flow__renderer,
+.attack-graph-canvas-shell .react-flow__pane {
+  background: transparent;
+}
+
+.attack-graph-canvas-shell .react-flow__controls {
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(30, 38, 33, 0.08);
+}
+
+.attack-graph-canvas-shell .react-flow__controls-button {
+  border-color: var(--panel-border);
+  background: rgba(255, 255, 252, 0.96);
+  color: var(--text-primary);
+}
+
+.attack-graph-canvas-shell .react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+.attack-graph-canvas-shell .react-flow__edge-textbg {
+  fill: rgba(255, 255, 252, 0.92);
+}
+
+.attack-graph-flow-node {
+  width: 280px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(74, 89, 79, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(36, 88, 69, 0.14), transparent 34%),
+    rgba(255, 255, 252, 0.96);
+  box-shadow: 0 20px 40px rgba(30, 38, 33, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
+.attack-graph-flow-node-active {
+  border-color: rgba(36, 88, 69, 0.38);
+  box-shadow: 0 22px 44px rgba(24, 58, 45, 0.16);
+}
+
+.attack-graph-flow-node-latest {
+  outline: 2px solid rgba(154, 114, 39, 0.28);
+  outline-offset: 2px;
+}
+
+.attack-graph-flow-node-selected {
+  border-color: rgba(36, 88, 69, 0.58);
+  box-shadow: 0 0 0 4px rgba(36, 88, 69, 0.12);
+}
+
+.attack-graph-flow-node-header,
+.attack-graph-flow-node-flags {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.attack-graph-flow-node-type,
+.attack-graph-flow-flag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.attack-graph-flow-flag {
+  background: rgba(154, 114, 39, 0.12);
+  color: var(--warning);
+}
+
+.attack-graph-flow-node-title {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.attack-graph-flow-node-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.attack-graph-flow-handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 255, 252, 0.92);
+  background: var(--accent);
+}
+
+.attack-graph-detail-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.attack-graph-detail-list > div {
+  min-width: 0;
+}
+
+.attack-graph-detail-list dd {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .attack-graph-detail-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attack-graph-canvas-shell {
+    height: 26rem;
+  }
+}
+
 .graph-workbench-shell {
   display: grid;
   gap: var(--space-5);

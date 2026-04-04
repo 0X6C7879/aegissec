@@ -159,6 +159,15 @@ def test_graph_repository_stores_and_lists_graph_data_deterministically() -> Non
             payload={"stage": 1},
             stable_key="task-node",
         )
+        attack_node = repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            node_type="outcome",
+            label="Attack path",
+            payload={"status": "running"},
+            stable_key="attack-node",
+        )
 
         later_edge = repository.create_edge(
             session_id=session.id,
@@ -180,6 +189,16 @@ def test_graph_repository_stores_and_lists_graph_data_deterministically() -> Non
             payload={"order": 1},
             stable_key="task-edge",
         )
+        attack_edge = repository.create_edge(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            source_node_id=later_node.id,
+            target_node_id=attack_node.id,
+            relation="confirms",
+            payload={"order": 3},
+            stable_key="attack-edge",
+        )
 
         task_nodes = repository.list_nodes(
             session.id, workflow_run_id=run.id, graph_type=GraphType.TASK
@@ -189,8 +208,12 @@ def test_graph_repository_stores_and_lists_graph_data_deterministically() -> Non
         fetched_edge = repository.get_edge_by_stable_key(session.id, "task-edge")
 
         assert [node.id for node in task_nodes] == [earlier_node.id]
-        assert [node.stable_key for node in all_nodes] == ["task-node", "impact-node"]
-        assert [edge.id for edge in all_edges] == [earlier_edge.id, later_edge.id]
+        assert [node.stable_key for node in all_nodes] == [
+            "task-node",
+            "impact-node",
+            "attack-node",
+        ]
+        assert [edge.id for edge in all_edges] == [earlier_edge.id, later_edge.id, attack_edge.id]
         assert fetched_edge is not None
         assert fetched_edge.id == earlier_edge.id
 
@@ -253,6 +276,74 @@ def test_workflow_repository_persists_state_and_isolates_graphs_by_run() -> None
         assert stored_second_run.last_error == "upstream timeout"
         assert [node.label for node in first_run_nodes] == ["first-run-node"]
         assert [node.label for node in second_run_nodes] == ["second-run-node"]
+
+
+def test_graph_repository_can_delete_attack_graph_slices() -> None:
+    with _db_session() as db_session:
+        session = _create_session(db_session)
+        workflow_repository = WorkflowRepository(db_session)
+        repository = GraphRepository(db_session)
+        run = workflow_repository.create_run(
+            session_id=session.id,
+            template_name="graph-build",
+            status=WorkflowRunStatus.RUNNING,
+            current_stage="graph",
+            started_at=datetime(2026, 3, 29, 12, 30, tzinfo=UTC),
+            ended_at=None,
+            state={"current_stage": "graph"},
+            last_error=None,
+        )
+
+        source = repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            node_type="surface",
+            label="Ingress",
+            payload={"attack_id": "surface:1"},
+            stable_key="attack-node:surface:1",
+        )
+        target = repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            node_type="outcome",
+            label="Outcome",
+            payload={"attack_id": "outcome:1"},
+            stable_key="attack-node:outcome:1",
+        )
+        repository.create_edge(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            source_node_id=source.id,
+            target_node_id=target.id,
+            relation="confirms",
+            payload={},
+            stable_key="attack-edge:surface:1:confirms:outcome:1",
+        )
+
+        deleted_edges = repository.delete_edges(
+            session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+        )
+        deleted_nodes = repository.delete_nodes(
+            session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+        )
+
+        assert deleted_edges == 1
+        assert deleted_nodes == 2
+        assert (
+            repository.list_edges(session.id, workflow_run_id=run.id, graph_type=GraphType.ATTACK)
+            == []
+        )
+        assert (
+            repository.list_nodes(session.id, workflow_run_id=run.id, graph_type=GraphType.ATTACK)
+            == []
+        )
 
 
 def _db_session() -> DBSession:

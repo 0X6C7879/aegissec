@@ -6,24 +6,21 @@ import { ApiError } from "../lib/api";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraph } from "../types/graphs";
 import type { SessionConversation, SessionQueue, SessionSummary } from "../types/sessions";
+import type { WorkflowRunExport, WorkflowRunReplay } from "../types/workflows";
 import { SessionWorkspaceWorkbench } from "./SessionWorkspaceWorkbench";
 
 const {
   mockAdvanceWorkflow,
+  mockGetAttackGraph,
+  mockGetAttackGraphForRun,
   mockCancelGeneration,
   mockCancelSession,
   mockCreateSession,
   mockDeleteSession,
   mockEditSessionMessage,
-  mockGetCausalGraph,
-  mockGetCausalGraphForRun,
-  mockGetEvidenceGraph,
-  mockGetEvidenceGraphForRun,
   mockGetRuntimeStatus,
   mockGetSessionConversation,
   mockGetSessionQueue,
-  mockGetTaskGraph,
-  mockGetTaskGraphForRun,
   mockGetWorkflow,
   mockGetWorkflowExport,
   mockGetWorkflowReplay,
@@ -38,20 +35,16 @@ const {
   mockUseSessionEvents,
 } = vi.hoisted(() => ({
   mockAdvanceWorkflow: vi.fn(),
+  mockGetAttackGraph: vi.fn(),
+  mockGetAttackGraphForRun: vi.fn(),
   mockCancelGeneration: vi.fn(),
   mockCancelSession: vi.fn(),
   mockCreateSession: vi.fn(),
   mockDeleteSession: vi.fn(),
   mockEditSessionMessage: vi.fn(),
-  mockGetCausalGraph: vi.fn(),
-  mockGetCausalGraphForRun: vi.fn(),
-  mockGetEvidenceGraph: vi.fn(),
-  mockGetEvidenceGraphForRun: vi.fn(),
   mockGetRuntimeStatus: vi.fn(),
   mockGetSessionConversation: vi.fn(),
   mockGetSessionQueue: vi.fn(),
-  mockGetTaskGraph: vi.fn(),
-  mockGetTaskGraphForRun: vi.fn(),
   mockGetWorkflow: vi.fn(),
   mockGetWorkflowExport: vi.fn(),
   mockGetWorkflowReplay: vi.fn(),
@@ -72,20 +65,16 @@ vi.mock("../lib/api", async () => {
   return {
     ...actual,
     advanceWorkflow: mockAdvanceWorkflow,
+    getAttackGraph: mockGetAttackGraph,
+    getAttackGraphForRun: mockGetAttackGraphForRun,
     cancelGeneration: mockCancelGeneration,
     cancelSession: mockCancelSession,
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
     editSessionMessage: mockEditSessionMessage,
-    getCausalGraph: mockGetCausalGraph,
-    getCausalGraphForRun: mockGetCausalGraphForRun,
-    getEvidenceGraph: mockGetEvidenceGraph,
-    getEvidenceGraphForRun: mockGetEvidenceGraphForRun,
     getRuntimeStatus: mockGetRuntimeStatus,
     getSessionConversation: mockGetSessionConversation,
     getSessionQueue: mockGetSessionQueue,
-    getTaskGraph: mockGetTaskGraph,
-    getTaskGraphForRun: mockGetTaskGraphForRun,
     getWorkflow: mockGetWorkflow,
     getWorkflowExport: mockGetWorkflowExport,
     getWorkflowReplay: mockGetWorkflowReplay,
@@ -114,6 +103,12 @@ vi.mock("./ConversationFeed", () => ({
 
 vi.mock("./WorkbenchComposer", () => ({
   WorkbenchComposer: () => <div data-testid="workbench-composer" />,
+}));
+
+vi.mock("./AttackGraphWorkbench", () => ({
+  AttackGraphWorkbench: ({ graph }: { graph: SessionGraph | undefined }) => (
+    <div data-testid="attack-graph-workbench">{graph?.graph_type ?? "none"}</div>
+  ),
 }));
 
 function createSessionSummary(id: string): SessionSummary {
@@ -155,14 +150,82 @@ function createConversation(sessionId: string): SessionConversation {
   };
 }
 
-function createGraph(sessionId: string): SessionGraph {
+function createGraph(
+  sessionId: string,
+  overrides: Partial<SessionGraph> = {},
+): SessionGraph {
   return {
     session_id: sessionId,
     workflow_run_id: "",
-    graph_type: "task",
+    graph_type: "attack",
     current_stage: null,
     nodes: [],
     edges: [],
+    ...overrides,
+  };
+}
+
+function createWorkflow(sessionId: string, runId: string) {
+  return {
+    id: runId,
+    session_id: sessionId,
+    template_name: "authorized-assessment",
+    status: "running",
+    current_stage: "safe_validation",
+    state: {},
+    last_error: null,
+    created_at: "2026-04-01T10:00:00.000Z",
+    updated_at: "2026-04-01T10:00:00.000Z",
+    started_at: "2026-04-01T10:00:00.000Z",
+    ended_at: null,
+    tasks: [],
+  };
+}
+
+function createWorkflowReplay(sessionId: string, runId: string): WorkflowRunReplay {
+  return {
+    run_id: runId,
+    session_id: sessionId,
+    template_name: "authorized-assessment",
+    status: "running",
+    current_stage: "safe_validation",
+    replay_steps: [],
+    replan_records: [],
+    batch_state: {
+      contract_version: "v1",
+      cycle: 0,
+      status: "idle",
+      max_nodes_per_cycle: 1,
+      selected_task_ids: [],
+      executed_task_ids: [],
+      started_at: null,
+      ended_at: null,
+    },
+  };
+}
+
+function createWorkflowExport(sessionId: string, runId: string): WorkflowRunExport {
+  const run = createWorkflow(sessionId, runId);
+  const attackGraph = createGraph(sessionId, { workflow_run_id: runId });
+
+  return {
+    run,
+    task_graph: createGraph(sessionId, { graph_type: "task", workflow_run_id: runId }),
+    evidence_graph: createGraph(sessionId, { graph_type: "evidence", workflow_run_id: runId }),
+    causal_graph: createGraph(sessionId, { graph_type: "causal", workflow_run_id: runId }),
+    attack_graph: attackGraph,
+    execution_records: [],
+    replan_records: [],
+    batch_state: {
+      contract_version: "v1",
+      cycle: 0,
+      status: "idle",
+      max_nodes_per_cycle: 1,
+      selected_task_ids: [],
+      executed_task_ids: [],
+      started_at: null,
+      ended_at: null,
+    },
   };
 }
 
@@ -233,9 +296,11 @@ describe("SessionWorkspaceWorkbench", () => {
       createConversation(sessionId),
     );
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
-    mockGetTaskGraph.mockResolvedValue(createGraph("session-1"));
-    mockGetEvidenceGraph.mockResolvedValue(createGraph("session-1"));
-    mockGetCausalGraph.mockResolvedValue(createGraph("session-1"));
+    mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
+    mockGetAttackGraphForRun.mockResolvedValue(createGraph("session-1"));
+    mockGetWorkflow.mockResolvedValue(createWorkflow("session-1", "run-1"));
+    mockGetWorkflowExport.mockResolvedValue(createWorkflowExport("session-1", "run-1"));
+    mockGetWorkflowReplay.mockResolvedValue(createWorkflowReplay("session-1", "run-1"));
   });
 
   it("recovers when the route session is missing from the current session list", async () => {
@@ -258,7 +323,7 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(useUiStore.getState().lastVisitedSessionId).toBeNull();
     expect(mockGetSessionConversation.mock.calls.length).toBeLessThanOrEqual(1);
     expect(mockGetSessionQueue.mock.calls.length).toBeLessThanOrEqual(1);
-    expect(mockGetTaskGraph.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(mockGetAttackGraph.mock.calls.length).toBeLessThanOrEqual(1);
     expect(mockUseSessionEvents).toHaveBeenLastCalledWith(null);
   });
 
@@ -274,7 +339,7 @@ describe("SessionWorkspaceWorkbench", () => {
       }),
     );
     mockGetSessionQueue.mockResolvedValue(createQueue("stale-session"));
-    mockGetTaskGraph.mockResolvedValue(createGraph("stale-session"));
+    mockGetAttackGraph.mockResolvedValue(createGraph("stale-session"));
 
     renderWorkbench("/sessions/stale-session/chat");
 
@@ -290,7 +355,7 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(useUiStore.getState().lastVisitedSessionId).toBeNull();
     expect(mockGetSessionConversation).toHaveBeenCalledTimes(1);
     expect(mockGetSessionQueue).toHaveBeenCalledTimes(1);
-    expect(mockGetTaskGraph).toHaveBeenCalledTimes(1);
+    expect(mockGetAttackGraph).toHaveBeenCalledTimes(1);
     expect(mockUseSessionEvents).toHaveBeenCalledWith("stale-session");
     expect(mockUseSessionEvents).toHaveBeenLastCalledWith(null);
   });
@@ -299,7 +364,7 @@ describe("SessionWorkspaceWorkbench", () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetSessionConversation.mockRejectedValue(new Error("服务暂时异常"));
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
-    mockGetTaskGraph.mockResolvedValue(createGraph("session-1"));
+    mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
 
     renderWorkbench("/sessions/session-1/chat");
 
@@ -312,5 +377,35 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.getByTestId("location-display").textContent).toBe("/sessions/session-1/chat");
     expect(useUiStore.getState().lastVisitedSessionId).toBe("session-1");
     expect(mockUseSessionEvents).not.toHaveBeenLastCalledWith(null);
+  });
+
+  it("shows only the attack graph surface for active workflow sessions", async () => {
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetAttackGraph.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        current_stage: "safe_validation",
+      }),
+    );
+    mockGetAttackGraphForRun.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        current_stage: "safe_validation",
+      }),
+    );
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("attack-graph-workbench")).toHaveTextContent("attack");
+    });
+
+    expect(screen.queryByRole("button", { name: "工作流控制" })).not.toBeInTheDocument();
+    expect(screen.queryByText("任务图")).not.toBeInTheDocument();
+    expect(screen.queryByText("证据图")).not.toBeInTheDocument();
+    expect(screen.queryByText("因果图")).not.toBeInTheDocument();
+    expect(screen.queryByText("任务树")).not.toBeInTheDocument();
+    expect(screen.queryByText("任务与图谱")).not.toBeInTheDocument();
+    expect(screen.queryByText("计划与推进")).not.toBeInTheDocument();
   });
 });

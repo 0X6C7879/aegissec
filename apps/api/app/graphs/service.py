@@ -4,10 +4,15 @@ from fastapi import Depends
 from sqlmodel import Session as DBSession
 
 from app.core.settings import Settings, get_settings
-from app.db.models import GraphType, SessionGraphRead
+from app.db.models import GraphType, SessionGraphRead, TaskNode, WorkflowRun
 from app.db.repositories import GraphRepository, SessionRepository, WorkflowRepository
 from app.db.session import get_db_session
-from app.graphs.builders import CausalGraphBuilder, SnapshotGraphBuilder, TaskGraphBuilder
+from app.graphs.builders import (
+    AttackGraphBuilder,
+    CausalGraphBuilder,
+    SnapshotGraphBuilder,
+    TaskGraphBuilder,
+)
 
 
 class SessionNotFoundError(Exception):
@@ -26,6 +31,7 @@ class GraphService:
         settings: Settings,
         task_graph_builder: TaskGraphBuilder | None = None,
         causal_graph_builder: CausalGraphBuilder | None = None,
+        attack_graph_builder: AttackGraphBuilder | None = None,
         snapshot_graph_builder: SnapshotGraphBuilder | None = None,
     ) -> None:
         del settings
@@ -34,6 +40,7 @@ class GraphService:
         self._graph_repository = GraphRepository(db_session)
         self._task_graph_builder = task_graph_builder or TaskGraphBuilder()
         self._causal_graph_builder = causal_graph_builder or CausalGraphBuilder()
+        self._attack_graph_builder = attack_graph_builder or AttackGraphBuilder()
         self._snapshot_graph_builder = snapshot_graph_builder or SnapshotGraphBuilder()
 
     def get_graph(self, *, session_id: str, graph_type: GraphType) -> SessionGraphRead:
@@ -75,21 +82,8 @@ class GraphService:
                 edges=graph_edges,
             )
 
-        if graph_type is GraphType.TASK:
-            tasks = self._workflow_repository.list_task_nodes(run.id)
-            return self._task_graph_builder.build(run=run, tasks=tasks)
-
-        if graph_type is GraphType.EVIDENCE:
-            return SessionGraphRead(
-                session_id=session_id,
-                workflow_run_id=run.id,
-                graph_type=GraphType.EVIDENCE,
-                current_stage=run.current_stage,
-                nodes=[],
-                edges=[],
-            )
-
-        return self._causal_graph_builder.build(run=run)
+        tasks = self._workflow_repository.list_task_nodes(run.id)
+        return self._build_dynamic_graph(run=run, tasks=tasks, graph_type=graph_type)
 
     def get_graph_for_run(self, *, run_id: str, graph_type: GraphType) -> SessionGraphRead:
         run = self._workflow_repository.get_run(run_id)
@@ -116,8 +110,17 @@ class GraphService:
                 edges=graph_edges,
             )
 
+        tasks = self._workflow_repository.list_task_nodes(run.id)
+        return self._build_dynamic_graph(run=run, tasks=tasks, graph_type=graph_type)
+
+    def _build_dynamic_graph(
+        self,
+        *,
+        run: WorkflowRun,
+        tasks: list[TaskNode],
+        graph_type: GraphType,
+    ) -> SessionGraphRead:
         if graph_type is GraphType.TASK:
-            tasks = self._workflow_repository.list_task_nodes(run.id)
             return self._task_graph_builder.build(run=run, tasks=tasks)
 
         if graph_type is GraphType.EVIDENCE:
@@ -130,7 +133,37 @@ class GraphService:
                 edges=[],
             )
 
-        return self._causal_graph_builder.build(run=run)
+        if graph_type is GraphType.CAUSAL:
+            return self._causal_graph_builder.build(run=run)
+
+        evidence_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        evidence_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )
+        causal_nodes = self._graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        causal_edges = self._graph_repository.list_edges(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+        )
+        return self._attack_graph_builder.build(
+            run=run,
+            tasks=tasks,
+            evidence_nodes=evidence_nodes,
+            evidence_edges=evidence_edges,
+            causal_nodes=causal_nodes,
+            causal_edges=causal_edges,
+        )
 
 
 def get_graph_service(
