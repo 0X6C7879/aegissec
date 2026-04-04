@@ -25,6 +25,8 @@ type AttackGraphCanvasProps = {
   selectedNodeId: string | null;
   latestNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
+  overlayTitle?: string | null;
+  overlayCopy?: string | null;
 };
 
 type AttackCanvasNodeData = {
@@ -301,6 +303,8 @@ export function AttackGraphCanvas({
   selectedNodeId,
   latestNodeId,
   onSelectNode,
+  overlayTitle = null,
+  overlayCopy = null,
 }: AttackGraphCanvasProps) {
   const flowGraph = useMemo(
     () => buildAutoLayout(graph, selectedNodeId, latestNodeId),
@@ -377,6 +381,12 @@ export function AttackGraphCanvas({
         />
         <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>
+      {overlayTitle ? (
+        <div className="attack-graph-canvas-overlay" data-testid="attack-graph-canvas-overlay">
+          <strong className="attack-graph-canvas-overlay-title">{overlayTitle}</strong>
+          {overlayCopy ? <p className="attack-graph-canvas-overlay-copy">{overlayCopy}</p> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

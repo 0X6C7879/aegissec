@@ -795,5 +795,17 @@ def build_workflow_prompting_state(
                 )
                 else {}
             ),
+            "workspace_rehydrate": (
+                dict(workspace_rehydrate)
+                if isinstance(
+                    (
+                        workspace_rehydrate := normalized_continuity_metadata.get(
+                            "workspace_rehydrate"
+                        )
+                    ),
+                    dict,
+                )
+                else {}
+            ),
         },
     }

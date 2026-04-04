@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.workspace_rehydrate import build_workspace_context, rehydrate_from_compact_boundary
 
 
 class PostCompactReinjectionService:
@@ -25,7 +26,9 @@ class PostCompactReinjectionService:
         boundary_marker = str(compact_runtime.get("boundary_marker") or "")
         compact_summary = str(compact_runtime.get("compact_summary") or "")
         retained_live_state = self._dict(compact_runtime.get("retained_live_state"))
-        workspace_state = self._dict(retained_live_state.get("workspace_state"))
+        boundary_workspace = rehydrate_from_compact_boundary(compact_runtime=compact_runtime)
+        workspace_context = build_workspace_context(boundary_workspace)
+        workspace_state = self._dict(workspace_context.get("workspace_state"))
         restored_stage = self._string_value(retained_live_state.get("current_stage"))
         restored_task = self._string_value(retained_live_state.get("current_task"))
         effective_stage = (
@@ -77,6 +80,7 @@ class PostCompactReinjectionService:
                 "restored_from_boundary": compact_applied,
                 "reinjected_components": sorted(fragments.keys()),
                 "workspace_state": workspace_state,
+                "workspace_rehydrate": workspace_context.get("workspace_rehydrate"),
             },
         }
         self._transcript_runtime.append_reinjection_event(

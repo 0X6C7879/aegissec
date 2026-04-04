@@ -331,11 +331,7 @@ class AssistantTurnPlanner:
             "prior_next_turn_hint": (
                 prior_outcome.next_turn_hint if prior_outcome is not None else ""
             ),
-            "workspace_state": (
-                dict(workspace_state)
-                if isinstance((workspace_state := continuity_dict.get("workspace_state")), dict)
-                else {}
-            ),
+            "workspace_state": AssistantTurnPlanner._workspace_state(continuity_dict),
         }
 
     @staticmethod
@@ -349,7 +345,6 @@ class AssistantTurnPlanner:
             context_snapshot.prompting if isinstance(context_snapshot.prompting, dict) else {}
         )
         continuity = prompting.get("continuity") if isinstance(prompting, dict) else {}
-        workspace_state = continuity.get("workspace_state") if isinstance(continuity, dict) else {}
         return {
             "projection_summary": context_snapshot.projection.summary,
             "last_directive": (
@@ -360,7 +355,7 @@ class AssistantTurnPlanner:
             ),
             "scheduler_mode": schedule.scheduler_mode,
             "selected_task_count": len(schedule.selected_tasks),
-            "workspace_state": dict(workspace_state) if isinstance(workspace_state, dict) else {},
+            "workspace_state": AssistantTurnPlanner._workspace_state(continuity),
         }
 
     @staticmethod
@@ -446,3 +441,17 @@ class AssistantTurnPlanner:
     @staticmethod
     def _string(raw: object) -> str | None:
         return raw if isinstance(raw, str) else None
+
+    @staticmethod
+    def _workspace_state(continuity: object) -> dict[str, object]:
+        if not isinstance(continuity, dict):
+            return {}
+        workspace_rehydrate = continuity.get("workspace_rehydrate")
+        if isinstance(workspace_rehydrate, dict):
+            state = workspace_rehydrate.get("state")
+            if isinstance(state, dict):
+                return {str(key): value for key, value in state.items()}
+        workspace_state = continuity.get("workspace_state")
+        if isinstance(workspace_state, dict):
+            return {str(key): value for key, value in workspace_state.items()}
+        return {}

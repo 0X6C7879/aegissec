@@ -187,6 +187,9 @@ def test_post_compact_reinjection_restores_required_fragments() -> None:
     assert cast(dict[str, Any], provenance["workspace_state"])["latest_turn_directive"] == (
         "await_user_input"
     )
+    workspace_rehydrate = cast(dict[str, Any], provenance["workspace_rehydrate"])
+    assert cast(dict[str, Any], workspace_rehydrate["state"])["active_stage"] == "restored-analysis"
+    assert cast(dict[str, Any], workspace_rehydrate["provenance"])["used_sources"] == ["boundary"]
     assert "Workspace continuity:" in str(reinjection["summary"])
     runtime_transcript = cast(dict[str, Any], mutable_state["runtime_transcript"])
     reinjection_events = cast(list[dict[str, Any]], runtime_transcript["reinjection_events"])

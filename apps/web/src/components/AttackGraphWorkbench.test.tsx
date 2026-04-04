@@ -68,8 +68,6 @@ function StatefulAttackGraphWorkbench({
   return (
     <AttackGraphWorkbench
       graph={createGraph()}
-      tasks={[]}
-      replay={undefined}
       selectedNodeId={selectedNodeId}
       actionBusyId={null}
       onSelectNode={setSelectedNodeId}

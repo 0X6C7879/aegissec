@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   isApiError,
-  advanceWorkflow,
   forkSessionMessage,
   getAttackGraph,
   getAttackGraphForRun,
@@ -15,14 +14,9 @@ import {
   getRuntimeStatus,
   getSessionConversation,
   getSessionQueue,
-  getWorkflow,
-  getWorkflowExport,
-  getWorkflowReplay,
   listSessions,
-  listWorkflowTemplates,
   regenerateSessionMessage,
   rollbackSessionMessage,
-  startWorkflow,
   updateSession,
   sendChatMessage,
 } from "../lib/api";
@@ -43,9 +37,6 @@ import type {
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
-import type {
-  WorkflowRunDetail,
-} from "../types/workflows";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
@@ -90,27 +81,6 @@ function visibleSessionsForSidebar(
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function formatWorkflowStatus(status: string | null): string {
-  switch (status) {
-    case "queued":
-      return "排队中";
-    case "running":
-      return "运行中";
-    case "needs_approval":
-      return "待审批";
-    case "paused":
-      return "已暂停";
-    case "done":
-      return "已完成";
-    case "error":
-      return "异常";
-    case "blocked":
-      return "已阻塞";
-    default:
-      return status ?? "未开始";
-  }
 }
 
 function getConnectionTone(state: string): string {
@@ -210,19 +180,6 @@ function buildOptimisticGeneration(
   };
 }
 
-function downloadJson(fileName: string, payload: unknown): void {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const objectUrl = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = fileName;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(objectUrl);
-}
-
-
 export function SessionWorkspaceWorkbench() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -231,9 +188,6 @@ export function SessionWorkspaceWorkbench() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() =>
     getStoredWorkspaceSidebarState(),
   );
-  const [selectedTemplateName, setSelectedTemplateName] = useState("");
-  const [pinnedWorkflowRunId, setPinnedWorkflowRunId] = useState<string | null>(null);
-  const [isInsightsOpen, setIsInsightsOpen] = useState(true);
   const [selectedAttackNodeId, setSelectedAttackNodeId] = useState<string | null>(null);
   const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
   const [invalidSessionState, setInvalidSessionState] = useState<InvalidSessionState | null>(null);
@@ -253,8 +207,6 @@ export function SessionWorkspaceWorkbench() {
       suppressRouteAutonavigateRef.current = true;
       setInvalidSessionState(buildInvalidSessionState(staleSessionId, message));
       setLastVisitedSessionId(null);
-      setPinnedWorkflowRunId(null);
-      setIsInsightsOpen(false);
       setSelectedAttackNodeId(null);
       void queryClient.cancelQueries({ queryKey: ["conversation", staleSessionId] });
       void queryClient.cancelQueries({ queryKey: ["session-queue", staleSessionId] });
@@ -272,11 +224,6 @@ export function SessionWorkspaceWorkbench() {
     queryKey: ["sessions", "workspace"],
     queryFn: ({ signal }) => listSessions(true, signal),
     placeholderData: (previousValue) => previousValue,
-  });
-
-  const templatesQuery = useQuery({
-    queryKey: ["workflow-templates"],
-    queryFn: ({ signal }) => listWorkflowTemplates(signal),
   });
 
   const runtimeStatusQuery = useQuery({
@@ -435,13 +382,7 @@ export function SessionWorkspaceWorkbench() {
 
   const inferredWorkflowRunId = sessionAttackGraphQuery.data?.workflow_run_id ?? null;
 
-  useEffect(() => {
-    if (inferredWorkflowRunId) {
-      setPinnedWorkflowRunId(inferredWorkflowRunId);
-    }
-  }, [inferredWorkflowRunId]);
-
-  const workflowRunId = pinnedWorkflowRunId ?? inferredWorkflowRunId;
+  const workflowRunId = inferredWorkflowRunId;
 
   useEffect(() => {
     if (workflowRunId) {
@@ -451,52 +392,10 @@ export function SessionWorkspaceWorkbench() {
     setSelectedAttackNodeId(null);
   }, [workflowRunId]);
 
-  useEffect(() => {
-    if (!isInsightsOpen) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      if (isInsightsOpen) {
-        setIsInsightsOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isInsightsOpen]);
-
-  const workflowQuery = useQuery({
-    enabled: Boolean(workflowRunId),
-    queryKey: ["workflow", workflowRunId],
-    queryFn: ({ signal }) => getWorkflow(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
   const runAttackGraphQuery = useQuery({
     enabled: Boolean(workflowRunId),
     queryKey: ["workflow", workflowRunId, "graph", "attack"],
     queryFn: ({ signal }) => getAttackGraphForRun(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const workflowExportQuery = useQuery({
-    enabled: Boolean(workflowRunId),
-    queryKey: ["workflow", workflowRunId, "export"],
-    queryFn: ({ signal }) => getWorkflowExport(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
-
-  const workflowReplayQuery = useQuery({
-    enabled: Boolean(workflowRunId),
-    queryKey: ["workflow", workflowRunId, "replay"],
-    queryFn: ({ signal }) => getWorkflowReplay(workflowRunId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
@@ -508,28 +407,6 @@ export function SessionWorkspaceWorkbench() {
       ),
     [activeSessionId, runtimeStatusQuery.data?.recent_runs],
   );
-
-  useEffect(() => {
-    const templateNames = new Set((templatesQuery.data ?? []).map((template) => template.name));
-    const activeTemplateName = workflowQuery.data?.template_name ?? null;
-
-    if (!selectedTemplateName) {
-      if (activeTemplateName && templateNames.has(activeTemplateName)) {
-        setSelectedTemplateName(activeTemplateName);
-        return;
-      }
-
-      const firstTemplateName = templatesQuery.data?.[0]?.name;
-      if (firstTemplateName) {
-        setSelectedTemplateName(firstTemplateName);
-      }
-      return;
-    }
-
-    if (templateNames.size > 0 && !templateNames.has(selectedTemplateName)) {
-      setSelectedTemplateName(templatesQuery.data?.[0]?.name ?? "");
-    }
-  }, [selectedTemplateName, templatesQuery.data, workflowQuery.data?.template_name]);
 
   const createSessionMutation = useMutation({
     mutationFn: () => createSession(),
@@ -592,15 +469,6 @@ export function SessionWorkspaceWorkbench() {
       suppressRouteAutonavigateRef.current = false;
       setInvalidSessionState(null);
       navigate(`/sessions/${restoredSession.id}/chat`);
-    },
-  });
-
-  const pauseSessionMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => updateSession(id, { status: "paused" }),
-    onSuccess: (updatedSession) => {
-      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
-        upsertSession(currentValue, updatedSession),
-      );
     },
   });
 
@@ -958,7 +826,7 @@ export function SessionWorkspaceWorkbench() {
         branch_id: branchId,
       }),
     onSuccess: async (_response, variables) => {
-      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
     },
   });
 
@@ -971,7 +839,7 @@ export function SessionWorkspaceWorkbench() {
       messageId: string;
     }) => forkSessionMessage(targetSessionId, messageId),
     onSuccess: async (_response, variables) => {
-      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
     },
   });
 
@@ -989,11 +857,11 @@ export function SessionWorkspaceWorkbench() {
         branch_id: branchId,
       }),
     onSuccess: async (_response, variables) => {
-      await invalidateWorkflowViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
     },
   });
 
-  const invalidateWorkflowViews = useCallback(
+  const invalidatePrimaryViews = useCallback(
     async (targetSessionId: string, targetRunId: string | null): Promise<void> => {
       const invalidations = [
         queryClient.invalidateQueries({ queryKey: ["conversation", targetSessionId] }),
@@ -1004,10 +872,7 @@ export function SessionWorkspaceWorkbench() {
 
       if (targetRunId) {
         invalidations.push(
-          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId] }),
           queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "graph", "attack"] }),
-          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "export"] }),
-          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "replay"] }),
         );
       }
 
@@ -1015,31 +880,6 @@ export function SessionWorkspaceWorkbench() {
     },
     [queryClient],
   );
-
-  const startWorkflowMutation = useMutation({
-    mutationFn: ({
-      activeSessionId: targetSessionId,
-      templateName,
-    }: {
-      activeSessionId: string;
-      templateName: string | null;
-    }) => startWorkflow({ session_id: targetSessionId, template_name: templateName }),
-    onSuccess: async (workflow) => {
-      setPinnedWorkflowRunId(workflow.id);
-      queryClient.setQueryData<WorkflowRunDetail>(["workflow", workflow.id], workflow);
-      await invalidateWorkflowViews(workflow.session_id, workflow.id);
-    },
-  });
-
-  const advanceWorkflowMutation = useMutation({
-    mutationFn: ({ runId, approve }: { runId: string; approve?: boolean }) =>
-      advanceWorkflow(runId, approve ? { approve: true } : {}),
-    onSuccess: async (workflow) => {
-      setPinnedWorkflowRunId(workflow.id);
-      queryClient.setQueryData<WorkflowRunDetail>(["workflow", workflow.id], workflow);
-      await invalidateWorkflowViews(workflow.session_id, workflow.id);
-    },
-  });
 
   const latestEvent = sessionEvents[sessionEvents.length - 1] ?? null;
 
@@ -1070,25 +910,16 @@ export function SessionWorkspaceWorkbench() {
     }
 
     const refreshTimer = window.setTimeout(() => {
-      void invalidateWorkflowViews(activeSessionId, workflowRunId);
+      void invalidatePrimaryViews(activeSessionId, workflowRunId);
     }, 180);
 
     return () => {
       window.clearTimeout(refreshTimer);
     };
-  }, [activeSessionId, invalidateWorkflowViews, latestEvent, workflowRunId]);
+  }, [activeSessionId, invalidatePrimaryViews, latestEvent, workflowRunId]);
 
   const attackGraph = runAttackGraphQuery.data ?? sessionAttackGraphQuery.data;
   const activeConversation = conversationQuery.data ?? null;
-
-  const workflowNeedsApproval =
-    workflowQuery.data?.status === "needs_approval" ||
-    workflowQuery.data?.state.approval?.required === true;
-
-  const canAdvanceWorkflow =
-    Boolean(workflowRunId) &&
-    workflowQuery.data?.status !== "done" &&
-    workflowQuery.data?.status !== "error";
   const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
   const queuedGenerationCount =
     sessionQueueQuery.data?.queued_generation_count ??
@@ -1132,7 +963,6 @@ export function SessionWorkspaceWorkbench() {
   }
 
   function handleSelectNode(nodeId: string): void {
-    setIsInsightsOpen(true);
     setSelectedAttackNodeId(nodeId);
   }
 
@@ -1165,7 +995,7 @@ export function SessionWorkspaceWorkbench() {
         messageId: sourceMessageId,
         content: trimmed,
       });
-      await invalidateWorkflowViews(activeSession.id, workflowRunId);
+      await invalidatePrimaryViews(activeSession.id, workflowRunId);
     } finally {
       setMessageActionBusyId((currentValue) =>
         currentValue === sourceMessageId ? null : currentValue,
@@ -1281,7 +1111,7 @@ export function SessionWorkspaceWorkbench() {
       />
 
       <section
-        className={`conversation-main-shell workspace-session-shell${activeSession ? " workspace-session-shell-drawer-active" : ""}`}
+        className="conversation-main-shell workspace-session-shell"
       >
         {sessionsQuery.isError ? (
           <section className="conversation-empty-state">
@@ -1327,7 +1157,7 @@ export function SessionWorkspaceWorkbench() {
         ) : activeSession && conversationQuery.isLoading && !activeConversation ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">正在打开对话</p>
-            <p className="conversation-empty-state-copy">消息与工作流状态正在同步。</p>
+            <p className="conversation-empty-state-copy">消息与攻击路径数据正在同步。</p>
           </section>
         ) : activeSession && activeConversation ? (
           <>
@@ -1336,102 +1166,12 @@ export function SessionWorkspaceWorkbench() {
                 <h2 className="conversation-title">
                   {getSessionDisplayTitle(activeSession.title)}
                 </h2>
+                <p className="conversation-copy workspace-session-header-copy">
+                  攻击路径主视图，会话与图谱保持同步更新。
+                </p>
               </div>
 
               <div className="conversation-header-actions workspace-session-header-actions">
-                {(templatesQuery.data?.length ?? 0) > 0 ? (
-                  <label className="workspace-inline-field" aria-label="选择工作流模板">
-                    <select
-                      className="field-input"
-                      value={selectedTemplateName}
-                      onChange={(event) => setSelectedTemplateName(event.target.value)}
-                    >
-                      {(templatesQuery.data ?? []).map((template) => (
-                        <option key={template.name} value={template.name}>
-                          {template.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  disabled={startWorkflowMutation.isPending}
-                  onClick={() => {
-                    void startWorkflowMutation.mutateAsync({
-                      activeSessionId: activeSession.id,
-                      templateName: selectedTemplateName || null,
-                    });
-                  }}
-                >
-                  {startWorkflowMutation.isPending ? "启动中" : workflowRunId ? "重新启动" : "启动工作流"}
-                </button>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  disabled={!canAdvanceWorkflow || workflowNeedsApproval || advanceWorkflowMutation.isPending}
-                  onClick={() => {
-                    if (!workflowRunId) {
-                      return;
-                    }
-                    void advanceWorkflowMutation.mutateAsync({ runId: workflowRunId });
-                  }}
-                >
-                  {advanceWorkflowMutation.isPending ? "推进中" : "推进下一步"}
-                </button>
-                {workflowNeedsApproval ? (
-                  <>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      disabled={!workflowRunId || advanceWorkflowMutation.isPending}
-                      onClick={() => {
-                        if (!workflowRunId) {
-                          return;
-                        }
-                        void advanceWorkflowMutation.mutateAsync({ runId: workflowRunId, approve: true });
-                      }}
-                    >
-                      批准继续
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      disabled={pauseSessionMutation.isPending}
-                      onClick={() => {
-                        void pauseSessionMutation.mutateAsync({ id: activeSession.id });
-                      }}
-                    >
-                      暂停
-                    </button>
-                  </>
-                ) : null}
-                {workflowReplayQuery.data ? (
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => {
-                      downloadJson(`session-${activeSession.id}-replay.json`, workflowReplayQuery.data);
-                    }}
-                  >
-                    回放
-                  </button>
-                ) : null}
-                {workflowExportQuery.data ? (
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => {
-                      downloadJson(`session-${activeSession.id}-export.json`, workflowExportQuery.data);
-                    }}
-                  >
-                    导出
-                  </button>
-                ) : null}
-                <span className="management-status-badge tone-neutral">
-                  {formatWorkflowStatus(workflowQuery.data?.status ?? activeSession.status)}
-                </span>
                 <span className={`connection-pill connection-${connectionState}`}>
                   {getConnectionTone(connectionState)}
                 </span>
@@ -1444,8 +1184,21 @@ export function SessionWorkspaceWorkbench() {
               </section>
             ) : null}
 
-            <section className="workspace-session-grid workspace-session-grid-single">
-              <section className="workspace-session-center-column">
+            <section className="workspace-session-grid workspace-session-grid-attack-main">
+              <section className="workspace-graph-main-column">
+                <AttackGraphWorkbench
+                  graph={attackGraph}
+                  selectedNodeId={selectedAttackNodeId}
+                  actionBusyId={messageActionBusyId}
+                  onSelectNode={handleSelectNode}
+                  onEditNode={handleEditAttackNode}
+                  onRegenerateNode={handleRegenerateAttackNode}
+                  onForkNode={handleForkAttackNode}
+                  onRollbackNode={handleRollbackAttackNode}
+                />
+              </section>
+
+              <section className="workspace-session-side-column">
                 <section className="workspace-message-panel">
                   <ConversationFeed
                     messages={activeConversation.messages}
@@ -1501,55 +1254,6 @@ export function SessionWorkspaceWorkbench() {
                   />
                 </section>
               </section>
-
-              <aside
-                className={`workspace-graph-drawer${isInsightsOpen ? " workspace-graph-drawer-open" : ""}`}
-              >
-                <button
-                  className="workspace-graph-drawer-handle"
-                  type="button"
-                  onClick={() => setIsInsightsOpen((currentValue) => !currentValue)}
-                  aria-expanded={isInsightsOpen}
-                  aria-label={isInsightsOpen ? "收起攻击图抽屉" : "展开攻击图抽屉"}
-                >
-                  <span className="workspace-graph-drawer-handle-indicator" aria-hidden="true" />
-                </button>
-
-                <section className="management-section-card workspace-graph-drawer-panel">
-                  <div className="workspace-graph-drawer-panel-header">
-                    <div>
-                      <strong className="workspace-graph-drawer-title">攻击图工作台</strong>
-                      <p className="workspace-graph-drawer-copy">
-                        统一查看攻击路径、推进工作流，并直接回到对应会话消息。
-                      </p>
-                    </div>
-                    <button
-                      className="workspace-graph-drawer-close"
-                      type="button"
-                      onClick={() => setIsInsightsOpen(false)}
-                      aria-label="关闭攻击图抽屉"
-                    >
-                      关闭
-                    </button>
-                  </div>
-
-                  <div className="workspace-graph-drawer-body">
-                    <AttackGraphWorkbench
-                      graph={attackGraph}
-                      tasks={workflowQuery.data?.tasks ?? []}
-                      replay={workflowReplayQuery.data}
-                      selectedNodeId={selectedAttackNodeId}
-                      actionBusyId={messageActionBusyId}
-                      onSelectNode={handleSelectNode}
-                      onEditNode={handleEditAttackNode}
-                      onRegenerateNode={handleRegenerateAttackNode}
-                      onForkNode={handleForkAttackNode}
-                      onRollbackNode={handleRollbackAttackNode}
-                    />
-                  </div>
-                </section>
-              </aside>
-              
             </section>
           </>
         ) : conversationQuery.isError ? (

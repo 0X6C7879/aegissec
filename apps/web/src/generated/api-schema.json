@@ -2355,6 +2355,48 @@
         }
       }
     },
+    "/api/sessions/{session_id}/graphs/attack": {
+      "get": {
+        "tags": [
+          "graphs"
+        ],
+        "summary": "Get Attack Graph",
+        "operationId": "get_attack_graph_api_sessions__session_id__graphs_attack_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGraphRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workflows/{run_id}/graphs/task": {
       "get": {
         "tags": [
@@ -2446,6 +2488,48 @@
         ],
         "summary": "Get Evidence Graph For Run",
         "operationId": "get_evidence_graph_for_run_api_workflows__run_id__graphs_evidence_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGraphRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{run_id}/graphs/attack": {
+      "get": {
+        "tags": [
+          "graphs"
+        ],
+        "summary": "Get Attack Graph For Run",
+        "operationId": "get_attack_graph_for_run_api_workflows__run_id__graphs_attack_get",
         "parameters": [
           {
             "name": "run_id",
@@ -4448,7 +4532,8 @@
         "enum": [
           "task",
           "evidence",
-          "causal"
+          "causal",
+          "attack"
         ],
         "title": "GraphType"
       },
@@ -7053,6 +7138,40 @@
             "type": "boolean",
             "title": "Approve",
             "default": false
+          },
+          "user_input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Input"
+          },
+          "resume_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Token"
+          },
+          "resolution_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Payload"
           }
         },
         "type": "object",
@@ -7163,6 +7282,9 @@
           "causal_graph": {
             "$ref": "#/components/schemas/SessionGraphRead"
           },
+          "attack_graph": {
+            "$ref": "#/components/schemas/SessionGraphRead"
+          },
           "execution_records": {
             "items": {
               "additionalProperties": true,
@@ -7190,7 +7312,8 @@
           "run",
           "task_graph",
           "evidence_graph",
-          "causal_graph"
+          "causal_graph",
+          "attack_graph"
         ],
         "title": "WorkflowRunExportRead"
       },

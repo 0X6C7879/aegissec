@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from app.agent.context_models import ContextProjection
 from app.agent.token_budget import estimate_token_count
 from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.workspace_state import WorkspaceRetainedState
 
 
 @dataclass(frozen=True)
@@ -33,30 +34,6 @@ class CompactRuntimeThresholds:
             "rough_token_threshold": self.rough_token_threshold,
             "message_count_threshold": self.message_count_threshold,
             "execution_record_threshold": self.execution_record_threshold,
-        }
-
-
-@dataclass(frozen=True)
-class WorkspaceRetainedState:
-    active_stage: str | None
-    active_tasks: tuple[str, ...]
-    latest_turn_directive: str
-    pending_protocol: dict[str, object]
-    active_capability_inventory_summary: str
-    recent_transcript_highlights: tuple[str, ...]
-    selected_project_memory_entries: tuple[str, ...]
-    current_retrieval_focus: dict[str, object]
-
-    def to_state(self) -> dict[str, object]:
-        return {
-            "active_stage": self.active_stage,
-            "active_tasks": list(self.active_tasks),
-            "latest_turn_directive": self.latest_turn_directive,
-            "pending_protocol": dict(self.pending_protocol),
-            "active_capability_inventory_summary": self.active_capability_inventory_summary,
-            "recent_transcript_highlights": list(self.recent_transcript_highlights),
-            "selected_project_memory_entries": list(self.selected_project_memory_entries),
-            "current_retrieval_focus": dict(self.current_retrieval_focus),
         }
 
 

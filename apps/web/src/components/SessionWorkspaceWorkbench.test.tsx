@@ -7,11 +7,9 @@ import { ApiError } from "../lib/api";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraph } from "../types/graphs";
 import type { SessionConversation, SessionQueue, SessionSummary } from "../types/sessions";
-import type { WorkflowRunExport, WorkflowRunReplay } from "../types/workflows";
 import { SessionWorkspaceWorkbench } from "./SessionWorkspaceWorkbench";
 
 const {
-  mockAdvanceWorkflow,
   mockGetAttackGraph,
   mockGetAttackGraphForRun,
   mockCancelGeneration,
@@ -22,20 +20,14 @@ const {
   mockGetRuntimeStatus,
   mockGetSessionConversation,
   mockGetSessionQueue,
-  mockGetWorkflow,
-  mockGetWorkflowExport,
-  mockGetWorkflowReplay,
   mockForkSessionMessage,
   mockListSessions,
-  mockListWorkflowTemplates,
   mockRegenerateSessionMessage,
   mockRollbackSessionMessage,
-  mockStartWorkflow,
   mockUpdateSession,
   mockSendChatMessage,
   mockUseSessionEvents,
 } = vi.hoisted(() => ({
-  mockAdvanceWorkflow: vi.fn(),
   mockGetAttackGraph: vi.fn(),
   mockGetAttackGraphForRun: vi.fn(),
   mockCancelGeneration: vi.fn(),
@@ -46,15 +38,10 @@ const {
   mockGetRuntimeStatus: vi.fn(),
   mockGetSessionConversation: vi.fn(),
   mockGetSessionQueue: vi.fn(),
-  mockGetWorkflow: vi.fn(),
-  mockGetWorkflowExport: vi.fn(),
-  mockGetWorkflowReplay: vi.fn(),
   mockForkSessionMessage: vi.fn(),
   mockListSessions: vi.fn(),
-  mockListWorkflowTemplates: vi.fn(),
   mockRegenerateSessionMessage: vi.fn(),
   mockRollbackSessionMessage: vi.fn(),
-  mockStartWorkflow: vi.fn(),
   mockUpdateSession: vi.fn(),
   mockSendChatMessage: vi.fn(),
   mockUseSessionEvents: vi.fn(),
@@ -65,7 +52,6 @@ vi.mock("../lib/api", async () => {
 
   return {
     ...actual,
-    advanceWorkflow: mockAdvanceWorkflow,
     getAttackGraph: mockGetAttackGraph,
     getAttackGraphForRun: mockGetAttackGraphForRun,
     cancelGeneration: mockCancelGeneration,
@@ -76,15 +62,10 @@ vi.mock("../lib/api", async () => {
     getRuntimeStatus: mockGetRuntimeStatus,
     getSessionConversation: mockGetSessionConversation,
     getSessionQueue: mockGetSessionQueue,
-    getWorkflow: mockGetWorkflow,
-    getWorkflowExport: mockGetWorkflowExport,
-    getWorkflowReplay: mockGetWorkflowReplay,
     forkSessionMessage: mockForkSessionMessage,
     listSessions: mockListSessions,
-    listWorkflowTemplates: mockListWorkflowTemplates,
     regenerateSessionMessage: mockRegenerateSessionMessage,
     rollbackSessionMessage: mockRollbackSessionMessage,
-    startWorkflow: mockStartWorkflow,
     updateSession: mockUpdateSession,
     sendChatMessage: mockSendChatMessage,
   };
@@ -195,70 +176,6 @@ function createAttackNode(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createWorkflow(sessionId: string, runId: string) {
-  return {
-    id: runId,
-    session_id: sessionId,
-    template_name: "authorized-assessment",
-    status: "running",
-    current_stage: "safe_validation",
-    state: {},
-    last_error: null,
-    created_at: "2026-04-01T10:00:00.000Z",
-    updated_at: "2026-04-01T10:00:00.000Z",
-    started_at: "2026-04-01T10:00:00.000Z",
-    ended_at: null,
-    tasks: [],
-  };
-}
-
-function createWorkflowReplay(sessionId: string, runId: string): WorkflowRunReplay {
-  return {
-    run_id: runId,
-    session_id: sessionId,
-    template_name: "authorized-assessment",
-    status: "running",
-    current_stage: "safe_validation",
-    replay_steps: [],
-    replan_records: [],
-    batch_state: {
-      contract_version: "v1",
-      cycle: 0,
-      status: "idle",
-      max_nodes_per_cycle: 1,
-      selected_task_ids: [],
-      executed_task_ids: [],
-      started_at: null,
-      ended_at: null,
-    },
-  };
-}
-
-function createWorkflowExport(sessionId: string, runId: string): WorkflowRunExport {
-  const run = createWorkflow(sessionId, runId);
-  const attackGraph = createGraph(sessionId, { workflow_run_id: runId });
-
-  return {
-    run,
-    task_graph: createGraph(sessionId, { graph_type: "task", workflow_run_id: runId }),
-    evidence_graph: createGraph(sessionId, { graph_type: "evidence", workflow_run_id: runId }),
-    causal_graph: createGraph(sessionId, { graph_type: "causal", workflow_run_id: runId }),
-    attack_graph: attackGraph,
-    execution_records: [],
-    replan_records: [],
-    batch_state: {
-      contract_version: "v1",
-      cycle: 0,
-      status: "idle",
-      max_nodes_per_cycle: 1,
-      selected_task_ids: [],
-      executed_task_ids: [],
-      started_at: null,
-      ended_at: null,
-    },
-  };
-}
-
 function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -319,7 +236,6 @@ describe("SessionWorkspaceWorkbench", () => {
       lastVisitedSessionId: null,
     });
 
-    mockListWorkflowTemplates.mockResolvedValue([]);
     mockGetRuntimeStatus.mockResolvedValue({ recent_runs: [] });
     mockUseSessionEvents.mockReturnValue("closed");
     mockGetSessionConversation.mockImplementation(async (sessionId: string) =>
@@ -328,9 +244,6 @@ describe("SessionWorkspaceWorkbench", () => {
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
     mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
     mockGetAttackGraphForRun.mockResolvedValue(createGraph("session-1"));
-    mockGetWorkflow.mockResolvedValue(createWorkflow("session-1", "run-1"));
-    mockGetWorkflowExport.mockResolvedValue(createWorkflowExport("session-1", "run-1"));
-    mockGetWorkflowReplay.mockResolvedValue(createWorkflowReplay("session-1", "run-1"));
   });
 
   it("recovers when the route session is missing from the current session list", async () => {
@@ -555,10 +468,11 @@ describe("SessionWorkspaceWorkbench", () => {
           "session-1": [
             {
               id: "event-1",
-              session_id: "session-1",
+              sessionId: "session-1",
               type: "message.delta",
               payload: {},
-              created_at: "2026-04-01T10:00:01.000Z",
+              createdAt: "2026-04-01T10:00:01.000Z",
+              summary: "delta",
             },
           ],
         },

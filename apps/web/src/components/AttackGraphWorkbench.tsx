@@ -1,13 +1,10 @@
 import { useMemo, useState } from "react";
 import { formatDateTime } from "../lib/format";
 import type { SessionGraph, SessionGraphEdge, SessionGraphNode } from "../types/graphs";
-import type { WorkflowRunReplay, WorkflowTaskNode } from "../types/workflows";
 import { AttackGraphCanvas } from "./AttackGraphCanvas";
 
 type AttackGraphWorkbenchProps = {
   graph: SessionGraph | undefined;
-  tasks: WorkflowTaskNode[];
-  replay: WorkflowRunReplay | undefined;
   selectedNodeId: string | null;
   actionBusyId: string | null;
   onSelectNode: (nodeId: string) => void;
@@ -69,7 +66,7 @@ function safeJsonSummary(value: unknown): string | null {
   }
 }
 
-function formatTaskStatusLabel(status: string | null): string {
+function formatNodeStatusLabel(status: string | null): string {
   switch (status) {
     case "completed":
     case "done":
@@ -91,7 +88,7 @@ function formatTaskStatusLabel(status: string | null): string {
   }
 }
 
-function getTaskStatusTone(status: string | null): string {
+function getNodeStatusTone(status: string | null): string {
   switch (status) {
     case "completed":
     case "done":
@@ -169,26 +166,15 @@ function getNodeStatus(node: SessionGraphNode): string | null {
   return readString(node.data.status);
 }
 
-function findWorkflowTask(node: SessionGraphNode | null, tasks: WorkflowTaskNode[]): WorkflowTaskNode | null {
-  if (!node) {
-    return null;
-  }
-
-  const taskId = readString(node.data.task_id) ?? readString(node.data.task_node_id) ?? node.id;
-  return tasks.find((task) => task.id === taskId) ?? null;
-}
-
 function buildTimelineItems(
   node: SessionGraphNode | null,
-  workflowTask: WorkflowTaskNode | null,
-  replay: WorkflowRunReplay | undefined,
 ): TimelineItem[] {
   if (!node) {
     return [];
   }
 
   const items: TimelineItem[] = [];
-  const createdAt = readString(workflowTask?.created_at) ?? readString(node.data.created_at);
+  const createdAt = readString(node.data.created_at);
   const startedAt = readString(node.data.started_at);
   const endedAt = readString(node.data.ended_at);
   const updatedAt = readString(node.data.updated_at);
@@ -208,23 +194,6 @@ function buildTimelineItems(
   }
   if (endedAt) {
     items.push({ id: `${node.id}-ended`, label: "结束", value: formatDateTime(endedAt) });
-  }
-
-  const taskId = readString(node.data.task_id) ?? readString(node.data.task_node_id) ?? node.id;
-  const replayStep = replay?.replay_steps.find((step) => step.task_node_id === taskId);
-  if (replayStep?.started_at) {
-    items.push({
-      id: `${node.id}-replay-start`,
-      label: "回放开始",
-      value: formatDateTime(replayStep.started_at),
-    });
-  }
-  if (replayStep?.ended_at) {
-    items.push({
-      id: `${node.id}-replay-end`,
-      label: "回放结束",
-      value: formatDateTime(replayStep.ended_at),
-    });
   }
 
   return items;
@@ -317,8 +286,6 @@ function NodeFieldList({ node }: { node: SessionGraphNode }) {
 
 export function AttackGraphWorkbench({
   graph,
-  tasks,
-  replay,
   selectedNodeId,
   actionBusyId,
   onSelectNode,
@@ -394,31 +361,37 @@ export function AttackGraphWorkbench({
         : [],
     [graph?.edges, selectedNode],
   );
-  const selectedWorkflowTask = useMemo(
-    () => findWorkflowTask(selectedNode, tasks),
-    [selectedNode, tasks],
-  );
-  const timeline = useMemo(
-    () => buildTimelineItems(selectedNode, selectedWorkflowTask, replay),
-    [replay, selectedNode, selectedWorkflowTask],
-  );
+  const timeline = useMemo(() => buildTimelineItems(selectedNode), [selectedNode]);
   const latestNodeId = useMemo(() => getLatestNodeId(visibleNodes), [visibleNodes]);
 
-  if (!graph) {
-    return (
-      <div className="workspace-right-stack" data-testid="attack-graph-workbench">
-        <section className="management-section-card workspace-attack-graph-panel">
-          <div className="management-section-header">
-            <h3 className="management-section-title">攻击图</h3>
-          </div>
-          <div className="management-empty-state session-graph-inline-empty">
-            <p className="management-empty-title">暂无攻击图</p>
-            <p className="management-empty-copy">工作流开始执行后，这里会展示统一的攻击路径画布。</p>
-          </div>
-        </section>
-      </div>
-    );
-  }
+  const graphData: SessionGraph =
+    graph ?? {
+      session_id: "",
+      workflow_run_id: "",
+      graph_type: "attack",
+      current_stage: null,
+      nodes: [],
+      edges: [],
+    };
+
+  const canvasGraph: SessionGraph = {
+    ...graphData,
+    nodes: visibleNodes,
+    edges: visibleEdges,
+  };
+
+  const canvasOverlay =
+    graphData.nodes.length === 0
+      ? {
+          title: "等待攻击路径生成",
+          copy: "攻击图主画布已就绪，当前还没有可展示的攻击节点。",
+        }
+      : visibleNodes.length === 0
+        ? {
+            title: "当前筛选无结果",
+            copy: "调整搜索、状态或节点类型后继续查看攻击路径。",
+          }
+        : null;
 
   const sourceMessageId = selectedNode ? readString(selectedNode.data.source_message_id) : null;
   const branchId = selectedNode ? readString(selectedNode.data.branch_id) : null;
@@ -438,7 +411,7 @@ export function AttackGraphWorkbench({
         <div className="management-section-header">
           <h3 className="management-section-title">攻击图</h3>
           <span className="management-status-badge tone-neutral">
-            {visibleNodes.length} / {graph.nodes.length} 节点
+            {visibleNodes.length} / {graphData.nodes.length} 节点
           </span>
         </div>
 
@@ -458,7 +431,7 @@ export function AttackGraphWorkbench({
             <option value="all">全部状态</option>
             {statusOptions.map((status) => (
               <option key={status} value={status}>
-                {formatTaskStatusLabel(status)}
+                  {formatNodeStatusLabel(status)}
               </option>
             ))}
           </select>
@@ -476,28 +449,23 @@ export function AttackGraphWorkbench({
           </select>
         </div>
 
-        {visibleNodes.length === 0 ? (
-          <div className="management-empty-state session-graph-inline-empty">
-            <p className="management-empty-title">筛选后没有节点</p>
-            <p className="management-empty-copy">调整搜索、状态或类型后重试。</p>
-          </div>
-        ) : (
-          <AttackGraphCanvas
-            graph={{ ...graph, nodes: visibleNodes, edges: visibleEdges }}
-            selectedNodeId={selectedNodeId}
-            latestNodeId={latestNodeId}
-            onSelectNode={onSelectNode}
-          />
-        )}
+        <AttackGraphCanvas
+          graph={canvasGraph}
+          selectedNodeId={selectedNodeId}
+          latestNodeId={latestNodeId}
+          onSelectNode={onSelectNode}
+          overlayTitle={canvasOverlay?.title ?? null}
+          overlayCopy={canvasOverlay?.copy ?? null}
+        />
       </section>
 
       <section className="management-section-card workspace-node-detail-panel">
         <div className="management-section-header">
           <h3 className="management-section-title">节点详情</h3>
           {selectedNode ? (
-            <span className={`management-status-badge ${getTaskStatusTone(getNodeStatus(selectedNode))}`}>
-              {formatTaskStatusLabel(getNodeStatus(selectedNode))}
-            </span>
+                <span className={`management-status-badge ${getNodeStatusTone(getNodeStatus(selectedNode))}`}>
+                  {formatNodeStatusLabel(getNodeStatus(selectedNode))}
+                </span>
           ) : null}
         </div>
 

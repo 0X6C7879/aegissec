@@ -484,6 +484,9 @@ def test_workflow_rehydrates_workspace_state_into_prompting_and_assistant_turn_a
         "continuity"
     ]
     assert cast(dict[str, Any], continuity["workspace_state"])["active_stage"] == "context_collect"
+    workspace_rehydrate = cast(dict[str, Any], continuity["workspace_rehydrate"])
+    assert cast(dict[str, Any], workspace_rehydrate["state"])["active_stage"] == "context_collect"
+    assert "boundary" in cast(dict[str, Any], workspace_rehydrate["provenance"])["used_sources"]
     assistant_turn_input = cast(
         dict[str, Any], cast(dict[str, Any], blocked_state["assistant_turn"])["input"]
     )
@@ -720,6 +723,7 @@ def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_t
     assert cast(dict[str, Any], retrieval_manifest["project"])["scope"] == "project"
     assert cast(dict[str, Any], retrieval_manifest["capability"])["scope"] == "capability_adjacent"
     assert isinstance(cast(dict[str, Any], prompting["continuity"])["workspace_state"], dict)
+    assert isinstance(cast(dict[str, Any], prompting["continuity"])["workspace_rehydrate"], dict)
 
     loop_state = cast(dict[str, Any], state["loop"])
     latest_cycle = cast(list[dict[str, Any]], loop_state["cycles"])[-1]

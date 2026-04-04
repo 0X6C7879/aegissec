@@ -27,6 +27,7 @@ from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.agent.turn_models import NextTurnDirective
 from app.agent.turn_planner import AssistantTurnPlanner
 from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
+from app.agent.workspace_rehydrate import build_rehydrated_workspace, build_workspace_context
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
 from app.services.capabilities import CapabilityFacade
@@ -1452,6 +1453,13 @@ class WorkflowLoopEngine:
             mutable_state=mutable_state,
             cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
         )
+        workspace_rehydrate = build_rehydrated_workspace(
+            mutable_state=mutable_state,
+            compact_runtime=compact_runtime,
+            retrieval=retrieval,
+            capability_inventory_summary=capability_fragments["inventory_summary"],
+        )
+        workspace_context = build_workspace_context(workspace_rehydrate)
         transcript_continuity = self._transcript_runtime.prompt_continuity(mutable_state)
         raw_reinjection_provenance = reinjection.get("provenance")
         reinjection_provenance = (
@@ -1529,10 +1537,7 @@ class WorkflowLoopEngine:
                     if isinstance(latest_resolved_pause, dict)
                     else {}
                 ),
-                "workspace_state": self._workspace_state_continuity(
-                    compact_runtime=compact_runtime,
-                    reinjection=reinjection,
-                ),
+                **workspace_context,
             },
         )
         snapshot = ContextSnapshot(
@@ -1717,20 +1722,6 @@ class WorkflowLoopEngine:
         ]
 
     @staticmethod
-    def _workspace_state_continuity(
-        *, compact_runtime: dict[str, object], reinjection: dict[str, object]
-    ) -> dict[str, object]:
-        fragments = reinjection.get("fragments")
-        if isinstance(fragments, dict) and isinstance(fragments.get("workspace_state"), dict):
-            return dict(fragments.get("workspace_state") or {})
-        retained_live_state = compact_runtime.get("retained_live_state")
-        if isinstance(retained_live_state, dict) and isinstance(
-            retained_live_state.get("workspace_state"), dict
-        ):
-            return dict(retained_live_state.get("workspace_state") or {})
-        return {}
-
-    @staticmethod
     def _history_summary(mutable_state: dict[str, object]) -> str:
         return TranscriptRuntimeService().history_summary(mutable_state)
 
@@ -1794,7 +1785,9 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
+                else "blocked"
+                if resolved_status is WorkflowRunStatus.BLOCKED
+                else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,
