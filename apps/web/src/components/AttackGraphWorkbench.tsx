@@ -160,9 +160,7 @@ function getNodeStatus(node: SessionGraphNode): string | null {
   return readString(node.data.status);
 }
 
-function buildTimelineItems(
-  node: SessionGraphNode | null,
-): TimelineItem[] {
+function buildTimelineItems(node: SessionGraphNode | null): TimelineItem[] {
   if (!node) {
     return [];
   }
@@ -228,8 +226,12 @@ function getLatestNodeId(nodes: SessionGraphNode[]): string | null {
 }
 
 function buildRelationContext(edges: SessionGraphEdge[], nodeId: string): string {
-  const incoming = edges.filter((edge) => edge.target === nodeId).map((edge) => getRelationLabel(edge.relation));
-  const outgoing = edges.filter((edge) => edge.source === nodeId).map((edge) => getRelationLabel(edge.relation));
+  const incoming = edges
+    .filter((edge) => edge.target === nodeId)
+    .map((edge) => getRelationLabel(edge.relation));
+  const outgoing = edges
+    .filter((edge) => edge.source === nodeId)
+    .map((edge) => getRelationLabel(edge.relation));
 
   const parts: string[] = [];
   if (incoming.length > 0) {
@@ -304,15 +306,14 @@ export function AttackGraphWorkbench({
   const timeline = useMemo(() => buildTimelineItems(selectedNode), [selectedNode]);
   const latestNodeId = useMemo(() => getLatestNodeId(graph?.nodes ?? []), [graph?.nodes]);
 
-  const graphData: SessionGraph =
-    graph ?? {
-      session_id: "",
-      workflow_run_id: "",
-      graph_type: "attack",
-      current_stage: null,
-      nodes: [],
-      edges: [],
-    };
+  const graphData: SessionGraph = graph ?? {
+    session_id: "",
+    workflow_run_id: "",
+    graph_type: "attack",
+    current_stage: null,
+    nodes: [],
+    edges: [],
+  };
 
   const canvasGraph: SessionGraph = {
     ...graphData,
@@ -333,10 +334,12 @@ export function AttackGraphWorkbench({
   const generationId = selectedNode ? readString(selectedNode.data.generation_id) : null;
   const isEditable = Boolean(sourceMessageId);
   const relationContext = selectedNode
-    ? readString(selectedNode.data.relation_context) ?? buildRelationContext(selectedEdges, selectedNode.id)
+    ? (readString(selectedNode.data.relation_context) ??
+      buildRelationContext(selectedEdges, selectedNode.id))
     : null;
   const provenanceText = selectedNode
-    ? readStringArray(selectedNode.data.source_graphs).join(" / ") || safeJsonSummary(selectedNode.data.provenance)
+    ? readStringArray(selectedNode.data.source_graphs).join(" / ") ||
+      safeJsonSummary(selectedNode.data.provenance)
     : null;
   const actionBusy = Boolean(sourceMessageId) && actionBusyId === sourceMessageId;
 
@@ -356,24 +359,15 @@ export function AttackGraphWorkbench({
   }, [onSelectNode, selectedNode]);
 
   return (
-    <div className="workspace-right-stack" data-testid="attack-graph-workbench">
-      <section className="management-section-card workspace-attack-graph-panel">
-        <div className="management-section-header">
-          <h3 className="management-section-title">攻击路径主画布</h3>
-          <span className="management-status-badge tone-neutral">
-            {graphData.nodes.length} 节点
-          </span>
-        </div>
-
-        <AttackGraphCanvas
-          graph={canvasGraph}
-          selectedNodeId={selectedNodeId}
-          latestNodeId={latestNodeId}
-          onSelectNode={onSelectNode}
-          overlayTitle={canvasOverlay?.title ?? null}
-          overlayCopy={canvasOverlay?.copy ?? null}
-        />
-      </section>
+    <div className="workspace-attack-graph-workbench" data-testid="attack-graph-workbench">
+      <AttackGraphCanvas
+        graph={canvasGraph}
+        selectedNodeId={selectedNodeId}
+        latestNodeId={latestNodeId}
+        onSelectNode={onSelectNode}
+        overlayTitle={canvasOverlay?.title ?? null}
+        overlayCopy={canvasOverlay?.copy ?? null}
+      />
 
       {selectedNode ? (
         <div className="management-modal-backdrop" role="presentation">
@@ -392,7 +386,9 @@ export function AttackGraphWorkbench({
             <div className="management-modal-header">
               <div>
                 <strong className="management-list-title">{selectedNode.label}</strong>
-                <p className="management-empty-copy">{formatAttackNodeType(selectedNode.node_type)}</p>
+                <p className="management-empty-copy">
+                  {formatAttackNodeType(selectedNode.node_type)}
+                </p>
               </div>
               <button
                 className="button button-secondary"
@@ -409,13 +405,18 @@ export function AttackGraphWorkbench({
                   <p className="session-graph-body-copy">{readString(selectedNode.data.summary)}</p>
                 ) : null}
                 <div className="session-graph-token-row">
-                  <span className={`management-status-badge ${getNodeStatusTone(getNodeStatus(selectedNode))}`}>
+                  <span
+                    className={`management-status-badge ${getNodeStatusTone(getNodeStatus(selectedNode))}`}
+                  >
                     {formatNodeStatusLabel(getNodeStatus(selectedNode))}
                   </span>
-                  {readBoolean(selectedNode.data.current) || readBoolean(selectedNode.data.active) ? (
+                  {readBoolean(selectedNode.data.current) ||
+                  readBoolean(selectedNode.data.active) ? (
                     <span className="management-token-chip">当前节点</span>
                   ) : null}
-                  <span className="management-token-chip">{isEditable ? "可编辑" : "不可编辑"}</span>
+                  <span className="management-token-chip">
+                    {isEditable ? "可编辑" : "不可编辑"}
+                  </span>
                 </div>
               </div>
 
@@ -427,12 +428,44 @@ export function AttackGraphWorkbench({
                   </span>
                 </div>
                 <div className="management-action-row">
-                  <button className="button button-secondary" type="button" disabled={!isEditable || actionBusy} onClick={() => void onEditNode(selectedNode)}>编辑</button>
-                  <button className="button button-secondary" type="button" disabled={!isEditable || actionBusy} onClick={() => void onRegenerateNode(selectedNode)}>重生成</button>
-                  <button className="button button-secondary" type="button" disabled={!isEditable || actionBusy} onClick={() => void onForkNode(selectedNode)}>分叉</button>
-                  <button className="button button-secondary" type="button" disabled={!isEditable || actionBusy} onClick={() => void onRollbackNode(selectedNode)}>回滚</button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={!isEditable || actionBusy}
+                    onClick={() => void onEditNode(selectedNode)}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={!isEditable || actionBusy}
+                    onClick={() => void onRegenerateNode(selectedNode)}
+                  >
+                    重生成
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={!isEditable || actionBusy}
+                    onClick={() => void onForkNode(selectedNode)}
+                  >
+                    分叉
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={!isEditable || actionBusy}
+                    onClick={() => void onRollbackNode(selectedNode)}
+                  >
+                    回滚
+                  </button>
                 </div>
-                {!isEditable ? <p className="management-empty-copy">该节点缺少会话锚点，无法直接操作对话</p> : actionBusy ? <p className="management-empty-copy">正在执行会话动作，请稍候。</p> : null}
+                {!isEditable ? (
+                  <p className="management-empty-copy">该节点缺少会话锚点，无法直接操作对话</p>
+                ) : actionBusy ? (
+                  <p className="management-empty-copy">正在执行会话动作，请稍候。</p>
+                ) : null}
               </div>
 
               <div className="management-subcard workspace-node-detail-section">
@@ -440,15 +473,42 @@ export function AttackGraphWorkbench({
                   <strong className="management-list-title">关键字段</strong>
                 </div>
                 <dl className="session-graph-data-list attack-graph-detail-list">
-                  <div><dt>节点类型</dt><dd>{formatAttackNodeType(selectedNode.node_type)}</dd></div>
-                  <div><dt>节点标签</dt><dd>{selectedNode.label}</dd></div>
-                  <div><dt>摘要</dt><dd>{readString(selectedNode.data.summary) ?? "—"}</dd></div>
-                  <div><dt>source_message_id</dt><dd>{sourceMessageId ?? "—"}</dd></div>
-                  <div><dt>branch_id</dt><dd>{branchId ?? "—"}</dd></div>
-                  <div><dt>generation_id</dt><dd>{generationId ?? "—"}</dd></div>
-                  <div><dt>来源上下文</dt><dd>{provenanceText ?? "—"}</dd></div>
-                  <div><dt>关系上下文</dt><dd>{relationContext ?? "—"}</dd></div>
-                  <div><dt>可编辑</dt><dd>{isEditable ? "是" : "否"}</dd></div>
+                  <div>
+                    <dt>节点类型</dt>
+                    <dd>{formatAttackNodeType(selectedNode.node_type)}</dd>
+                  </div>
+                  <div>
+                    <dt>节点标签</dt>
+                    <dd>{selectedNode.label}</dd>
+                  </div>
+                  <div>
+                    <dt>摘要</dt>
+                    <dd>{readString(selectedNode.data.summary) ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>source_message_id</dt>
+                    <dd>{sourceMessageId ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>branch_id</dt>
+                    <dd>{branchId ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>generation_id</dt>
+                    <dd>{generationId ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>来源上下文</dt>
+                    <dd>{provenanceText ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>关系上下文</dt>
+                    <dd>{relationContext ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>可编辑</dt>
+                    <dd>{isEditable ? "是" : "否"}</dd>
+                  </div>
                 </dl>
               </div>
 
@@ -457,7 +517,9 @@ export function AttackGraphWorkbench({
                   <strong className="management-list-title">节点时间线</strong>
                   <span className="management-status-badge tone-neutral">{timeline.length}</span>
                 </div>
-                {timeline.length === 0 ? <p className="management-empty-copy">当前节点没有可展示的时间线字段。</p> : (
+                {timeline.length === 0 ? (
+                  <p className="management-empty-copy">当前节点没有可展示的时间线字段。</p>
+                ) : (
                   <ul className="workspace-node-timeline-list">
                     {timeline.map((item) => (
                       <li key={item.id} className="workspace-node-timeline-item">
@@ -472,14 +534,22 @@ export function AttackGraphWorkbench({
               <div className="management-subcard workspace-node-detail-section">
                 <div className="management-list-card-header">
                   <strong className="management-list-title">关联边</strong>
-                  <span className="management-status-badge tone-neutral">{selectedEdges.length}</span>
+                  <span className="management-status-badge tone-neutral">
+                    {selectedEdges.length}
+                  </span>
                 </div>
-                {selectedEdges.length === 0 ? <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p> : (
+                {selectedEdges.length === 0 ? (
+                  <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p>
+                ) : (
                   <ul className="management-list">
                     {selectedEdges.map((edge) => (
                       <li key={edge.id} className="management-subcard workspace-graph-edge-card">
-                        <strong className="management-list-title">{edge.source} → {edge.target}</strong>
-                        <span className="management-token-chip">{getRelationLabel(edge.relation)}</span>
+                        <strong className="management-list-title">
+                          {edge.source} → {edge.target}
+                        </strong>
+                        <span className="management-token-chip">
+                          {getRelationLabel(edge.relation)}
+                        </span>
                       </li>
                     ))}
                   </ul>

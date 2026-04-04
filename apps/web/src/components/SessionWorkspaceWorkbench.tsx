@@ -358,11 +358,7 @@ export function SessionWorkspaceWorkbench() {
     }
 
     return null;
-  }, [
-    conversationQuery.error,
-    sessionQueueQuery.error,
-    sessionAttackGraphQuery.error,
-  ]);
+  }, [conversationQuery.error, sessionQueueQuery.error, sessionAttackGraphQuery.error]);
 
   useEffect(() => {
     if (!routeSessionId || !staleSessionNotFoundMessage) {
@@ -859,7 +855,9 @@ export function SessionWorkspaceWorkbench() {
         queryClient.invalidateQueries({ queryKey: ["conversation", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-        queryClient.invalidateQueries({ queryKey: ["session", targetSessionId, "graph", "attack"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["session", targetSessionId, "graph", "attack"],
+        }),
       ];
 
       if (targetRunId) {
@@ -1102,9 +1100,7 @@ export function SessionWorkspaceWorkbench() {
         }}
       />
 
-      <section
-        className="conversation-main-shell workspace-session-shell"
-      >
+      <section className="conversation-main-shell workspace-session-shell">
         {sessionsQuery.isError ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">对话列表暂不可用</p>

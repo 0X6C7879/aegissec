@@ -59,8 +59,10 @@
   --transition-base: 220ms ease;
 }
 
-.workspace-attack-graph-panel {
-  gap: var(--space-4);
+.workspace-attack-graph-workbench {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
 }
 
 .attack-graph-canvas-shell {
@@ -7100,7 +7102,8 @@ a {
 }
 
 .workspace-session-grid-attack-main {
-  grid-template-columns: minmax(0, 1.52fr) minmax(320px, 0.68fr);
+  grid-template-columns: minmax(0, 1.74fr) minmax(300px, 0.56fr);
+  gap: clamp(12px, 1.25vw, 18px);
 }
 
 .workspace-graph-main-column,
@@ -7111,13 +7114,13 @@ a {
 }
 
 .workspace-graph-main-column .workspace-right-stack,
-.workspace-graph-main-column .workspace-attack-graph-panel {
+.workspace-graph-main-column .workspace-attack-graph-workbench {
   min-height: 0;
   height: 100%;
 }
 
 .workspace-graph-main-column .attack-graph-canvas-shell {
-  min-height: min(74vh, 940px);
+  min-height: min(80vh, 1040px);
 }
 
 .workspace-session-summary-grid {
@@ -7137,7 +7140,7 @@ a {
 .workspace-message-panel {
   flex: 1 1 auto;
   min-height: 0;
-  height: min(68vh, 860px);
+  height: min(60vh, 740px);
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
@@ -7541,13 +7544,12 @@ a {
 }
 
 .workspace-message-panel {
-  min-height: min(62vh, 760px);
+  min-height: min(58vh, 720px);
 }
 
 .workspace-message-panel .conversation-feed {
   padding: 24px clamp(18px, 3vw, 28px);
 }
-
 
 .conversation-feed-threaded {
   display: grid;

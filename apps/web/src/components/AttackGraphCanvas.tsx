@@ -268,7 +268,7 @@ function AttackGraphViewportController({
     }
 
     lastAutoFocusSignatureRef.current = autoFocusSignature;
-    const focusNode = focusNodeId ? nodes.find((node) => node.id === focusNodeId) ?? null : null;
+    const focusNode = focusNodeId ? (nodes.find((node) => node.id === focusNodeId) ?? null) : null;
 
     if (!focusNode) {
       fitView({ padding: 0.18, minZoom: 0.55, duration: AUTO_FOCUS_DURATION_MS });
@@ -293,7 +293,15 @@ function AttackGraphViewportController({
       zoom: AUTO_FOCUS_ZOOM,
       duration: AUTO_FOCUS_DURATION_MS,
     });
-  }, [autoFocusSignature, fitView, focusNodeId, hasUserInteracted, nodes, setCenter, viewportInitialized]);
+  }, [
+    autoFocusSignature,
+    fitView,
+    focusNodeId,
+    hasUserInteracted,
+    nodes,
+    setCenter,
+    viewportInitialized,
+  ]);
 
   return null;
 }

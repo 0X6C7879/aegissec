@@ -144,10 +144,7 @@ function createConversation(sessionId: string): SessionConversation {
   };
 }
 
-function createGraph(
-  sessionId: string,
-  overrides: Partial<SessionGraph> = {},
-): SessionGraph {
+function createGraph(sessionId: string, overrides: Partial<SessionGraph> = {}): SessionGraph {
   return {
     session_id: sessionId,
     workflow_run_id: "",
@@ -343,7 +340,7 @@ describe("SessionWorkspaceWorkbench", () => {
       expect(screen.getByTestId("attack-graph-workbench")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("攻击路径主画布")).toBeInTheDocument();
+    expect(screen.queryByText("攻击路径主画布")).not.toBeInTheDocument();
     expect(screen.queryByText("新对话")).not.toBeInTheDocument();
     expect(screen.queryByText("攻击路径主视图，会话与图谱保持同步更新。")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "工作流控制" })).not.toBeInTheDocument();
@@ -481,9 +478,12 @@ describe("SessionWorkspaceWorkbench", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(sessionCallsBefore);
-      expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(runCallsBefore);
-    }, { timeout: 3000 });
+    await waitFor(
+      () => {
+        expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(sessionCallsBefore);
+        expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(runCallsBefore);
+      },
+      { timeout: 3000 },
+    );
   });
 });
