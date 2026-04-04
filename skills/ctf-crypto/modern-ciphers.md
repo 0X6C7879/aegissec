@@ -1,5 +1,7 @@
 # CTF Crypto - Modern Cipher Attacks
 
+Block cipher attacks, MAC forgery, padding oracles, and authenticated encryption. For hash/signature attacks (hash extension, PBKDF2, MD5 collision, Rabin, ECB oracles), see [modern-ciphers-2.md](modern-ciphers-2.md). For stream cipher attacks (LFSR, RC4, XOR), see [stream-ciphers.md](stream-ciphers.md).
+
 ## Table of Contents
 - [AES-CFB-8 Static IV State Forging](#aes-cfb-8-static-iv-state-forging)
 - [ECB Pattern Leakage on Images](#ecb-pattern-leakage-on-images)
@@ -10,12 +12,20 @@
 - [Weak Hash Functions / GF(2) Gaussian Elimination](#weak-hash-functions--gf2-gaussian-elimination)
 - [Affine Cipher over Composite Modulus (Nullcon 2026)](#affine-cipher-over-composite-modulus-nullcon-2026)
 - [AES-GCM with Derived Keys (EHAX 2026)](#aes-gcm-with-derived-keys-ehax-2026)
+- [AES-GCM Nonce Reuse / Forbidden Attack](#aes-gcm-nonce-reuse--forbidden-attack)
 - [Ascon-like Reduced-Round Differential Cryptanalysis (srdnlenCTF 2026)](#ascon-like-reduced-round-differential-cryptanalysis-srdnlenctf-2026)
 - [Custom Linear MAC Forgery (Nullcon 2026)](#custom-linear-mac-forgery-nullcon-2026)
 - [CBC Padding Oracle Attack](#cbc-padding-oracle-attack)
 - [Bleichenbacher / PKCS#1 v1.5 RSA Padding Oracle](#bleichenbacher--pkcs1-v15-rsa-padding-oracle)
 - [Birthday Attack / Meet-in-the-Middle](#birthday-attack--meet-in-the-middle)
-- [LFSR Stream Cipher Attacks](#lfsr-stream-cipher-attacks)
+- [CRC32 Collision-Based Signature Forgery (iCTF 2013)](#crc32-collision-based-signature-forgery-ictf-2013)
+- [AES Key Recovery via Byte-by-Byte Zeroing Oracle (CONFidence CTF 2017)](#aes-key-recovery-via-byte-by-byte-zeroing-oracle-confidence-ctf-2017)
+- [AES-CTR Constant Counter / Repeating Keystream (SHA2017)](#aes-ctr-constant-counter--repeating-keystream-sha2017)
+- [Custom SPN Column-Wise XOR Brute-Force (Hack Dat Kiwi 2017)](#custom-spn-column-wise-xor-brute-force-hack-dat-kiwi-2017)
+- [AES-CTR Bitflip + CRC Linearity Signature Forgery (hxp CTF 2017)](#aes-ctr-bitflip--crc-linearity-signature-forgery-hxp-ctf-2017)
+- [AES-CBC Ciphertext Forging via Error-Message Decryption Oracle (Nuit du Hack CTF 2018)](#aes-cbc-ciphertext-forging-via-error-message-decryption-oracle-nuit-du-hack-ctf-2018)
+
+See also [modern-ciphers-2.md](modern-ciphers-2.md) for CRC32 forgery, Blum-Goldwasser, hash length extension, compression oracle, hash time reversal, OFB invertible RNG, weak key derivation, HMAC-CRC, DES weak keys, SRP bypass, modified AES S-Box, square attack, AES-ECB byte-at-a-time, AES-ECB cut-and-paste, AES-CBC IV bit-flip, Rabin LSB parity oracle, PBKDF2 pre-hash bypass, MD5 multi-collision, custom hash state reversal, and CRC32 brute-force.
 
 ---
 
@@ -67,6 +77,8 @@ new_sig = known_sig XOR block2_of_P1 XOR block2_of_P2
 
 **Important:** Don't forget PKCS#7 padding in calculations! Small bruteforce space? Just try all combinations (e.g., 100 for 2 unknown digits).
 
+**Key insight:** OFB-MAC generates a keystream independent of the plaintext, so knowing one (message, MAC) pair lets you forge MACs for arbitrary messages by XORing the known plaintext blocks out and XORing the new ones in. CBC-MAC does not have this weakness because each block's encryption depends on the previous ciphertext block.
+
 ---
 
 ## Non-Permutation S-box Collision Attack
@@ -83,7 +95,7 @@ See [advanced-math.md](advanced-math.md) for full S-box collision analysis code.
 
 ## LCG Partial Output Recovery (0xFun 2026)
 
-**Known parameters:** If LCG constants (M, A, C) are known and output is `state mod N`, iterate by N through modulus to find state:
+**Known parameters:** If LCG (Linear Congruential Generator) constants (M, A, C) are known and output is `state mod N`, iterate by N through modulus to find state:
 ```python
 # output = state % N, state = (A * prev + C) % M
 for candidate in range(output, M, N):
@@ -101,6 +113,8 @@ for low in range(2**32):
     if (next_state >> 32) == next_observed_upper:
         print(f"Full state: {state}")
 ```
+
+**Key insight:** LCG output truncation (modulo or upper bits only) hides part of the state, but consecutive outputs constrain it. When output is `state mod N`, iterate candidates by N through the modulus. When only upper bits are visible, brute-force the hidden lower bits and validate against the next output.
 
 ---
 
@@ -129,6 +143,8 @@ def solve_gf2(A, b):
         x[c] = Aug[r, -1] ^ sum(Aug[r, c2] * x[c2] for c2 in range(c+1, n)) % 2
     return x
 ```
+
+**Key insight:** Hash functions built from only XOR and rotations (no S-boxes or modular addition) are linear over GF(2). Build the transformation as a binary matrix, then invert it with Gaussian elimination to recover the preimage directly. This breaks any "custom hash" that avoids non-linear operations.
 
 ---
 
@@ -161,6 +177,42 @@ def decrypt_with_derived_key(s_bytes, wrapped_nonce, ciphertext, aes_nonce, tag,
 ```
 
 **Key insight:** When AES-GCM authentication fails (`ValueError: MAC check failed`), the derived key is wrong — usually means the upstream secret recovery was incorrect or endianness is swapped.
+
+---
+
+## AES-GCM Nonce Reuse / Forbidden Attack
+
+AES-GCM (Galois/Counter Mode) combines AES-CTR encryption with a GHASH polynomial authentication tag. Reusing a nonce with the same key is catastrophic -- it enables both plaintext recovery AND authentication key recovery.
+
+**CTR keystream reuse:** Same nonce = same keystream. XOR two ciphertexts to cancel the keystream: `C1 XOR C2 = P1 XOR P2`. With known plaintext in one message, recover the other.
+
+**GHASH authentication key recovery:** The authentication tag is a polynomial evaluation over GF(2^128). Two messages with the same nonce produce two equations in the same authentication key H. XOR the tag polynomials and factor over GF(2^128) to recover H. With H, forge valid tags for arbitrary messages.
+
+```python
+from Crypto.Cipher import AES
+from sage.all import GF, PolynomialRing
+
+# Given: two (ciphertext, tag, nonce) pairs with same nonce
+# Step 1: Recover plaintext via CTR keystream reuse
+keystream = xor(known_plaintext, ciphertext1)
+plaintext2 = xor(keystream, ciphertext2)
+
+# Step 2: Recover GHASH auth key H
+# Construct tag difference polynomial in GF(2^128)
+F = GF(2**128, 'x', modulus=...)  # GCM polynomial
+# T1 XOR T2 = P(H) where P is polynomial from ciphertext difference
+# Factor P(H) = 0 to find H candidates
+# Verify H against known tags
+
+# Step 3: Forge tags for arbitrary messages
+# GHASH(H, aad, ciphertext) computed with recovered H
+```
+
+**Tool:** [nonce-disrespect](https://github.com/nonce-disrespect/nonce-disrespect) automates GHASH key recovery and tag forgery from nonce-reused GCM ciphertexts.
+
+**Short nonce brute-force:** When GCM uses a short nonce (1-4 bytes), brute-force all nonce values if the key is known. AES-GCM with 1-byte nonce = only 256 candidates.
+
+**Key insight:** AES-GCM is a "one-time nonce" scheme -- a single nonce reuse breaks both confidentiality (CTR keystream reuse) AND authenticity (GHASH key recovery). Always check for repeated nonces in GCM challenge traffic.
 
 ---
 
@@ -374,108 +426,140 @@ def meet_in_the_middle(encrypt_fn, decrypt_fn, plaintext, ciphertext, keyspace):
 
 ---
 
-## LFSR Stream Cipher Attacks
+## CRC32 Collision-Based Signature Forgery (iCTF 2013)
 
-Linear Feedback Shift Registers generate keystreams from an initial state and feedback polynomial. Common in CTF crypto challenges and lightweight/custom ciphers.
+**Pattern:** CRC32 is linear — appending 4 carefully chosen bytes to any message produces a target CRC32 value, enabling signature forgery without knowing the secret key.
 
-**Detection:** Look for bit-level operations (XOR, shift, AND with tap mask), short repeating keystreams, or challenge descriptions mentioning "stream cipher", "LFSR", "shift register", or "linear recurrence".
-
-### Berlekamp-Massey Algorithm
-
-**Pattern:** Given a portion of known keystream (from known plaintext XOR), recover the minimal LFSR that generates it. Once you have the feedback polynomial and state, predict all future (and past) output.
-
-**Key insight:** Berlekamp-Massey finds the shortest LFSR producing a given sequence in O(n^2). If you have 2L consecutive keystream bits (where L is the LFSR length), you can fully recover the LFSR.
+**Key insight:** `CRC32(msg || secret)` is not a secure MAC. Given any signed response `(msg, sig)`, compute 4 suffix bytes that force `CRC32(forged_msg || suffix || secret) == target_sig`. The linearity of CRC32 means the suffix computation is deterministic and instant.
 
 ```python
-from sage.all import *
+import struct, binascii
 
-# Known keystream bits (from known plaintext XOR ciphertext)
-keystream = [1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1]
-
-# Berlekamp-Massey in SageMath
-F = GF(2)
-seq = [F(b) for b in keystream]
-R = berlekamp_massey(seq)  # Returns the feedback polynomial
-print(f"LFSR polynomial: {R}")
-print(f"LFSR length: {R.degree()}")
-
-# Recover initial state from first L bits
-L = R.degree()
-state = keystream[:L]
-
-# Generate future keystream
-def lfsr_next(state, taps):
-    """taps = list of tap positions from polynomial"""
-    new_bit = 0
-    for t in taps:
-        new_bit ^= state[t]
-    return state[1:] + [new_bit]
+def crc32_forge(data, target_crc):
+    """Append 4 bytes to data so CRC32(data + suffix) == target_crc"""
+    current = binascii.crc32(data) & 0xFFFFFFFF
+    # CRC32 polynomial table lookup to find suffix bytes
+    # that transform current CRC into target_crc
+    suffix = b''
+    crc = target_crc ^ 0xFFFFFFFF
+    for _ in range(4):
+        byte = (crc & 0xFF)
+        crc = (crc >> 8)
+        suffix = bytes([byte]) + suffix
+    return data + suffix  # Simplified — full implementation requires polynomial division
 ```
 
-### Correlation Attack
+**When to use:** Any protocol using CRC32 as a message authentication code (MAC). CRC32 is a checksum, not a cryptographic hash — it provides no integrity guarantees against adversarial modification.
 
-**Pattern:** Combined LFSR generator (multiple LFSRs combined through a nonlinear function). If the combining function has correlation bias toward one LFSR's output, attack that LFSR independently.
+---
 
-**Key insight:** If `P(output = LFSR_i output) > 0.5`, brute-force LFSR_i's initial state (2^L candidates for length-L LFSR) and check correlation with known keystream. Much faster than brute-forcing the full combined state.
+## AES Key Recovery via Byte-by-Byte Zeroing Oracle (CONFidence CTF 2017)
+
+**Pattern:** When a service allows selective zeroing of key bytes (e.g., via integer overflow in key slot indexing), recover the full AES key by testing one byte at a time.
 
 ```python
-# Correlation attack on a single biased LFSR
-def correlation_attack(keystream_bits, lfsr_length, taps, threshold=0.6):
-    """Try all 2^L initial states, keep those with high correlation"""
-    best_corr, best_state = 0, None
-    for seed in range(2**lfsr_length):
-        state = [(seed >> i) & 1 for i in range(lfsr_length)]
-        matches = 0
-        s = state[:]
-        for i, bit in enumerate(keystream_bits):
-            if s[0] == bit:
-                matches += 1
-            s = lfsr_next(s, taps)
-        corr = matches / len(keystream_bits)
-        if corr > best_corr:
-            best_corr, best_state = corr, seed
-    return best_state, best_corr
+# Service has key slots and a "regenerate" function with integer overflow
+# offset = index * ENTRY_SIZE wraps around, allowing arbitrary byte zeroing
+
+# Strategy: zero bytes progressively, brute-force each unknown byte
+for byte_pos in range(16):
+    # Zero all bytes EXCEPT byte_pos (by overflowing index calculation)
+    zero_index = (target_offset * modinv(ENTRY_SIZE, 2**32)) % 2**32
+    regenerate(zero_index)
+
+    # Key is now: [0,0,...,key[byte_pos],...,0,0]
+    # Brute-force the single non-zero byte (256 possibilities)
+    known_ct = encrypt(known_pt)
+    for guess in range(256):
+        test_key = bytes([0]*byte_pos + [guess] + [0]*(15-byte_pos))
+        if AES.new(test_key, AES.MODE_ECB).encrypt(known_pt) == known_ct:
+            recovered_key[byte_pos] = guess
+            break
 ```
 
-### Known-Plaintext on LFSR Keystream
+**Key insight:** Integer overflow in `index * ENTRY_SIZE` calculations can target arbitrary memory offsets. By selectively zeroing all-but-one key bytes, the key becomes trivially brute-forceable one byte at a time (256 attempts per byte, 4096 total vs 2^128 for the full key).
 
-**Pattern:** XOR known plaintext with ciphertext to get keystream. With >=2L keystream bits, solve the linear system directly.
+**References:** CONFidence CTF 2017
+
+---
+
+## AES-CTR Constant Counter / Repeating Keystream (SHA2017)
+
+**Pattern:** When an AES-CTR implementation uses `counter=lambda: secret` (a constant function), the counter never increments. AES-CTR with a fixed counter produces the same 16-byte block on every call — equivalent to Vigenère cipher at the byte level with a 16-byte repeating key.
 
 ```python
-import numpy as np
-
-# Given 2L keystream bits, solve for L-bit state + L feedback taps
-# Keystream relation: k[i+L] = c[0]*k[i] + c[1]*k[i+1] + ... + c[L-1]*k[i+L-1] (mod 2)
-def solve_lfsr(keystream, L):
-    """Solve for LFSR feedback from 2L keystream bits over GF(2)"""
-    # Build matrix: each row is [k[i], k[i+1], ..., k[i+L-1]] = k[i+L]
-    A = []
-    b = []
-    for i in range(L):
-        A.append(keystream[i:i+L])
-        b.append(keystream[i+L])
-    # Solve over GF(2) using SageMath
-    from sage.all import matrix, vector, GF
-    M = matrix(GF(2), A)
-    v = vector(GF(2), b)
-    coeffs = M.solve_right(v)
-    return list(coeffs)
+# Constant counter makes CTR equivalent to repeating-key XOR
+key_byte = ciphertext_byte ^ known_plaintext_byte
+# Apply recovered key bytes across all 16-byte-aligned blocks
+for i, ct_byte in enumerate(ciphertext):
+    plaintext_byte = ct_byte ^ keystream[i % 16]
 ```
 
-### Galois vs Fibonacci LFSR
+**Exploit using file format headers:**
+1. Identify the file format from context (e.g., `%PDF-1.` for PDF files)
+2. XOR the known header bytes against the ciphertext to recover `keystream[0:len(header)]`
+3. Iteratively extend: use recovered plaintext to guess the next structural keyword (`endobj`, `/Page`, `stream`, etc.), verify XOR produces consistent ASCII, and extend the keystream further
+4. Tool: `otp_pwn` supports interactive block-aligned crib-dragging for this workflow
 
-Two equivalent representations — same keystream, different wiring:
-- **Fibonacci:** feedback from multiple taps XOR'd into last position (most common in CTFs)
-- **Galois:** feedback distributed across the register (faster in hardware)
+**Key insight:** Constant AES-CTR counter = repeating 16-byte Vigenère key. Known file format magic bytes bootstrap iterative key recovery via crib-dragging. Any known-plaintext at block-aligned positions reveals the full keystream byte at that position.
 
-Conversion: Galois polynomial is the reciprocal of Fibonacci polynomial. Most CTF tools assume Fibonacci form.
+**References:** SHA2017
 
-### Common LFSR Lengths and Polynomials
+---
 
-| Bits | Common primitive polynomial | Period |
-|------|---------------------------|--------|
-| 16 | x^16 + x^14 + x^13 + x^11 + 1 | 65535 |
-| 32 | x^32 + x^22 + x^2 + x + 1 | 2^32 - 1 |
-| 64 | x^64 + x^4 + x^3 + x + 1 | 2^64 - 1 |
+## Custom SPN Column-Wise XOR Brute-Force (Hack Dat Kiwi 2017)
 
-**Maximal-length LFSR:** Primitive polynomial -> period = 2^L - 1 (visits all nonzero states).
+**Pattern:** SPN (Substitution-Permutation Network) cipher with a seed-based sbox/pbox and a final XOR key layer. If the XOR key is applied column-wise (each key byte affects one column position independently), each key byte can be brute-forced separately using printable-text consistency as an oracle.
+
+**Attack:**
+1. Collect multiple ciphertext blocks (same key, different plaintexts)
+2. For each column position `c` (0-15), try all 256 candidate key bytes `k`
+3. Apply the inverse pbox and sbox to undo the SPN rounds, then XOR with candidate `k`
+4. Keep only candidates where ALL blocks produce printable ASCII at position `c`
+5. The intersection of valid candidates across blocks recovers each key byte
+
+**Multi-round variant:** Peel one round at a time. After recovering the outermost XOR key, apply the inverse pbox/sbox for that round using the recovered bytes, then repeat for the next inner round.
+
+**Seed-based permutation dependency:** When sbox and pbox are generated from a shared seed, recovering partial key bytes constrains the seed (and thus the remaining permutation entries). Use this to propagate partial solutions across columns with cross-column dependencies.
+
+**Key insight:** Column-aligned XOR layers in SPN ciphers allow independent per-byte brute-force using printable-text consistency as an oracle. Cross-column key reuse from seed-based permutations propagates partial solutions.
+
+**References:** Hack Dat Kiwi 2017
+
+---
+
+## AES-CTR Bitflip + CRC Linearity Signature Forgery (hxp CTF 2017)
+
+**Pattern:** AES-CTR allows targeted plaintext modification via XOR. CRC is linear w.r.t. XOR: `CRC(A ^ B) = CRC(A) ^ CRC(B) ^ CRC(zeros)`. Flip `{admin: 0}` to `{admin: 1}` in ciphertext and fix the encrypted CRC:
+
+```python
+import binascii
+# X = desired_plaintext XOR original_plaintext (flip bit)
+X = b'\x00' * offset + b'\x01' + b'\x00' * remaining
+crc_diff = binascii.crc32(X) ^ binascii.crc32(b'\x00' * len(X))
+# New ciphertext = old_ciphertext XOR X (for data portion)
+# New CRC ciphertext = old_CRC_ciphertext XOR pack(crc_diff)
+```
+
+**Key insight:** CRC is GF(2)-linear -- XOR-based modifications to plaintext produce predictable CRC changes without knowing the key. When a system uses AES-CTR for confidentiality + CRC for integrity (instead of a proper MAC like HMAC or GCM), you can flip arbitrary plaintext bits and fix the CRC simultaneously. This is a fundamental failure of using CRC as a MAC: CRC detects random errors but provides zero protection against adversarial modification under stream ciphers.
+
+**References:** hxp CTF 2017
+
+---
+
+### AES-CBC Ciphertext Forging via Error-Message Decryption Oracle (Nuit du Hack CTF 2018)
+
+**Pattern:** Server decrypts AES-CBC cookie and displays decrypted value in error messages. Send zero blocks, read decrypted intermediates from error, XOR with desired plaintext to forge ciphertext block-by-block. Use forged ciphertext to deliver blind SQLi payloads through encrypted cookies. (Nuit du Hack CTF 2018)
+
+```python
+# Forge ciphertext for arbitrary plaintext
+for i in range(blocks):
+    payload = b'\x00' * 16 * (blocks - 1) + last_forged_block
+    response = send_payload(payload)
+    decrypted = parse_error_message(response)  # server leaks decrypted bytes
+    intermediate = decrypted[-16:]
+    new_block = xor(target_plaintext_block, intermediate)
+    forged_blocks.append(new_block)
+```
+
+**Key insight:** When the server reveals decrypted ciphertext in error messages, you can forge arbitrary plaintext without knowing the key. Send zero IV blocks to learn the intermediate state, then XOR with desired plaintext to produce the correct ciphertext. Build block-by-block from last to first.

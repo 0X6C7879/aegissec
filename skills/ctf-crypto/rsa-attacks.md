@@ -13,11 +13,22 @@
 - [Manger's RSA Padding Oracle Attack (Nullcon 2026)](#mangers-rsa-padding-oracle-attack-nullcon-2026)
 - [Manger's Attack on RSA-OAEP via Timing Oracle (HTB Early Bird)](#mangers-attack-on-rsa-oaep-via-timing-oracle-htb-early-bird)
 - [Polynomial Hash with Trivial Root (Pragyan 2026)](#polynomial-hash-with-trivial-root-pragyan-2026)
-- [Polynomial CRT in GF(2)[x] (Nullcon 2026)](#polynomial-crt-in-gf2x-nullcon-2026)
+- [Polynomial CRT in GF(2)\[x\] (Nullcon 2026)](#polynomial-crt-in-gf2x-nullcon-2026)
 - [Affine Cipher over Non-Prime Modulus (Nullcon 2026)](#affine-cipher-over-non-prime-modulus-nullcon-2026)
-- [RSA p=q Validation Bypass (BearCatCTF 2026)](#rsa-pq-validation-bypass-bearcatctf-2026)
-- [RSA Cube Root CRT when gcd(e, phi) > 1 (BearCatCTF 2026)](#rsa-cube-root-crt-when-gcde-phi--1-bearcatctf-2026)
-- [Factoring n from Multiple of phi(n) (BearCatCTF 2026)](#factoring-n-from-multiple-of-phin-bearcatctf-2026)
+- [Hastad Broadcast Attack with Linear Padding -- Coppersmith (PlaidCTF 2017)](#hastad-broadcast-attack-with-linear-padding----coppersmith-plaidctf-2017)
+- [Franklin-Reiter Related Message Attack on RSA e=3 (N1CTF 2018)](#franklin-reiter-related-message-attack-on-rsa-e3-n1ctf-2018)
+- [Coppersmith Attack on Linearly-Related RSA Primes (ASIS CTF 2018)](#coppersmith-attack-on-linearly-related-rsa-primes-asis-ctf-2018)
+- [rsa-attacks-2.md: RSA p=q Validation Bypass (BearCatCTF 2026)](rsa-attacks-2.md#rsa-pq-validation-bypass-bearcatctf-2026)
+- [rsa-attacks-2.md: RSA Cube Root CRT when gcd(e, phi) > 1 (BearCatCTF 2026)](rsa-attacks-2.md#rsa-cube-root-crt-when-gcde-phi-1-bearcatctf-2026)
+- [rsa-attacks-2.md: Factoring n from Multiple of phi(n) (BearCatCTF 2026)](rsa-attacks-2.md#factoring-n-from-multiple-of-phin-bearcatctf-2026)
+- [rsa-attacks-2.md: RSA Signature Forgery via Multiplicative Homomorphism (MMA CTF 2015)](rsa-attacks-2.md#rsa-signature-forgery-via-multiplicative-homomorphism-mma-ctf-2015)
+- [rsa-attacks-2.md: Weak RSA Key Generation via Base Representation (Sharif CTF 2016)](rsa-attacks-2.md#weak-rsa-key-generation-via-base-representation-sharif-ctf-2016)
+- [rsa-attacks-2.md: RSA with gcd(e, phi(n)) > 1 (CSAW 2015)](rsa-attacks-2.md#rsa-with-gcde-phin-1-csaw-2015)
+- [rsa-attacks-2.md: Batch GCD for Shared Prime Factoring (BSidesSF 2025)](rsa-attacks-2.md#batch-gcd-for-shared-prime-factoring-bsidessf-2025)
+- [rsa-attacks-2.md: RSA Partial Key Recovery from dp dq qinv (0CTF 2016)](rsa-attacks-2.md#rsa-partial-key-recovery-from-dp-dq-qinv-0ctf-2016)
+- [rsa-attacks-2.md: RSA-CRT Fault Attack / Bit-Flip Recovery (CSAW CTF 2016)](rsa-attacks-2.md#rsa-crt-fault-attack-bit-flip-recovery-csaw-ctf-2016)
+- [rsa-attacks-2.md: RSA Homomorphic Decryption Oracle Bypass (ECTF 2016)](rsa-attacks-2.md#rsa-homomorphic-decryption-oracle-bypass-ectf-2016)
+- [rsa-attacks-2.md: RSA with Small Prime Factors and CRT Decomposition (Hack The Vote 2016)](rsa-attacks-2.md#rsa-with-small-prime-factors-and-crt-decomposition-hack-the-vote-2016)
 
 ---
 
@@ -196,6 +207,71 @@ print(bytes.fromhex(hex(m)[2:]))
 ```
 
 **Key insight:** CRT reconstructs `m^e` exactly (no modular reduction) because `m < min(n_i)` and therefore `m^e < n_1 * n_2 * ... * n_e`. Taking the integer eth root recovers `m`.
+
+---
+
+## Hastad Broadcast Attack with Linear Padding -- Coppersmith (PlaidCTF 2017)
+
+**Pattern:** Extension of Hastad's broadcast attack when each recipient applies a known linear transform `c_i = (a_i * m + b_i)^e mod n_i` before encryption.
+
+```python
+# Standard Hastad requires identical plaintext
+# With linear padding: each ciphertext encrypts a_i*m + b_i
+# Use CRT + Coppersmith's small_roots on the resulting polynomial
+
+from sage.all import *
+# Combine via CRT
+N = prod(n_values)
+T = [crt_coefficient(i, n_values) for i in range(e)]
+
+P = PolynomialRing(Zmod(N), 'x')
+x = P.gen()
+poly = sum(T[i] * ((a[i]*x + b[i])**e - c[i]) for i in range(e))
+poly = poly.monic()
+
+# Coppersmith's method finds small root
+roots = poly.small_roots(epsilon=1/30)
+flag = int(roots[0])
+```
+
+**Key insight:** When the same message is encrypted with `e` different moduli but each applies a known affine transform `a_i * m + b_i`, CRT combines the congruences into a single polynomial of degree `e` over `Z/NZ`. Coppersmith's method recovers `m` as a small root, generalizing Hastad's attack beyond identical plaintexts.
+
+**References:** PlaidCTF 2017
+
+---
+
+### Franklin-Reiter Related Message Attack on RSA e=3 (N1CTF 2018)
+
+**Pattern:** When server encrypts `m+padding` where `padding = sha256(user_input)` and `e=3`, two ciphertexts with known padding difference allow polynomial GCD in `Zmod(n)` to recover `m`. (N1CTF 2018)
+
+```python
+# SageMath
+def franklin_reiter(n, pad1, pad2, c1, c2):
+    R.<X> = PolynomialRing(Zmod(n))
+    f1 = (X + pad1)^3 - c1
+    f2 = (X + pad2)^3 - c2
+    return -gcd(f1, f2).coefficients()[0]
+```
+
+**Key insight:** With RSA e=3, if the same message `m` is encrypted with two known affine transformations (`m+pad1`, `m+pad2`), polynomial GCD over `Zmod(n)` recovers `m` directly. Works whenever the padding difference is known, even without knowing the full padding.
+
+---
+
+### Coppersmith Attack on Linearly-Related RSA Primes (ASIS CTF 2018)
+
+**Pattern:** When RSA primes have a near-linear relation `q ~ 4p`, approximate `q` from `sqrt(4*n)`, then use Coppersmith's `small_roots` to find the error term. (ASIS CTF 2018)
+
+```python
+# SageMath
+qbar = isqrt(4 * n)
+R.<x> = PolynomialRing(Zmod(n))
+f = x + qbar
+roots = f.small_roots(X=2^200, beta=0.5)  # find small error term
+q = qbar + int(roots[0])
+p = n // q
+```
+
+**Key insight:** When `q ~ k*p` for known `k`, then `q ~ sqrt(k*n)`. The difference between `q` and this approximation is small enough for Coppersmith's method. This generalizes Fermat factorization to non-consecutive primes with known ratio.
 
 ---
 
@@ -408,109 +484,4 @@ See [advanced-math.md](advanced-math.md) for GF(2)[x] polynomial arithmetic and 
 
 See [advanced-math.md](advanced-math.md) for CRT approach and Gauss-Jordan implementation.
 
----
-
-## RSA p=q Validation Bypass (BearCatCTF 2026)
-
-**Pattern (Pickme):** Server validates user-submitted RSA key (checks `n`, `e`, `d`, `p*q=n`, `e*d ≡ 1 mod phi`), encrypts the flag, then tries test decryption. If decryption fails, leaks ciphertext in error message.
-
-**Exploit:** Set `p = q`. The server computes `phi = (p-1)*(q-1) = (p-1)^2` (incorrect — real totient of `p^2` is `p*(p-1)`). All validation checks pass, but decryption with the wrong `d` fails, leaking the ciphertext.
-
-```python
-from Crypto.Util.number import getPrime, inverse
-
-p = getPrime(512)
-q = p  # p = q!
-n = p * q  # = p^2
-e = 65537
-wrong_phi = (p - 1) * (q - 1)  # = (p-1)^2
-d = inverse(e, wrong_phi)  # passes server validation
-
-# Server encrypts flag with our key, test decryption fails → leaks ciphertext c
-# Decrypt with correct totient:
-real_phi = p * (p - 1)
-real_d = inverse(e, real_phi)
-flag = pow(c, real_d, n)
-```
-
-**Key insight:** `phi(p^2) = p*(p-1)`, NOT `(p-1)^2`. When a server validates RSA parameters but uses `(p-1)*(q-1)` without checking `p != q`, setting `p=q` creates a working key that the server will miscompute the private exponent for, causing decryption failure and error-path data leakage.
-
----
-
-## RSA Cube Root CRT when gcd(e, phi) > 1 (BearCatCTF 2026)
-
-**Pattern (Kidd's Crypto):** RSA with `e=3`, modulus composed of many small primes all ≡ 1 (mod 3). Since each `p-1` is divisible by 3, `gcd(e, phi(n)) = 3^k` and the standard modular inverse `d = e^-1 mod phi` doesn't exist.
-
-**Solution:** Compute cube roots per-prime via CRT:
-```python
-from sympy.ntheory.residues import nthroot_mod
-from sympy.ntheory.modular import crt
-
-primes = [p1, p2, ..., p13]  # All ≡ 1 mod 3
-
-# For each prime, find all 3 cube roots of c mod p
-roots_per_prime = []
-for p in primes:
-    roots = nthroot_mod(c % p, 3, p, all_roots=True)
-    roots_per_prime.append(roots)
-
-# Try all 3^13 = 1,594,323 combinations
-from itertools import product
-for combo in product(*roots_per_prime):
-    result, mod = crt(primes, list(combo))
-    try:
-        text = long_to_bytes(result).decode('ascii')
-        if text.isprintable():
-            print(f"Flag: {text}")
-            break
-    except:
-        continue
-```
-
-**Key insight:** When `gcd(e, phi(n)) > 1`, standard RSA decryption fails. Factor `n`, compute eth roots modulo each prime separately (each prime ≡ 1 mod e gives `e` roots), then enumerate all CRT combinations. Feasible when the number of primes is small (3^13 ≈ 1.6M combinations).
-
----
-
-## Factoring n from Multiple of phi(n) (BearCatCTF 2026)
-
-**Pattern (Twisted Pair):** Given RSA `n` and a leaked pair `(re, rd)` where `re * rd ≡ 1 (mod k*phi(n))`. The value `re*rd - 1` is a multiple of `phi(n)`, enabling probabilistic factoring.
-
-```python
-import random
-from math import gcd
-
-def factor_from_phi_multiple(n, phi_multiple):
-    """Factor n given any multiple of phi(n) using Miller-Rabin variant."""
-    # Write phi_multiple = 2^s * d where d is odd
-    s, d = 0, phi_multiple
-    while d % 2 == 0:
-        s += 1
-        d //= 2
-
-    for _ in range(100):  # 100 attempts
-        a = random.randrange(2, n - 1)
-        x = pow(a, d, n)
-        if x == 1 or x == n - 1:
-            continue
-        for _ in range(s - 1):
-            prev = x
-            x = pow(x, 2, n)
-            if x == n - 1:
-                break
-            if x == 1:
-                # prev is non-trivial square root of 1
-                p = gcd(prev - 1, n)
-                if 1 < p < n:
-                    return p, n // p
-        # Check final
-        if x != n - 1:
-            p = gcd(x - 1, n)
-            if 1 < p < n:
-                return p, n // p
-    return None
-
-phi_mult = re * rd - 1
-p, q = factor_from_phi_multiple(n, phi_mult)
-```
-
-**Key insight:** Any multiple of `phi(n)` — not just `phi(n)` itself — enables factoring via the Miller-Rabin square root technique. If a server leaks `e*d` for any key pair, or if `re*rd - 1` is given, compute `gcd(a^(m/2) - 1, n)` for random `a` values. Succeeds with probability ≥ 1/2 per attempt.
+See also: [rsa-attacks-2.md](rsa-attacks-2.md) for specialized RSA techniques (p=q bypass, cube root CRT, phi(n) multiple factoring, signature forgery, weak keygen, batch GCD, partial key recovery, CRT fault attack, homomorphic bypass).

@@ -11,6 +11,16 @@
 - [Brotli Decompression Bomb Seam Analysis (BearCatCTF 2026)](#brotli-decompression-bomb-seam-analysis-bearcatctf-2026)
 - [SMB RID Recycling via LSARPC (Midnight 2026)](#smb-rid-recycling-via-lsarpc-midnight-2026)
 - [Timeroasting / MS-SNTP Hash Extraction (Midnight 2026)](#timeroasting--ms-sntp-hash-extraction-midnight-2026)
+- [ICMP Payload Steganography with Byte Rotation (HackIM 2016)](#icmp-payload-steganography-with-byte-rotation-hackim-2016)
+- [Packet Reconstruction via Checksum Validation (Break In 2016)](#packet-reconstruction-via-checksum-validation-break-in-2016)
+- [USB HID Keyboard Capture Decoding (EKOPARTY CTF 2016)](#usb-hid-keyboard-capture-decoding-ekoparty-ctf-2016)
+- [dnscat2 Traffic Reassembly from DNS PCAP (BSidesSF 2017)](#dnscat2-traffic-reassembly-from-dns-pcap-bsidessf-2017)
+- [USB Keyboard LED Morse Code Exfiltration (BITSCTF 2017)](#usb-keyboard-led-morse-code-exfiltration-bitsctf-2017)
+- [Unreferenced PDF Objects with Hidden Pages (SharifCTF 7 2016)](#unreferenced-pdf-objects-with-hidden-pages-sharifctf-7-2016)
+- [RDP Session Decryption via Extracted PKCS12 Key (HITB 2017)](#rdp-session-decryption-via-extracted-pkcs12-key-hitb-2017)
+- [USB HID Keyboard Arrow Key Navigation Tracking (HackIT 2017)](#usb-hid-keyboard-arrow-key-navigation-tracking-hackit-2017)
+- [RADIUS Shared Secret Cracking (UConn CyberSEED 2017)](#radius-shared-secret-cracking-uconn-cyberseed-2017)
+- [RC4 Stream Identification in Shellcode PCAP (CODE BLUE 2017)](#rc4-stream-identification-in-shellcode-pcap-code-blue-2017)
 
 ---
 
@@ -50,6 +60,7 @@ print(data.decode(errors='replace'))
 **Key insight:** When identical packets appear on a single interface with only two practical interval values, it's almost certainly binary encoding via timing. The content is noise — the signal is in the gaps. Filter by interface and count unique intervals first.
 
 **Scale tip:** Large PCAPs (millions of packets) often have the signal in a tiny subset. Triage with `tshark -q -z io,phs` to find which interface has the fewest packets — that's likely the data carrier.
+
 ---
 
 ## USB HID Mouse/Pen Drawing Recovery (EHAX 2026)
@@ -352,7 +363,7 @@ result = dec.process(data[seam_offset:seam_offset+block_size])
 
 ## SMB RID Recycling via LSARPC (Midnight 2026)
 
-**Pattern (UntilTime):** PCAP with SMB2 authentication followed by RPC calls over `\pipe\lsarpc`. The attacker enumerates Active Directory accounts by iterating RIDs through LSARPC functions.
+**Pattern (UntilTime):** PCAP with SMB2 authentication followed by RPC calls over `\pipe\lsarpc`. The attacker enumerates Active Directory accounts by iterating RIDs (Relative Identifiers) through LSARPC functions.
 
 **Identification:** SMB2 session setup with multiple authentication attempts (null session, Guest, random username), followed by RPC bind to LSARPC and repeated `LsaLookupSids` calls with incrementing RIDs.
 
@@ -443,6 +454,324 @@ hashcat -m 31300 -a 0 -O hashes.txt rockyou.txt --username
 3. Send MS-SNTP requests with discovered RIDs
 4. Extract HMAC-MD5 hashes from NTP responses
 5. Crack offline with Hashcat mode 31300
+
+---
+
+## ICMP Payload Steganography with Byte Rotation (HackIM 2016)
+
+Data hidden in ICMP echo request/reply payloads with byte-level rotation encoding:
+
+```python
+from scapy.all import rdpcap, ICMP
+
+packets = rdpcap('challenge.pcap')
+icmp_data = b''
+for pkt in packets:
+    if pkt.haslayer(ICMP) and pkt[ICMP].type == 8:  # Echo request
+        icmp_data += bytes(pkt[ICMP].payload)
+
+# Apply byte rotation (Caesar cipher on bytes)
+SHIFT = 42
+decoded = bytes((b - SHIFT) % 256 for b in icmp_data)
+
+# Result may be base64-encoded
+import base64
+plaintext = base64.b64decode(decoded)
+```
+
+**Key insight:** ICMP payloads are often ignored by analysts focused on TCP/UDP. Check for non-standard payload sizes or non-zero data in ICMP packets. Common encoding layers: byte rotation -> base64 -> shell commands.
+
+---
+
+## Packet Reconstruction via Checksum Validation (Break In 2016)
+
+Reconstruct corrupted/incomplete packets by using protocol checksums as validation:
+
+1. **Identify missing bytes** from packet structure analysis (Ethernet, IP, TCP headers)
+2. **Brute-force missing values** and validate against:
+   - IP header checksum (16-bit ones' complement)
+   - TCP checksum (includes pseudo-header)
+3. **Extract data** from reconstructed payload
+
+```python
+import struct
+
+def ip_checksum(header_bytes):
+    """Compute IP header checksum"""
+    words = struct.unpack('!' + 'H' * (len(header_bytes) // 2), header_bytes)
+    s = sum(words)
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
+
+# Brute-force missing byte to match expected checksum
+for candidate in range(256):
+    header = header_template[:missing_offset] + bytes([candidate]) + header_template[missing_offset+1:]
+    if ip_checksum(header) == 0:  # Valid checksum sums to 0
+        print(f"Missing byte: 0x{candidate:02x}")
+```
+
+**Key insight:** Protocol checksums constrain missing data. For single missing bytes, brute-force is instant. For multiple missing bytes, use TCP sequence numbers and MAC/IP header structure to reduce the search space.
+
+---
+
+## USB HID Keyboard Capture Decoding (EKOPARTY CTF 2016)
+
+USB keyboard captures contain HID scan codes that map to keystrokes. Decode the capture to reconstruct typed text.
+
+```python
+# USB HID keyboard report format:
+# Byte 0: Modifier keys (Shift, Ctrl, Alt)
+# Byte 1: Reserved (0x00)
+# Bytes 2-7: Up to 6 simultaneous key codes
+
+# HID scan code to character mapping (partial)
+HID_MAP = {
+    0x04: 'a', 0x05: 'b', 0x06: 'c', 0x07: 'd', 0x08: 'e',
+    0x09: 'f', 0x0a: 'g', 0x0b: 'h', 0x0c: 'i', 0x0d: 'j',
+    0x0e: 'k', 0x0f: 'l', 0x10: 'm', 0x11: 'n', 0x12: 'o',
+    0x13: 'p', 0x14: 'q', 0x15: 'r', 0x16: 's', 0x17: 't',
+    0x18: 'u', 0x19: 'v', 0x1a: 'w', 0x1b: 'x', 0x1c: 'y',
+    0x1d: 'z', 0x1e: '1', 0x1f: '2', 0x20: '3', 0x21: '4',
+    0x22: '5', 0x23: '6', 0x24: '7', 0x25: '8', 0x26: '9',
+    0x27: '0', 0x28: '\n', 0x2c: ' ', 0x2d: '-', 0x2e: '=',
+    0x2f: '[', 0x30: ']', 0x33: ';', 0x34: "'", 0x36: ',',
+    0x37: '.', 0x38: '/',
+}
+
+SHIFT_MAP = {
+    'a': 'A', 'b': 'B', '1': '!', '2': '@', '3': '#', '4': '$',
+    '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+    '-': '_', '=': '+', '[': '{', ']': '}', ';': ':', "'": '"',
+    ',': '<', '.': '>', '/': '?',
+}
+
+def decode_hid_keyboard(capture_data):
+    """Decode USB HID keyboard capture to text"""
+    text = ""
+    for report in capture_data:
+        modifier = report[0]
+        keycode = report[2]  # first key in report
+
+        if keycode == 0:
+            continue
+
+        char = HID_MAP.get(keycode, '')
+        if modifier & 0x22:  # Left or Right Shift
+            char = SHIFT_MAP.get(char, char.upper())
+
+        text += char
+    return text
+
+# Extract from Wireshark: tshark -r capture.pcapng -T fields -e usb.capdata
+# Or from text dump: parse +XX/-XX format (+ = keydown, - = keyup)
+```
+
+**Key insight:** USB HID keyboards send 8-byte reports where byte 0 is modifiers (Shift/Ctrl/Alt) and bytes 2-7 are active key scan codes. In Wireshark, filter with `usb.transfer_type == 1` and extract `usb.capdata`. Ignore reports where byte 2 is 0x00 (key release).
+
+---
+
+## dnscat2 Traffic Reassembly from DNS PCAP (BSidesSF 2017)
+
+**Pattern (dnscap):** Extract data tunneled via dnscat2 from a DNS pcap. Decode base32 subdomain labels from DNS queries, strip the 9-byte dnscat2 protocol header from each chunk, deduplicate retransmitted packets by comparing consecutive queries, then reassemble the payload (e.g., PNG image).
+
+```python
+from scapy.all import rdpcap, DNSQR
+
+packets = rdpcap('capture.pcap')
+domain = '.skullseclabs.org.'
+prev = None
+data = b''
+
+for p in packets:
+    if not p.haslayer(DNSQR):
+        continue
+    qname = p[DNSQR].qname.decode()
+    if domain not in qname:
+        continue
+    # Strip domain, join hex-encoded labels
+    labels = qname.replace(domain, '').split('.')
+    chunk = bytes.fromhex(''.join(labels))
+    chunk = chunk[9:]  # strip 9-byte dnscat2 header
+    if chunk == prev:
+        continue  # skip retransmission
+    prev = chunk
+    data += chunk
+
+with open('extracted.png', 'wb') as f:
+    f.write(data)
+```
+
+**Key insight:** dnscat2 encodes data in DNS query subdomain labels (hex or base32). Each query carries a 9-byte header (session ID, sequence, acknowledgment). Retransmissions are common — deduplicate by comparing consecutive payloads. The reassembled stream may contain files (PNG, documents) identifiable by magic bytes.
+
+---
+
+## USB Keyboard LED Morse Code Exfiltration (BITSCTF 2017)
+
+**Pattern (Ghost in the Machine):** A pcap of USB keyboard traffic contains host-to-device packets with alternating `0x01`/`0x03` values controlling the Caps Lock LED state. Timing differences between LED state changes encode Morse code: durations >300ms represent dashes, shorter durations represent dots. Decode the Morse sequence to recover the flag.
+
+```python
+from scapy.all import rdpcap
+import struct
+
+packets = rdpcap('usb_capture.pcap')
+signals = []
+
+for p in packets:
+    raw = bytes(p)
+    # USB HID SET_REPORT to keyboard (host -> device)
+    if len(raw) >= 35 and raw[30] in (0x01, 0x03):
+        timestamp = p.time
+        led_state = raw[30]  # 0x01 = LED off, 0x03 = LED on
+        signals.append((timestamp, led_state))
+
+# Convert timing to Morse
+morse = ''
+for i in range(0, len(signals) - 1, 2):
+    duration = signals[i+1][0] - signals[i][0]
+    if duration > 0.3:
+        morse += '-'
+    else:
+        morse += '.'
+    # Gap between signals indicates letter/word boundary
+```
+
+**Key insight:** Data exfiltration via keyboard LED state changes captured in USB pcap. The LED control packets use HID SET_REPORT class requests. Timing analysis of on/off transitions reveals Morse code patterns. Tools: Wireshark USB dissector, filter on `usb.transfer_type == 0x02` (interrupt) and direction host→device.
+
+---
+
+## Unreferenced PDF Objects with Hidden Pages (SharifCTF 7 2016)
+
+**Pattern (Strange PDF):** A PDF contains objects not referenced by the page tree. To reveal hidden content: (1) examine raw PDF objects with `qpdf --show-xref` or a text editor, (2) identify unreferenced content stream objects, (3) modify the `/Kids` array in the Pages object to include hidden page references, (4) increment the `/Count` value, (5) re-render the PDF to display previously hidden pages containing flag data.
+
+```bash
+# List all objects in the PDF
+qpdf --show-xref suspicious.pdf
+
+# Find pages object and hidden content objects
+strings suspicious.pdf | grep -E '/Type /Page|/Contents|/Kids'
+
+# Manual fix: edit PDF to add hidden page references
+# Change: /Kids [1 0 R]  ->  /Kids [1 0 R 5 0 R]
+# Change: /Count 1  ->  /Count 2
+# Rewrite xref table or use qpdf --linearize to fix offsets
+qpdf --linearize modified.pdf fixed.pdf
+```
+
+**Key insight:** PDF viewers only render pages reachable from the `/Pages` tree root. Unreferenced objects are invisible but still present in the file. Check object cross-references: any content stream object not in `/Kids` may contain hidden data. `mutool clean -d` and `qpdf --show-object N` help inspect individual objects.
+
+---
+
+## RDP Session Decryption via Extracted PKCS12 Key (HITB 2017)
+
+PCAP contains a PKCS12 (.p12/.pfx) file transmitted over UDP. Extract the private key from the PKCS12 container, then load it into Wireshark to decrypt the RDP session and recover transmitted data.
+
+```bash
+# Extract private key from PKCS12 (no cert, no passphrase protection)
+openssl pkcs12 -in cert.p12 -out key.pem -nocerts -nodes
+
+# In Wireshark: Edit > Preferences > Protocols > TLS > RSA keys list
+# Add entry: IP=<rdp_server_ip>, Port=3389, Protocol=tpkt, Key file=key.pem
+```
+
+**Key insight:** PKCS12 files in network captures provide the private key needed to decrypt encrypted RDP sessions in Wireshark. Look for .p12/.pfx file transfers (often in UDP or FTP streams) before the RDP session begins.
+
+---
+
+## USB HID Keyboard Arrow Key Navigation Tracking (HackIT 2017)
+
+USB HID keyboard traffic from an Apple Keyboard requires tracking arrow key navigation. Decode HID keycodes using the USB HID usage table. Modifier byte `0x02` = Shift (uppercase). Track cursor position via up/down arrow presses to determine which line contains the flag.
+
+```bash
+tshark -r capture.pcap -T fields -e usb.capdata | \
+  python3 decode_hid.py  # Must track arrow keys for line position
+```
+
+Arrow key HID codes to track:
+- `0x4F` = Right Arrow
+- `0x50` = Left Arrow
+- `0x51` = Down Arrow (next line)
+- `0x52` = Up Arrow (previous line)
+
+```python
+# Skeleton: track line position during HID decode
+line = 0
+lines = {0: ""}
+for report in hid_reports:
+    modifier = report[0]
+    keycode = report[2]
+    if keycode == 0x51:    # Down arrow
+        line += 1; lines.setdefault(line, "")
+    elif keycode == 0x52:  # Up arrow
+        line -= 1; lines.setdefault(line, "")
+    elif keycode in HID_MAP:
+        char = HID_MAP[keycode]
+        if modifier & 0x22:
+            char = char.upper()
+        lines[line] += char
+# Flag is on a specific line determined by arrow navigation
+```
+
+**Key insight:** USB keyboard captures must account for cursor movement keys (arrows, backspace). Track cursor line position to reconstruct text typed on each line separately — the flag may be on a non-zero line that arrow keys navigated to.
+
+---
+
+## RADIUS Shared Secret Cracking (UConn CyberSEED 2017)
+
+Extract the RADIUS authenticator hash from a PCAP using `radius2john.pl`, crack the shared secret with john, then enter the cracked secret in Wireshark to decrypt obfuscated password fields.
+
+```bash
+# Extract hash for john
+perl radius2john.pl capture.pcap > radius_hash.txt
+john radius_hash.txt --wordlist=rockyou.txt
+
+# Wireshark: Edit > Preferences > Protocols > RADIUS > Shared Secret = <cracked_secret>
+# RADIUS Access-Request packets will now show decrypted User-Password fields
+```
+
+`radius2john.pl` is part of the JohnTheRipper jumbo package (`src/radius2john.pl`).
+
+**Key insight:** RADIUS uses MD5(shared_secret + authenticator + password) for password obfuscation — cracking the shared secret via john exposes all credentials in the capture. The shared secret is typically a short dictionary word.
+
+---
+
+## RC4 Stream Identification in Shellcode PCAP (CODE BLUE 2017)
+
+A backdoor sends 32 bytes of `/dev/urandom` as an RC4 key, then encrypts all subsequent traffic. Identify RC4 by the characteristic 256-byte KSA (Key Scheduling Algorithm) table initialization pattern visible in the shellcode. Extract the key from the first 32 bytes of the TCP stream and decrypt the remainder.
+
+```python
+from scapy.all import rdpcap, TCP
+
+packets = rdpcap('capture.pcap')
+stream = b''
+for pkt in packets:
+    if TCP in pkt and pkt[TCP].payload:
+        stream += bytes(pkt[TCP].payload)
+
+# First 32 bytes = RC4 key (from /dev/urandom)
+key = stream[:32]
+ciphertext = stream[32:]
+
+# RC4 decryption
+def rc4(key, data):
+    S = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + S[i] + key[i % len(key)]) % 256
+        S[i], S[j] = S[j], S[i]
+    i = j = 0
+    out = []
+    for byte in data:
+        i = (i + 1) % 256
+        j = (j + S[i]) % 256
+        S[i], S[j] = S[j], S[i]
+        out.append(byte ^ S[(S[i] + S[j]) % 256])
+    return bytes(out)
+
+plaintext = rc4(key, ciphertext)
+```
+
+**Key insight:** RC4 in shellcode is identifiable by the 256-byte permutation table initialization loop (KSA). The key is typically the first N bytes transmitted over the connection before encrypted data begins. Look for a fixed-length initial burst followed by encrypted traffic.
 
 ---
 

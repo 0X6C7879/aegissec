@@ -59,7 +59,13 @@ def test_compact_runtime_triggers_and_creates_boundary() -> None:
                 ]
             }
         },
-        "assistant_turn": {"outcome": {"resulting_directive": "await_user_input"}},
+        "assistant_turn": {
+            "outcome": {
+                "resulting_directive": "await_user_input",
+                "unresolved_questions": ["Need operator answer"],
+                "carry_forward_context": "Awaiting scoped host answer.",
+            }
+        },
     }
 
     runtime_state = service.build_runtime_state(
@@ -104,6 +110,8 @@ def test_compact_runtime_triggers_and_creates_boundary() -> None:
     assert isinstance(workspace_state["recent_transcript_highlights"], list)
     assert isinstance(workspace_state["active_capability_inventory_summary"], str)
     assert isinstance(workspace_state["current_retrieval_focus"], dict)
+    assert isinstance(workspace_state["open_questions"], list)
+    assert isinstance(workspace_state["carry_forward_context"], str)
     compact_metadata = cast(dict[str, Any], runtime_state["compact_metadata"])
     metrics = cast(dict[str, Any], compact_metadata["metrics"])
     assert metrics["message_count"] >= 1

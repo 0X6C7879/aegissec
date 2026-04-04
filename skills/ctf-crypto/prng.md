@@ -2,6 +2,7 @@
 
 ## Table of Contents
 - [Mersenne Twister (MT19937) State Recovery](#mersenne-twister-mt19937-state-recovery)
+- [MT State Recovery from random.random() Floats via GF(2) Matrix (PHD CTF Quals 2012)](#mt-state-recovery-from-randomrandom-floats-via-gf2-matrix-phd-ctf-quals-2012)
 - [Time-Based Seed Attacks](#time-based-seed-attacks)
 - [C srand/rand Synchronization via Python ctypes](#c-srandrand-synchronization-via-python-ctypes)
 - [Layered Encryption Recovery](#layered-encryption-recovery)
@@ -15,6 +16,9 @@
 - [Password Cracking Strategy](#password-cracking-strategy)
 - [Logistic Map / Chaotic PRNG Seed Recovery (BYPASS CTF 2025)](#logistic-map--chaotic-prng-seed-recovery-bypass-ctf-2025)
 - [V8 XorShift128+ State Recovery (Math.random Prediction)](#v8-xorshift128-state-recovery-mathrandom-prediction)
+- [Mersenne Twister Seed Recovery from Subset Sum (Tokyo Westerns 2017)](#mersenne-twister-seed-recovery-from-subset-sum-tokyo-westerns-2017)
+- [MT19937 State Recovery via Constraint Propagation (HITCON 2017)](#mt19937-state-recovery-via-constraint-propagation-hitcon-2017)
+- [Rule 86 Cellular Automaton PRNG Reversal via Z3 (Insomni'hack 2018)](#rule-86-cellular-automaton-prng-reversal-via-z3-insomnihack-2018)
 
 ---
 
@@ -79,6 +83,73 @@ if solver.check() == sat:
 - Session token prediction
 - CAPTCHA bypass (predictable codes)
 - Game RNG exploitation
+
+## MT State Recovery from random.random() Floats via GF(2) Matrix (PHD CTF Quals 2012)
+
+**Pattern:** Server exposes `random.random()` float outputs (e.g., via an API endpoint). Standard MT untemper requires 624 × 32-bit integer outputs, but `random.random()` produces 53-bit floats — truncating each to 8 usable bits per observation. A precomputed GF(2) magic matrix maps observed byte values back to the 624-word MT state.
+
+**Key insight:** `random.random()` returns `(a*2^27+b)/2^53` where `a` = 27 bits from one MT output and `b` = 26 bits from the next. Truncating `int(float * 256)` yields only 8 bits per float, so 3360+ observations are needed (vs. 624 for integer outputs). The `not_random` library precomputes the GF(2) relationship between observed bits and state bits.
+
+```python
+import random, gzip, hashlib
+
+# Load precomputed GF(2) magic matrix (from github.com/fx5/not_random)
+f = gzip.GzipFile("magic_data", "r")
+magic = eval(f.read())
+f.close()
+
+def rebuild_from_floats(floats):
+    """Convert float observations to byte values, then recover MT state."""
+    vals = [int(f * 256) for f in floats]  # truncate to 8-bit
+    return rebuild_random(vals)
+
+def rebuild_random(vals):
+    """Recover MT19937 state from 3360+ byte observations using GF(2) matrix."""
+    def getbit(bit):
+        assert bit >= 0
+        return (vals[bit // 8] >> (7 - bit % 8)) & 1
+    state = []
+    for i in range(624):
+        val = 0
+        data = magic[i % 2]
+        for bit in data:
+            val <<= 1
+            for b in bit:
+                val ^= getbit(b + (i // 2) * 8 - 8)
+        state.append(val)
+    state.append(0)
+    ran = random.Random()
+    ran.setstate((3, tuple(state), None))
+    # Advance past consumed outputs
+    for i in range(len(vals) - 3201 + 394):
+        ran.randint(0, 255)
+    return ran
+
+# Collect 3360+ random.random() floats from the target
+floats = [...]  # observed values from server API
+
+# Recover state and predict future outputs
+my_random = rebuild_from_floats(floats[:3360])
+
+# Verify predictions match remaining observations
+for observed, predicted in zip(floats[3360:], [my_random.random() for _ in range(40)]):
+    assert '%.16f' % observed == '%.16f' % predicted
+
+# Forge password reset token (same hash the server computes)
+token = hashlib.md5(('%.16f' % my_random.random()).encode()).hexdigest()
+reset_url = f'http://target/reset/{user_id}-{token}/'
+```
+
+**Attack flow (password reset token prediction):**
+1. Request 3360+ random float values from an API endpoint that exposes them (e.g., `/?count=3360`)
+2. Simultaneously trigger a password reset (the reset token is `md5(random.random())`)
+3. Recover the MT state from the observed floats
+4. Predict the `random.random()` call used for the reset token
+5. Construct the reset URL with the predicted token
+
+**When to use:** Server uses Python's `random.random()` for security-sensitive tokens (session IDs, password resets, CSRF tokens) and also exposes random values through another endpoint. The `not_random` library handles the bit-level math — focus on collecting enough float observations and synchronizing timing with the target operation.
+
+---
 
 ## Time-Based Seed Attacks
 
@@ -510,6 +581,37 @@ python3 xs128p.py --multiple 100000 --gen <state0>,<state1>,<count>
 - Multiple browser tabs or web workers may have separate PRNG states
 - Cache boundary (every 64 calls) can introduce discontinuities if observations span a refill
 
+**Inverse xorshift128+ (backward prediction):** After recovering state, step the PRNG backward to predict values generated *before* the observed sequence. Essential when the target value was generated earlier than observations (e.g., predicting another user's 2FA code). (Midnight Flag 2026)
+
+```python
+def undo_rshift_xor(val, shift):
+    """Invert val ^= (val >> shift)"""
+    result = val
+    for _ in range(3):  # 3 iterations sufficient for 64-bit
+        result = val ^ (result >> shift)
+    return result & 0xFFFFFFFFFFFFFFFF
+
+def undo_lshift_xor(val, shift):
+    """Invert val ^= (val << shift)"""
+    result = val
+    for _ in range(3):
+        result = val ^ ((result << shift) & 0xFFFFFFFFFFFFFFFF)
+    return result & 0xFFFFFFFFFFFFFFFF
+
+def reverse_step(s0, s1):
+    """Run xs128p one step backward: (s0, s1) → (old_s0, old_s1)"""
+    old_s1 = s0
+    known = (s1 ^ s0 ^ ((s0 >> 26) & 0xFFFFFFFFFFFFFFFF)) & 0xFFFFFFFFFFFFFFFF
+    x = undo_rshift_xor(known, 17)
+    old_s0 = undo_lshift_xor(x, 23)
+    return old_s0, old_s1
+
+# Usage: step backward N times from recovered state
+for _ in range(N):
+    state0, state1 = reverse_step(state0, state1)
+    predicted = math.floor(CONST * to_double(state0))
+```
+
 **When to use:** Web challenge where JavaScript generates predictable-looking random values (tokens, verification codes, game rolls) using `Math.random()`. Look for patterns like `Math.floor(N * Math.random())` or `Math.random().toString(36).substr(2)` in client-side or server-side Node.js code.
 
 ---
@@ -555,3 +657,109 @@ leet speak               → p@ssw0rd, s3cr3t
 - Try reversed: `drowssap`
 - Try with common suffixes: `!`, `@`, `#`, `1`, `123`
 - If SMB/FTP password known, ZIP password often related
+
+---
+
+## Mersenne Twister Seed Recovery from Subset Sum (Tokyo Westerns 2017)
+
+**Pattern:** MT19937 seeded with a 32-bit value generates subset-sum problems (e.g., "which elements from this set sum to target?"). Solving small subset-sum problems leaks specific MT output values. Two recovered outputs at indices 0 and 227 are sufficient to invert the MT seeding process.
+
+**MT twist function relationship:**
+```text
+mt[i] = mt[i-624] XOR twist(mt[i-624], mt[i-623])
+```
+At the wrap-around: `mt[624]` depends on `mt[0]` (new cycle) and `mt[397]` (old cycle). Recovering `mt[0]` and `mt[227]` (which is related to `mt[624-227] = mt[397]`) via subset-sum solutions reveals enough to invert the twist recurrence.
+
+```python
+import random
+
+def crack_seed_from_two_outputs(mt0_val, mt227_val):
+    """Try all 2^32 seeds until MT outputs match recovered values."""
+    for seed in range(2**32):
+        r = random.Random()
+        r.seed(seed)
+        # Generate enough to reach indices 0 and 227
+        outputs = [r.getrandbits(32) for _ in range(228)]
+        if outputs[0] == mt0_val and outputs[227] == mt227_val:
+            return seed
+    return None
+
+# After recovering seed, all future (and past) outputs are predictable
+r = random.Random()
+r.seed(recovered_seed)
+```
+
+**Key insight:** MT19937 seeds recoverable from as few as two state values (indices 0 and 227) via the twist function's wrap-around relationship. Any challenge that exposes MT state values through solvable mathematical puzzles is vulnerable to full seed recovery.
+
+**References:** Tokyo Westerns CTF 2017
+
+---
+
+## MT19937 State Recovery via Constraint Propagation (HITCON 2017)
+
+**Pattern:** Server generates problems that leak 24-120 bits of PRNG output per round (e.g., partial bit-patterns, subset sums, modular reductions). Rather than collecting 624 full 32-bit outputs, model the MT state as an array of per-cell candidate sets and propagate constraints bidirectionally through the MT recurrence.
+
+**MT recurrence dependencies:**
+```text
+state[i] = state[i-624] XOR twist(state[i-624], state[i-623])
+```
+This means `state[x]` depends on `state[x-624]`, `state[x-623]`, and `state[x-227]` (via the generate step). Partial knowledge at any index propagates in both directions.
+
+**Constraint propagation approach:**
+```python
+# Model: each state word starts as a set of 2^32 candidates
+# Partial observation: narrow candidates for observed indices
+# Propagate: for each constrained cell, narrow related cells
+
+def propagate_forward(state_candidates, idx):
+    """MT: state[idx+624] = f(state[idx], state[idx+1])"""
+    for s0 in state_candidates[idx]:
+        for s1 in state_candidates[idx + 1]:
+            new_val = mt_twist(s0, s1)
+            state_candidates[idx + 624].add(new_val)
+
+def propagate_backward(state_candidates, idx):
+    """Invert MT twist to constrain earlier states from later ones."""
+    for val in state_candidates[idx]:
+        # Recover state[idx-624] given state[idx] and state[idx-623]
+        for s1 in state_candidates[idx - 623]:
+            s0 = mt_untwist(val, s1)
+            state_candidates[idx - 624].add(s0)
+
+# After ~20 partial observations across different positions:
+# Most cells converge to single candidates → full state determined
+```
+
+**Key insight:** MT19937's recurrence dependencies allow bidirectional constraint propagation — partial knowledge at multiple positions narrows candidates until the full 624-word state is determined. The number of partial observations needed scales inversely with bits leaked per observation: ~20 observations of 24+ bits each typically suffice.
+
+**References:** HITCON CTF 2017
+
+---
+
+## Rule 86 Cellular Automaton PRNG Reversal via Z3 (Insomni'hack 2018)
+
+**Pattern:** Wolfram elementary cellular automaton Rule 86 used as PRNG. Reverse through 128 rounds using Z3 Bool arrays:
+
+```python
+from z3 import *
+
+def RULE86(x, y, z):
+    return Or(And(Not(x), Not(y), z), And(Not(x), y, Not(z)),
+              And(x, Not(y), Not(z)), And(x, y, Not(z)))
+
+s = Solver()
+state = [Bool(f'b{i}') for i in range(256)]
+# Forward-compute 128 rounds symbolically
+for round in range(128):
+    new_state = [RULE86(state[(i-1)%256], state[i], state[(i+1)%256]) for i in range(256)]
+    state = new_state
+# Constrain final state to known output
+for i, bit in enumerate(known_output):
+    s.add(state[i] == (bit == 1))
+s.check()
+model = s.model()
+```
+
+**Key insight:** Elementary cellular automata are NOT injective -- multiple preimages may exist. But Z3 handles the search efficiently by treating each cell as a boolean variable and each rule application as a CNF clause. For Rule 86 specifically, the DNF has 4 terms (bits 1,2,4,6 of rule number 86 = 01010110). Use `s.push()`/`s.pop()` to iteratively backtrack through rounds. This approach generalizes to any elementary CA rule used as a PRNG: encode the rule's truth table as a boolean formula, compose symbolically for N rounds, and constrain to the known output.
+
+**References:** Insomni'hack CTF 2018

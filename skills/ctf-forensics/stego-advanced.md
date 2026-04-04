@@ -1,5 +1,7 @@
 # CTF Forensics - Advanced Steganography
 
+See also: [stego-advanced-2.md](stego-advanced-2.md) for video frame techniques, JPEG XL TOC permutation, Arnold's Cat Map, SSTV FM demodulation, MJPEG steganography, EXIF/Stegano pixel patterns, PDF xref covert channels, ANSI escape code stego, and ECB image recovery.
+
 ## Table of Contents
 - [FFT Frequency Domain Steganography (Pragyan 2026)](#fft-frequency-domain-steganography-pragyan-2026)
 - [SSTV Red Herring + LSB Audio Stego (0xFun 2026)](#sstv-red-herring--lsb-audio-stego-0xfun-2026)
@@ -11,6 +13,9 @@
 - [Audio FFT Musical Note Identification (BYPASS CTF 2025)](#audio-fft-musical-note-identification-bypass-ctf-2025)
 - [Audio Metadata Octal Encoding (BYPASS CTF 2025)](#audio-metadata-octal-encoding-bypass-ctf-2025)
 - [Nested Tar Archive with Whitespace Encoding (UTCTF 2026)](#nested-tar-archive-with-whitespace-encoding-utctf-2026)
+- [DeepSound Audio Steganography with Password Cracking (INShAck 2018)](#deepsound-audio-steganography-with-password-cracking-inshack-2018)
+- [Audio Waveform Binary Encoding (BackdoorCTF 2013)](#audio-waveform-binary-encoding-backdoorctf-2013)
+- [Audio Spectrogram Hidden QR Code (BaltCTF 2013)](#audio-spectrogram-hidden-qr-code-baltctf-2013)
 
 ---
 
@@ -338,3 +343,94 @@ print(message.decode(errors='replace'))
 - Number of spaces between words encodes data
 
 **Key insight:** "Silent" or "invisible" hints point to whitespace encoding. Use `xxd` or `cat -A` to reveal hidden whitespace characters. Deeply nested archives are misdirection — the data is in the whitespace, not the nesting depth.
+
+---
+
+## DeepSound Audio Steganography with Password Cracking (INShAck 2018)
+
+**Pattern:** Two-phase audio steganography: part 1 visible in Audacity spectrogram, part 2 hidden with DeepSound tool (password-protected). Use `deepsound2john.py` to extract the hash, crack with John, then retrieve hidden files.
+
+```bash
+# Phase 1: Check spectrogram for visible text
+sox audio.wav -n spectrogram -o spec.png
+
+# Phase 2: Extract DeepSound password hash
+python3 deepsound2john.py audio.wav > hash.txt
+
+# Crack password
+john --wordlist=rockyou.txt hash.txt
+
+# Extract hidden file with DeepSound GUI or CLI using cracked password
+```
+
+**DeepSound detection:**
+```python
+# DeepSound embeds a signature in WAV files
+# Check for DeepSound header pattern in audio data
+with open('audio.wav', 'rb') as f:
+    data = f.read()
+    # DeepSound uses specific byte patterns in the audio data section
+    # deepsound2john.py from John the Ripper's bleeding-jumbo branch
+    # handles detection and hash extraction automatically
+```
+
+**Tool installation:**
+```bash
+# deepsound2john.py is part of John the Ripper bleeding-jumbo
+git clone https://github.com/openwall/john.git
+# Script located at: john/run/deepsound2john.py
+
+# DeepSound GUI (Windows): http://jpinsoft.net/deepsound/
+# For Linux: run under Wine or use the extracted hash + john approach
+```
+
+**Key insight:** DeepSound embeds files in WAV audio with optional AES encryption. The password hash is extractable with `deepsound2john.py` from John the Ripper's bleeding-jumbo branch. Always check both spectrogram (visual stego) and DeepSound (data stego) in audio challenges.
+
+**Detection:** WAV file that seems normal but `deepsound2john.py` produces a hash. Challenge has two-part structure where first part is easy (spectrogram) and second part requires a tool. Challenge mentions "layers", "hidden", or "deep".
+
+---
+
+## Audio Waveform Binary Encoding (BackdoorCTF 2013)
+
+**Pattern:** WAV file contains two distinct waveform shapes representing binary 0 and 1. Group 8 bits into bytes and decode as ASCII.
+
+```python
+import wave, struct
+wf = wave.open('audio.wav', 'rb')
+frames = wf.readframes(wf.getnframes())
+samples = struct.unpack(f'{len(frames)//2}h', frames)
+
+# Identify two distinct wave patterns (e.g., positive peak vs flat)
+# Segment audio into fixed-length windows, classify each as 0 or 1
+bits = ''
+window = len(samples) // num_bits
+for i in range(num_bits):
+    segment = samples[i*window:(i+1)*window]
+    bits += '1' if max(segment) > threshold else '0'
+
+# Decode binary to ASCII
+flag = ''.join(chr(int(bits[i:i+8], 2)) for i in range(0, len(bits)-7, 8))
+```
+
+**Key insight:** Open in Audacity and zoom in — two visually distinct wave patterns alternate. Each pattern represents one bit. Count the patterns, group into 8-bit bytes, decode as ASCII.
+
+---
+
+## Audio Spectrogram Hidden QR Code (BaltCTF 2013)
+
+**Pattern:** Audio file contains visual data hidden in the frequency domain, visible only in a spectrogram view.
+
+```bash
+# Generate spectrogram image
+sox audio.mp3 -n spectrogram -o spec.png
+# Or use Sonic Visualiser for interactive exploration
+
+# Look for visual patterns in specific frequency bands (often 5-12 kHz)
+# Extract/assemble QR code fragments from spectrogram
+# Scan with: zbarimg assembled_qr.png
+```
+
+**Key insight:** Use Sonic Visualiser (Layer → Add Spectrogram) with adjustable window size and color mapping. QR codes or text often appear in the 2-15 kHz band. Multiple spectrogram fragments may need to be stitched together in an image editor before scanning.
+
+---
+

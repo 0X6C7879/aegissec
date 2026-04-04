@@ -7,10 +7,8 @@
 - [Prefix Hash Brute-Force (Nullcon 2026)](#prefix-hash-brute-force-nullcon-2026)
 - [CVP/LLL Lattice for Constrained Integer Validation (HTB ShadowLabyrinth)](#cvplll-lattice-for-constrained-integer-validation-htb-shadowlabyrinth)
 - [Decision Tree Function Obfuscation (HTB WonderSMS)](#decision-tree-function-obfuscation-htb-wondersms)
-- [GLSL Shader VM with Self-Modifying Code (ApoorvCTF 2026)](#glsl-shader-vm-with-self-modifying-code-apoorvctf-2026)
 - [GF(2^8) Gaussian Elimination for Flag Recovery (ApoorvCTF 2026)](#gf28-gaussian-elimination-for-flag-recovery-apoorvctf-2026)
-- [Z3 for Single-Line Python Boolean Circuit (BearCatCTF 2026)](#z3-for-single-line-python-boolean-circuit-bearcatctf-2026)
-- [Sliding Window Popcount Differential Propagation (BearCatCTF 2026)](#sliding-window-popcount-differential-propagation-bearcatctf-2026)
+- [ROP Chain Obfuscation in Modified Binary (PlaidCTF 2016)](#rop-chain-obfuscation-in-modified-binary-plaidctf-2016)
 
 ---
 
@@ -288,56 +286,6 @@ for func in fm.getFunctions(True):
 
 ---
 
-## GLSL Shader VM with Self-Modifying Code (ApoorvCTF 2026)
-
-**Pattern (Draw Me):** A WebGL2 fragment shader implements a Turing-complete VM on a 256x256 RGBA texture. The texture is both program memory and display output.
-
-**Texture layout:**
-- **Row 0:** Registers (pixel 0 = instruction pointer, pixels 1-32 = general purpose)
-- **Rows 1-127:** Program memory (RGBA = opcode, arg1, arg2, arg3)
-- **Rows 128-255:** VRAM (display output)
-
-**Opcodes:** NOP(0), SET(1), ADD(2), SUB(3), XOR(4), JMP(5), JNZ(6), VRAM-write(7), STORE(8), LOAD(9). 16 steps per frame.
-
-**Self-modifying code:** Phase 1 (decryption) uses STORE opcode to XOR-patch program memory that Phase 2 (drawing) then executes. The decryption overwrites SET instructions with correct pixel color values before the drawing code runs.
-
-**Why GPU rendering fails:** The GPU runs all pixels in parallel per frame, but the shader tracks only ONE write target per pixel per frame. With multiple VRAM writes per frame, only the last survives — losing 75%+ of pixels. Similarly, STORE patches conflict during parallel decryption.
-
-**Solve via sequential emulation:**
-```python
-from PIL import Image
-import numpy as np
-
-img = Image.open('program.png').convert('RGBA')
-state = np.array(img, dtype=np.int32).copy()
-regs = [0] * 33
-
-# Phase 1: Trace decryption — apply all STORE patches sequentially
-x, y = start_x, start_y
-while True:
-    r, g, b, a = state[y][x]
-    opcode = int(r)
-    if opcode == 1: regs[g] = b & 255           # SET
-    elif opcode == 4: regs[g] = regs[b] ^ regs[a]  # XOR
-    elif opcode == 8:                              # STORE — patches program memory
-        tx, ty = regs[g], regs[b]
-        state[ty][tx] = [regs[a], regs[a+1], regs[a+2], regs[a+3]]
-    elif opcode == 5: break                        # JMP to drawing phase
-    x += 1
-    if x > 255: x, y = 0, y + 1
-
-# Phase 2: Execute drawing code — all VRAM writes preserved
-vram = np.zeros((128, 256), dtype=np.uint8)
-# ... trace with opcode 7 writing to vram[ty][tx] = color
-Image.fromarray(vram, mode='L').save('output.png')
-```
-
-**Key insight:** GLSL shaders are Turing-complete but GPU parallelism causes write conflicts. Self-modifying code (STORE patches) compounds the problem — patches from parallel executions overwrite each other. Sequential emulation in Python recovers the full output. The program.png file IS the bytecode.
-
-**Detection:** WebGL/shader challenge with a PNG "program" file, challenge says "nothing renders" or output is garbled. Look for custom opcode tables in GLSL source.
-
----
-
 ## GF(2^8) Gaussian Elimination for Flag Recovery (ApoorvCTF 2026)
 
 **Pattern (Forge):** Stripped binary performs Gaussian elimination over GF(2^8) (Galois Field with 256 elements, using the AES polynomial). A matrix and augmentation vector are embedded in `.rodata`. The solution vector is the flag.
@@ -396,87 +344,54 @@ flag = bytes(aug[i][N] for i in range(N))
 
 ---
 
-## Z3 for Single-Line Python Boolean Circuit (BearCatCTF 2026)
+## ROP Chain Obfuscation in Modified Binary (PlaidCTF 2016)
 
-**Pattern (Captain Morgan):** Single-line Python (2000+ semicolons) validates flag via walrus operator chains decomposing input as a big-endian integer, with bitwise operations producing a boolean circuit.
+**Pattern (quite quixotic quest):** Modified `curl` binary with a custom `--pctfkey KEY` option. Key validation replaces `esp` with a buffer address and returns into a ~250KB ROP chain stored in a `magic_buf` symbol. The ROP chain validates the key through XOR, MD5, and constant comparisons.
 
-**Identification:**
-- Single-line Python with semicolons separating statements
-- Walrus operator `:=` chains: `(x := expr)`
-- Obfuscated XOR: `(x | i) & ~(x & i)` instead of `x ^ i`
-- Input treated as a single large integer, decomposed via bit-shifting
+**Analysis approach:**
 
-**Z3 solution:**
+1. **Detect the ROP dispatch:** Look for `mov esp, eax; ret` or similar stack pivot — this redirects execution into the ROP chain
+2. **Dump the ROP chain:** Script GDB to disassemble instructions after each return address in the chain:
 ```python
-from z3 import *
+# GDB script to trace ROP gadgets
+import gdb
 
-n_bytes = 29  # Flag length
-ari = BitVec('ari', n_bytes * 8)
+magic_buf = 0x080b0000  # symbol address
+buf_size = 0x40000       # quarter megabyte
+offset = 0
 
-# Parse semicolon-separated statements
-# Model walrus chains as LShR(ari, shift_amount)
-# Evaluate boolean expressions symbolically
-# Final assertion: result_var == 0
-
-s = Solver()
-s.add(bfu == 0)  # Final validation variable
-if s.check() == sat:
-    m = s.model()
-    val = m[ari].as_long()
-    flag = val.to_bytes(n_bytes, 'big').decode('ascii')
+while offset < buf_size:
+    addr = int.from_bytes(gdb.selected_inferior().read_memory(magic_buf + offset, 4), 'little')
+    gdb.execute(f'x/3i {addr}')
+    # Advance past the gadget (typically 4 bytes per return address)
+    offset += 4
 ```
 
-**Key insight:** Single-line Python obfuscation creates a boolean circuit over input bits. The walrus operator chains are just variable assignments — split on semicolons and translate each to Z3 symbolically. Obfuscated XOR `(a | b) & ~(a & b)` is just `a ^ b`. Z3 solves these circuits in under a second. Look for `__builtins__` access or `ord()`/`chr()` calls to identify the input→integer conversion.
+3. **Identify patterns in the chain:** Look for unrolled loops (repeated gadget sequences), `pop` instructions that skip data, and `ret imm16` that skip large blocks
+4. **Reconstruct the algorithm:** The chain typically performs:
+   - Key length check (compare with constant)
+   - Character-level operations (sum ASCII values, XOR with constants)
+   - Hash computation (MD5 of derived value)
+   - Hash prefix comparison
+   - XOR of input with hash as keystream
+   - Comparison with embedded constants
 
-**Detection:** Single-line Python with 1000+ semicolons, walrus operators, bitwise operations, and a final comparison to 0 or True.
-
----
-
-## Sliding Window Popcount Differential Propagation (BearCatCTF 2026)
-
-**Pattern (Treasure Hunt 4):** Binary validates input via expected popcount (number of set bits) for each position of a 16-bit sliding window over the input bits.
-
-**Differential propagation:**
-When the window slides by 1 bit:
-```text
-popcount(window[i+1]) - popcount(window[i]) = bit[i+16] - bit[i]
-```
-So: `bit[i+16] = bit[i] + (data[i+1] - data[i])`
-
+5. **Extract and solve:** Dump the embedded constants, brute-force any intermediate values (e.g., character sum → MD5 with matching prefix), then XOR to recover the key:
 ```python
-expected = [...]  # 337 expected popcount values
-total_bits = 337 + 15  # = 352
+import hashlib
 
-# Brute-force the initial 16-bit window (must have popcount = expected[0])
-for start_val in range(0x10000):
-    if bin(start_val).count('1') != expected[0]:
-        continue
+# Brute-force the sum that produces correct MD5 prefix
+target_prefix = 0xc0050bdd  # extracted from ROP chain
+for s in range(128 * 0x35):  # max sum of printable chars * key_length
+    h = hashlib.md5(str(s ^ xor_constant).encode()).hexdigest()
+    if int(h[:8], 16) == target_prefix:
+        md5_key = bytes.fromhex(h)
+        break
 
-    bits = [0] * total_bits
-    for j in range(16):
-        bits[j] = (start_val >> (15 - j)) & 1
-
-    valid = True
-    for i in range(len(expected) - 1):
-        new_bit = bits[i] + (expected[i + 1] - expected[i])
-        if new_bit not in (0, 1):
-            valid = False
-            break
-        bits[i + 16] = new_bit
-
-    if valid:
-        # Convert bits to bytes
-        flag_bytes = bytes(int(''.join(map(str, bits[i:i+8])), 2)
-                          for i in range(0, total_bits, 8))
-        if b'BCCTF' in flag_bytes or flag_bytes[:5].isascii():
-            print(flag_bytes.decode(errors='replace'))
-            break
+# XOR embedded values with MD5 keystream to get flag
+flag = bytes(v ^ md5_key[i % 16] for i, v in enumerate(embedded_values))
 ```
 
-**Key insight:** Sliding window popcount differences create a recurrence relation: each new bit is determined by the bit 16 positions back plus the popcount delta. Only the first 16 bits are free (constrained by initial popcount). Brute-force the ~4000-8000 valid initial windows — for each, the entire bit sequence is deterministic. Runs in under a second.
+**Key insight:** ROP chain obfuscation ("ROPfuscation") hides algorithms in chains of return-oriented gadgets. The chain looks incomprehensible as raw addresses but becomes analyzable when you: (a) dump each gadget's disassembly, (b) filter repetitions and skip regions, (c) annotate register effects. The chain is functionally equivalent to normal code — it just uses `ret` instead of sequential execution. Large chains (100K+ gadgets) often contain unrolled loops that compress to ~1000 lines of pseudocode.
 
-**Detection:** Binary computing popcount/hamming weight on fixed-size windows. Expected value array with length ≈ input_bits - window_size + 1. Values in array are small integers (0 to window_size).
-
----
-
-See also: [patterns-ctf.md](patterns-ctf.md) for Part 1 (hidden emulator opcodes, SPN static extraction, image XOR smoothness, byte-at-a-time cipher, mathematical convergence bitmap, Windows PE XOR bitmap OCR, two-stage RC4+VM loaders, GBA ROM meet-in-the-middle, Sprague-Grundy game theory, kernel module maze solving, multi-threaded VM channels).
+See also: [patterns-ctf.md](patterns-ctf.md) for Part 1 (hidden emulator opcodes, SPN static extraction, image XOR smoothness, byte-at-a-time cipher, mathematical convergence bitmap, Windows PE XOR bitmap OCR, two-stage RC4+VM loaders, GBA ROM meet-in-the-middle, Sprague-Grundy game theory, kernel module maze solving, multi-threaded VM channels). [patterns-ctf-3.md](patterns-ctf-3.md) for Part 3 (Z3 single-line Python circuit, sliding window popcount, keyboard LED Morse code, C++ destructor-hidden validation, syscall side-effect memory corruption, MFC dialog event handlers, VM sequential key-chain brute-force, Burrows-Wheeler transform inversion, OpenType font ligature exploitation, GLSL shader VM with self-modifying code, instruction counter as cryptographic state).

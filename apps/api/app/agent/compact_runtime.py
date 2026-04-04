@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from app.agent.context_models import ContextProjection
 from app.agent.token_budget import estimate_token_count
 from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.workbench_runtime import load_workbench_runtime_state
 from app.agent.workspace_state import WorkspaceRetainedState
 
 
@@ -72,6 +73,7 @@ class CompactRuntimeService:
         runtime_store = self._ensure_runtime_store(mutable_state, thresholds)
         latest_boundary = self._dict(runtime_store.get("latest_boundary"))
         triggered = self._should_compact(metrics, thresholds)
+        workbench_runtime = load_workbench_runtime_state(mutable_state)
 
         workspace_state = WorkspaceRetainedState(
             active_stage=current_stage,
@@ -84,6 +86,12 @@ class CompactRuntimeService:
                 item for item in selected_project_memory_entries if isinstance(item, str)
             ),
             current_retrieval_focus=self._dict(current_retrieval_focus),
+            open_questions=(
+                tuple(workbench_runtime.open_questions) if workbench_runtime is not None else ()
+            ),
+            carry_forward_context=(
+                workbench_runtime.carry_forward_context if workbench_runtime is not None else ""
+            ),
         )
 
         if triggered and self._should_create_boundary(latest_boundary, metrics, workspace_state):

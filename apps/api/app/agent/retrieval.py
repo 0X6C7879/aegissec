@@ -7,6 +7,7 @@ from app.agent.memory_recall import rank_memory_manifest_sources, select_relevan
 from app.agent.memory_store import load_memory_manifest, record_memory_entry_surfaced
 from app.agent.recall_policy import RecallPolicy
 from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.workbench_runtime import load_workbench_runtime_state
 from app.db.models import Session, TaskNode, WorkflowRun
 from app.db.repositories import RunLogRepository
 
@@ -285,22 +286,7 @@ class RetrievalPipeline:
                     "Project retrieval scaffolded because the session is not linked to a project."
                 ),
             )
-        current_task = " ".join(
-            task.name for task in tasks if task.status.value in {"ready", "in_progress"}
-        )
-        transcript_recent_tools = [
-            str(record.get("command_or_action") or "")
-            for record in self._transcript_runtime.recent_tool_result_records(state, limit=6)
-            if str(record.get("command_or_action") or "").strip()
-        ]
-        recent_tools = transcript_recent_tools or [
-            str(record.get("command_or_action") or "")
-            for record in (
-                self._dict_list(state.get("archived_execution_records"))
-                + self._dict_list(state.get("execution_records"))
-            )[-6:]
-            if str(record.get("command_or_action") or "").strip()
-        ]
+        current_task, recent_tools = self._project_runtime_inputs(state=state, tasks=tasks)
         already_surfaced = self._already_surfaced_entry_ids(state)
         state["surfaced_history_state"] = {
             "already_surfaced": sorted(already_surfaced),
@@ -370,14 +356,7 @@ class RetrievalPipeline:
     ) -> dict[str, object]:
         if session is None or session.project_id is None:
             return {"scope": "project", "source_count": 0, "sources": []}
-        current_task = " ".join(
-            task.name for task in tasks if task.status.value in {"ready", "in_progress"}
-        )
-        recent_tools = [
-            str(record.get("command_or_action") or "")
-            for record in self._transcript_runtime.recent_tool_result_records(state, limit=6)
-            if str(record.get("command_or_action") or "").strip()
-        ]
+        current_task, recent_tools = self._project_runtime_inputs(state=state, tasks=tasks)
         ranked_sources = rank_memory_manifest_sources(
             load_memory_manifest(session.project_id),
             current_task=current_task,
@@ -464,6 +443,44 @@ class RetrievalPipeline:
                 }
             )
         return {"scope": "capability_adjacent", "source_count": len(sources), "sources": sources}
+
+    def _project_runtime_inputs(
+        self,
+        *,
+        state: dict[str, object],
+        tasks: list[TaskNode],
+    ) -> tuple[str, list[str]]:
+        workbench_runtime = load_workbench_runtime_state(state)
+        default_task = " ".join(
+            task.name for task in tasks if task.status.value in {"ready", "in_progress"}
+        )
+        current_task = (
+            " ".join(workbench_runtime.active_tasks)
+            if workbench_runtime is not None and workbench_runtime.active_tasks
+            else default_task
+        )
+
+        transcript_recent_tools = [
+            str(record.get("command_or_action") or "")
+            for record in self._transcript_runtime.recent_tool_result_records(state, limit=6)
+            if str(record.get("command_or_action") or "").strip()
+        ]
+        fallback_recent_tools = [
+            str(record.get("command_or_action") or "")
+            for record in (
+                self._dict_list(state.get("archived_execution_records"))
+                + self._dict_list(state.get("execution_records"))
+            )[-6:]
+            if str(record.get("command_or_action") or "").strip()
+        ]
+        recent_tools = transcript_recent_tools or fallback_recent_tools
+
+        if workbench_runtime is not None:
+            focus = str(workbench_runtime.active_recall_focus.get("focus") or "").strip()
+            if focus:
+                recent_tools = [focus, *recent_tools]
+
+        return current_task, recent_tools
 
     @staticmethod
     def _dict_list(raw: object) -> list[dict[str, object]]:

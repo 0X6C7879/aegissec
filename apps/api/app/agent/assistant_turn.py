@@ -91,6 +91,9 @@ class AssistantTurnPlan:
     turn_id: str
     cycle_id: str
     recommended_tool_wave: dict[str, object] = field(default_factory=dict)
+    candidate_waves: list[dict[str, object]] = field(default_factory=list)
+    chosen_wave: dict[str, object] = field(default_factory=dict)
+    wave_decision: dict[str, object] = field(default_factory=dict)
     scheduler_mode: str | None = None
     selected_task_ids: list[str] = field(default_factory=list)
     selected_task_names: list[str] = field(default_factory=list)
@@ -102,6 +105,9 @@ class AssistantTurnPlan:
             "turn_id": self.turn_id,
             "cycle_id": self.cycle_id,
             "recommended_tool_wave": dict(self.recommended_tool_wave),
+            "candidate_waves": [dict(item) for item in self.candidate_waves],
+            "chosen_wave": dict(self.chosen_wave),
+            "wave_decision": dict(self.wave_decision),
             "scheduler_mode": self.scheduler_mode,
             "selected_task_ids": list(self.selected_task_ids),
             "selected_task_names": list(self.selected_task_names),
@@ -120,6 +126,9 @@ class AssistantTurnPlan:
             turn_id=turn_id,
             cycle_id=cycle_id,
             recommended_tool_wave=_dict(raw_dict.get("recommended_tool_wave")),
+            candidate_waves=_dict_list(raw_dict.get("candidate_waves")),
+            chosen_wave=_dict(raw_dict.get("chosen_wave")),
+            wave_decision=_dict(raw_dict.get("wave_decision")),
             scheduler_mode=_string(raw_dict.get("scheduler_mode")),
             selected_task_ids=_string_list(raw_dict.get("selected_task_ids")),
             selected_task_names=_string_list(raw_dict.get("selected_task_names")),
@@ -144,6 +153,7 @@ class AssistantTurnOutcome:
     tool_result_count: int = 0
     partial_failure_count: int = 0
     reflection_summary: str = ""
+    assimilation_result: dict[str, object] = field(default_factory=dict)
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -161,6 +171,7 @@ class AssistantTurnOutcome:
             "tool_result_count": self.tool_result_count,
             "partial_failure_count": self.partial_failure_count,
             "reflection_summary": self.reflection_summary,
+            "assimilation_result": dict(self.assimilation_result),
         }
 
     @classmethod
@@ -196,6 +207,7 @@ class AssistantTurnOutcome:
                 partial_failure_count if isinstance(partial_failure_count, int) else 0
             ),
             reflection_summary=str(raw_dict.get("reflection_summary") or ""),
+            assimilation_result=_dict(raw_dict.get("assimilation_result")),
         )
 
 

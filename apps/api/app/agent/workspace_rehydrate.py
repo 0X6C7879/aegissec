@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from app.agent.context_models import RetrievalState
 from app.agent.transcript_runtime import TranscriptRuntimeService
+from app.agent.workbench_runtime import (
+    WorkbenchRuntimeBuildResult,
+    load_workbench_runtime_state,
+    project_workspace_rehydrate_from_runtime_payload,
+    project_workspace_state_from_runtime_payload,
+)
 from app.agent.workspace_state import (
     WorkspaceRehydratedState,
     WorkspaceRehydrateResult,
@@ -31,6 +37,8 @@ def rehydrate_from_compact_boundary(
         selected_project_memory_entries=retained_workspace.selected_project_memory_entries,
         active_retrieval_focus=dict(retained_workspace.current_retrieval_focus),
         active_capability_summary=retained_workspace.active_capability_inventory_summary,
+        open_questions=retained_workspace.open_questions,
+        carry_forward_context=retained_workspace.carry_forward_context,
     )
     used_sources = ["boundary"] if retained_live_state else []
     return WorkspaceRehydrateResult(
@@ -51,6 +59,7 @@ def build_rehydrated_workspace(
     capability_inventory_summary: str,
 ) -> WorkspaceRehydrateResult:
     transcript_runtime = TranscriptRuntimeService()
+    workbench_runtime = load_workbench_runtime_state(mutable_state)
     boundary_result = rehydrate_from_compact_boundary(compact_runtime=compact_runtime)
     latest_reinjection = _latest_reinjection_workspace_state(mutable_state)
     latest_assistant_turn = _latest_assistant_turn(mutable_state)
@@ -64,26 +73,49 @@ def build_rehydrated_workspace(
         or boundary_result.state.active_capability_summary
     )
     latest_turn_directive = (
-        _string(latest_assistant_turn.get("resulting_directive"))
+        (workbench_runtime.latest_directive if workbench_runtime is not None else None)
+        or _string(latest_assistant_turn.get("resulting_directive"))
         or _string(latest_reinjection.get("latest_turn_directive"))
         or boundary_result.state.latest_turn_directive
         or transcript_runtime.last_directive(mutable_state).value
     )
     active_stage = (
-        _string(latest_reinjection.get("active_stage"))
+        (workbench_runtime.active_stage if workbench_runtime is not None else None)
+        or _string(latest_reinjection.get("active_stage"))
         or _string(mutable_state.get("current_stage"))
         or boundary_result.state.active_stage
     )
     active_tasks = (
+        tuple(workbench_runtime.active_tasks)
+        if workbench_runtime is not None and workbench_runtime.active_tasks
+        else ()
+    ) or (
         _string_tuple(latest_reinjection.get("active_tasks"))
         or boundary_result.state.active_tasks
         or _string_tuple(mutable_state.get("active_tasks"))
     )
     pending_protocol = (
+        dict(workbench_runtime.pending_protocol_summary)
+        if workbench_runtime is not None and workbench_runtime.pending_protocol_summary
+        else {}
+    ) or (
         pause_active
         or _dict(latest_reinjection.get("pending_protocol"))
         or dict(boundary_result.state.pending_protocol)
     )
+    if workbench_runtime is not None:
+        recent_transcript_highlights = (
+            tuple(workbench_runtime.recent_transcript_highlights) or recent_transcript_highlights
+        )
+        selected_project_memory_entries = (
+            tuple(workbench_runtime.active_memory_selection) or selected_project_memory_entries
+        )
+        active_retrieval_focus = (
+            dict(workbench_runtime.active_recall_focus) or active_retrieval_focus
+        )
+        active_capability_summary = (
+            workbench_runtime.active_capability_summary or active_capability_summary
+        )
     rehydrated_state = WorkspaceRehydratedState(
         active_stage=active_stage,
         active_tasks=active_tasks,
@@ -93,11 +125,22 @@ def build_rehydrated_workspace(
         selected_project_memory_entries=selected_project_memory_entries,
         active_retrieval_focus=active_retrieval_focus,
         active_capability_summary=active_capability_summary,
+        open_questions=(
+            tuple(workbench_runtime.open_questions)
+            if workbench_runtime is not None and workbench_runtime.open_questions
+            else boundary_result.state.open_questions
+        ),
+        carry_forward_context=(
+            workbench_runtime.carry_forward_context
+            if workbench_runtime is not None and workbench_runtime.carry_forward_context
+            else boundary_result.state.carry_forward_context
+        ),
     )
     return WorkspaceRehydrateResult(
         state=rehydrated_state,
         provenance={
             "used_sources": [
+                "workbench_runtime",
                 "boundary",
                 "reinjection",
                 "transcript",
@@ -112,10 +155,31 @@ def build_rehydrated_workspace(
     )
 
 
-def build_workspace_context(result: WorkspaceRehydrateResult) -> dict[str, object]:
+def build_workspace_context(
+    result: WorkspaceRehydrateResult,
+    *,
+    workbench_runtime: WorkbenchRuntimeBuildResult | None = None,
+) -> dict[str, object]:
+    workspace_state = result.state.to_state()
+    workspace_rehydrate = result.to_state()
+    if workbench_runtime is not None:
+        runtime_payload = workbench_runtime.to_state()
+        workspace_state = project_workspace_state_from_runtime_payload(
+            runtime_payload,
+            fallback=workspace_state,
+        )
+        workspace_rehydrate = project_workspace_rehydrate_from_runtime_payload(
+            runtime_payload,
+            fallback=workspace_rehydrate,
+        )
+        return {
+            "workspace_state": workspace_state,
+            "workspace_rehydrate": workspace_rehydrate,
+            "workbench_runtime": runtime_payload,
+        }
     return {
-        "workspace_state": result.state.to_state(),
-        "workspace_rehydrate": result.to_state(),
+        "workspace_state": workspace_state,
+        "workspace_rehydrate": workspace_rehydrate,
     }
 
 

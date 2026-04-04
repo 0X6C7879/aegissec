@@ -7,6 +7,8 @@
 - [DNS Rebinding](#dns-rebinding)
 - [DNS Tunneling / Exfiltration](#dns-tunneling--exfiltration)
 - [DNS Enumeration Quick Reference](#dns-enumeration-quick-reference)
+- [DNS Round-Robin A Record Enumeration (EKOPARTY 2017)](#dns-round-robin-a-record-enumeration-ekoparty-2017)
+- [DNS Maze Traversal (hxp CTF 2017)](#dns-maze-traversal-hxp-ctf-2017)
 
 ---
 
@@ -139,6 +141,63 @@ print(decoded)
 tshark -r capture.pcap -Y "dns.qry.type == 16" \
     -T fields -e dns.qry.name -e dns.txt
 ```
+
+---
+
+## DNS Round-Robin A Record Enumeration (EKOPARTY 2017)
+
+**Pattern:** Domain configured with many rotating A records pointing to different backend IPs. Only some serve the relevant HTTP content. Query repeatedly to collect all IPs, then scan and make direct virtual-host requests.
+
+```bash
+# Get all A records (query multiple times for round-robin)
+for i in $(seq 1 100); do dig +short target.com A; done | sort -u > ips.txt
+
+# Scan each IP for open port 80 and request with correct Host header
+while read ip; do
+    response=$(curl -s -m 3 -H "Host: target.com" "http://$ip/")
+    if echo "$response" | grep -q "flag"; then
+        echo "Found on $ip"
+        echo "$response"
+    fi
+done < ips.txt
+```
+
+**Key insight:** DNS round-robin with heterogeneous backends can hide content across many IPs. A single DNS query may not return all records — query repeatedly (50-100 times) and deduplicate to exhaust the record set. Then make direct virtual-host requests (`-H "Host: target.com"`) to each IP for complete coverage.
+
+---
+
+## DNS Maze Traversal (hxp CTF 2017)
+
+A maze encoded as DNS records: each UUID subdomain is a position, `dig -t txt` gives hints, CNAME records for directional subdomains give neighboring positions:
+
+```python
+import dns.resolver
+def get_neighbors(uuid, domain):
+    neighbors = {}
+    for direction in ['up', 'down', 'left', 'right']:
+        try:
+            answer = dns.resolver.resolve(f'{direction}.{uuid}.{domain}', 'CNAME')
+            neighbors[direction] = str(answer[0]).split('.')[0]
+        except: pass
+    return neighbors
+
+# BFS to find exit
+from collections import deque
+queue = deque([(start_uuid, [start_uuid])])
+visited = {start_uuid}
+while queue:
+    current, path = queue.popleft()
+    txt = dns.resolver.resolve(f'{current}.{domain}', 'TXT')
+    if 'flag' in str(txt[0]):
+        print(f"Found flag at {current}: {txt[0]}")
+        break
+    for direction, next_uuid in get_neighbors(current, domain).items():
+        if next_uuid not in visited:
+            visited.add(next_uuid)
+            queue.append((next_uuid, path + [next_uuid]))
+```
+
+**Key insight:** DNS records can encode arbitrary graph structures. Each node is a subdomain (UUID), edges are CNAME records at directional subdomains (up/down/left/right.UUID.domain), and node data is in TXT records. Standard graph search (BFS/DFS) solves these. Cache aggressively — DNS round-trip times dominate runtime. Use `dns.resolver` (dnspython) rather than subprocess `dig` calls for performance.
 
 ---
 

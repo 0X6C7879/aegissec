@@ -3,18 +3,22 @@
 ## Table of Contents
 - [Elliptic Curve Isogenies](#elliptic-curve-isogenies)
 - [Pohlig-Hellman Attack (Weak ECC)](#pohlig-hellman-attack-weak-ecc)
+- [Baby-Step Giant-Step for General DLP](#baby-step-giant-step-for-general-dlp)
 - [LLL Algorithm for Approximate GCD](#lll-algorithm-for-approximate-gcd)
+- [Merkle-Hellman Knapsack Cryptosystem via LLL (ASIS 2014)](#merkle-hellman-knapsack-cryptosystem-via-lll-asis-2014)
 - [Coppersmith's Method (Close Private Keys)](#coppersmiths-method-close-private-keys)
 - [Coppersmith's Method (Structured Primes, LACTF 2026)](#coppersmiths-method-structured-primes-lactf-2026)
-- [Clock Group (x²+y²≡1 mod p) DLP (LACTF 2026)](#clock-group-xy1-mod-p-dlp-lactf-2026)
+- [Clock Group (x^2+y^2=1 mod p) DLP (LACTF 2026)](#clock-group-x2y21-mod-p-dlp-lactf-2026)
 - [Quaternion RSA](#quaternion-rsa)
-- [Polynomial Arithmetic in GF(2)[x]](#polynomial-arithmetic-in-gf2x)
+- [Polynomial Arithmetic in GF(2)\[x\]](#polynomial-arithmetic-in-gf2x)
 - [RSA Signing Bug](#rsa-signing-bug)
 - [Non-Permutation S-box Collision Attack (Nullcon 2026)](#non-permutation-s-box-collision-attack-nullcon-2026)
-- [Polynomial CRT in GF(2)[x] (Nullcon 2026)](#polynomial-crt-in-gf2x-nullcon-2026)
+- [Polynomial CRT in GF(2)\[x\] (Nullcon 2026)](#polynomial-crt-in-gf2x-nullcon-2026)
 - [Manger's RSA Padding Oracle Attack (Nullcon 2026)](#mangers-rsa-padding-oracle-attack-nullcon-2026)
 - [LWE Lattice Attack via CVP (EHAX 2026)](#lwe-lattice-attack-via-cvp-ehax-2026)
 - [Affine Cipher over Non-Prime Modulus (Nullcon 2026)](#affine-cipher-over-non-prime-modulus-nullcon-2026)
+- [Introspective CRC via GF(2) Linear Algebra (Google CTF 2017)](#introspective-crc-via-gf2-linear-algebra-google-ctf-2017)
+- [Baby-Step Giant-Step for Sparse/Low Hamming Weight Exponents (SEC-T CTF 2017)](#baby-step-giant-step-for-sparselow-hamming-weight-exponents-sec-t-ctf-2017)
 
 ---
 
@@ -91,6 +95,92 @@ residues = [r for (r, _) in partial_logs]
 private_key, _ = crt(moduli, residues)
 ```
 
+## Baby-Step Giant-Step for General DLP
+
+**Pattern:** Compute discrete logarithm `x` where `g^x = h (mod p)` in O(sqrt(n)) time and space, where n is the group order. Works for any cyclic group — multiplicative groups mod p, elliptic curves, or abstract groups. Combined with Pohlig-Hellman for smooth-order groups, solves DLP when `p-1` (or group order) has only small prime factors.
+
+**Baby-step giant-step algorithm:**
+
+```python
+from math import isqrt
+
+def bsgs(g, h, p, order=None):
+    """Baby-step giant-step: find x such that g^x = h (mod p).
+
+    Time/space: O(sqrt(order)). For subgroups, pass the subgroup order.
+    """
+    if order is None:
+        order = p - 1
+    m = isqrt(order) + 1
+
+    # Baby step: build table of g^j for j in [0, m)
+    table = {}
+    power = 1
+    for j in range(m):
+        table[power] = j
+        power = (power * g) % p
+
+    # Giant step: compute g^(-m), then check h * (g^(-m))^i
+    factor = pow(g, -m, p)  # g^(-m) mod p
+    gamma = h
+    for i in range(m):
+        if gamma in table:
+            return i * m + table[gamma]
+        gamma = (gamma * factor) % p
+    return None  # No solution found (order was wrong)
+
+# Example: ElGamal with smooth p-1 (MMA CTF 2015 "Alicegame")
+# p-1 = 2 * 3^4 * 5 * 13 * 397 * 34703 * ... (all small factors)
+# Pohlig-Hellman: solve DLP in each prime-power subgroup, combine with CRT
+```
+
+**Full Pohlig-Hellman + BSGS pipeline:**
+
+```python
+from sympy.ntheory import factorint
+from sympy.ntheory.modular import crt
+
+def pohlig_hellman(g, h, p):
+    """Solve g^x = h (mod p) when p-1 is smooth."""
+    order = p - 1
+    factors = factorint(order)  # {prime: exponent}
+
+    residues = []
+    moduli = []
+    for prime, exp in factors.items():
+        pe = prime ** exp
+        # Project to subgroup of order prime^exp
+        cofactor = order // pe
+        gi = pow(g, cofactor, p)  # Generator of subgroup
+        hi = pow(h, cofactor, p)  # Target in subgroup
+
+        # Solve DLP in small subgroup via BSGS
+        xi = bsgs(gi, hi, p, order=pe)
+        if xi is None:
+            return None
+        residues.append(xi)
+        moduli.append(pe)
+
+    # Combine via CRT
+    x, _ = crt(moduli, residues)
+    assert pow(g, x, p) == h % p
+    return x
+```
+
+**Key insight:** BSGS runs in O(sqrt(q)) for a subgroup of order q. Pohlig-Hellman decomposes the full DLP into subgroup DLPs. If `p-1 = q1^e1 * q2^e2 * ...` where all qi are small, the total cost is O(sum(sqrt(qi^ei))). A 1024-bit prime with smooth `p-1` (all factors under ~40 bits) is solvable in seconds. Sage's `discrete_log()` automatically applies Pohlig-Hellman + BSGS.
+
+**When to recognize:**
+- ElGamal, DSA, or Diffie-Hellman with a randomly generated prime — check if `p-1` is smooth: `factor(p-1)` in Sage
+- ECC with smooth curve order — same approach, replace modular exponentiation with point multiplication
+- Challenge generates new parameters on each connection — retry until you get a smooth prime
+- Challenge description mentions "weak parameters" or uses suspiciously small primes
+
+**Sage one-liner:** `discrete_log(Mod(h, p), Mod(g, p))` handles everything automatically.
+
+**References:** MMA CTF 2015 "Alicegame", SEC-T CTF "Madlog", Crypto CTF 2021 "RoHaLd"
+
+---
+
 ## LLL Algorithm for Approximate GCD
 
 **Pattern (Grinch's Cryptological Defense):** Server gives hints `h_i = f * p_i + n_i` where f is the flag, p_i are small primes, n_i is small noise.
@@ -114,6 +204,35 @@ reduced = M.LLL()
 # Short vector contains p1, p2, p3
 # Recover f = (h1 - n1) / p1
 ```
+
+## Merkle-Hellman Knapsack Cryptosystem via LLL (ASIS 2014)
+
+The Merkle-Hellman knapsack is a broken asymmetric scheme. Given public key P = [p0, ..., pn-1] and ciphertext C (sum of selected public key elements), recover the binary plaintext vector:
+
+```python
+# Sage
+nbit = len(pubKey)
+A = Matrix(ZZ, nbit + 1, nbit + 1)
+
+# Identity matrix in upper-left (tracks which elements are selected)
+for i in range(nbit):
+    A[i, i] = 1
+    A[i, nbit] = pubKey[i]
+
+# Target sum in bottom-right
+A[nbit, nbit] = -int(encoded)
+
+# LLL reduction finds short vector where last element is 0
+res = A.LLL()
+
+# Find row with last element == 0 and all others in {0, 1}
+for row in res:
+    if row[-1] == 0 and all(b in (0, 1) for b in row[:-1]):
+        plaintext_bits = list(row[:-1])
+        break
+```
+
+**Key insight:** The knapsack problem becomes easy when reformulated as a shortest vector problem. The LLL-reduced basis contains a row representing the binary plaintext when the last column is zero.
 
 ## Coppersmith's Method (Close Private Keys)
 
@@ -160,7 +279,7 @@ if roots:
 - `X` parameter is upper bound on root size
 - Works for any "partially known prime" pattern
 
-## Clock Group (x²+y²≡1 mod p) DLP (LACTF 2026)
+## Clock Group (x^2+y^2=1 mod p) DLP (LACTF 2026)
 
 **Pattern (the-clock):** Diffie-Hellman on the unit circle group.
 
@@ -568,3 +687,77 @@ x5 = gauss_elim(A5, b5, mod=5)
 x13 = gauss_elim(A13, b13, mod=13)
 x = [crt2(x5[i], 5, x13[i], 13) for i in range(len(x5))]
 ```
+
+---
+
+## Introspective CRC via GF(2) Linear Algebra (Google CTF 2017)
+
+**Pattern:** Find an ASCII string whose CRC-N value equals the string itself (self-referential CRC). Model CRC as a linear function over GF(2) and solve the resulting system.
+
+```python
+# CRC is linear over GF(2): CRC(a XOR b) = CRC(a) XOR CRC(b)
+# Goal: find x where CRC(x) = x (as ASCII hex)
+# 1. Compute CRC of all-zeros baseline
+# 2. For each bit position, compute the CRC difference (remainder)
+# 3. Set up GF(2) linear system: CRC(x) XOR x = 0
+# 4. Solve with Gaussian elimination over GF(2)
+from sage.all import *
+F = GF(2)
+# Build matrix where each column represents flipping one bit
+# Rows represent the CRC output bits XOR input bits
+M = Matrix(F, n_bits, n_bits)
+# ... fill with CRC remainders ...
+solution = M.solve_right(target_vector)
+```
+
+**Key insight:** CRC is a linear function over GF(2). The self-referential constraint CRC(x)=x becomes a system of linear equations over GF(2), solvable by Gaussian elimination. The ASCII constraint requires choosing free variables to keep all bytes in the printable range.
+
+**References:** Google CTF 2017
+
+---
+
+## Baby-Step Giant-Step for Sparse/Low Hamming Weight Exponents (SEC-T CTF 2017)
+
+**Pattern:** DLP where the exponent is known to have low Hamming weight — e.g., at most k=11 bits set in a 128-bit exponent. Split the exponent into two halves `e = e1 * 2^64 + e2`. Precompute baby steps for all `e1` values with ⌊k/2⌋ = 5 bits set, then do giant steps for all `e2` values with ⌈k/2⌉ = 6 bits set.
+
+**Complexity:** `C(128, 5) ≈ 10^8` baby steps + `C(128, 6) ≈ 10^9` giant steps — vastly less than `O(2^128)` brute force or `O(2^64)` standard BSGS.
+
+```python
+from itertools import combinations
+from math import comb
+
+# Parameters: g^x = a (mod p), x has at most k=11 bits set in 128 bits
+# Split: x = x1 * 2^64 + x2, where x1 has 5 bits set, x2 has 6 bits set
+half = 64
+k_low, k_high = 5, 6
+
+# Baby step: g^(x1 * 2^64) for all x1 with k_low bits set
+baby = {}
+for bit_positions in combinations(range(half), k_low):
+    x1 = sum(1 << b for b in bit_positions)
+    val = pow(g, x1 * (2**half), p)
+    baby[val] = x1
+
+# Giant step: check if a * g^(-x2) is in baby table
+# a = g^x = g^(x1*2^64) * g^x2, so g^(x1*2^64) = a * g^(-x2)
+g_inv = pow(g, -1, p)
+for bit_positions in combinations(range(half), k_high):
+    x2 = sum(1 << b for b in bit_positions)
+    candidate = (a * pow(g_inv, x2, p)) % p
+    if candidate in baby:
+        x1 = baby[candidate]
+        x = x1 * (2**half) + x2
+        assert pow(g, x, p) == a
+        print(f"Found exponent: {x}")
+        break
+```
+
+**Verification:**
+```python
+# Check Hamming weight of recovered exponent
+assert bin(x).count('1') <= 11
+```
+
+**Key insight:** Sparse-exponent DLP with only k bits set is attackable with meet-in-the-middle: each half uses `C(n, k/2)` entries, reducing complexity from `O(2^k)` to `O(C(n, k/2))`. For k=11 in 128 bits, this is ~10^8 vs 2^128. Always check if the challenge reveals or constrains the Hamming weight of the exponent.
+
+**References:** SEC-T CTF 2017

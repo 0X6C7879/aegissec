@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Team4 Progress Tracker",
+  "description": "Phase-4 specialist agent progress tracker, updated by specialists, read by main scheduler and QC-3",
+  "type": "object",
+  "required": [
+    "experts",
+    "status"
+  ],
+  "properties": {
+    "experts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent_name",
+          "task_id",
+          "status"
+        ],
+        "properties": {
+          "agent_name": {
+            "type": "string",
+            "description": "Specialist agent name",
+            "maxLength": 100,
+            "minLength": 1
+          },
+          "task_id": {
+            "type": "string",
+            "description": "Corresponding task ID",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "maxLength": 100
+          },
+          "sink_type": {
+            "type": "string",
+            "description": "Assigned sink type",
+            "enum": [
+              "sqli",
+              "xss_ssti",
+              "rce",
+              "lfi",
+              "filewrite",
+              "ssrf",
+              "xxe",
+              "deserial",
+              "crlf",
+              "ldap",
+              "nosql",
+              "csrf",
+              "session",
+              "authz",
+              "crypto",
+              "race_condition",
+              "business_logic",
+              "infoleak",
+              "logging",
+              "config",
+              "wordpress"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "running",
+              "completed",
+              "failed",
+              "timeout"
+            ],
+            "description": "Agent execution status"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sinks_total": {
+            "type": "integer",
+            "description": "Total number of assigned sinks"
+          },
+          "sinks_completed": {
+            "type": "integer",
+            "description": "Number of completed sink audits"
+          },
+          "vulns_found": {
+            "type": "integer",
+            "description": "Number of vulnerabilities found"
+          },
+          "error_message": {
+            "type": "string",
+            "description": "Error message on failure",
+            "maxLength": 500,
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "partial_failure"
+      ],
+      "description": "Overall Phase-4 status"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "total_experts": {
+      "type": "integer"
+    },
+    "completed_experts": {
+      "type": "integer"
+    }
+  }
+}

@@ -25,7 +25,7 @@
 
 ### KASLR Bypass via Stack Leak (hxp CTF 2020)
 
-Leak a kernel text pointer from the stack to compute the KASLR slide:
+Leak a kernel text pointer from the stack to compute the KASLR (Kernel Address Space Layout Randomization) slide:
 
 ```c
 // Kernel base without KASLR
@@ -51,7 +51,7 @@ unsigned long pop_rdi_ret_kaslr = pop_rdi_ret + kaslr_offset;
 
 ### FGKASLR Bypass (hxp CTF 2020)
 
-FG-KASLR randomizes individual functions, but the early `.text` section (up to approximately offset `0x400dc6`) remains at a fixed offset from the kernel base. Gadgets from this range are safe to use.
+FGKASLR (Function Granular KASLR) randomizes individual functions, but the early `.text` section (up to approximately offset `0x400dc6`) remains at a fixed offset from the kernel base. Gadgets from this range are safe to use.
 
 **Method 1: Use only unaffected `.text` gadgets**
 
@@ -148,20 +148,20 @@ The ROP chain still calls `commit_creds(prepare_kernel_cred(0))` and does `swapg
 
 Instead of returning to userland, overwrite `modprobe_path` directly from the kernel ROP chain using `pop rax; pop rdi; mov [rdi], rax; ret` gadgets. No KPTI handling needed — the write happens entirely in kernel context.
 
-See [kernel.md - modprobe_path Overwrite](kernel.md#modprobe_path-overwrite) for the full technique, trigger sequence, and ROP payload.
+See [kernel.md - modprobe_path Overwrite](kernel.md#modprobepath-overwrite) for the full technique, trigger sequence, and ROP payload.
 
 ### Method 4: core_pattern via ROP
 
 Similar to Method 3 but overwrites `core_pattern` with a pipe command (e.g., `"|/evil"`). When any process crashes, the kernel executes the piped program as root.
 
-See [kernel.md - core_pattern Overwrite](kernel.md#core_pattern-overwrite) for the full technique and how to find the `core_pattern` address.
+See [kernel.md - core_pattern Overwrite](kernel.md#corepattern-overwrite) for the full technique and how to find the `core_pattern` address.
 
 ---
 
 ## SMEP / SMAP Bypass
 
 **SMEP (Supervisor Mode Execution Prevention):** Blocks executing userland pages from kernel mode.
-- **Bypass:** Use kernel ROP (kROP) chains — all gadgets from kernel `.text`. See [kernel.md - Kernel ROP](kernel.md#kernel-rop-with-prepare_kernel_cred--commit_creds).
+- **Bypass:** Use kernel ROP (kROP) chains — all gadgets from kernel `.text`. See [kernel.md - Kernel ROP](kernel.md#kernel-rop-with-preparekernelcred-commitcreds).
 
 **SMAP (Supervisor Mode Access Prevention):** Blocks accessing userland memory from kernel mode.
 - **Bypass:** kROP with heap-resident chain (all data in kernel heap), or `stac`/`clac` gadgets to temporarily disable SMAP.
@@ -174,7 +174,7 @@ See [kernel.md - core_pattern Overwrite](kernel.md#core_pattern-overwrite) for t
 
 | Protection | Blocks | Bypass |
 |-----------|--------|--------|
-| SMEP | Executing userland pages from kernel | kROP (kernel ROP chain) — see [kernel.md](kernel.md#kernel-rop-with-prepare_kernel_cred--commit_creds) |
+| SMEP | Executing userland pages from kernel | kROP (kernel ROP chain) — see [kernel.md](kernel.md#kernel-rop-with-preparekernelcred-commitcreds) |
 | SMAP | Accessing userland memory from kernel | kROP with heap-resident chain, `stac`/`clac` gadgets |
 | No SMEP/SMAP | (nothing) | [ret2usr](kernel.md#ret2usr-no-smepsmap) — directly call userland privesc function |
 | KPTI | Kernel page table isolation | [Trampoline](#method-1-swapgs_restore-trampoline), [signal handler](#method-2-signal-handler-sigsegv), [modprobe_path](#method-3-modprobe_path-via-rop), [core_pattern](#method-4-core_pattern-via-rop) |

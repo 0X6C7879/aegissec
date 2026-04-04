@@ -15,6 +15,9 @@
 - [Kernel Module Maze Solving (DiceCTF 2026)](#kernel-module-maze-solving-dicectf-2026)
 - [Multi-Threaded VM with Channel Synchronization (DiceCTF 2026)](#multi-threaded-vm-with-channel-synchronization-dicectf-2026)
 - [Backdoored Shared Library Detection via String Diffing (Hack.lu CTF 2012)](#backdoored-shared-library-detection-via-string-diffing-hacklu-ctf-2012)
+- [Custom binfmt Kernel Module with RC4 Flat Binaries (BSidesSF 2026)](#custom-binfmt-kernel-module-with-rc4-flat-binaries-bsidessf-2026)
+- [Hash-Resolved Imports / No-Import Ransomware (BSidesSF 2026)](#hash-resolved-imports--no-import-ransomware-bsidessf-2026)
+- [ELF Section Header Corruption for Anti-Analysis (BSidesSF 2026)](#elf-section-header-corruption-for-anti-analysis-bsidessf-2026)
 
 ---
 
@@ -471,4 +474,163 @@ gdb /lib/libc/libc.so.6
 
 ---
 
-See also: [patterns-ctf-2.md](patterns-ctf-2.md) for Part 2 (multi-layer self-decrypting binary, embedded ZIP+XOR license, stack string deobfuscation, prefix hash brute-force, CVP/LLL lattice, decision tree obfuscation, GLSL shader VM, GF(2^8) Gaussian elimination, Z3 boolean circuit, sliding window popcount).
+---
+
+## Custom binfmt Kernel Module with RC4 Flat Binaries (BSidesSF 2026)
+
+**Pattern (Private Binary):** A custom Linux kernel module (`.ko`) registers a `binfmt` handler for non-standard binary formats. When a file with a specific magic number is executed, the kernel module intercepts it, decrypts the contents in memory, and jumps to the entry point.
+
+**Reverse engineering approach:**
+1. **Analyze the `.ko`:** Look for `register_binfmt()` call — it registers a `struct linux_binfmt` with a `load_binary` callback
+2. **Find the magic number:** The `load_binary` function checks the file's first bytes against a specific magic number to identify its format
+3. **Extract the encryption key:** Look for `movabs` instructions loading 8-byte constants — these are often RC4 key bytes
+4. **Identify the encryption scheme:** Common choices are RC4, XOR, or AES-ECB. RC4 is identifiable by the S-box initialization loop (256-byte array, swap pattern)
+5. **Decrypt the flat binary:** Apply the recovered key to the encrypted file contents, skipping any header
+
+```python
+from Crypto.Cipher import ARC4
+
+# Extract RC4 key from kernel module (found via movabs instructions)
+key = bytes([0x41, 0x42, 0x43, ...])  # Key bytes from .ko disassembly
+
+with open('encrypted.bin', 'rb') as f:
+    header = f.read(HEADER_SIZE)  # Skip binfmt header
+    encrypted = f.read()
+
+cipher = ARC4.new(key)
+decrypted = cipher.decrypt(encrypted)
+
+# The decrypted output is a flat binary (no ELF headers)
+# Load at the fixed virtual address specified in the kernel module
+# Disassemble with: objdump -b binary -m i386:x86-64 -D decrypted.bin
+# Or in Ghidra: import as "Raw Binary", set base address from .ko
+```
+
+**Detection in kernel module:**
+- `register_binfmt` / `unregister_binfmt` calls
+- `vm_mmap()` or `vm_brk()` for memory allocation at fixed addresses
+- Direct jump to mapped memory (entry point execution)
+- S-box initialization pattern (RC4): loop 0-255, swap `S[i]` with `S[j]`
+
+**Key insight:** The flat binary has no ELF headers, so standard tools won't recognize it. You must extract the load address from the kernel module (look for the `vm_mmap` call's address argument) and import the decrypted blob at that address in your disassembler. RC4 keys in kernel modules are often stored as immediate values in `mov` or `movabs` instructions rather than in data sections.
+
+**References:** BSidesSF 2026 "Private Binary"
+
+---
+
+## Hash-Resolved Imports / No-Import Ransomware (BSidesSF 2026)
+
+**Pattern (Ran Somewhere):** Malware binary has zero visible imports — all API calls are resolved at runtime by hashing symbol names and comparing against pre-computed hash values. The binary uses `dlopen` + a custom hash table to find libc and libcrypto functions.
+
+**Identification:**
+- `readelf -d` shows no dynamic symbols or very few (just `dlopen`/`dlsym`)
+- Strings reveal no standard API names
+- Disassembly shows hash computation loops followed by indirect calls
+- RC4-encrypted embedded strings (RSA public key, file paths, passphrases)
+
+**Analysis shortcut — LD_PRELOAD key extraction:**
+
+Rather than reversing the full hash resolution and key derivation, hook the crypto functions that the malware ultimately calls:
+
+```c
+// hook_crypto.c — captures AES key used by the ransomware
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <openssl/evp.h>
+#include <stdio.h>
+
+int EVP_CipherInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *type,
+                       ENGINE *impl, const unsigned char *key,
+                       const unsigned char *iv) {
+    if (key) {
+        FILE *f = fopen("/tmp/aes_key.bin", "wb");
+        fwrite(key, 1, 32, f);  // AES-256
+        fclose(f);
+        fprintf(stderr, "[HOOK] AES key captured\n");
+    }
+    typedef int (*orig_t)(EVP_CIPHER_CTX*, const EVP_CIPHER*, ENGINE*,
+                          const unsigned char*, const unsigned char*);
+    orig_t orig = (orig_t)dlsym(RTLD_NEXT, "EVP_CipherInit_ex");
+    return orig(ctx, type, impl, key, iv);
+}
+```
+
+```bash
+# Compile and run
+gcc -shared -fPIC -o hook.so hook_crypto.c -ldl
+# Run in Docker container (ransomware may be destructive!)
+docker run --rm -v $(pwd):/work -w /work ubuntu:22.04 \
+  bash -c "LD_PRELOAD=./hook.so ./ransomware; xxd /tmp/aes_key.bin"
+```
+
+**Hash resolution patterns:**
+- **SipHash variant:** Two 64-bit seeds, iterative mixing with symbol name bytes
+- **DJB2/FNV variants:** Simpler hash functions with recognizable constants (`5381`, `0xcbf29ce484222325`)
+- **ROR13-based:** Windows malware favorite: `hash = (hash >> 13) | (hash << 19); hash += c`
+
+**Decryption after key capture:**
+```python
+from Crypto.Cipher import AES
+
+key = open('/tmp/aes_key.bin', 'rb').read()
+iv = open('/tmp/aes_iv.bin', 'rb').read()  # Also hookable
+cipher = AES.new(key, AES.MODE_CBC, iv)
+
+with open('flag.txt.enc', 'rb') as f:
+    ct = f.read()
+pt = cipher.decrypt(ct)
+# Remove PKCS7 padding
+pt = pt[:-pt[-1]]
+print(pt.decode())
+```
+
+**Key insight:** When a binary resolves all imports via hashing, don't waste time reversing the hash function and building a rainbow table. Instead, let the malware resolve everything itself by running it in a sandboxed environment with `LD_PRELOAD` hooks on the functions you care about (OpenSSL crypto functions, file I/O, network calls). The AES key is deterministic across runs — if it works once, it works always.
+
+**Safety:** Always run suspected ransomware in a Docker container or VM. Mount only copies of the encrypted files, never originals.
+
+**References:** BSidesSF 2026 "Ran Somewhere"
+
+---
+
+## ELF Section Header Corruption for Anti-Analysis (BSidesSF 2026)
+
+**Pattern (stubborn-elf):** An ELF binary has deliberately corrupted section header table entries, causing standard analysis tools (`readelf`, `objdump`, IDA, Ghidra) to crash or produce errors. However, the **program headers** (which the OS loader uses) are intact, so the binary executes normally. The flag is appended after the corrupted sections, marked with magic bytes.
+
+```python
+import sys
+
+# Standard tools fail on corrupted section headers
+# Manual parsing bypasses section headers entirely
+
+with open("stubborn_elf", "rb") as f:
+    data = f.read()
+
+# Search for magic marker appended after ELF sections
+magic = b"\xDE\xAD\xBE\xEF\xCA\xFE\xBA\xBE"
+idx = data.find(magic)
+if idx >= 0:
+    # Data after magic is XOR-encrypted
+    encrypted = data[idx + len(magic):]
+    decrypted = bytes(b ^ 0x42 for b in encrypted)
+    print(decrypted.decode(errors='ignore'))
+```
+
+**Key insight:** ELF execution requires **program headers** (PT_LOAD segments), NOT section headers. Section headers are metadata for debuggers and analysis tools — they're optional at runtime. Corrupting `e_shoff`, `e_shnum`, or `e_shstrndx` in the ELF header breaks tools but not execution. When tools fail, parse the binary manually or patch the ELF header to zero out section header references before loading in a disassembler.
+
+**Recovery approach:**
+```bash
+# Patch section header offset to 0 (removes section table)
+printf '\x00\x00\x00\x00\x00\x00\x00\x00' | dd of=binary bs=1 seek=40 conv=notrunc
+# Now Ghidra/IDA can load it using program headers only
+
+# Or use readelf -l (program headers only, ignores sections)
+readelf -l stubborn_elf
+```
+
+**When to recognize:** `readelf -S` crashes or shows garbage. `file` command identifies it as ELF. `readelf -l` (lowercase L, program headers) works fine. The binary runs normally despite tool failures.
+
+**References:** BSidesSF 2026 "stubborn-elf"
+
+---
+
+See also: [patterns-ctf-2.md](patterns-ctf-2.md) for Part 2 (multi-layer self-decrypting binary, embedded ZIP+XOR license, stack string deobfuscation, prefix hash brute-force, CVP/LLL lattice, decision tree obfuscation, GF(2^8) Gaussian elimination), [patterns-ctf-3.md](patterns-ctf-3.md) for Part 3 (Z3 boolean circuit, sliding window popcount, keyboard LED Morse code, C++ destructor-hidden validation, VM sequential key-chain brute-force, BWT inversion, OpenType font ligature exploitation, GLSL shader VM with self-modifying code).

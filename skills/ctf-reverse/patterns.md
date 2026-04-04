@@ -6,10 +6,12 @@
   - [Common VM Patterns](#common-vm-patterns)
   - [RVA-Based Opcode Dispatching](#rva-based-opcode-dispatching)
   - [State Machine VMs (90K+ states)](#state-machine-vms-90k-states)
+  - [Custom VM Reverse Engineering via Fuzzing and Instruction Set Discovery (hxp CTF 2017)](#custom-vm-reverse-engineering-via-fuzzing-and-instruction-set-discovery-hxp-ctf-2017)
 - [Anti-Debugging Techniques](#anti-debugging-techniques)
   - [Common Checks](#common-checks)
   - [Bypass Technique](#bypass-technique)
   - [LD_PRELOAD Hook](#ld_preload-hook)
+  - [pwntools Binary Patching (Crypto-Cat)](#pwntools-binary-patching-crypto-cat)
 - [Nanomites](#nanomites)
   - [Linux (Signal-Based)](#linux-signal-based)
   - [Windows (Debug Events)](#windows-debug-events)
@@ -18,8 +20,8 @@
   - [Pattern: XOR Decryption](#pattern-xor-decryption)
 - [Known-Plaintext XOR (Flag Prefix)](#known-plaintext-xor-flag-prefix)
   - [Variant: XOR with Position Index](#variant-xor-with-position-index)
-- [Mixed-Mode (x86-64 ↔ x86) Stagers](#mixed-mode-x86-64--x86-stagers)
-- [LLVM Obfuscation (Control Flow Flattening)](#llvm-obfuscation-control-flow-flattening)
+- [Mixed-Mode (x86-64 / x86) Stagers](#mixed-mode-x86-64--x86-stagers)
+- [LLVM (Low Level Virtual Machine) Obfuscation (Control Flow Flattening)](#llvm-low-level-virtual-machine-obfuscation-control-flow-flattening)
   - [Pattern](#pattern)
   - [De-obfuscation](#de-obfuscation)
 - [S-Box / Keystream Generation](#s-box--keystream-generation)
@@ -45,7 +47,10 @@
 - [Malware Anti-Analysis Bypass via Patching](#malware-anti-analysis-bypass-via-patching)
 - [Multi-Stage Shellcode Loaders](#multi-stage-shellcode-loaders)
 - [Timing Side-Channel Attack](#timing-side-channel-attack)
-- [Multi-Thread Anti-Debug with Decoy + Signal Handler MBA (ApoorvCTF 2026)](#multi-thread-anti-debug-with-decoy--signal-handler-mba-apoorvctf-2026)
+- [Multi-Thread Anti-Debug with Decoy + Signal Handler Mixed Boolean-Arithmetic (ApoorvCTF 2026)](#multi-thread-anti-debug-with-decoy--signal-handler-mixed-boolean-arithmetic-apoorvctf-2026)
+- [INT3 Patch + Coredump Brute-Force Oracle (Pwn2Win 2016)](#int3-patch--coredump-brute-force-oracle-pwn2win-2016)
+- [Signal Handler Chain + LD_PRELOAD Oracle (Nuit du Hack 2016)](#signal-handler-chain--ld_preload-oracle-nuit-du-hack-2016)
+- [printf Format String VM Decompilation to Z3 (SECCON 2017)](#printf-format-string-vm-decompilation-to-z3-seccon-2017)
 
 ---
 
@@ -94,6 +99,54 @@ while (!agenda.isEmpty()) {
 }
 ```
 
+**Key insight:** Custom VMs appear when the challenge bundles a bytecode blob alongside a dispatcher loop. Reverse the opcode switch table first, then write a disassembler to lift the bytecode before attempting to understand the algorithm.
+
+### Custom VM Reverse Engineering via Fuzzing and Instruction Set Discovery (hxp CTF 2017)
+
+Methodical black-box approach to reversing unknown VM bytecode when static analysis of the dispatch loop is too complex:
+
+**Step 1: Determine instruction alignment.**
+Dump the bytecode as bit strings at various widths (6-11 bits) to identify instruction alignment. Look for repeating patterns that suggest opcode boundaries.
+
+**Step 2: Fuzz with random bytes.**
+Send single instructions and observe effects on registers/memory to map opcodes. Reduce to minimal programs: find the shortest input that produces each observable effect.
+
+**Step 3: Build the instruction set.**
+Example discovered ISA (variable-length 6-11 bit):
+```text
+000 xxxxxxxx  jmpz    001 xxxxxxxx  jmp     010 xxxxxxxx  call
+011 xxxxxxxx  label   1000 xxxxxxx  loadram  1001 xxxxxxx  saveram
+110 xxxxxxxx  loadi   11100 xxxxxx  shl      11101 xxxxxx  shr
+111100 not    111101 and    111110 or    111111 setif
+```
+
+**Step 4: Build assembler/disassembler.**
+Write tools to assemble and disassemble the discovered ISA, then disassemble the challenge bytecode to understand its algorithm.
+
+**Step 5: Implement missing primitives.**
+If the ISA lacks expected operations, synthesize them from available instructions. Example: implementing XTEA decryption using only AND/OR/NOT (no native XOR or ADD):
+```python
+# XOR from AND/OR/NOT:  XOR(a, b) = (a OR b) AND NOT(a AND b)
+# ADD via full-adder chains using AND/OR/NOT for carry propagation
+def xor_from_primitives(a, b):
+    return (a | b) & ~(a & b)
+
+def add_from_primitives(a, b, bits=32):
+    carry = 0
+    result = 0
+    for i in range(bits):
+        ai = (a >> i) & 1
+        bi = (b >> i) & 1
+        sum_bit = xor_from_primitives(xor_from_primitives(ai, bi), carry)
+        carry = (ai & bi) | (carry & xor_from_primitives(ai, bi))
+        result |= (sum_bit << i)
+    return result
+```
+
+**Key insight:** When static analysis of a VM's dispatch loop is too complex, black-box fuzzing can map the ISA faster. Send single instructions and observe state changes. Variable-length instruction sets require testing multiple bit widths. Once the ISA is known, complex algorithms (XTEA) can be implemented even with minimal primitives (AND/OR/NOT).
+
+**References:** hxp CTF 2017
+
 ---
 
 ## Anti-Debugging Techniques
@@ -135,6 +188,8 @@ long int ptrace(enum __ptrace_request req, ...) {
 Compile: `gcc -shared -fPIC -ldl hook.c -o hook.so`
 Run: `LD_PRELOAD=./hook.so ./binary`
 
+**Key insight:** Anti-debugging checks are the first obstacle in most reversing challenges. Look for `ptrace`, `IsDebuggerPresent`, or timing checks early in `main()` and patch or hook them before attempting deeper analysis.
+
 ### pwntools Binary Patching (Crypto-Cat)
 Patch out anti-debug calls directly using pwntools — replaces function with `ret` instruction:
 ```python
@@ -173,6 +228,8 @@ elf.asm(addr, 'mov eax, 1; ret')      # Return 1 (force success)
 3. Map EAX values to operations
 4. Log operations to reconstruct algorithm
 
+**Key insight:** Nanomites hide the real computation inside signal/exception handlers that only fire under a debugger parent. If the binary forks and the child calls `ptrace(TRACEME)`, the parent is the real CPU -- log its POKE operations to reconstruct the algorithm.
+
 ---
 
 ## Self-Modifying Code
@@ -190,6 +247,8 @@ jmp     rax              ; Execute decrypted
 ```
 
 **Solution:** Known opcode at block start reveals XOR key (flag char).
+
+**Key insight:** Self-modifying code decrypts the next block using each input character as a key. A known-good opcode at the start of each decrypted block (e.g., function prologue) reveals the correct key byte, recovering the flag one character at a time.
 
 ---
 
@@ -258,7 +317,7 @@ for klen in range(2, 33):
 
 ---
 
-## Mixed-Mode (x86-64 ↔ x86) Stagers
+## Mixed-Mode (x86-64 / x86) Stagers
 
 **Pattern:** 64-bit ELF jumps into a 32-bit blob via far return (`retf`/`retfq`), often after anti-debug.
 
@@ -279,7 +338,7 @@ for klen in range(2, 33):
 
 ---
 
-## LLVM Obfuscation (Control Flow Flattening)
+## LLVM (Low Level Virtual Machine) Obfuscation (Control Flow Flattening)
 
 ### Pattern
 ```c
@@ -295,6 +354,8 @@ while (1) {
 2. Log state variable values
 3. Map state transitions
 4. Reconstruct true control flow
+
+**Key insight:** Control flow flattening replaces structured if/else/loops with a single dispatcher switch. The state variable is the key -- trace its values at runtime to reconstruct the original control flow graph without fighting the obfuscation statically.
 
 ---
 
@@ -334,6 +395,8 @@ def gen_keystream():
 - Xorshift64*: shifts 12, 25, 27, then multiply by `0x2545f4914f6cdd1d`
 - Other common constant: `0x9e3779b97f4a7c15` (golden ratio)
 
+**Key insight:** Recognize S-box generation by the Fisher-Yates shuffle pattern (loop counting down from 255, swap with PRNG-chosen index) and keystream generators by the xorshift constants. Once the PRNG family is identified, the algorithm is fully determined by its seed.
+
 ---
 
 ## SECCOMP/BPF Filter Analysis
@@ -358,6 +421,8 @@ if s.check() == sat:
     print(''.join(chr(m[c].as_long()) for c in flag))
 ```
 
+**Key insight:** SECCOMP (Secure Computing Mode) filters encode flag validation as BPF bytecode operating on syscall arguments. Dump the filter with `seccomp-tools`, translate the comparisons and memory operations into z3 constraints, and solve for the flag without ever running the binary.
+
 ---
 
 ## Exception Handler Obfuscation
@@ -371,6 +436,8 @@ if s.check() == sat:
 - `AddVectoredExceptionHandler` installs handler
 - Handler decrypts code at exception address
 - Step through, dump decrypted code
+
+**Key insight:** Exception-handler-based obfuscation hides the real control flow inside SEH/VEH handlers that trigger on deliberate faults. Set breakpoints inside the exception handlers rather than on the faulting instructions to follow the actual execution path.
 
 ---
 
@@ -387,6 +454,8 @@ prologue = bytes([0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5])
 encrypted = data[func_offset:func_offset+8]
 partial_key = bytes(a ^ b for a, b in zip(encrypted, prologue))
 ```
+
+**Key insight:** When a binary reads `/proc/self/mem` or `/proc/self/maps`, it is dumping its own memory -- possibly after encrypting it. Use known function prologues (`endbr64; push rbp; mov rbp, rsp`) as known plaintext to recover the XOR key from the encrypted dump.
 
 ---
 
@@ -433,6 +502,8 @@ loop_middle:
     jne  loop_top
 ```
 
+**Key insight:** Decompilers often get x86-64 sign extension and loop boundary state updates wrong. Always verify decompiled output against the raw assembly for operations involving `movsx`/`cdqe`, and check whether loop variables update before or after their use in each iteration.
+
 ---
 
 ## Custom Mangle Function Reversing
@@ -444,6 +515,8 @@ loop_middle:
 2. Understand mangle: processes pairs with running state value
 3. Write inverse function (process in reverse, undo each operation)
 4. Feed target bytes through inverse → recovers flag
+
+**Key insight:** When a binary mangles input in pairs with running state and compares to a static target, extract the target from `.rodata` and write the inverse function. Process the target bytes in reverse order, undoing each operation, to recover the original input.
 
 ---
 
@@ -581,7 +654,7 @@ for pos in range(flag_length):
 
 ---
 
-## Multi-Thread Anti-Debug with Decoy + Signal Handler MBA (ApoorvCTF 2026)
+## Multi-Thread Anti-Debug with Decoy + Signal Handler Mixed Boolean-Arithmetic (ApoorvCTF 2026)
 
 **Pattern (A Golden Experience Requiem):** Multi-threaded binary with layered anti-analysis: Thread 1 performs decoy operations (fake AES + deliberate crash via `ud2`), Thread 2 does the real flag computation in a SIGSEGV signal handler using Mixed Boolean Arithmetic (MBA), Thread 3 erases memory to prevent post-mortem analysis.
 
@@ -636,3 +709,93 @@ print(''.join(flag))
 - `ud2` instruction (deliberate illegal instruction)
 - `rdtsc` instructions for timing checks
 - SHA-256 constants (0x6a09e667...) used as lookup tables, not for hashing
+
+---
+
+## INT3 Patch + Coredump Brute-Force Oracle (Pwn2Win 2016)
+
+Instead of reversing complex transformation logic, patch a byte to `0xCC` (INT3) after the transform, enable core dumps, brute-force each character by running the binary and extracting the transformed result from the coredump via `strings`.
+
+```bash
+# Patch byte at transform output point to 0xCC
+printf '\xcc' | dd of=binary bs=1 seek=$((0x400ebb)) conv=notrunc
+ulimit -c unlimited
+# Brute-force each position:
+for c in $(seq 32 126); do
+    echo -ne "$(printf '\\x%02x' $c)$known_suffix" | ./binary 2>/dev/null
+    strings core | grep -q "$expected" && echo "Found: $c"
+done
+```
+
+**Key insight:** Use INT3/SIGTRAP as a breakpoint oracle -- the coredump captures computed state at the crash point. Avoids full reverse engineering of the transformation.
+
+---
+
+## Signal Handler Chain + LD_PRELOAD Oracle (Nuit du Hack 2016)
+
+Binary uses Unix signals for flow control: `main()` sends SIGINT to itself 1024 times, each handler checks one password character, then calls `signal()` to install the next handler. Bypass: LD_PRELOAD a custom `signal()` that logs when it's called (indicating correct character), brute-force each position.
+
+```c
+// LD_PRELOAD library:
+#include <signal.h>
+sighandler_t signal(int sig, sighandler_t handler) {
+    write(2, "CORRECT\n", 8);  // signal() called = char was correct
+    return SIG_DFL;
+}
+```
+
+**Key insight:** Signal-handler-chain anti-reversing can be defeated by hooking `signal()` via LD_PRELOAD. The call to `signal()` (to install the next handler) acts as a side-channel confirming the current character.
+
+---
+
+### printf Format String VM Decompilation to Z3 (SECCON 2017)
+
+A "virtual machine" implemented entirely via `%hhn` format strings. Format string `%hhn` writes the count of printed characters (mod 256) to a pointed-to byte. A sequence of `%Nc%hhn` instructions implements arbitrary byte-to-memory writes, effectively creating a bytecode VM.
+
+**Step 1: Identify instruction types.**
+Count unique format patterns to determine the instruction set:
+```bash
+# Normalize numbers and count unique patterns
+sed -e 's/[[:digit:]]\+/1/g' program.fs | sort | uniq -c | sort -nr
+```
+
+**Step 2: Write a decompiler.**
+Convert format patterns to C-style pseudocode. Each `%N...%hhn` pair maps to a memory write: extract the write address (from the argument pointer) and value (from the character count).
+
+**Step 3: Recognize the algorithm.**
+The pseudocode typically reveals a linear equation system over bytes. Map memory addresses to symbolic variables.
+
+**Step 4: Generate Z3 constraints and solve.**
+```python
+from z3 import *
+
+flag_len = 32  # adjust based on decompiled output
+flag = [BitVec(f'f{i}', 8) for i in range(flag_len)]
+s = Solver()
+
+# Constrain to printable ASCII
+for f in flag:
+    s.add(f >= 0x20, f <= 0x7e)
+
+# Add constraints from decompiled format string operations
+# e.g., flag[3] + flag[7] == 0xAB (mod 256)
+# These come from the write sequences: each %hhn accumulates
+# character counts and writes the result to a target byte
+s.add((flag[0] + flag[1]) & 0xFF == 0x9A)  # example constraint
+s.add((flag[2] ^ flag[3]) & 0xFF == 0x3F)  # example constraint
+# ... (add all constraints from decompilation)
+
+if s.check() == sat:
+    m = s.model()
+    print(bytes([m[f].as_long() for f in flag]))
+```
+
+**Decompilation approach in detail:**
+1. Extract the write address and value from each `%N...%hhn` pair
+2. Map memory addresses to symbolic variables (flag bytes)
+3. Build an equation system from the write sequences
+4. Solve with Z3
+
+**Key insight:** Format string `%hhn` writes the count of printed characters (mod 256) to a pointed-to byte. A sequence of `%Nc%hhn` instructions implements arbitrary byte-to-memory writes, effectively creating a bytecode VM. Decompile by: (1) extract the write address and value from each `%N...%hhn` pair, (2) map memory addresses to symbolic variables, (3) build an equation system from the write sequences, (4) solve with Z3.
+
+**References:** SECCON 2017

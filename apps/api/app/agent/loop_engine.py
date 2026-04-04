@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.agent.assistant_runtime import AssistantExecutionRuntime, AssistantRuntimeService
 from app.agent.compact_runtime import CompactRuntimeService
 from app.agent.context_models import ContextSnapshot
 from app.agent.context_projection import ContextProjectionBuilder
@@ -26,8 +27,14 @@ from app.agent.tool_scheduler import (
 from app.agent.transcript_runtime import TranscriptRuntimeService
 from app.agent.turn_models import NextTurnDirective
 from app.agent.turn_planner import AssistantTurnPlanner
+from app.agent.workbench_runtime import (
+    build_workbench_runtime,
+    load_workbench_runtime_state,
+    persist_workbench_runtime_state,
+    project_workbench_runtime,
+)
 from app.agent.workflow import WorkflowExecutionContext, WorkflowGraphRuntime
-from app.agent.workspace_rehydrate import build_rehydrated_workspace, build_workspace_context
+from app.agent.workspace_rehydrate import build_rehydrated_workspace
 from app.db.models import Session, TaskNode, TaskNodeStatus, WorkflowRun, WorkflowRunStatus
 from app.db.repositories import GraphRepository, RunLogRepository, SessionRepository
 from app.services.capabilities import CapabilityFacade
@@ -92,6 +99,7 @@ class WorkflowLoopEngine:
         self._post_compact_reinjection = PostCompactReinjectionService()
         self._transcript_runtime = TranscriptRuntimeService()
         self._assistant_turn_planner = AssistantTurnPlanner()
+        self._assistant_runtime = AssistantRuntimeService()
         self._runtime = runtime or WorkflowGraphRuntime()
         self._selector = selector or WorkflowRunnableSelector(
             self._runtime,
@@ -142,10 +150,43 @@ class WorkflowLoopEngine:
                 task_name=resolved_task.name if resolved_task is not None else "workflow-protocol",
                 resolved_entry=resolved_protocol,
             )
+            lifecycle_events = self._pause_runtime.lifecycle_events(mutable_state, limit=1)
+            if lifecycle_events:
+                self._transcript_runtime.append_continuation_lifecycle_event(
+                    mutable_state=mutable_state,
+                    cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
+                    current_stage=(
+                        self._runtime.task_stage(resolved_task)
+                        if resolved_task is not None
+                        else run.current_stage
+                    ),
+                    task_name=resolved_task.name
+                    if resolved_task is not None
+                    else "workflow-protocol",
+                    lifecycle_event=lifecycle_events[-1],
+                )
             self._transcript_runtime.set_last_directive(
                 mutable_state,
                 NextTurnDirective.CONTINUE,
             )
+        elif (
+            isinstance(resume_token, str)
+            or isinstance(user_input, str)
+            or isinstance(resolution_payload, dict)
+            or approve
+        ):
+            lifecycle_events = self._pause_runtime.lifecycle_events(mutable_state, limit=1)
+            if (
+                lifecycle_events
+                and str(lifecycle_events[-1].get("event_type") or "") == "validation_failed"
+            ):
+                self._transcript_runtime.append_continuation_lifecycle_event(
+                    mutable_state=mutable_state,
+                    cycle_id=f"cycle-{self._batch_cycle(mutable_state)}",
+                    current_stage=run.current_stage,
+                    task_name="workflow-protocol",
+                    lifecycle_event=lifecycle_events[-1],
+                )
         context_snapshot = self._build_context_snapshot(
             run=run,
             session=session,
@@ -227,14 +268,27 @@ class WorkflowLoopEngine:
             )
 
         selection = self._selector.select(tasks=tasks, state=mutable_state)
-        schedule = self._tool_scheduler.build_schedule(selection)
+        assistant_execution_runtime = self._assistant_runtime.build_runtime(
+            cycle_id=f"cycle-{self._batch_cycle(mutable_state) + 1}",
+            mutable_state=mutable_state,
+            selection=selection,
+        )
+        assistant_execution_frame = assistant_execution_runtime.execution_frame
+        mutable_state["assistant_execution_runtime"] = assistant_execution_runtime.to_state()
+        wave_selection = AssistantRuntimeService.filter_selection_to_wave(
+            selection,
+            assistant_execution_frame.chosen_wave,
+        )
+        schedule = self._tool_scheduler.build_schedule(wave_selection)
         task_by_id = {task.id: task for task in tasks}
         runnable_tasks = [
             task_by_id[selected_task.task_id]
-            for selected_task in selection.selected_tasks
+            for selected_task in wave_selection.selected_tasks
             if selected_task.task_id in task_by_id
         ]
         if not runnable_tasks:
+            idle_tool_results: list[dict[str, object]] = []
+            idle_partial_failures: list[dict[str, object]] = []
             resolved_status = self._runtime.resolve_run_status(tasks)
             ended_at = datetime.now(UTC) if resolved_status is WorkflowRunStatus.DONE else None
             mutable_state["approval"] = {"required": False, "pending_task_id": None}
@@ -244,25 +298,34 @@ class WorkflowLoopEngine:
                 selected_task_ids=[],
                 executed_task_ids=[],
             )
+            empty_assimilation = self._assistant_runtime.assimilate_wave_result(
+                mutable_state=mutable_state,
+                chosen_wave=assistant_execution_frame.chosen_wave,
+                tool_results=idle_tool_results,
+                partial_failures=idle_partial_failures,
+                next_directive=self._transcript_runtime.last_directive(mutable_state),
+            ).to_state()
             loop_state = loop_state.append_cycle(
                 self._build_cycle_artifact(
                     mutable_state,
                     schedule=schedule,
                     context_snapshot=context_snapshot,
-                    tool_results=[],
+                    tool_results=idle_tool_results,
                     reflection_summaries=[],
                     merge_summary=self._build_merge_summary(
                         merge_events=[],
                         executed_task_ids=[],
-                        partial_failures=[],
+                        partial_failures=idle_partial_failures,
                     ),
-                    partial_failures=[],
+                    partial_failures=idle_partial_failures,
+                    assistant_execution_runtime=assistant_execution_runtime,
                     next_action=self._transcript_runtime.directive_to_next_action(
                         self._transcript_runtime.set_last_directive(
                             mutable_state,
                             self._transcript_runtime.directive_for_run_status(resolved_status),
                         )
                     ),
+                    assimilation_result=empty_assimilation,
                 )
             )
             loop_state.apply_to_state(mutable_state)
@@ -277,7 +340,7 @@ class WorkflowLoopEngine:
                 executed_task_ids=[],
             )
 
-        self._start_batch_cycle(mutable_state, selected_task_ids=selection.selected_task_ids)
+        self._start_batch_cycle(mutable_state, selected_task_ids=wave_selection.selected_task_ids)
         context_snapshot = self._build_context_snapshot(
             run=run,
             session=session,
@@ -377,6 +440,14 @@ class WorkflowLoopEngine:
                         last_executed_task=last_executed_task,
                         last_failure_reason=last_failure_reason,
                         blocked_task_id=self._blocked_task_id_from_merge_result(merge_result),
+                        assimilation_result=self._assistant_turn_planner.build_assimilation_result(
+                            mutable_state=mutable_state,
+                            tool_results=tool_results,
+                            partial_failures=partial_failures,
+                            next_directive=latest_directive,
+                            assistant_execution_runtime=assistant_execution_runtime,
+                        ),
+                        assistant_execution_runtime=assistant_execution_runtime,
                     )
                     if directive_result is not None:
                         return directive_result
@@ -393,7 +464,7 @@ class WorkflowLoopEngine:
                     self._update_batch_state(
                         mutable_state,
                         status="waiting_approval",
-                        selected_task_ids=selection.selected_task_ids,
+                        selected_task_ids=wave_selection.selected_task_ids,
                         executed_task_ids=executed_task_ids,
                     )
                     context_snapshot = self._build_context_snapshot(
@@ -415,6 +486,7 @@ class WorkflowLoopEngine:
                                 partial_failures=partial_failures,
                             ),
                             partial_failures=partial_failures,
+                            assistant_execution_runtime=assistant_execution_runtime,
                             next_action=self._transcript_runtime.directive_to_next_action(
                                 self._transcript_runtime.set_last_directive(
                                     mutable_state,
@@ -422,6 +494,15 @@ class WorkflowLoopEngine:
                                         WorkflowRunStatus.NEEDS_APPROVAL
                                     ),
                                 )
+                            ),
+                            assimilation_result=self._assistant_turn_planner.build_assimilation_result(
+                                mutable_state=mutable_state,
+                                tool_results=tool_results,
+                                partial_failures=partial_failures,
+                                next_directive=self._transcript_runtime.last_directive(
+                                    mutable_state
+                                ),
+                                assistant_execution_runtime=assistant_execution_runtime,
                             ),
                         )
                     )
@@ -453,7 +534,7 @@ class WorkflowLoopEngine:
                     self._update_batch_state(
                         mutable_state,
                         status="waiting_approval",
-                        selected_task_ids=selection.selected_task_ids,
+                        selected_task_ids=wave_selection.selected_task_ids,
                         executed_task_ids=executed_task_ids,
                     )
                     context_snapshot = self._build_context_snapshot(
@@ -475,6 +556,7 @@ class WorkflowLoopEngine:
                                 partial_failures=partial_failures,
                             ),
                             partial_failures=partial_failures,
+                            assistant_execution_runtime=assistant_execution_runtime,
                             next_action=self._transcript_runtime.directive_to_next_action(
                                 self._transcript_runtime.set_last_directive(
                                     mutable_state,
@@ -482,6 +564,15 @@ class WorkflowLoopEngine:
                                         WorkflowRunStatus.NEEDS_APPROVAL
                                     ),
                                 )
+                            ),
+                            assimilation_result=self._assistant_turn_planner.build_assimilation_result(
+                                mutable_state=mutable_state,
+                                tool_results=tool_results,
+                                partial_failures=partial_failures,
+                                next_directive=self._transcript_runtime.last_directive(
+                                    mutable_state
+                                ),
+                                assistant_execution_runtime=assistant_execution_runtime,
                             ),
                         )
                     )
@@ -547,6 +638,14 @@ class WorkflowLoopEngine:
                     last_executed_task=last_executed_task,
                     last_failure_reason=last_failure_reason,
                     blocked_task_id=self._blocked_task_id_from_merge_result(merge_result),
+                    assimilation_result=self._assistant_turn_planner.build_assimilation_result(
+                        mutable_state=mutable_state,
+                        tool_results=tool_results,
+                        partial_failures=partial_failures,
+                        next_directive=latest_directive,
+                        assistant_execution_runtime=assistant_execution_runtime,
+                    ),
+                    assistant_execution_runtime=assistant_execution_runtime,
                 )
                 if directive_result is not None:
                     return directive_result
@@ -581,6 +680,7 @@ class WorkflowLoopEngine:
                     partial_failures=partial_failures,
                 ),
                 partial_failures=partial_failures,
+                assistant_execution_runtime=assistant_execution_runtime,
                 next_action=self._transcript_runtime.directive_to_next_action(
                     self._transcript_runtime.set_last_directive(
                         mutable_state,
@@ -590,6 +690,13 @@ class WorkflowLoopEngine:
                             else latest_directive
                         ),
                     )
+                ),
+                assimilation_result=self._assistant_turn_planner.build_assimilation_result(
+                    mutable_state=mutable_state,
+                    tool_results=tool_results,
+                    partial_failures=partial_failures,
+                    next_directive=self._transcript_runtime.last_directive(mutable_state),
+                    assistant_execution_runtime=assistant_execution_runtime,
                 ),
             )
         )
@@ -693,6 +800,15 @@ class WorkflowLoopEngine:
                 task_name=task.name,
                 pending_entry=pending_protocol,
             )
+            lifecycle_events = self._pause_runtime.lifecycle_events(mutable_state, limit=1)
+            if lifecycle_events:
+                self._transcript_runtime.append_continuation_lifecycle_event(
+                    mutable_state=mutable_state,
+                    cycle_id=cycle_id,
+                    current_stage=self._runtime.task_stage(task),
+                    task_name=task.name,
+                    lifecycle_event=lifecycle_events[-1],
+                )
             if str(pending_protocol.get("kind") or "") == "approval":
                 pending_resume_payload = pending_protocol.get("resume_payload")
                 mutable_state["approval"] = {
@@ -1268,6 +1384,11 @@ class WorkflowLoopEngine:
         merge_summary: dict[str, object],
         partial_failures: list[dict[str, object]],
         next_action: str,
+        assistant_execution_runtime: AssistantExecutionRuntime | None = None,
+        candidate_waves: list[dict[str, object]] | None = None,
+        chosen_wave: dict[str, object] | None = None,
+        wave_decision: dict[str, object] | None = None,
+        assimilation_result: dict[str, object] | None = None,
     ) -> WorkflowCycleArtifact:
         batch_raw = mutable_state.get("batch")
         batch = (
@@ -1295,6 +1416,21 @@ class WorkflowLoopEngine:
         )
         started_at = batch.get("started_at") if isinstance(batch.get("started_at"), str) else None
         ended_at = batch.get("ended_at") if isinstance(batch.get("ended_at"), str) else None
+        resolved_candidate_waves = (
+            assistant_execution_runtime.execution_frame.candidate_waves_state()
+            if assistant_execution_runtime is not None
+            else list(candidate_waves or [])
+        )
+        resolved_chosen_wave = (
+            assistant_execution_runtime.execution_frame.chosen_wave_state()
+            if assistant_execution_runtime is not None
+            else dict(chosen_wave or {})
+        )
+        resolved_wave_decision = (
+            assistant_execution_runtime.execution_frame.wave_decision_state()
+            if assistant_execution_runtime is not None
+            else dict(wave_decision or {})
+        )
         cycle_id = f"cycle-{uuid4()}"
         base_cycle = WorkflowCycleArtifact(
             cycle_id=cycle_id,
@@ -1355,6 +1491,10 @@ class WorkflowLoopEngine:
                 "projection_summary": context_snapshot.projection.summary,
             },
             context_projection=context_snapshot.projection.to_state(),
+            candidate_waves=resolved_candidate_waves,
+            chosen_wave=resolved_chosen_wave,
+            wave_decision=resolved_wave_decision,
+            assimilation_result=dict(assimilation_result or {}),
             next_action=next_action,
             started_at=started_at,
             ended_at=ended_at,
@@ -1370,8 +1510,48 @@ class WorkflowLoopEngine:
             partial_failures=partial_failures,
             next_action=next_action,
             next_directive=self._transcript_runtime.last_directive(mutable_state),
+            assistant_execution_runtime=assistant_execution_runtime,
+            candidate_waves=resolved_candidate_waves,
+            chosen_wave=resolved_chosen_wave,
+            wave_decision=resolved_wave_decision,
+            assimilation_result=dict(assimilation_result or {}),
         )
         self._assistant_turn_planner.persist_bundle(mutable_state=mutable_state, bundle=bundle)
+        existing_workbench = load_workbench_runtime_state(mutable_state)
+        if existing_workbench is not None:
+            current_runtime = mutable_state.get("workbench_runtime")
+            raw_workspace_rehydrate = (
+                current_runtime.get("workspace_rehydrate")
+                if isinstance(current_runtime, dict)
+                else None
+            )
+            workspace_rehydrate = (
+                {str(key): value for key, value in raw_workspace_rehydrate.items()}
+                if isinstance(raw_workspace_rehydrate, dict)
+                else {}
+            )
+            persist_workbench_runtime_state(
+                mutable_state,
+                state=existing_workbench.__class__(
+                    active_stage=existing_workbench.active_stage,
+                    active_tasks=list(existing_workbench.active_tasks),
+                    current_turn_id=bundle.turn_input.turn_id,
+                    latest_directive=bundle.turn_outcome.resulting_directive,
+                    active_continuations=list(existing_workbench.active_continuations),
+                    active_recall_focus=dict(existing_workbench.active_recall_focus),
+                    active_memory_selection=list(existing_workbench.active_memory_selection),
+                    recent_transcript_highlights=list(
+                        existing_workbench.recent_transcript_highlights
+                    ),
+                    active_capability_summary=existing_workbench.active_capability_summary,
+                    open_questions=list(bundle.turn_outcome.unresolved_questions),
+                    carry_forward_context=bundle.turn_outcome.carry_forward_context,
+                    pending_protocol_summary=dict(existing_workbench.pending_protocol_summary),
+                    latest_assimilation_summary=dict(bundle.turn_outcome.assimilation_result),
+                ),
+                workspace_rehydrate=workspace_rehydrate,
+                source="workflow.loop_engine",
+            )
         context_raw = mutable_state.get("context")
         if isinstance(context_raw, dict):
             prompting_raw = context_raw.get("prompting")
@@ -1459,7 +1639,7 @@ class WorkflowLoopEngine:
             retrieval=retrieval,
             capability_inventory_summary=capability_fragments["inventory_summary"],
         )
-        workspace_context = build_workspace_context(workspace_rehydrate)
+        retrieval_manifest_sources = self._project_manifest_source_ids(mutable_state)
         transcript_continuity = self._transcript_runtime.prompt_continuity(mutable_state)
         raw_reinjection_provenance = reinjection.get("provenance")
         reinjection_provenance = (
@@ -1477,6 +1657,69 @@ class WorkflowLoopEngine:
         active_pause = pause_state.get("active")
         latest_resolved_pause = pause_state.get("latest_resolved")
         prior_turn_outcome = self._assistant_turn_planner.latest_outcome(mutable_state)
+        active_continuation_items = (
+            [item for item in raw_active_continuations if isinstance(item, dict)]
+            if isinstance(
+                (raw_active_continuations := pause_state.get("active_continuations")), list
+            )
+            else []
+        )
+        recent_delta_ids = (
+            [str(item) for item in raw_recent_delta_ids if isinstance(item, str)]
+            if isinstance(
+                (raw_recent_delta_ids := transcript_provenance.get("recent_delta_ids")), list
+            )
+            else []
+        )
+        workbench_runtime = build_workbench_runtime(
+            mutable_state=mutable_state,
+            active_stage=current_stage,
+            active_tasks=self._workspace_active_tasks(tasks, active_task_name=active_task_name),
+            latest_directive=self._transcript_runtime.last_directive(mutable_state).value,
+            active_continuations=[dict(item) for item in active_continuation_items],
+            active_recall_focus=self._current_retrieval_focus(retrieval, mutable_state),
+            active_memory_selection=self._selected_project_memory_entries(
+                retrieval=retrieval,
+                mutable_state=mutable_state,
+            ),
+            recent_transcript_highlights=list(
+                workspace_rehydrate.state.recent_transcript_highlights
+            ),
+            active_capability_summary=capability_fragments["inventory_summary"],
+            open_questions=(
+                list(prior_turn_outcome.unresolved_questions)
+                if prior_turn_outcome is not None
+                else []
+            ),
+            carry_forward_context=(
+                prior_turn_outcome.carry_forward_context if prior_turn_outcome is not None else ""
+            ),
+            pending_protocol_summary=self._workspace_pending_protocol(mutable_state),
+            latest_assimilation_summary=(
+                dict(prior_turn_outcome.assimilation_result)
+                if prior_turn_outcome is not None
+                else {}
+            ),
+            workspace_rehydrate=workspace_rehydrate.to_state(),
+            recent_delta_ids=recent_delta_ids,
+            continuation_ids=[
+                str(item.get("continuation_token") or "")
+                for item in active_continuation_items
+                if isinstance(item, dict) and isinstance(item.get("continuation_token"), str)
+            ],
+            assistant_turn_id=(
+                prior_turn_outcome.turn_id if prior_turn_outcome is not None else None
+            ),
+            retrieval_manifest_sources=retrieval_manifest_sources,
+            memory_entry_ids=self._selected_project_memory_entries(
+                retrieval=retrieval,
+                mutable_state=mutable_state,
+            ),
+        )
+        workbench_projection = project_workbench_runtime(
+            workbench_runtime,
+            workspace_rehydrate=workspace_rehydrate.to_state(),
+        )
         prompting = build_workflow_prompting_state(
             goal=str(mutable_state.get("goal") or "authorized assessment"),
             template_name=run.template_name,
@@ -1528,7 +1771,11 @@ class WorkflowLoopEngine:
                     else ""
                 ),
                 "resolved_protocol_kind": (
-                    str(latest_resolved_pause.get("kind") or "")
+                    str(
+                        latest_resolved_pause.get("kind")
+                        or latest_resolved_pause.get("protocol_kind")
+                        or ""
+                    )
                     if isinstance(latest_resolved_pause, dict)
                     else ""
                 ),
@@ -1537,7 +1784,7 @@ class WorkflowLoopEngine:
                     if isinstance(latest_resolved_pause, dict)
                     else {}
                 ),
-                **workspace_context,
+                **workbench_projection,
             },
         )
         snapshot = ContextSnapshot(
@@ -1764,6 +2011,11 @@ class WorkflowLoopEngine:
         last_executed_task: TaskNode | None,
         last_failure_reason: str | None,
         blocked_task_id: str | None,
+        assistant_execution_runtime: AssistantExecutionRuntime | None = None,
+        candidate_waves: list[dict[str, object]] | None = None,
+        chosen_wave: dict[str, object] | None = None,
+        wave_decision: dict[str, object] | None = None,
+        assimilation_result: dict[str, object] | None = None,
     ) -> LoopAdvanceResult | None:
         if not self._transcript_runtime.should_stop_current_cycle(latest_directive):
             return None
@@ -1785,7 +2037,9 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
+                else "blocked"
+                if resolved_status is WorkflowRunStatus.BLOCKED
+                else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,
@@ -1805,9 +2059,14 @@ class WorkflowLoopEngine:
                     partial_failures=partial_failures,
                 ),
                 partial_failures=partial_failures,
+                assistant_execution_runtime=assistant_execution_runtime,
                 next_action=self._transcript_runtime.directive_to_next_action(
                     self._transcript_runtime.set_last_directive(mutable_state, latest_directive)
                 ),
+                candidate_waves=list(candidate_waves or []),
+                chosen_wave=dict(chosen_wave or {}),
+                wave_decision=dict(wave_decision or {}),
+                assimilation_result=dict(assimilation_result or {}),
             )
         )
         loop_state.apply_to_state(mutable_state)

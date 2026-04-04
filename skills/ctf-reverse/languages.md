@@ -1,4 +1,4 @@
-# CTF Reverse - Language & Platform-Specific Techniques
+# CTF Reverse - Language-Specific Techniques
 
 ## Table of Contents
 - [Python Bytecode Reversing (dis.dis output)](#python-bytecode-reversing-disdis-output)
@@ -12,21 +12,19 @@
 - [Unity IL2CPP Games](#unity-il2cpp-games)
 - [HarmonyOS HAP/ABC Reverse (abc-decompiler)](#harmonyos-hapabc-reverse-abc-decompiler)
 - [Brainfuck/Esolangs](#brainfuckesolangs)
+  - [Brainfuck Character-by-Character Static Analysis (BSidesSF 2026)](#brainfuck-character-by-character-static-analysis-bsidessf-2026)
+  - [Brainfuck Side-Channel via Read Count Oracle (BSidesSF 2026)](#brainfuck-side-channel-via-read-count-oracle-bsidessf-2026)
+  - [Brainfuck Comparison Idiom Detection (BSidesSF 2026)](#brainfuck-comparison-idiom-detection-bsidessf-2026)
 - [UEFI Binary Analysis](#uefi-binary-analysis)
 - [Transpilation to C](#transpilation-to-c)
 - [Code Coverage Side-Channel Attack](#code-coverage-side-channel-attack)
 - [Functional Language Reversing (OPAL)](#functional-language-reversing-opal)
 - [Python Version-Specific Bytecode (VuwCTF 2025)](#python-version-specific-bytecode-vuwctf-2025)
 - [Non-Bijective Substitution Cipher Reversing](#non-bijective-substitution-cipher-reversing)
-- [Roblox Place File Analysis](#roblox-place-file-analysis)
-- [Godot Game Asset Extraction](#godot-game-asset-extraction)
-- [Rust serde_json Schema Recovery](#rust-serde_json-schema-recovery)
-- [Android JNI RegisterNatives Obfuscation (HTB WonderSMS)](#android-jni-registernatives-obfuscation-htb-wondersms)
-- [Verilog/Hardware Reverse Engineering (srdnlenCTF 2026)](#veriloghardware-reverse-engineering-srdnlenctf-2026)
-- [Prefix-by-Prefix Hash Reversal (Nullcon 2026)](#prefix-by-prefix-hash-reversal-nullcon-2026)
-- [Ruby/Perl Polyglot Constraint Satisfaction (BearCatCTF 2026)](#rubyperl-polyglot-constraint-satisfaction-bearcatctf-2026)
-- [Electron App + Native Binary Reversing (RootAccess2026)](#electron-app--native-binary-reversing-rootaccess2026)
-- [Node.js npm Package Runtime Introspection (RootAccess2026)](#nodejs-npm-package-runtime-introspection-rootaccess2026)
+- [FRACTRAN Program Inversion (Boston Key Party 2016)](#fractran-program-inversion-boston-key-party-2016)
+
+For platform/framework-specific techniques (Android, Roblox, Godot, Electron, Node.js, Verilog, Ruby/Perl polyglot, etc.), see [languages-platforms.md](languages-platforms.md).
+For Go and Rust binary reversing, see [languages-compiled.md](languages-compiled.md).
 
 ---
 
@@ -56,6 +54,8 @@ print(''.join(flag))
 - Loop structure: `FOR_ITER` + `BINARY_SUBSCR` = iterating over flag chars
 - `CALL_FUNCTION` on `ord` = character-to-int conversion
 
+**Key insight:** Python bytecode challenges give you the algorithm in explicit stack operations. Focus on `LOAD_CONST` values (expected outputs), `BINARY_XOR`/`BINARY_ADD` (the transform), and `BUILD_TUPLE` (the target array) to reconstruct the validation logic without running the bytecode.
+
 ---
 
 ## Python Opcode Remapping
@@ -69,6 +69,12 @@ Decompiler fails with opcode errors.
 3. Build mapping: `{new_opcode: original_opcode}`
 4. Patch target .pyc
 5. Decompile normally
+
+**Shortcut (Hack.lu CTF 2013):** If the challenge bundles its own modified Python interpreter (e.g., a custom `./py` binary), install `uncompyle2`/`uncompyle6` into that interpreter's environment and decompile using the challenge's own runtime. The modified interpreter understands its own opcode mapping, so standard decompilation tools work without manual opcode recovery.
+
+**Tool selection by Python version:** `uncompyle6` supports Python 2.x–3.8. For Python 3.9+ bytecode, use [`pycdc`](https://github.com/zrax/pycdc) (compile from source: `git clone && cmake . && make`).
+
+**Key insight:** Opcode remapping breaks all standard decompilers. The fastest fix is to find the modified `opcode.pyc` in the PyInstaller bundle, diff it against the stock Python opcodes, and patch the target `.pyc` back to standard opcodes before decompiling.
 
 ---
 
@@ -100,6 +106,8 @@ Notes:
 - `oneshot/pyarmor-1shot` executable must exist before running `shot.py`.
 - PyInstaller bundles or archives should be unpacked first, then processed with 1shot.
 
+**Key insight:** Pyarmor 8/9 wraps scripts with runtime decryption. The 1shot tool statically unpacks without execution by directly processing the armored bytecode and `pyarmor_runtime` library. Treat the disassembly output as ground truth when the experimental decompiled source looks inconsistent.
+
 ---
 
 ## DOS Stub Analysis
@@ -109,6 +117,8 @@ PE files can hide code in DOS stub:
 2. Run in DOSBox
 3. Load in IDA as 16-bit DOS
 4. Look for `int 16h` (keyboard input)
+
+**Key insight:** PE files can embed a fully functional 16-bit DOS program in the DOS stub (before the PE header). If the stub is unusually large, load it in IDA as 16-bit DOS or run it in DOSBox -- the challenge logic may live entirely in the stub.
 
 ---
 
@@ -121,6 +131,8 @@ PE files can hide code in DOS stub:
 - Decrypt server responses with derived key
 
 Please note most of that the executable file for the PC platform is GameAssembly.dll or *Assembly.dll, for the Android is libil2cpp.so.
+
+**Key insight:** IL2CPP compiles C# to native code, but Il2CppDumper recovers method names and offsets. If the dumper fails, the `global-metadata.dat` is likely encrypted -- trace the metadata loading path in the native binary to find the custom decryption before dumping.
 
 ---
 
@@ -173,6 +185,8 @@ Standard workflow:
 3. If cleaner output is needed, retry with `-m auto` or `-m restructure`
 4. If some methods still fail, keep the `simple` output and continue logic analysis via alternate paths
 
+**Key insight:** HarmonyOS `.hap` packages are ZIP archives containing `.abc` bytecode. Use the abc-decompiler's CLI mode (`jadx.cli.JadxCLI`) with `-m simple` for the most reliable decompilation -- GUI mode may launch instead of processing files.
+
 ---
 
 ## Brainfuck/Esolangs
@@ -180,6 +194,138 @@ Standard workflow:
 - Check if compiled with known tools (BF-it)
 - Understand tape/memory model
 - Static analysis of cell operations
+
+### Brainfuck Character-by-Character Static Analysis (BSidesSF 2026)
+
+**Pattern (i-love-my-bf-part1):** BF programs that validate input character-by-character follow a recognizable pattern: `,` (read char) followed by a sequence of `+` operations whose count equals the expected ASCII value of that character.
+
+**Extraction technique:**
+```python
+import re
+
+bf_code = open('challenge.bf', 'r').read()
+
+# Split on comma (input read) — each segment handles one character
+segments = bf_code.split(',')
+expected = []
+
+for seg in segments[1:]:  # Skip preamble before first comma
+    # Count consecutive '+' operations before any branch/output
+    plus_count = 0
+    for ch in seg:
+        if ch == '+':
+            plus_count += 1
+        elif ch in '-.[]><':
+            break  # Stop at first non-increment operation
+    if plus_count > 0:
+        expected.append(chr(plus_count % 256))
+
+flag = ''.join(expected)
+print(f"Flag: {flag}")
+```
+
+**Variations:**
+- `-` operations: character value = `256 - minus_count`
+- Mixed `+`/`-`: net increment determines value
+- Cell reset (`[-]`) between characters: each segment is independent
+- Loop-based multiplication: `[->>+++<<]` multiplies by 3 — count the inner operations
+
+**Detection:** Large BF file with repeating pattern of `,` followed by many `+` or `-` characters, then a comparison structure (`[-]` or `[->+<]` patterns).
+
+**Key insight:** BF programs that check input are structurally simple — each input byte is compared against a constant built by incrementing a cell. Extract the increment counts to recover the expected input without running the program.
+
+**References:** BSidesSF 2026 "i-love-my-bf-part1"
+
+### Brainfuck Side-Channel via Read Count Oracle (BSidesSF 2026)
+
+**Pattern (i-love-my-bf-part2):** When a BF program validates input character-by-character, a correct character causes the program to consume MORE input bytes (advancing to check the next position). By counting how many `,` (read) operations execute for each candidate input, the character that triggers the most reads is correct.
+
+```python
+import itertools
+
+def bytes_read_running_bf(bf_code, input_iter, braces):
+    """Run BF and count how many input bytes were consumed."""
+    tape = [0] * 30000
+    ptr = ip = reads = 0
+    input_list = list(input_iter)
+    input_idx = 0
+    while ip < len(bf_code):
+        c = bf_code[ip]
+        if c == ',':
+            if input_idx < len(input_list):
+                tape[ptr] = input_list[input_idx]
+                input_idx += 1
+                reads += 1
+            else:
+                return reads
+        elif c == '.': pass
+        elif c == '+': tape[ptr] = (tape[ptr] + 1) % 256
+        elif c == '-': tape[ptr] = (tape[ptr] - 1) % 256
+        elif c == '>': ptr += 1
+        elif c == '<': ptr -= 1
+        elif c == '[' and tape[ptr] == 0: ip = braces[ip]
+        elif c == ']' and tape[ptr] != 0: ip = braces[ip]
+        ip += 1
+    return reads
+
+# Recover flag character by character
+PRINTABLE = list(range(32, 127))
+flag = []
+for pos in range(50):  # max flag length
+    best_byte = None
+    max_reads = 0
+    baseline = bytes_read_running_bf(bf, flag + [PRINTABLE[0]], braces)
+    for b in PRINTABLE[1:]:
+        reads = bytes_read_running_bf(bf, flag + [b], braces)
+        if reads > baseline:
+            best_byte = b
+            break
+    if best_byte is None:
+        break
+    flag.append(best_byte)
+print(bytes(flag).decode())
+```
+
+**Key insight:** BF input validation programs are sequential — they read one character, check it, and only read the next if it matches. The character causing more reads is correct because the program advances past the validation gate to check the next position.
+
+**References:** BSidesSF 2026 "i-love-my-bf-part2"
+
+### Brainfuck Comparison Idiom Detection (BSidesSF 2026)
+
+**Pattern (i-love-my-bf-part3):** BF programs compiled from higher-level languages use recognizable comparison idioms. The equality check `<[-<->] +<[>-<[-]]>[-<+>]` compares two adjacent cells. By instrumenting a BF interpreter to detect this pattern during execution, you can extract the comparison operands (expected flag bytes) directly from the tape.
+
+```python
+EQ_PATTERN = "<[-<->] +<[>-<[-]]>[-<+>]"
+
+def instrumented_bf_run(bf_code, dummy_input):
+    """Run BF, detect equality comparisons, extract operands."""
+    tape = [0] * 30000
+    ptr = ip = 0
+    comparisons = []
+
+    while ip < len(bf_code):
+        # Check if current position starts the eq pattern
+        if bf_code[ip:ip+len(EQ_PATTERN)] == EQ_PATTERN:
+            # The two cells being compared are at ptr-2 and ptr-1
+            lhs = tape[ptr - 2]  # User input byte
+            rhs = tape[ptr - 1]  # Expected byte
+            comparisons.append((chr(lhs), chr(rhs)))
+        # ... normal BF execution ...
+        ip += 1
+
+    return comparisons
+
+# Expected bytes from comparisons reveal the flag
+```
+
+**Key insight:** Compiled BF programs reuse fixed idioms for operations like equality comparison, conditional branching, and loops. Pattern-matching these idioms in the BF source or during execution lets you extract constants without fully understanding the program logic.
+
+**Common BF idioms:**
+- `[-]` — clear cell (set to 0)
+- `[->+<]` — move cell right
+- `<[-<->] +<[>-<[-]]>[-<+>]` — equality comparison of two cells
+
+**References:** BSidesSF 2026 "i-love-my-bf-part3"
 
 ---
 
@@ -193,6 +339,8 @@ file extracted/* | grep "PE32+"
 - Bootkit replaces boot loader
 - Custom VM protects decryption
 - Lift VM bytecode to C
+
+**Key insight:** UEFI binaries are PE32+ executables. Extract the firmware with `7z`, identify PE files with `file`, and load them in Ghidra/IDA. Bootkits replace the boot loader, so focus on DXE drivers and boot services protocols for the challenge logic.
 
 ---
 
@@ -208,6 +356,8 @@ for opcode, args in instructions:
 ```
 
 Compile with `-O3` for constant folding.
+
+**Key insight:** Transpiling obfuscated VM bytecode to C and compiling with `-O3` lets the compiler's constant folding and dead code elimination simplify the algorithm automatically. This is faster than manual deobfuscation for complex instruction sets.
 
 ---
 
@@ -342,276 +492,23 @@ for i, v in enumerate(sbox):
 
 ---
 
-## Roblox Place File Analysis
+## FRACTRAN Program Inversion (Boston Key Party 2016)
 
-**Pattern (MazeRunna, 0xFun 2026):** Roblox game with flag hidden in older version; latest version contains decoy.
-
-**Version history via Asset Delivery API:**
-```bash
-# Extract placeId and universeId from game page HTML
-# Query each version (requires .ROBLOSECURITY cookie):
-curl -H "Cookie: .ROBLOSECURITY=..." \
-  "https://assetdelivery.roblox.com/v2/assetId/{placeId}/version/1"
-# Download location URL → place_v1.rbxlbin
-```
-
-**Binary format parsing:** `.rbxlbin` files contain chunks:
-- **INST** — class buckets and referent IDs
-- **PROP** — per-instance fields (including `Script.Source`)
-- **PRNT** — parent-child relationships (object tree)
-
-Decode chunk payloads, walk PROP entries for `Source` field, dump `Script.Source` / `LocalScript.Source` per version, then diff.
-
-**Key lesson:** Always check version history. Latest version may contain decoy flag while real flag is in an older version. Diff script sources across versions.
-
----
-
-## Godot Game Asset Extraction
-
-**Pattern (Steal the Xmas):** Encrypted Godot .pck packages.
-
-**Tools:**
-- [gdsdecomp](https://github.com/GDRETools/gdsdecomp) - Extract Godot packages
-- [KeyDot](https://github.com/Titoot/KeyDot) - Extract encryption key from Godot executables
-
-**Workflow:**
-1. Run KeyDot against game executable → extract encryption key
-2. Input key into gdsdecomp
-3. Extract and open project in Godot editor
-4. Search scripts/resources for flag data
-
----
-
-## Rust serde_json Schema Recovery
-
-**Pattern (Curly Crab, PascalCTF 2026):** Rust binary reads JSON from stdin, deserializes via serde_json, prints success/failure emoji.
-
-**Approach:**
-1. Disassemble serde-generated `Visitor` implementations
-2. Each visitor's `visit_map` / `visit_seq` reveals expected keys and types
-3. Look for string literals in deserializer code (field names like `"pascal"`, `"CTF"`)
-4. Reconstruct nested JSON schema from visitor call hierarchy
-5. Identify value types from visitor method names: `visit_str` = string, `visit_u64` = number, `visit_bool` = boolean, `visit_seq` = array
-
-```json
-{"pascal":"CTF","CTF":2026,"crab":{"I_":true,"cr4bs":1337,"crabby":{"l0v3_":["rust"],"r3vv1ng_":42}}}
-```
-
-**Key insight:** Flag is the concatenation of JSON keys in schema order. Reading field names in order reveals the flag.
-
----
-
-## Verilog/Hardware Reverse Engineering (srdnlenCTF 2026)
-
-**Pattern (Rev Juice):** Verilog HDL source for a vending machine with hidden product unlocked by specific coin insertion and selection sequence.
-
-**Approach:**
-1. Analyze Verilog modules to understand state machine and history tracking
-2. Identify hidden conditions (e.g., product 8 enabled only when `COINS_HISTORY` array has specific values at specific taps)
-3. Build timing model for each action type (how many clock cycles each operation takes)
-4. Work backward from required history values to construct the correct input sequence
-
-**Timing model construction:**
-```python
-# Map each action to its cycle count (determined from Verilog state machines)
-TIMING = {
-    "insert_coin": 3,       # 3 cycles per coin insertion
-    "select_success": 7,    # 7 cycles for successful product selection
-    "select_fail": 5,       # 5 cycles for failed selection attempt
-    "cancel_with_coins": 4, # 4 cycles for cancel when coins > 0
-    "cancel_at_zero": 2,    # 2 cycles for cancel when coins = 0
-}
-
-# COINS_HISTORY is a shift register updated each cycle
-# History tap requirements (from Verilog conditions):
-# H[0]=1, H[7]=4, H[28]=H[33]=H[38]=6
-# H[63]=H[73]=2, H[80]=9
-# (H[19]+H[21]+H[56]+H[69]) mod 32 = 0
-```
-
-**Key insight:** Hardware challenges require understanding the exact timing model — each operation takes a specific number of clock cycles, and shift registers record history at fixed tap positions. Work backward from the required tap values to determine what action must have occurred at each cycle. The solution is often a specific sequence notation (e.g., `I9C_SP6_CNL_I2C_SP2_I6C_SP6_SP6_SP5_CNL_I4C_SP1`).
-
-**Detection:** Look for `.v` or `.sv` (Verilog/SystemVerilog) files, `always @(posedge clk)` blocks, shift register patterns, and state machine `case` statements with hidden conditions gated on history values.
-
----
-
-## Prefix-by-Prefix Hash Reversal (Nullcon 2026)
-
-See [patterns-ctf-2.md](patterns-ctf-2.md#prefix-hash-brute-force-nullcon-2026) for the full technique. This section covers language-specific considerations.
-
-**Language-specific notes:**
-- Hash algorithm may be uncommon (MD2, custom) — don't need to identify it, just match outputs by running the binary
-- Use `subprocess.run()` with `timeout=2` to handle binaries that hang on bad input
-- For stripped binaries, check if `ltrace` reveals the hash function name (e.g., `MD2_Update`)
-
----
-
-## Android JNI RegisterNatives Obfuscation (HTB WonderSMS)
-
-**Pattern:** Android app loads native library with `System.loadLibrary()`, but uses `RegisterNatives` in `JNI_OnLoad` instead of standard JNI naming convention (`Java_com_pkg_Class_method`). This hides which C++ function handles each Java native method.
-
-**Identification:**
-```java
-// In decompiled Java (jadx):
-static { System.loadLibrary("audio"); }
-private final native ProcessedMessage processMessage(SmsMessage msg);
-```
-Standard JNI would have a symbol `Java_com_rloura_wondersms_SmsReceiver_processMessage`. If that symbol is missing from the `.so`, `RegisterNatives` is being used.
-
-**Finding the real handler in Ghidra:**
-1. Locate `JNI_OnLoad` (exported symbol, always present)
-2. Trace to `RegisterNatives(env, clazz, methods, count)` call
-3. The `methods` array contains `{name, signature, fnPtr}` structs
-4. Follow `fnPtr` to find the actual native function
-
-```c
-// JNI_OnLoad registers functions manually:
-static JNINativeMethod methods[] = {
-    {"processMessage", "(Landroid/telephony/SmsMessage;)LProcessedMessage;", (void*)real_handler}
-};
-(*env)->RegisterNatives(env, clazz, methods, 1);
-```
-
-**Architecture selection for analysis:**
-```bash
-# x86_64 gives best Ghidra decompilation (most similar to desktop code)
-# Extract from APK:
-unzip WonderSMS.apk -d extracted/
-ls extracted/lib/x86_64/  # Prefer this over arm64-v8a for static analysis
-```
-
-**Key insight:** `RegisterNatives` is a deliberate obfuscation technique — it decouples Java method names from native symbol names, making it impossible to find handlers by string search alone. Always check `JNI_OnLoad` first when reversing Android native libraries with stripped symbols.
-
-**Detection:** Native method declared in Java + no matching JNI symbol in `.so` + `JNI_OnLoad` present. The library is typically stripped (no debug symbols).
-
----
-
-## Ruby/Perl Polyglot Constraint Satisfaction (BearCatCTF 2026)
-
-**Pattern (Polly's Key):** A single file valid in both Ruby and Perl. Each language imposes different validation constraints on a 50-character key. Satisfy both simultaneously to decrypt the flag.
-
-**Polyglot structure exploits:**
-- Ruby: `=begin`...`=end` is a block comment
-- Perl: `=begin`...`=cut` is POD (Plain Old Documentation), `=end` is ignored
-- Different code runs in each language based on comment block boundaries
-
-**Typical constraints:**
-- **Ruby:** Character set must form a mathematical property (e.g., all 50 printable ASCII chars except `^` used exactly once, each satisfying `XOR(val, (val-16) % 257)` is a primitive root mod 257)
-- **Perl:** Ordering constraint via insertion sort inversion count (hardcoded inversion table determines exact permutation)
-
-**Solution approach:**
-1. Find the valid character set (mathematical constraint from one language)
-2. Use the ordering constraint (from other language) to determine exact arrangement
-3. Compute key hash (e.g., MD5) and decrypt
+FRACTRAN: an esoteric language where computation is iterated multiplication by a fraction table. Input is encoded as prime factorization (ASCII values as exponents of sequential primes). To invert: swap each fraction's numerator and denominator, run the "success" output backward through the inverted program.
 
 ```python
-# Determine character ordering from inversion counts
-def reconstruct_from_inversions(chars, inv_counts):
-    result = []
-    remaining = sorted(chars)
-    for i in range(len(chars) - 1, -1, -1):
-        # inv_counts[i] = number of elements to the left that are greater
-        idx = inv_counts[i]
-        result.insert(idx, remaining.pop(i))
-    return result
+# Original: for each step, find first fraction where n*frac is integer
+def fractran_step(n, fractions):
+    for num, den in fractions:
+        if (n * num) % den == 0:
+            return (n * num) // den
+    return None  # Halt
+
+# Inversion: swap num/denom in fraction table
+inverted = [(d, n) for n, d in fraction_table]
+# Run target output through inverted program to recover input
 ```
 
-**Key insight:** Polyglot files exploit language-specific comment/block syntax to run different code in each interpreter. The constraints from both languages intersect to uniquely determine the key. Identify which code runs in which language by testing the file with both interpreters and comparing behavior.
+**Key insight:** FRACTRAN programs can be inverted by swapping numerators and denominators. The prime factorization encoding is the key to understanding I/O -- factor the result to extract exponents of sequential primes, map to ASCII.
 
-**Detection:** File that runs under multiple interpreters (`ruby file && perl file`). Challenge mentions "polyglot" or provides a file ending in `.rb` that also looks like Perl.
-
----
-
-## Electron App + Native Binary Reversing (RootAccess2026)
-
-**Pattern (Rootium Browser):** Electron desktop app bundles a native ELF/DLL binary for sensitive operations (vault, crypto, auth). The Electron layer is a wrapper; the real flag logic is in the native binary.
-
-**Extraction workflow:**
-1. **Unpack Electron ASAR archive:**
-```bash
-# Install ASAR tool
-npm install -g @electron/asar
-
-# Extract the app.asar archive
-asar extract resources/app.asar app_extracted/
-ls app_extracted/
-```
-
-2. **Locate native binary:** Search for ELF/DLL files called from JavaScript:
-```bash
-# Find native binaries
-find app_extracted/ -name "*.node" -o -name "*.so" -o -name "*vault*" -o -name "*auth*"
-
-# Check JS for child_process.spawn or ffi-napi calls
-grep -r "spawn\|execFile\|ffi\|require.*native" app_extracted/
-```
-
-3. **Reverse the native binary** (XOR + rotation cipher example):
-```python
-def decrypt_password(encrypted_bytes, key):
-    """Common pattern: XOR with constant + bit rotation + key XOR."""
-    result = []
-    for i, byte in enumerate(encrypted_bytes):
-        decrypted = ((byte ^ 0x42) >> 3) ^ key[i % len(key)]
-        result.append(chr(decrypted))
-    return ''.join(result)
-
-def decrypt_flag(encrypted_flag, password):
-    """Flag uses password as key with position-dependent rotation."""
-    result = []
-    for i, byte in enumerate(encrypted_flag):
-        key_byte = ord(password[i % len(password)])
-        decrypted = ((byte ^ 0x7E) >> (i % 8)) ^ key_byte
-        result.append(chr(decrypted))
-    return ''.join(result)
-```
-
-**Key insight:** Electron apps are JavaScript wrapping native code. Extract with `asar`, then focus on the native binary. The JS layer often contains the password verification flow in plaintext, revealing what the native binary expects. Look for encrypted data in the `.data` or `.rodata` sections of the ELF.
-
-**Detection:** `.asar` files in `resources/` directory, Electron framework files, `package.json` with electron dependency.
-
----
-
-## Node.js npm Package Runtime Introspection (RootAccess2026)
-
-**Pattern (RootAccess CLI):** Obfuscated npm package with RC4 encoding, control flow flattening, and flag split across multiple fragments. Static analysis is impractical — use runtime introspection instead.
-
-**Dynamic analysis approach:**
-```javascript
-#!/usr/bin/env node
-
-// 1. Load obfuscated modules
-const cryptoMod = require('target-package/dist/lib/crypto.js');
-const vaultMod = require('target-package/dist/lib/vault.js');
-
-// 2. Enumerate all exported properties
-for (const mod of [cryptoMod, vaultMod]) {
-    for (const key of Object.keys(mod)) {
-        const obj = mod[key];
-        console.log(`Export: ${key}`);
-        // List all methods including hidden ones
-        const props = Object.getOwnPropertyNames(obj);
-        const proto = Object.getOwnPropertyNames(obj.prototype || {});
-        console.log('  Own:', props);
-        console.log('  Proto:', proto);
-    }
-}
-
-// 3. Extract flag fragments
-const Engine = cryptoMod.CryptoEngine;
-const total = Engine.getTotalFragments();
-let flag = '';
-for (let i = 1; i <= total; i++) {
-    flag += Engine.getFragment(i);
-}
-console.log('Flag:', flag);
-
-// 4. Check for hidden methods (common: __getFullFlag__, _debug, _raw)
-const hidden = Object.getOwnPropertyNames(Engine)
-    .filter(p => p.startsWith('__') || p.startsWith('_'));
-console.log('Hidden methods:', hidden);
-```
-
-**Key insight:** Heavily obfuscated JavaScript (control flow flattening, RC4 string encoding, dead code) makes static analysis prohibitively slow. Runtime introspection via `Object.getOwnPropertyNames()` reveals all methods including hidden ones. The module's own decryption runs automatically when loaded — just call the decoded functions directly.
-
-**Detection:** npm package with minified/obfuscated `dist/` directory, challenge says "reverse engineer the CLI tool", `package.json` with custom commands.
+**Detection:** Challenge mentions fractions, prime factorization, or provides a list of rational numbers.

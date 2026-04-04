@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Remediation Summary",
+  "description": "Remediation summary output by Phase-4.5 remediation_generator",
+  "type": "object",
+  "required": [
+    "generated_at",
+    "total_vulns",
+    "patches_generated",
+    "patches"
+  ],
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "total_vulns": {
+      "type": "integer"
+    },
+    "patches_generated": {
+      "type": "integer"
+    },
+    "patches_skipped": {
+      "type": "integer"
+    },
+    "skip_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1000,
+        "minLength": 1
+      }
+    },
+    "patches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sink_id",
+          "vuln_type",
+          "file",
+          "fix_strategy"
+        ],
+        "properties": {
+          "sink_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "maxLength": 100
+          },
+          "vuln_type": {
+            "type": "string",
+            "enum": [
+              "sqli",
+              "xss_ssti",
+              "rce",
+              "lfi",
+              "filewrite",
+              "ssrf",
+              "xxe",
+              "deserial",
+              "crlf",
+              "ldap",
+              "nosql",
+              "csrf",
+              "session",
+              "authz",
+              "crypto",
+              "race_condition",
+              "business_logic",
+              "infoleak",
+              "logging",
+              "config",
+              "wordpress"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "description": "Modified source file path",
+            "maxLength": 500,
+            "minLength": 1
+          },
+          "patch_file": {
+            "type": "string",
+            "description": "Patch file path",
+            "maxLength": 500,
+            "minLength": 1
+          },
+          "fix_strategy": {
+            "type": "string",
+            "description": "Fix strategy description",
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "breaking_change": {
+            "type": "boolean"
+          },
+          "verification": {
+            "type": "string",
+            "description": "Verification recommendation",
+            "maxLength": 1000,
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

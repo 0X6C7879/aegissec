@@ -120,6 +120,10 @@ class WorkflowCycleArtifact:
     assistant_turn_input: dict[str, object] = field(default_factory=dict)
     assistant_turn_plan: dict[str, object] = field(default_factory=dict)
     assistant_turn_outcome: dict[str, object] = field(default_factory=dict)
+    candidate_waves: list[dict[str, object]] = field(default_factory=list)
+    chosen_wave: dict[str, object] = field(default_factory=dict)
+    wave_decision: dict[str, object] = field(default_factory=dict)
+    assimilation_result: dict[str, object] = field(default_factory=dict)
     next_action: str = "idle"
     started_at: str | None = None
     ended_at: str | None = None
@@ -146,6 +150,10 @@ class WorkflowCycleArtifact:
             "assistant_turn_input": dict(self.assistant_turn_input),
             "assistant_turn_plan": dict(self.assistant_turn_plan),
             "assistant_turn_outcome": dict(self.assistant_turn_outcome),
+            "candidate_waves": [dict(item) for item in self.candidate_waves],
+            "chosen_wave": dict(self.chosen_wave),
+            "wave_decision": dict(self.wave_decision),
+            "assimilation_result": dict(self.assimilation_result),
             "next_action": self.next_action,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
@@ -263,6 +271,30 @@ class WorkflowCycleArtifact:
             if isinstance(raw_assistant_turn_outcome, dict)
             else {}
         )
+        candidate_waves_raw = raw_dict.get("candidate_waves")
+        candidate_waves = (
+            [dict(item) for item in candidate_waves_raw if isinstance(item, dict)]
+            if isinstance(candidate_waves_raw, list)
+            else []
+        )
+        raw_chosen_wave = raw_dict.get("chosen_wave")
+        chosen_wave = (
+            {str(key): value for key, value in raw_chosen_wave.items()}
+            if isinstance(raw_chosen_wave, dict)
+            else {}
+        )
+        raw_wave_decision = raw_dict.get("wave_decision")
+        wave_decision = (
+            {str(key): value for key, value in raw_wave_decision.items()}
+            if isinstance(raw_wave_decision, dict)
+            else {}
+        )
+        raw_assimilation_result = raw_dict.get("assimilation_result")
+        assimilation_result = (
+            {str(key): value for key, value in raw_assimilation_result.items()}
+            if isinstance(raw_assimilation_result, dict)
+            else {}
+        )
         return cls(
             cycle_id=cycle_id,
             batch_cycle=batch_cycle,
@@ -284,6 +316,10 @@ class WorkflowCycleArtifact:
             assistant_turn_input=assistant_turn_input,
             assistant_turn_plan=assistant_turn_plan,
             assistant_turn_outcome=assistant_turn_outcome,
+            candidate_waves=candidate_waves,
+            chosen_wave=chosen_wave,
+            wave_decision=wave_decision,
+            assimilation_result=assimilation_result,
             next_action=str(raw_dict.get("next_action") or "idle"),
             started_at=(
                 raw_dict.get("started_at") if isinstance(raw_dict.get("started_at"), str) else None

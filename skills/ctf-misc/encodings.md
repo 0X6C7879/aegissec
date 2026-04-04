@@ -23,9 +23,9 @@
 - [Esoteric Languages](#esoteric-languages)
   - [Whitespace Language Parser (BYPASS CTF 2025)](#whitespace-language-parser-bypass-ctf-2025)
   - [Custom Brainfuck Variants (Themed Esolangs)](#custom-brainfuck-variants-themed-esolangs)
-- [Verilog/HDL](#veriloghdl)
-- [Gray Code Cyclic Encoding (EHAX 2026)](#gray-code-cyclic-encoding-ehax-2026)
-- [Binary Tree Key Encoding](#binary-tree-key-encoding)
+  - [Multi-Layer Esoteric Language Chains (Break In 2016)](#multi-layer-esoteric-language-chains-break-in-2016)
+
+See also: [encodings-advanced.md](encodings-advanced.md) - Verilog/HDL, Gray code, binary tree encoding, RTF custom tags, SMS PDU decoding, multi-encoding solvers, UTF-9, pixel binary encoding, hex Sudoku + QR, TOPKEK, MaxiCode
 
 ---
 
@@ -382,66 +382,23 @@ bf = ''.join(mapping.get(w, '') for w in words)
 
 ---
 
-## Verilog/HDL
+### Multi-Layer Esoteric Language Chains (Break In 2016)
 
-```python
-# Translate Verilog logic to Python
-def verilog_module(input_byte):
-    wire_a = (input_byte >> 4) & 0xF
-    wire_b = input_byte & 0xF
-    return wire_a ^ wire_b
+Challenges may stack multiple esoteric languages requiring sequential interpretation:
+
+1. **Piet:** Visual programming language using colored pixel blocks. Execute PNG images as code:
+```bash
+npiet challenge.png         # npiet interpreter
+# Or: java -jar PietDev.jar challenge.png
 ```
 
----
-
-## Gray Code Cyclic Encoding (EHAX 2026)
-
-**Pattern (#808080):** Web interface with a circular wheel (5 concentric circles = 5 bits, 32 positions). Must fill in a valid Gray code sequence where consecutive values differ by exactly one bit.
-
-**Gray code properties:**
-- N-bit Gray code has 2^N unique values
-- Adjacent values differ by exactly 1 bit (Hamming distance = 1)
-- The sequence is **cyclic** — rotating the start position produces another valid sequence
-- Standard conversion: `gray = n ^ (n >> 1)`
-
-```python
-# Generate N-bit Gray code sequence
-def gray_code(n_bits):
-    return [i ^ (i >> 1) for i in range(1 << n_bits)]
-
-# 5-bit Gray code: 32 values
-seq = gray_code(5)
-# [0, 1, 3, 2, 6, 7, 5, 4, 12, 13, 15, 14, 10, 11, 9, 8, ...]
-
-# Rotate sequence by k positions (cyclic property)
-def rotate(seq, k):
-    return seq[k:] + seq[:k]
-
-# If decoded output is ROT-N shifted, rotate the Gray code start by N positions
-rotated = rotate(seq, 4)  # Shift start by 4
+2. **Malbolge:** Extremely difficult esoteric language. Decode output from previous layer:
+```bash
+# Piet output → base64 decode → Malbolge source
+echo "piet_output" | base64 -d > program.mal
+malbolge program.mal        # Or use online interpreter
 ```
 
-**Key insight:** If the decoded output looks correct but shifted (e.g., ROT-4), the Gray code start position needs cyclic rotation by the same offset. The cyclic property guarantees all rotations remain valid Gray codes.
+Common esoteric chains: Piet → base64 → Malbolge, Brainfuck → Ook → Whitespace, JSFuck → standard JS.
 
-**Wheel mapping:** Each concentric circle = one bit position. Innermost = bit 0, outermost = bit N-1. Read bits at each angular position to build N-bit values.
-
----
-
-## Binary Tree Key Encoding
-
-**Encoding:** `'0' → j = j*2 + 1`, `'1' → j = j*2 + 2`
-
-**Decoding:**
-```python
-def decode_path(index):
-    path = ""
-    while index != 0:
-        if index & 1:  # Odd = left ('0')
-            path += "0"
-            index = (index - 1) // 2
-        else:          # Even = right ('1')
-            path += "1"
-            index = (index - 2) // 2
-    return path[::-1]
-```
-
+**Key insight:** When a PNG file doesn't contain obvious visual stego, try interpreting it as Piet code. Use `file` + visual inspection to identify the first layer, then decode sequentially.

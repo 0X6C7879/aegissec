@@ -379,6 +379,37 @@ class TranscriptRuntimeService:
             },
         )
 
+    def append_continuation_lifecycle_event(
+        self,
+        *,
+        mutable_state: dict[str, object],
+        cycle_id: str,
+        current_stage: str | None,
+        task_name: str,
+        lifecycle_event: dict[str, object],
+    ) -> dict[str, object]:
+        event_type = str(lifecycle_event.get("event_type") or "lifecycle")
+        protocol_kind = str(lifecycle_event.get("protocol_kind") or "continuation")
+        continuation_token = str(lifecycle_event.get("continuation_token") or "")
+        details = self._dict(lifecycle_event.get("details"))
+        return self._append_protocol_event(
+            mutable_state=mutable_state,
+            cycle_id=cycle_id,
+            current_stage=current_stage,
+            task_name=task_name,
+            event_type=f"continuation_{event_type}",
+            content=(
+                f"Continuation lifecycle {event_type} ({protocol_kind})"
+                f" for {task_name}: {continuation_token}"
+            ),
+            metadata={
+                "continuation_token": continuation_token,
+                "protocol_kind": protocol_kind,
+                "lifecycle_event_type": event_type,
+                "details": details,
+            },
+        )
+
     def project_execution_record(
         self,
         *,
@@ -512,6 +543,7 @@ class TranscriptRuntimeService:
         ]
         pending_protocol_lines: list[str] = []
         resolved_protocol_lines: list[str] = []
+        continuation_lifecycle_lines: list[str] = []
         for delta in deltas:
             for block in self._dict_list(delta.get("assistant_blocks")):
                 metadata = self._dict(block.get("metadata"))
@@ -523,6 +555,8 @@ class TranscriptRuntimeService:
                     pending_protocol_lines.append(content)
                 if event_type.endswith("_resolved"):
                     resolved_protocol_lines.append(content)
+                if event_type.startswith("continuation_"):
+                    continuation_lifecycle_lines.append(content)
         provenance = {
             "source": "runtime_transcript",
             "recent_delta_ids": [str(delta.get("delta_id") or "") for delta in deltas],
@@ -543,6 +577,7 @@ class TranscriptRuntimeService:
             "reinjection_continuity": "\n".join(reinjection_lines),
             "pending_protocol_continuity": "\n".join(pending_protocol_lines),
             "resolved_protocol_continuity": "\n".join(resolved_protocol_lines),
+            "continuation_lifecycle_continuity": "\n".join(continuation_lifecycle_lines),
             "provenance": provenance,
         }
 

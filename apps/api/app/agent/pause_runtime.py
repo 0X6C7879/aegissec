@@ -1,38 +1,30 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
+from app.agent.continuation import ContinuationContract
+from app.agent.continuation_store import ContinuationStore
 from app.agent.executor import ExecutionResult
 from app.agent.workflow import WorkflowGraphRuntime
 from app.db.models import TaskNode, TaskNodeStatus
 
 
 class PauseRuntimeService:
+    def __init__(self) -> None:
+        self._continuation_store = ContinuationStore()
+
     def ensure_state(self, mutable_state: dict[str, object]) -> dict[str, object]:
         raw = mutable_state.get("pause")
         state = dict(raw) if isinstance(raw, dict) else {}
-        for key in (
-            "pending_interactions",
-            "pending_approvals",
-            "resolved_interactions",
-            "resolved_approvals",
-            "resume_contexts",
-        ):
-            value = state.get(key)
-            state[key] = (
-                [item for item in value if isinstance(item, dict)]
-                if isinstance(value, list)
-                else []
-            )
-        active = state.get("active")
-        state["active"] = dict(active) if isinstance(active, dict) else None
+        state = self._continuation_store.ensure_pause_state(state)
         mutable_state["pause"] = state
         return state
 
     def active_pending(self, mutable_state: dict[str, object]) -> dict[str, object] | None:
         state = self.ensure_state(mutable_state)
-        active = state.get("active")
-        return dict(active) if isinstance(active, dict) else None
+        return self._continuation_store.active_pending(state)
+
+    def active_contract(self, mutable_state: dict[str, object]) -> ContinuationContract | None:
+        state = self.ensure_state(mutable_state)
+        return self._continuation_store.active_contract(state)
 
     def register_pending_protocol(
         self,
@@ -63,6 +55,35 @@ class PauseRuntimeService:
             or pending_payload.get("approval_id")
             or f"pause-{task.id}"
         )
+        formal_fields = self._formal_pending_fields(
+            protocol_kind=protocol_kind,
+            pending_payload=pending_payload,
+        )
+        expected_fields = formal_fields.get("expected_fields")
+        contract = ContinuationContract(
+            continuation_token=continuation_token,
+            protocol_kind=protocol_kind,
+            task_id=task.id,
+            task_name=task.name,
+            tool_name=str(execution.tool_name or "workflow.tool"),
+            originating_turn_id=None,
+            originating_delta_id=None,
+            originating_trace_id=execution.trace_id,
+            resume_payload_schema={
+                "required_fields": (
+                    [item for item in expected_fields if isinstance(item, str)]
+                    if isinstance(expected_fields, list)
+                    else ["approved"]
+                    if protocol_kind == "approval"
+                    else ["user_input"]
+                ),
+                "kind": protocol_kind,
+            },
+            protocol_payload=dict(protocol_payload),
+            continuation_status="pending",
+            continuation_reason=str(execution.output_payload.get("pause_reason") or ""),
+            created_at=execution.ended_at.isoformat(),
+        )
         pending_entry: dict[str, object] = {
             "pending_id": pending_id,
             "kind": protocol_kind,
@@ -76,24 +97,13 @@ class PauseRuntimeService:
             "protocol_payload": dict(protocol_payload),
             "created_at": execution.ended_at.isoformat(),
             "status": "pending",
-            "formal_fields": self._formal_pending_fields(
-                protocol_kind=protocol_kind,
-                pending_payload=pending_payload,
-            ),
+            "formal_fields": formal_fields,
+            "originating_trace_id": execution.trace_id,
+            "resume_payload_schema": contract.resume_payload_schema,
         }
-        list_key = "pending_interactions" if protocol_kind == "interaction" else "pending_approvals"
-        pending_list_raw = state.get(list_key)
-        pending_list = (
-            [item for item in pending_list_raw if isinstance(item, dict)]
-            if isinstance(pending_list_raw, list)
-            else []
-        )
-        pending_list = [item for item in pending_list if str(item.get("task_id") or "") != task.id]
-        pending_list.append(pending_entry)
-        state[list_key] = pending_list
-        state["active"] = dict(pending_entry)
+        persisted = self._continuation_store.register_pending(state, pending_entry)
         mutable_state["pause"] = state
-        return pending_entry
+        return persisted
 
     def resolve_pending(
         self,
@@ -105,90 +115,23 @@ class PauseRuntimeService:
         resolution_payload: dict[str, object] | None,
     ) -> dict[str, object] | None:
         state = self.ensure_state(mutable_state)
-        active = state.get("active")
-        if not isinstance(active, dict):
-            return None
-        continuation_token = active.get("continuation_token")
-        if (
-            isinstance(resume_token, str)
-            and isinstance(continuation_token, str)
-            and resume_token != continuation_token
-        ):
-            return None
-        kind = str(active.get("kind") or "")
-        if kind == "approval" and not approve:
-            return None
-        normalized_payload = (
-            dict(resolution_payload) if isinstance(resolution_payload, dict) else {}
+        resolved_entry = (
+            self._continuation_store.resolve_by_token(
+                state,
+                continuation_token=resume_token,
+                approve=approve,
+                user_input=user_input,
+                resolution_payload=resolution_payload,
+            )
+            if isinstance(resume_token, str) and resume_token
+            else self._continuation_store.resolve_active(
+                state,
+                approve=approve,
+                user_input=user_input,
+                resume_token=resume_token,
+                resolution_payload=resolution_payload,
+            )
         )
-        if (
-            kind == "interaction"
-            and not normalized_payload
-            and not (isinstance(user_input, str) and user_input.strip())
-        ):
-            return None
-        now = datetime.now(UTC).isoformat()
-        resolution = {
-            "approved": approve,
-            "user_input": user_input if isinstance(user_input, str) else "",
-            "resolution_payload": normalized_payload,
-            "resolved_at": now,
-        }
-        resolved_entry: dict[str, object] = {
-            **active,
-            "status": "resolved",
-            "resolution": resolution,
-            "resolved_at": now,
-        }
-        pending_list_key = "pending_interactions" if kind == "interaction" else "pending_approvals"
-        resolved_list_key = (
-            "resolved_interactions" if kind == "interaction" else "resolved_approvals"
-        )
-        pending_list_raw = state.get(pending_list_key)
-        pending_list = (
-            [item for item in pending_list_raw if isinstance(item, dict)]
-            if isinstance(pending_list_raw, list)
-            else []
-        )
-        state[pending_list_key] = [
-            item
-            for item in pending_list
-            if str(item.get("pending_id") or "") != str(active.get("pending_id") or "")
-        ]
-        resolved_list_raw = state.get(resolved_list_key)
-        resolved_list = (
-            [item for item in resolved_list_raw if isinstance(item, dict)]
-            if isinstance(resolved_list_raw, list)
-            else []
-        )
-        resolved_list.append(resolved_entry)
-        state[resolved_list_key] = resolved_list
-        resume_contexts_raw = state.get("resume_contexts")
-        resume_contexts = (
-            [item for item in resume_contexts_raw if isinstance(item, dict)]
-            if isinstance(resume_contexts_raw, list)
-            else []
-        )
-        resume_contexts = [
-            item
-            for item in resume_contexts
-            if str(item.get("task_id") or "") != str(active.get("task_id") or "")
-        ]
-        active_resume_payload = active.get("resume_payload")
-        resume_contexts.append(
-            {
-                "task_id": str(active.get("task_id") or ""),
-                "kind": kind,
-                "continuation_token": str(active.get("continuation_token") or ""),
-                "resume_payload": (
-                    dict(active_resume_payload) if isinstance(active_resume_payload, dict) else {}
-                ),
-                "resolution": resolution,
-                "created_at": now,
-            }
-        )
-        state["resume_contexts"] = resume_contexts
-        state["active"] = None
         mutable_state["pause"] = state
         return resolved_entry
 
@@ -242,65 +185,23 @@ class PauseRuntimeService:
         self, mutable_state: dict[str, object], *, task_id: str
     ) -> dict[str, object]:
         state = self.ensure_state(mutable_state)
-        resume_contexts = state.get("resume_contexts")
-        if not isinstance(resume_contexts, list):
-            return {}
-        for item in resume_contexts:
-            if isinstance(item, dict) and str(item.get("task_id") or "") == task_id:
-                return dict(item)
-        return {}
+        return self._continuation_store.resume_context_for_task(state, task_id=task_id)
 
     def clear_resume_context(self, mutable_state: dict[str, object], *, task_id: str) -> None:
         state = self.ensure_state(mutable_state)
-        resume_contexts_raw = state.get("resume_contexts")
-        resume_contexts = (
-            [item for item in resume_contexts_raw if isinstance(item, dict)]
-            if isinstance(resume_contexts_raw, list)
-            else []
-        )
-        state["resume_contexts"] = [
-            item
-            for item in resume_contexts
-            if isinstance(item, dict) and str(item.get("task_id") or "") != task_id
-        ]
+        self._continuation_store.clear_resume_context(state, task_id=task_id)
         mutable_state["pause"] = state
 
     def continuity_snapshot(self, mutable_state: dict[str, object]) -> dict[str, object]:
         state = self.ensure_state(mutable_state)
-        active = state.get("active")
-        active_dict = dict(active) if isinstance(active, dict) else {}
-        resolved_interactions_raw = state.get("resolved_interactions")
-        resolved_approvals_raw = state.get("resolved_approvals")
-        resolved_interactions = (
-            [item for item in resolved_interactions_raw if isinstance(item, dict)]
-            if isinstance(resolved_interactions_raw, list)
-            else []
-        )
-        resolved_approvals = (
-            [item for item in resolved_approvals_raw if isinstance(item, dict)]
-            if isinstance(resolved_approvals_raw, list)
-            else []
-        )
-        pending_interactions_raw = state.get("pending_interactions")
-        pending_approvals_raw = state.get("pending_approvals")
-        pending_interactions = (
-            [item for item in pending_interactions_raw if isinstance(item, dict)]
-            if isinstance(pending_interactions_raw, list)
-            else []
-        )
-        pending_approvals = (
-            [item for item in pending_approvals_raw if isinstance(item, dict)]
-            if isinstance(pending_approvals_raw, list)
-            else []
-        )
-        latest_resolved = None
-        if resolved_interactions:
-            latest_resolved = resolved_interactions[-1]
-        elif resolved_approvals:
-            latest_resolved = resolved_approvals[-1]
-        return {
-            "active": active_dict,
-            "pending_interaction_count": len(pending_interactions),
-            "pending_approval_count": len(pending_approvals),
-            "latest_resolved": dict(latest_resolved) if isinstance(latest_resolved, dict) else {},
-        }
+        return self._continuation_store.continuity_snapshot(state)
+
+    def lifecycle_events(
+        self, mutable_state: dict[str, object], *, limit: int = 8
+    ) -> list[dict[str, object]]:
+        snapshot = self.continuity_snapshot(mutable_state)
+        events = snapshot.get("lifecycle_events")
+        if not isinstance(events, list):
+            return []
+        normalized = [item for item in events if isinstance(item, dict)]
+        return normalized[-limit:]

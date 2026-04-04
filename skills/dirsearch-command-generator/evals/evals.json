@@ -1,0 +1,40 @@
+{
+  "skill_name": "dirsearch-command-generator",
+  "evals": [
+    {
+      "id": 1,
+      "name": "php-quick-scan",
+      "prompt": "帮我扫描 https://php-app.example.com，这是个 PHP 网站，想快速看看有什么目录和文件",
+      "expected_output": "生成至少5种dirsearch命令，包含PHP相关扩展名，快速扫描选项，每种命令有场景说明和参数解释",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "aspnet-deep-scan",
+      "prompt": "目标是一个 ASP.NET 内部系统 http://internal.company.local:8080，需要全面扫描找出所有可能的路径，包括隐藏的管理后台",
+      "expected_output": "生成至少5种dirsearch命令，包含ASP.NET扩展名(aspx,ashx等)，深度扫描选项，递归扫描，管理后台探测相关参数",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "waf-bypass-scan",
+      "prompt": "目标网站 https://secure-bank.com 有 WAF 防护，我需要扫描它的目录结构但不能触发封禁",
+      "expected_output": "生成至少5种dirsearch命令，包含WAF绕过技巧(随机UA、延迟、代理、伪造IP头等)，低速率扫描选项",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "api-endpoint-discovery",
+      "prompt": "发现了一个 API 服务 https://api.startup.io，想找出所有的 API 端点",
+      "expected_output": "生成至少5种dirsearch命令，专注于API端点发现，包含/api路径、json/xml扩展名、Content-Type头设置",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "sensitive-file-hunt",
+      "prompt": "需要对 https://old-server.net 进行敏感文件探测，找配置文件、备份文件、数据库文件等",
+      "expected_output": "生成至少5种dirsearch命令，专注于敏感文件探测，包含bak/backup/conf/env/sql等扩展名，敏感文件字典",
+      "files": []
+    }
+  ]
+}

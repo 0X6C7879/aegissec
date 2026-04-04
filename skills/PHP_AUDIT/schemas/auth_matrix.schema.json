@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Auth Matrix",
+  "description": "Authorization matrix: route + auth level + mechanism + bypass notes",
+  "type": "object",
+  "required": [
+    "matrix"
+  ],
+  "properties": {
+    "matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "url",
+          "auth_level",
+          "auth_mechanism"
+        ],
+        "properties": {
+          "route_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_/-]+$",
+            "maxLength": 100
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1
+          },
+          "auth_level": {
+            "type": "string",
+            "enum": [
+              "anonymous",
+              "authenticated",
+              "admin"
+            ]
+          },
+          "auth_mechanism": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "bypass_notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

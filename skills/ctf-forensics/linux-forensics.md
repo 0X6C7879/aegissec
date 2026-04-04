@@ -17,6 +17,10 @@
 - [Browser Artifact Analysis](#browser-artifact-analysis)
   - [Chrome/Chromium](#chromechromium)
   - [Firefox](#firefox)
+- [Corrupted Git Blob Repair via Byte Brute-Force (CSAW CTF 2015)](#corrupted-git-blob-repair-via-byte-brute-force-csaw-ctf-2015)
+- [VBA Macro Forensics - Excel Cell Data to ELF Binary (Sharif CTF 2016)](#vba-macro-forensics---excel-cell-data-to-elf-binary-sharif-ctf-2016)
+- [Ethereum / Blockchain Transaction Tracing (Defenit CTF 2020)](#ethereum--blockchain-transaction-tracing-defenit-ctf-2020)
+- [Python In-Memory Source Recovery via pyrasite (Insomni'hack 2017)](#python-in-memory-source-recovery-via-pyrasite-insomnihack-2017)
 
 ---
 
@@ -366,3 +370,142 @@ with open('sessionstore-backups/recovery.jsonlz4','rb') as f:
 ```
 
 **Key insight:** Browser artifacts are SQLite databases with non-standard timestamp formats. Chrome uses WebKit epoch (microseconds since 1601-01-01), Firefox uses Unix epoch in microseconds. Always check History, Cookies, Login Data, Local Storage, and session restore files. For encrypted passwords, you need the master key (DPAPI on Windows, keychain on macOS, key4.db on Firefox).
+
+---
+
+## Corrupted Git Blob Repair via Byte Brute-Force (CSAW CTF 2015)
+
+**Pattern (sharpturn):** Git repository with corrupted blob objects. Since git identifies objects by SHA-1 hash, a single-byte corruption changes the hash, making the object unreadable. Repair by brute-forcing each byte position until `git hash-object` produces the expected hash.
+
+```python
+import subprocess, shutil
+
+def repair_blob(filepath, target_hash):
+    """Brute-force single-byte corruption in a git blob."""
+    with open(filepath, 'rb') as f:
+        data = bytearray(f.read())
+
+    for pos in range(len(data)):
+        original = data[pos]
+        for val in range(256):
+            if val == original:
+                continue
+            data[pos] = val
+            with open(filepath, 'wb') as f:
+                f.write(data)
+            result = subprocess.run(
+                ['git', 'hash-object', filepath],
+                capture_output=True, text=True
+            )
+            if result.stdout.strip() == target_hash:
+                print(f"Fixed byte {pos}: 0x{original:02x} -> 0x{val:02x}")
+                return True
+            data[pos] = original
+
+    with open(filepath, 'wb') as f:
+        f.write(data)
+    return False
+```
+
+**Workflow:**
+1. `git fsck` to identify corrupted objects and their expected hashes
+2. Locate the corrupt blob files in `.git/objects/`
+3. Decompress with `python3 -c "import zlib; print(zlib.decompress(open('blob','rb').read()))"`
+4. Brute-force each byte position (256 values * file_size attempts)
+5. Verify with `git hash-object` matching the expected hash
+
+**Key insight:** Git's content-addressable storage means the expected SHA-1 hash is known from the commit tree, even when the blob is corrupted. Single-byte corruption is brute-forceable in seconds. For multi-byte corruption, combine with contextual knowledge (e.g., source code must compile, numeric constants must be valid).
+
+---
+
+## VBA Macro Forensics - Excel Cell Data to ELF Binary (Sharif CTF 2016)
+
+Excel spreadsheet hides an entire executable as numeric cell values. A VBA (Visual Basic for Applications) macro transforms each cell via `CByte((cell_value - 78) / 3)` and writes bytes to produce an ELF (Executable and Linkable Format) binary. Safe analysis: export to CSV, reimplement transform in Python.
+
+```python
+import csv
+with open('data.csv') as f, open('binary', 'wb') as out:
+    for row in csv.reader(f):
+        for cell in row:
+            if cell.strip():
+                out.write(bytes([int((int(cell) - 78) / 3)]))
+```
+
+**Key insight:** Malware delivery via spreadsheet cell values with arithmetic transformation. Always reimplement VBA macro logic in Python rather than executing the macro. Check for `olevba` output to extract the transformation formula.
+
+**Detection:** Excel file with large numbers in cells, VBA macro with `CByte`/`Chr`/`Write` operations.
+
+---
+
+## Ethereum / Blockchain Transaction Tracing (Defenit CTF 2020)
+
+Track cryptocurrency through tumbler/mixer services by analyzing on-chain transaction patterns.
+
+```python
+import requests
+from collections import defaultdict
+
+def trace_ethereum_transactions(address, api_key, depth=3):
+    """Trace ETH transactions through tumbler hops"""
+    url = f"https://api.etherscan.io/api?module=account&action=txlist&address={address}&apikey={api_key}"
+    r = requests.get(url)
+    txs = r.json()["result"]
+
+    graph = defaultdict(list)
+    for tx in txs:
+        graph[tx["from"]].append({
+            "to": tx["to"],
+            "value": int(tx["value"]) / 1e18,  # Wei to ETH
+            "timestamp": int(tx["timeStamp"])
+        })
+
+    # Heuristics for tumbler detection:
+    # 1. Amount correlation: input ~= output (minus fee)
+    # 2. Timing: outputs follow inputs within minutes/hours
+    # 3. Fan-out pattern: one input splits to many outputs
+    # 4. Round amounts: tumblers often use round ETH values
+
+    # Filter by transaction count (skip high-volume faucets/exchanges)
+    suspicious = {addr: txs for addr, txs in graph.items()
+                  if 5 < len(txs) < 100}  # Not faucet, not end-user
+
+    return suspicious
+
+# Tools for blockchain forensics:
+# - Etherscan API: transaction history, internal transactions
+# - Blockchair: multi-chain explorer (BTC, ETH, etc.)
+# - Chainalysis Reactor: commercial but referenced in CTFs
+# - breadcrumbs.app: free transaction visualization
+```
+
+**Key insight:** Blockchain tumblers obscure transaction trails but leave statistical patterns. Track by correlating input/output amounts (minus fees), timing windows, and intermediate wallet transaction counts. Wallets with 10-50 transactions are likely intermediaries; 1000+ are exchanges/faucets to ignore.
+
+---
+
+## Python In-Memory Source Recovery via pyrasite (Insomni'hack 2017)
+
+When a Python process has its source file deleted but is still running, attach to it with `pyrasite-shell` and decompile code objects from memory.
+
+```bash
+# 1. Find the running Python process
+pgrep -f "python"
+
+# 2. Attach with pyrasite (requires ptrace permissions)
+pyrasite-shell <PID>
+
+# 3. Inside the pyrasite shell, enumerate and decompile functions:
+import sys, uncompyle6
+# List all global variables and functions
+for name, obj in globals().items():
+    if hasattr(obj, 'func_code'):
+        print(f"\n=== {name} ===")
+        uncompyle6.main.uncompyle(sys.version_info[0] + sys.version_info[1]/10.0,
+                                   obj.func_code, sys.stdout)
+
+# 4. Also check for variables containing secrets
+print(globals())  # May contain flags, keys, etc.
+```
+
+**Key insight:** `pyrasite` injects a Python shell into a running process via `ptrace`. All code objects and global variables remain in memory even after the source file is deleted. `uncompyle6` decompiles `func_code` objects back to readable Python source. For Python 3.9+ processes, use [`pycdc`](https://github.com/zrax/pycdc) instead (`pycdc` operates on `.pyc` files — write code objects to disk with `marshal.dump` first).
+
+**Detection:** Challenge provides access to a running system where a Python process is active but the `.py` source file has been deleted. `ls -l /proc/<PID>/exe` shows the Python interpreter; `/proc/<PID>/fd/` may still reference the deleted file. Check `ptrace` permissions (`/proc/sys/kernel/yama/ptrace_scope`).

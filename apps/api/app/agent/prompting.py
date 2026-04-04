@@ -11,6 +11,10 @@ from app.agent.token_budget import (
     estimate_token_count,
     truncate_text_to_token_budget,
 )
+from app.agent.workbench_runtime import (
+    project_workspace_rehydrate_from_runtime_payload,
+    project_workspace_state_from_runtime_payload,
+)
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
 
 
@@ -577,6 +581,38 @@ def build_workflow_prompting_state(
         if isinstance(raw_tool_result_delta_ids, list)
         else []
     )
+    fallback_workspace_state = (
+        dict(workspace_state)
+        if isinstance(
+            (workspace_state := normalized_continuity_metadata.get("workspace_state")),
+            dict,
+        )
+        else {}
+    )
+    fallback_workspace_rehydrate = (
+        dict(workspace_rehydrate)
+        if isinstance(
+            (workspace_rehydrate := normalized_continuity_metadata.get("workspace_rehydrate")),
+            dict,
+        )
+        else {}
+    )
+    workbench_runtime = (
+        dict(workbench_runtime)
+        if isinstance(
+            (workbench_runtime := normalized_continuity_metadata.get("workbench_runtime")),
+            dict,
+        )
+        else {}
+    )
+    projected_workspace_state = project_workspace_state_from_runtime_payload(
+        workbench_runtime,
+        fallback=fallback_workspace_state,
+    )
+    projected_workspace_rehydrate = project_workspace_rehydrate_from_runtime_payload(
+        workbench_runtime,
+        fallback=fallback_workspace_rehydrate,
+    )
     budget = allocate_token_budget(
         total_budget=total_budget,
         components=[
@@ -787,25 +823,8 @@ def build_workflow_prompting_state(
                 )
                 else {}
             ),
-            "workspace_state": (
-                dict(workspace_state)
-                if isinstance(
-                    (workspace_state := normalized_continuity_metadata.get("workspace_state")),
-                    dict,
-                )
-                else {}
-            ),
-            "workspace_rehydrate": (
-                dict(workspace_rehydrate)
-                if isinstance(
-                    (
-                        workspace_rehydrate := normalized_continuity_metadata.get(
-                            "workspace_rehydrate"
-                        )
-                    ),
-                    dict,
-                )
-                else {}
-            ),
+            "workspace_state": projected_workspace_state,
+            "workspace_rehydrate": projected_workspace_rehydrate,
+            "workbench_runtime": workbench_runtime,
         },
     }

@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Priority Queue",
+  "description": "Priority queue: P0-P3 / sink / source count / rating rationale",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [
+      "id",
+      "priority",
+      "route_id",
+      "route_url",
+      "sink_function",
+      "sink_file",
+      "sink_line",
+      "auth_level",
+      "reason",
+      "source_count",
+      "sources"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^sink_\\d+$"
+      },
+      "priority": {
+        "type": "string",
+        "enum": [
+          "P0",
+          "P1",
+          "P2",
+          "P3"
+        ]
+      },
+      "route_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_/-]+$",
+        "maxLength": 100
+      },
+      "route_url": {
+        "type": "string",
+        "maxLength": 500,
+        "minLength": 1
+      },
+      "sink_function": {
+        "type": "string",
+        "pattern": "^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\:]*$",
+        "maxLength": 200
+      },
+      "sink_file": {
+        "type": "string",
+        "maxLength": 500,
+        "minLength": 1
+      },
+      "sink_line": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "auth_level": {
+        "type": "string",
+        "enum": [
+          "anonymous",
+          "authenticated",
+          "admin"
+        ]
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 500,
+        "minLength": 1
+      },
+      "source_count": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 1000,
+          "minLength": 1
+        }
+      },
+      "sink_type": {
+        "type": "string",
+        "description": "Sink type (RCE/SQLi/XSS/LFI etc.)",
+        "enum": [
+          "sqli",
+          "xss_ssti",
+          "rce",
+          "lfi",
+          "filewrite",
+          "ssrf",
+          "xxe",
+          "deserial",
+          "crlf",
+          "ldap",
+          "nosql",
+          "csrf",
+          "session",
+          "authz",
+          "crypto",
+          "race_condition",
+          "business_logic",
+          "infoleak",
+          "logging",
+          "config",
+          "wordpress"
+        ]
+      },
+      "cvss": {
+        "type": "object",
+        "description": "CVSS 3.1 score",
+        "properties": {
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "vector": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW",
+              "NONE"
+            ]
+          }
+        }
+      },
+      "attack_surface_score": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100,
+        "description": "Attack surface quantification score"
+      },
+      "business_impact": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 1000,
+          "minLength": 1
+        },
+        "description": "Business impact labels"
+      }
+    }
+  }
+}

@@ -29,6 +29,8 @@ class WorkspaceRetainedState:
     recent_transcript_highlights: tuple[str, ...]
     selected_project_memory_entries: tuple[str, ...]
     current_retrieval_focus: dict[str, object]
+    open_questions: tuple[str, ...] = ()
+    carry_forward_context: str = ""
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -40,6 +42,8 @@ class WorkspaceRetainedState:
             "recent_transcript_highlights": list(self.recent_transcript_highlights),
             "selected_project_memory_entries": list(self.selected_project_memory_entries),
             "current_retrieval_focus": dict(self.current_retrieval_focus),
+            "open_questions": list(self.open_questions),
+            "carry_forward_context": self.carry_forward_context,
         }
 
     @classmethod
@@ -60,6 +64,8 @@ class WorkspaceRetainedState:
                 raw_dict.get("selected_project_memory_entries")
             ),
             current_retrieval_focus=_dict(raw_dict.get("current_retrieval_focus")),
+            open_questions=_string_tuple(raw_dict.get("open_questions")),
+            carry_forward_context=str(raw_dict.get("carry_forward_context") or ""),
         )
 
 
@@ -73,6 +79,8 @@ class WorkspaceRehydratedState:
     selected_project_memory_entries: tuple[str, ...]
     active_retrieval_focus: dict[str, object]
     active_capability_summary: str
+    open_questions: tuple[str, ...] = ()
+    carry_forward_context: str = ""
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -84,6 +92,8 @@ class WorkspaceRehydratedState:
             "selected_project_memory_entries": list(self.selected_project_memory_entries),
             "active_retrieval_focus": dict(self.active_retrieval_focus),
             "active_capability_summary": self.active_capability_summary,
+            "open_questions": list(self.open_questions),
+            "carry_forward_context": self.carry_forward_context,
         }
 
 

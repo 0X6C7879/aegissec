@@ -11,6 +11,8 @@
 - [FEC Political Donation Research](#fec-political-donation-research)
 - [Wayback Machine](#wayback-machine)
 - [WHOIS Investigation](#whois-investigation)
+- [Shodan SSH Fingerprint Lookup (EKOPARTY CTF 2016)](#shodan-ssh-fingerprint-lookup-ekoparty-ctf-2016)
+- [Fake Service Banner Detection via Fingerprinting (MetaCTF Flash 2026)](#fake-service-banner-detection-via-fingerprinting-metactf-flash-2026)
 - [Resources](#resources)
 
 ---
@@ -181,6 +183,73 @@ whois -h whois.radb.net AS12345
 ```
 
 **Key insight:** WHOIS data is most useful for timeline correlation (when was the domain registered relative to CTF events?), reverse lookups (what other domains share the same registrant?), and identifying shared infrastructure. Historical WHOIS via SecurityTrails or Wayback Machine can reveal pre-privacy registrant details.
+
+---
+
+## Shodan SSH Fingerprint Lookup (EKOPARTY CTF 2016)
+
+Discover the real IP behind a Tor hidden service or CDN by searching Shodan for the service's SSH fingerprint.
+
+```bash
+# Step 1: Get SSH fingerprint from target
+ssh-keyscan -t rsa target.onion 2>/dev/null | ssh-keygen -lf - -E md5
+# Or use a dedicated scanner:
+# pip install ssh-audit
+ssh-audit target.onion
+
+# Step 2: Extract the fingerprint hash
+# e.g., MD5:ab:cd:ef:12:34:56:78:90:ab:cd:ef:12:34:56:78:90
+
+# Step 3: Search Shodan for matching fingerprint
+# Via API:
+import shodan
+api = shodan.Shodan('YOUR_API_KEY')
+results = api.search('ssh.fingerprint:"ab:cd:ef:12:34:56:78:90:ab:cd:ef:12:34:56:78:90"')
+for result in results['matches']:
+    print(f"IP: {result['ip_str']}")
+    print(f"Port: {result['port']}")
+    print(f"Banner: {result['data'][:200]}")
+
+# Via Shodan CLI:
+shodan search 'ssh.fingerprint:"ab:cd:ef:12:34:56:78:90"'
+
+# Via web: https://www.shodan.io/search?query=ssh.fingerprint:%22...%22
+
+# Also works with TLS certificate fingerprints:
+# shodan search 'ssl.cert.fingerprint:"SHA256_HASH"'
+```
+
+**Key insight:** SSH host keys are unique per server. If a hidden service runs SSH, its fingerprint can be searched on Shodan/Censys to find the real IP. This technique also works to de-anonymize services behind CloudFlare or other CDNs. Search both SSH fingerprints and TLS certificate fingerprints.
+
+---
+
+## Fake Service Banner Detection via Fingerprinting (MetaCTF Flash 2026)
+
+**Pattern (O-Syn-T):** A port appears open on a standard service port (e.g., 22/SSH), but the service behind it is not what it claims. A basic SYN scan reports the port as open, but service version detection reveals a fake or custom banner containing the flag.
+
+```bash
+# Step 1: Basic port scan finds port 22 open
+nmap -sS target.ctf
+# PORT   STATE SERVICE
+# 22/tcp open  ssh
+
+# Step 2: Service version fingerprinting reveals the deception
+nmap -sV -sC target.ctf -p 22
+# PORT   STATE SERVICE VERSION
+# 22/tcp open  ssh?
+# |_banner: MetaCTF{fake_banner_flag_here}
+
+# Step 3: Or simply connect with netcat to read the banner
+nc target.ctf 22
+# MetaCTF{fake_banner_flag_here}
+
+# Alternative: use curl or openssl for TLS-wrapped banners
+echo "" | timeout 3 nc -w 3 target.ctf 22
+```
+
+**Key insight:** Never trust port numbers alone. A SYN scan only confirms the port is open, not what service is running. Always run `nmap -sV` (version detection) or connect with `nc` to read the actual banner. CTF challenges exploit the assumption that port 22 = SSH, port 80 = HTTP, etc. Custom banner services on standard ports are a common OSINT/network recon trick.
+
+**When to recognize:** Challenge name hints at network scanning or reconnaissance ("SYN", "scan", "port"). The expected approach is to enumerate open ports, but the flag is in the service banner itself rather than requiring exploitation.
 
 ---
 

@@ -11,6 +11,7 @@
 - [Hosts File Hidden Data](#hosts-file-hidden-data)
 - [Contact Files (.contact)](#contact-files-contact)
 - [WinZip AES Encrypted Archives](#winzip-aes-encrypted-archives)
+- [NTFS Alternate Data Streams](#ntfs-alternate-data-streams)
 - [NTFS MFT Analysis](#ntfs-mft-analysis)
 - [USN Journal ($J) Analysis](#usn-journal-j-analysis)
 - [SAM Account Creation Timing](#sam-account-creation-timing)
@@ -20,6 +21,7 @@
 - [RDP Session Event IDs](#rdp-session-event-ids)
 - [Windows Defender MPLog Analysis](#windows-defender-mplog-analysis)
 - [Anti-Forensics Detection Checklist](#anti-forensics-detection-checklist)
+- [Windows Memory Forensics: certutil Base64 ZIP Recovery (SEC-T CTF 2017)](#windows-memory-forensics-certutil-base64-zip-recovery-sec-t-ctf-2017)
 
 ---
 
@@ -211,6 +213,78 @@ hashcat -m 13600 zip_hash.txt wordlist.txt
 # Hybrid: word + 4 digits
 hashcat -m 13600 zip_hash.txt wordlist.txt -a 6 '?d?d?d?d'
 ```
+
+---
+
+## NTFS Alternate Data Streams
+
+**Pattern:** NTFS supports multiple data streams per file. The default stream stores normal file content, but additional named streams (Alternate Data Streams / ADS) can hide arbitrary data invisibly. `dir`, Explorer, and most tools only show the default stream.
+
+**Detection and enumeration:**
+
+```bash
+# On a mounted NTFS volume (Linux):
+getfattr -R -n ntfs.streams.list /mnt/ntfs/     # List all streams on all files
+
+# Using Sleuth Kit on a raw NTFS image (best for forensics):
+fls -r ntfs_image.dd                              # Recursive file listing
+fls -r ntfs_image.dd | grep -i ":"                # ADS entries contain ":"
+# Output: r/r 66-128-4: Documents/credentials.txt:hidden_flag.jpg
+
+# Extract ADS by inode — find inode first:
+istat ntfs_image.dd 66                            # Show all attributes for inode 66
+# Look for $DATA attributes with names (e.g., $DATA "hidden_flag.jpg")
+
+icat ntfs_image.dd 66-128-4 > hidden_flag.jpg    # Extract ADS by full address
+
+# Using ntfsstreams (part of ntfs-3g):
+ntfs_streams_list /dev/sda1
+```
+
+**On Windows (live analysis):**
+
+```powershell
+# List ADS on a file
+Get-Item -Path C:\file.txt -Stream *
+
+# Read ADS content
+Get-Content -Path C:\file.txt -Stream hidden_data
+
+# dir /r shows ADS (Windows Vista+)
+dir /r C:\Users\suspect\Documents\
+
+# Common ADS names to check:
+# Zone.Identifier — marks files downloaded from the internet
+# (contains ZoneId, ReferrerUrl, HostUrl)
+Get-Content -Path C:\file.exe -Stream Zone.Identifier
+```
+
+**Python extraction from raw NTFS image:**
+
+```python
+# Using pytsk3 (Python bindings for Sleuth Kit)
+import pytsk3
+
+img = pytsk3.Img_Info("ntfs_image.dd")
+fs = pytsk3.FS_Info(img)
+
+# Walk all files and check for ADS
+for entry in fs.open_dir("/"):
+    for attr in entry:
+        if attr.info.type == pytsk3.TSK_FS_ATTR_TYPE_NTFS_DATA:
+            name = attr.info.name or "(default)"
+            if name != "(default)":
+                print(f"ADS found: {entry.info.name.name}/{name} "
+                      f"(size: {attr.info.size})")
+                # Read ADS content
+                data = entry.read_random(0, attr.info.size, attr.info.type, attr.info.id)
+```
+
+**Key insight:** ADS are invisible to `dir` (without `/r`), Explorer, and most forensic tools that only check default data streams. The Sleuth Kit's `fls` with the colon notation (`inode-type-id`) is the most reliable way to enumerate and extract ADS from images. Malware uses ADS to hide payloads; CTF challenges use them to hide flags. The `Zone.Identifier` stream is the most common ADS — it's automatically added by browsers and email clients to downloaded files.
+
+**When to recognize:** Challenge provides an NTFS image, mentions "hidden data", "hidden in plain sight", or "alternate streams". Credentials files or documents that seem too simple may have ADS attached. Always run `fls -r image.dd | grep ":"` on any NTFS forensics challenge.
+
+**References:** Google CTF 2019 "Home Computer", TCP1P CTF 2023 "hide and split", De1CTF 2019 "DeeplnReal"
 
 ---
 
@@ -417,3 +491,51 @@ When event logs are cleared (attacker used `wevtutil cl` or `Clear-EventLog`):
 10. **Registry timestamps** - Key last_modified times reveal activity
 
 **Security.evtx EventID 1102** = "The audit log was cleared" (ironically logged even during clearing)
+
+---
+
+## Windows Memory Forensics: certutil Base64 ZIP Recovery (SEC-T CTF 2017)
+
+Volatility memory dump analysis where `psxview` reveals hidden cmd/powershell processes. A malware batch script uses `bitsadmin` to download and `certutil -decode` to base64-decode payloads. Search memory for `UEsD` (the base64 encoding of ZIP magic `PK\x03`) to find in-transit base64 archives, then decode to recover ZIP contents including registry entries.
+
+```bash
+# Step 1: Find hidden processes (psxview compares multiple process lists)
+vol.py -f dump.raw --profile=Win7SP1x64 psxview
+
+# Step 2: Dump suspicious process memory
+vol.py -f dump.raw --profile=Win7SP1x64 procdump -p <PID> -D ./dumps/
+
+# Step 3: Scan raw memory for base64-encoded ZIP archives
+# UEsD = base64("PK\x03") — ZIP magic bytes encoded in base64
+strings dump.raw | grep -o 'UEsD[A-Za-z0-9+/=]*' > candidates.txt
+
+# Step 4: Decode each candidate
+python3 -c "
+import base64, sys
+with open('candidates.txt') as f:
+    for line in f:
+        line = line.strip()
+        # Pad to valid base64 length
+        padded = line + '=' * (-len(line) % 4)
+        try:
+            data = base64.b64decode(padded)
+            if data[:4] == b'PK\x03\x04':
+                with open('recovered.zip', 'wb') as out:
+                    out.write(data)
+                print('ZIP recovered')
+                break
+        except Exception:
+            pass
+"
+
+# Step 5: Extract ZIP contents
+unzip recovered.zip
+```
+
+**Malware indicators to look for:**
+- `bitsadmin /transfer` — background download without browser
+- `certutil -decode input.b64 output.exe` — base64 decode abuse
+- Batch files (`.bat`, `.cmd`) in unusual locations (`%TEMP%`, `%APPDATA%`)
+- Registry exports (`.reg` files) inside ZIP payloads
+
+**Key insight:** `certutil` is commonly abused by malware for base64 decoding as a living-off-the-land technique. `UEsD` is the base64 encoding of ZIP magic bytes `PK\x03` — use it as a memory scanning signature to find in-transit ZIP archives before they are written to disk or after they are deleted.
