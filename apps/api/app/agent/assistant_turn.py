@@ -36,6 +36,11 @@ class AssistantTurnInput:
     memory_context: dict[str, object] = field(default_factory=dict)
     transcript_context: dict[str, object] = field(default_factory=dict)
     reasoning_frame: dict[str, object] = field(default_factory=dict)
+    workspace_context: dict[str, object] = field(default_factory=dict)
+    pending_protocol_context: dict[str, object] = field(default_factory=dict)
+    unresolved_questions_seed: list[str] = field(default_factory=list)
+    recall_focus: dict[str, object] = field(default_factory=dict)
+    prior_turn_outcome_summary: str = ""
 
     def to_state(self) -> dict[str, object]:
         return {
@@ -48,6 +53,11 @@ class AssistantTurnInput:
             "memory_context": dict(self.memory_context),
             "transcript_context": dict(self.transcript_context),
             "reasoning_frame": dict(self.reasoning_frame),
+            "workspace_context": dict(self.workspace_context),
+            "pending_protocol_context": dict(self.pending_protocol_context),
+            "unresolved_questions_seed": list(self.unresolved_questions_seed),
+            "recall_focus": dict(self.recall_focus),
+            "prior_turn_outcome_summary": self.prior_turn_outcome_summary,
         }
 
     @classmethod
@@ -68,6 +78,11 @@ class AssistantTurnInput:
             memory_context=_dict(raw_dict.get("memory_context")),
             transcript_context=_dict(raw_dict.get("transcript_context")),
             reasoning_frame=_dict(raw_dict.get("reasoning_frame")),
+            workspace_context=_dict(raw_dict.get("workspace_context")),
+            pending_protocol_context=_dict(raw_dict.get("pending_protocol_context")),
+            unresolved_questions_seed=_string_list(raw_dict.get("unresolved_questions_seed")),
+            recall_focus=_dict(raw_dict.get("recall_focus")),
+            prior_turn_outcome_summary=str(raw_dict.get("prior_turn_outcome_summary") or ""),
         )
 
 
@@ -79,6 +94,7 @@ class AssistantTurnPlan:
     scheduler_mode: str | None = None
     selected_task_ids: list[str] = field(default_factory=list)
     selected_task_names: list[str] = field(default_factory=list)
+    wave_priority: str = "advance"
     rationale: str = ""
 
     def to_state(self) -> dict[str, object]:
@@ -89,6 +105,7 @@ class AssistantTurnPlan:
             "scheduler_mode": self.scheduler_mode,
             "selected_task_ids": list(self.selected_task_ids),
             "selected_task_names": list(self.selected_task_names),
+            "wave_priority": self.wave_priority,
             "rationale": self.rationale,
         }
 
@@ -106,6 +123,7 @@ class AssistantTurnPlan:
             scheduler_mode=_string(raw_dict.get("scheduler_mode")),
             selected_task_ids=_string_list(raw_dict.get("selected_task_ids")),
             selected_task_names=_string_list(raw_dict.get("selected_task_names")),
+            wave_priority=str(raw_dict.get("wave_priority") or "advance"),
             rationale=str(raw_dict.get("rationale") or ""),
         )
 
@@ -119,6 +137,9 @@ class AssistantTurnOutcome:
     unresolved_questions: list[str] = field(default_factory=list)
     carry_forward_context: str = ""
     next_action: str = "idle"
+    turn_focus: dict[str, object] = field(default_factory=dict)
+    resume_strategy: dict[str, object] = field(default_factory=dict)
+    recall_focus: dict[str, object] = field(default_factory=dict)
     executed_task_ids: list[str] = field(default_factory=list)
     tool_result_count: int = 0
     partial_failure_count: int = 0
@@ -133,6 +154,9 @@ class AssistantTurnOutcome:
             "unresolved_questions": list(self.unresolved_questions),
             "carry_forward_context": self.carry_forward_context,
             "next_action": self.next_action,
+            "turn_focus": dict(self.turn_focus),
+            "resume_strategy": dict(self.resume_strategy),
+            "recall_focus": dict(self.recall_focus),
             "executed_task_ids": list(self.executed_task_ids),
             "tool_result_count": self.tool_result_count,
             "partial_failure_count": self.partial_failure_count,
@@ -163,6 +187,9 @@ class AssistantTurnOutcome:
             unresolved_questions=_string_list(raw_dict.get("unresolved_questions")),
             carry_forward_context=str(raw_dict.get("carry_forward_context") or ""),
             next_action=str(raw_dict.get("next_action") or "idle"),
+            turn_focus=_dict(raw_dict.get("turn_focus")),
+            resume_strategy=_dict(raw_dict.get("resume_strategy")),
+            recall_focus=_dict(raw_dict.get("recall_focus")),
             executed_task_ids=_string_list(raw_dict.get("executed_task_ids")),
             tool_result_count=tool_result_count if isinstance(tool_result_count, int) else 0,
             partial_failure_count=(

@@ -47,6 +47,8 @@ class PauseRuntimeService:
             return None
         protocol_kind = str(protocol_payload.get("protocol_kind") or "")
         pending_payload = protocol_payload.get(protocol_kind)
+        if protocol_kind not in {"interaction", "approval"}:
+            return None
         deferred = protocol_payload.get("deferred_continuation")
         resume_payload = deferred.get("resume_payload") if isinstance(deferred, dict) else None
         continuation_token = (
@@ -74,6 +76,10 @@ class PauseRuntimeService:
             "protocol_payload": dict(protocol_payload),
             "created_at": execution.ended_at.isoformat(),
             "status": "pending",
+            "formal_fields": self._formal_pending_fields(
+                protocol_kind=protocol_kind,
+                pending_payload=pending_payload,
+            ),
         }
         list_key = "pending_interactions" if protocol_kind == "interaction" else "pending_approvals"
         pending_list_raw = state.get(list_key)
@@ -185,6 +191,28 @@ class PauseRuntimeService:
         state["active"] = None
         mutable_state["pause"] = state
         return resolved_entry
+
+    @staticmethod
+    def _formal_pending_fields(
+        *, protocol_kind: str, pending_payload: dict[str, object]
+    ) -> dict[str, object]:
+        if protocol_kind == "approval":
+            return {
+                "approval_reason": str(pending_payload.get("approval_reason") or ""),
+                "requested_scope": str(pending_payload.get("requested_scope") or ""),
+                "risk_summary": str(pending_payload.get("risk_summary") or ""),
+                "resume_hint": str(pending_payload.get("resume_hint") or ""),
+            }
+        return {
+            "question": str(pending_payload.get("question") or ""),
+            "expected_fields": (
+                [item for item in fields if isinstance(item, str)]
+                if isinstance((fields := pending_payload.get("expected_fields")), list)
+                else []
+            ),
+            "context_note": str(pending_payload.get("context_note") or ""),
+            "resume_hint": str(pending_payload.get("resume_hint") or ""),
+        }
 
     def mark_task_ready_for_resolution(
         self,

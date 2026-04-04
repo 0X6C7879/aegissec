@@ -1785,9 +1785,7 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked"
-                if resolved_status is WorkflowRunStatus.BLOCKED
-                else "completed"
+                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,

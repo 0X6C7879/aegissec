@@ -58,10 +58,6 @@ function getStoredWorkspaceSidebarState(): boolean {
   return window.localStorage.getItem(WORKSPACE_SIDEBAR_STORAGE_KEY) === "true";
 }
 
-function getSessionDisplayTitle(title: string): string {
-  return title === "New Session" ? "新对话" : title;
-}
-
 function buildInvalidSessionState(sessionId: string, message?: string): InvalidSessionState {
   return {
     sessionId,
@@ -81,10 +77,6 @@ function visibleSessionsForSidebar(
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function getConnectionTone(state: string): string {
-  return state === "open" ? "在线" : state === "connecting" ? "连接中" : "离线";
 }
 
 function buildOptimisticUserMessage(sessionId: string, content: string): SessionMessage {
@@ -399,7 +391,7 @@ export function SessionWorkspaceWorkbench() {
     placeholderData: (previousValue) => previousValue,
   });
 
-  const connectionState = useSessionEvents(activeSessionId);
+  useSessionEvents(activeSessionId);
   const sessionRuns = useMemo(
     () =>
       (runtimeStatusQuery.data?.recent_runs ?? []).filter(
@@ -962,7 +954,7 @@ export function SessionWorkspaceWorkbench() {
     await renameSessionMutation.mutateAsync({ id: targetSessionId, title: trimmed });
   }
 
-  function handleSelectNode(nodeId: string): void {
+  function handleSelectNode(nodeId: string | null): void {
     setSelectedAttackNodeId(nodeId);
   }
 
@@ -1161,23 +1153,6 @@ export function SessionWorkspaceWorkbench() {
           </section>
         ) : activeSession && activeConversation ? (
           <>
-            <header className="conversation-header workspace-session-header">
-              <div className="conversation-header-copy">
-                <h2 className="conversation-title">
-                  {getSessionDisplayTitle(activeSession.title)}
-                </h2>
-                <p className="conversation-copy workspace-session-header-copy">
-                  攻击路径主视图，会话与图谱保持同步更新。
-                </p>
-              </div>
-
-              <div className="conversation-header-actions workspace-session-header-actions">
-                <span className={`connection-pill connection-${connectionState}`}>
-                  {getConnectionTone(connectionState)}
-                </span>
-              </div>
-            </header>
-
             {activeSession.deleted_at ? (
               <section className="conversation-inline-notice">
                 对话已归档，仍可查看当前消息与执行摘要。

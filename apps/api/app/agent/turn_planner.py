@@ -73,6 +73,9 @@ class AssistantTurnPlanner:
         schedule: WorkflowToolSchedule,
     ) -> AssistantTurnInput:
         prior_outcome = self.latest_outcome(mutable_state)
+        workspace_context = self._workspace_state_from_snapshot(context_snapshot)
+        pending_protocol_context = self._pending_protocol_context(workspace_context)
+        recall_focus = self._recall_focus(context_snapshot, workspace_context)
         active_tasks = [task.task_name for task in schedule.selected_tasks]
         if not active_tasks:
             current_stage = self._string(mutable_state.get("current_stage"))
@@ -95,6 +98,16 @@ class AssistantTurnPlanner:
                 prior_outcome=prior_outcome,
                 schedule=schedule,
             ),
+            workspace_context=workspace_context,
+            pending_protocol_context=pending_protocol_context,
+            unresolved_questions_seed=self.build_unresolved_questions_seed(
+                workspace_context=workspace_context,
+                recall_focus=recall_focus,
+                prior_outcome=prior_outcome,
+                context_snapshot=context_snapshot,
+            ),
+            recall_focus=recall_focus,
+            prior_turn_outcome_summary=self._prior_turn_outcome_summary(prior_outcome),
         )
 
     def build_turn_plan(
@@ -106,6 +119,7 @@ class AssistantTurnPlanner:
         selected_task_ids = [task.task_id for task in schedule.selected_tasks]
         selected_task_names = [task.task_name for task in schedule.selected_tasks]
         recommended_tool_wave = self.resolve_turn_wave(schedule=schedule)
+        wave_priority = self.choose_wave_priority(turn_input=turn_input, schedule=schedule)
         rationale = str(recommended_tool_wave.get("rationale") or "")
         return AssistantTurnPlan(
             turn_id=turn_input.turn_id,
@@ -114,6 +128,7 @@ class AssistantTurnPlanner:
             scheduler_mode=schedule.scheduler_mode,
             selected_task_ids=selected_task_ids,
             selected_task_names=selected_task_names,
+            wave_priority=wave_priority,
             rationale=rationale,
         )
 
@@ -154,17 +169,33 @@ class AssistantTurnPlanner:
         next_action: str,
         next_directive: NextTurnDirective,
     ) -> AssistantTurnOutcome:
-        unresolved_questions = self._unresolved_questions(
+        turn_focus = self.build_turn_focus(
+            turn_input=turn_input,
+            turn_plan=turn_plan,
+            partial_failures=partial_failures,
+            next_directive=next_directive,
+        )
+        unresolved_questions = self.build_unresolved_questions(
+            turn_input=turn_input,
             turn_plan=turn_plan,
             tool_results=tool_results,
             partial_failures=partial_failures,
         )
-        next_turn_hint = self._next_turn_hint(
+        next_turn_hint = self.build_next_turn_hint(
+            turn_focus=turn_focus,
+            turn_input=turn_input,
             turn_plan=turn_plan,
             next_directive=next_directive,
             partial_failures=partial_failures,
         )
-        carry_forward_context = self._carry_forward_context(
+        resume_strategy = self._resume_strategy(
+            turn_input=turn_input,
+            turn_focus=turn_focus,
+            next_directive=next_directive,
+        )
+        carry_forward_context = self.build_carry_forward_context(
+            turn_input=turn_input,
+            turn_focus=turn_focus,
             reflection_summary=reflection_summary,
             tool_results=tool_results,
             partial_failures=partial_failures,
@@ -180,6 +211,9 @@ class AssistantTurnPlanner:
             unresolved_questions=unresolved_questions,
             carry_forward_context=carry_forward_context,
             next_action=next_action,
+            turn_focus=turn_focus,
+            resume_strategy=resume_strategy,
+            recall_focus=dict(turn_input.recall_focus),
             executed_task_ids=self._executed_task_ids(tool_results),
             tool_result_count=len(tool_results),
             partial_failure_count=len(partial_failures),
@@ -367,14 +401,15 @@ class AssistantTurnPlanner:
                 result.append(task_id)
         return result
 
-    @staticmethod
-    def _unresolved_questions(
+    def build_unresolved_questions(
+        self,
         *,
+        turn_input: AssistantTurnInput,
         turn_plan: AssistantTurnPlan,
         tool_results: list[dict[str, object]],
         partial_failures: list[dict[str, object]],
     ) -> list[str]:
-        questions: list[str] = []
+        questions = list(turn_input.unresolved_questions_seed)
         if not tool_results and turn_plan.selected_task_names:
             selected_names = ", ".join(turn_plan.selected_task_names)
             questions.append(f"Why did the recommended wave not execute for {selected_names}?")
@@ -383,11 +418,13 @@ class AssistantTurnPlanner:
             reason = item.get("reason")
             if isinstance(task_name, str) and isinstance(reason, str):
                 questions.append(f"What follow-up is needed for {task_name}: {reason}?")
-        return questions
+        return questions[:6]
 
-    @staticmethod
-    def _next_turn_hint(
+    def build_next_turn_hint(
+        self,
         *,
+        turn_focus: dict[str, object],
+        turn_input: AssistantTurnInput,
         turn_plan: AssistantTurnPlan,
         next_directive: NextTurnDirective,
         partial_failures: list[dict[str, object]],
@@ -400,15 +437,27 @@ class AssistantTurnPlanner:
             return "Replan the next turn around failed or contradicted workflow hypotheses."
         if partial_failures:
             return "Continue the next turn with retries or follow-up checks for partial failures."
+        focus_type = str(turn_focus.get("focus_type") or "")
+        if focus_type == "pending_protocol":
+            pending_kind = str(turn_input.pending_protocol_context.get("kind") or "protocol")
+            return (
+                f"Hold the next turn on the {pending_kind} protocol until the resume "
+                "condition is met."
+            )
+        if focus_type == "investigation":
+            recall_focus = str(turn_input.recall_focus.get("focus") or "current evidence")
+            return f"Use the next turn to investigate unresolved evidence around {recall_focus}."
         expected_task_names = turn_plan.recommended_tool_wave.get("expected_task_names")
         if isinstance(expected_task_names, list) and expected_task_names:
             names = ", ".join(item for item in expected_task_names if isinstance(item, str))
             return f"Continue the next turn by advancing the workflow-selected wave: {names}."
         return "Continue the next turn from the current workflow frontier."
 
-    @staticmethod
-    def _carry_forward_context(
+    def build_carry_forward_context(
+        self,
         *,
+        turn_input: AssistantTurnInput,
+        turn_focus: dict[str, object],
         reflection_summary: str,
         tool_results: list[dict[str, object]],
         partial_failures: list[dict[str, object]],
@@ -421,13 +470,20 @@ class AssistantTurnPlanner:
             for item in tool_results
             if isinstance(item.get("task_name"), str)
         ]
-        lines = [f"Resulting directive: {next_directive.value}.", next_turn_hint]
+        lines = [
+            f"Resulting directive: {next_directive.value}.",
+            f"Turn focus: {str(turn_focus.get('summary') or 'workflow progression')}",
+            next_turn_hint,
+        ]
         if executed_names:
             lines.append(f"Executed workflow tasks: {', '.join(executed_names)}.")
         if reflection_summary.strip():
             lines.append(reflection_summary.strip())
         if unresolved_questions:
             lines.append(f"Open questions: {' | '.join(unresolved_questions)}")
+        recall_focus = str(turn_input.recall_focus.get("focus") or "")
+        if recall_focus:
+            lines.append(f"Recall focus: {recall_focus}.")
         if partial_failures:
             failed_names = [
                 str(item.get("task_name"))
@@ -437,6 +493,187 @@ class AssistantTurnPlanner:
             if failed_names:
                 lines.append(f"Partial failures: {', '.join(failed_names)}.")
         return " ".join(line for line in lines if line)
+
+    def build_turn_focus(
+        self,
+        *,
+        turn_input: AssistantTurnInput,
+        turn_plan: AssistantTurnPlan,
+        partial_failures: list[dict[str, object]],
+        next_directive: NextTurnDirective,
+    ) -> dict[str, object]:
+        if turn_input.pending_protocol_context.get("kind"):
+            pending_kind = str(turn_input.pending_protocol_context.get("kind") or "protocol")
+            return {
+                "focus_type": "pending_protocol",
+                "summary": (
+                    f"Wait on {pending_kind} for "
+                    f"{str(turn_input.pending_protocol_context.get('task_name') or 'workflow')}"
+                ),
+                "wave_priority": "resume",
+            }
+        if partial_failures:
+            return {
+                "focus_type": "stabilization",
+                "summary": (
+                    "Stabilize the workflow around partial failures and contradictory evidence."
+                ),
+                "wave_priority": "stabilize",
+            }
+        if turn_input.unresolved_questions_seed:
+            return {
+                "focus_type": "investigation",
+                "summary": turn_input.unresolved_questions_seed[0],
+                "wave_priority": "investigate",
+            }
+        return {
+            "focus_type": "workflow_wave",
+            "summary": (
+                f"Advance the recommended workflow wave with priority {turn_plan.wave_priority}."
+            ),
+            "wave_priority": turn_plan.wave_priority,
+            "directive": next_directive.value,
+        }
+
+    def choose_wave_priority(
+        self, *, turn_input: AssistantTurnInput, schedule: WorkflowToolSchedule
+    ) -> str:
+        if turn_input.pending_protocol_context.get("kind"):
+            return "resume"
+        if turn_input.unresolved_questions_seed:
+            return "investigate"
+        if schedule.serialized_write_group:
+            return "advance"
+        return "stabilize"
+
+    def build_unresolved_questions_seed(
+        self,
+        *,
+        workspace_context: dict[str, object],
+        recall_focus: dict[str, object],
+        prior_outcome: AssistantTurnOutcome | None,
+        context_snapshot: ContextSnapshot,
+    ) -> list[str]:
+        questions: list[str] = []
+        pending_protocol = workspace_context.get("pending_protocol")
+        pending_kind = (
+            str(pending_protocol.get("kind") or "") if isinstance(pending_protocol, dict) else ""
+        )
+        if pending_kind:
+            questions.append(
+                f"What information is still needed to satisfy the pending {pending_kind}?"
+            )
+        selected_memory = workspace_context.get("selected_project_memory_entries")
+        if isinstance(selected_memory, list) and selected_memory:
+            questions.append(
+                "Which prior project memory best explains the current focus on "
+                f"{selected_memory[0]}?"
+            )
+        recall_target = str(recall_focus.get("focus") or "")
+        if recall_target:
+            questions.append(f"What evidence should be recalled next for {recall_target}?")
+        if prior_outcome is not None and prior_outcome.unresolved_questions:
+            questions.extend(prior_outcome.unresolved_questions[:2])
+        transcript_recent = (
+            context_snapshot.prompting.get("continuity", {})
+            if isinstance(context_snapshot.prompting, dict)
+            else {}
+        )
+        if isinstance(transcript_recent, dict) and not questions:
+            recent_delta_ids = transcript_recent.get("recent_delta_ids")
+            if isinstance(recent_delta_ids, list) and recent_delta_ids:
+                questions.append(
+                    "What changed in the latest transcript continuity that should shape "
+                    "the next turn?"
+                )
+        return questions[:4]
+
+    def _resume_strategy(
+        self,
+        *,
+        turn_input: AssistantTurnInput,
+        turn_focus: dict[str, object],
+        next_directive: NextTurnDirective,
+    ) -> dict[str, object]:
+        pending_kind = str(turn_input.pending_protocol_context.get("kind") or "")
+        if next_directive is NextTurnDirective.AWAIT_USER_INPUT:
+            return {
+                "mode": "await_user_input",
+                "resume_condition": str(
+                    turn_input.pending_protocol_context.get("resume_condition") or ""
+                ),
+                "pending_kind": pending_kind,
+            }
+        if next_directive is NextTurnDirective.AWAIT_APPROVAL:
+            return {
+                "mode": "await_approval",
+                "resume_condition": str(
+                    turn_input.pending_protocol_context.get("resume_condition") or ""
+                ),
+                "pending_kind": pending_kind,
+            }
+        if next_directive is NextTurnDirective.REPLAN_SUBGRAPH:
+            return {"mode": "replan", "resume_condition": "rebuild the working hypothesis graph"}
+        return {
+            "mode": "continue_execution",
+            "resume_condition": str(turn_focus.get("summary") or "continue current workflow focus"),
+        }
+
+    @staticmethod
+    def _prior_turn_outcome_summary(prior_outcome: AssistantTurnOutcome | None) -> str:
+        if prior_outcome is None:
+            return ""
+        return (
+            f"Prior directive {prior_outcome.resulting_directive}; "
+            f"hint {prior_outcome.next_turn_hint}; "
+            f"carry {prior_outcome.carry_forward_context}"
+        )[:400]
+
+    @staticmethod
+    def _workspace_state_from_snapshot(context_snapshot: ContextSnapshot) -> dict[str, object]:
+        prompting = (
+            context_snapshot.prompting if isinstance(context_snapshot.prompting, dict) else {}
+        )
+        continuity = prompting.get("continuity") if isinstance(prompting, dict) else {}
+        return AssistantTurnPlanner._workspace_state(continuity)
+
+    @staticmethod
+    def _pending_protocol_context(workspace_context: dict[str, object]) -> dict[str, object]:
+        pending = workspace_context.get("pending_protocol")
+        pending_dict = (
+            {str(key): value for key, value in pending.items()} if isinstance(pending, dict) else {}
+        )
+        return {
+            "kind": str(pending_dict.get("kind") or ""),
+            "pause_reason": str(pending_dict.get("pause_reason") or ""),
+            "resume_condition": str(pending_dict.get("resume_condition") or ""),
+            "task_id": str(pending_dict.get("task_id") or ""),
+            "task_name": str(pending_dict.get("task_name") or ""),
+        }
+
+    @staticmethod
+    def _recall_focus(
+        context_snapshot: ContextSnapshot, workspace_context: dict[str, object]
+    ) -> dict[str, object]:
+        retrieval_focus = workspace_context.get("active_retrieval_focus")
+        if isinstance(retrieval_focus, dict):
+            return {str(key): value for key, value in retrieval_focus.items()}
+        retrieval = context_snapshot.retrieval
+        if retrieval.project.items:
+            first = retrieval.project.items[0]
+            return {
+                "scope": "project",
+                "focus": first.record_id,
+                "source_count": retrieval.project.source_count,
+            }
+        if retrieval.session_local.items:
+            first = retrieval.session_local.items[0]
+            return {
+                "scope": "session_local",
+                "focus": first.record_id,
+                "source_count": retrieval.session_local.source_count,
+            }
+        return {"scope": "", "focus": "", "source_count": 0}
 
     @staticmethod
     def _string(raw: object) -> str | None:

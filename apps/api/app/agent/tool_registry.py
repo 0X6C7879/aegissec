@@ -406,9 +406,108 @@ def build_default_tool_registry(
         side_effect_level=ToolSideEffectLevel.LOW,
         resource_keys=("workflow.interaction",),
         description="Pause the workflow and request user input using a protocolized payload.",
+        input_schema={
+            "type": "object",
+            "required": ["question", "expected_fields", "context_note", "resume_hint"],
+            "properties": {
+                "question": {"type": "string"},
+                "expected_fields": {"type": "array", "items": {"type": "string"}},
+                "context_note": {"type": "string"},
+                "resume_hint": {"type": "string"},
+            },
+        },
         interaction_required=True,
         interrupt_behavior_value=ToolInterruptBehavior.USER_INTERACTION,
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "stdout": {"type": "string"},
+                "stderr": {"type": "string"},
+                "exit_code": {"type": "integer"},
+                "execution_blocked": {"type": "boolean"},
+                "interaction_required": {"type": "boolean"},
+                "interrupt_behavior": {"type": "string"},
+                "block_reason": {"type": "string"},
+                "protocol_payload": {
+                    "type": "object",
+                    "required": [
+                        "protocol_kind",
+                        "protocol_version",
+                        "interaction",
+                        "deferred_continuation",
+                    ],
+                    "properties": {
+                        "protocol_kind": {"type": "string"},
+                        "protocol_version": {"type": "string"},
+                        "interaction": {
+                            "type": "object",
+                            "required": [
+                                "interaction_id",
+                                "question",
+                                "expected_fields",
+                                "context_note",
+                                "resume_hint",
+                            ],
+                            "properties": {
+                                "interaction_id": {"type": "string"},
+                                "question": {"type": "string"},
+                                "expected_fields": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "context_note": {"type": "string"},
+                                "resume_hint": {"type": "string"},
+                            },
+                        },
+                        "deferred_continuation": {
+                            "type": "object",
+                            "required": ["continuation_token", "resume_payload"],
+                            "properties": {
+                                "continuation_token": {"type": "string"},
+                                "resume_payload": {"type": "object"},
+                            },
+                        },
+                    },
+                },
+                "resume_payload": {"type": "object"},
+                "continuation_token": {"type": "string"},
+                "pause_reason": {"type": "string"},
+                "resume_condition": {"type": "string"},
+                "transcript_blocks": {"type": "array", "items": {"type": "object"}},
+                "interaction_resolved": {"type": "boolean"},
+                "resolution": {"type": "object"},
+                "artifacts": {"type": "array"},
+                "observations": {"type": "array"},
+            },
+        },
+        input_normalizer=lambda payload: {
+            **dict(payload),
+            "question": str(
+                payload.get("question")
+                or payload.get("task_description")
+                or payload.get("task_name")
+                or ""
+            ),
+            "expected_fields": (
+                [item for item in expected if isinstance(item, str)]
+                if isinstance((expected := payload.get("expected_fields")), list)
+                else ["user_input"]
+            ),
+            "context_note": str(
+                payload.get("context_note")
+                or payload.get("task_description")
+                or payload.get("stage_key")
+                or ""
+            ),
+            "resume_hint": str(payload.get("resume_hint") or "provide user input to resume"),
+        },
+        use_message_renderer=lambda request, input_payload: (
+            f"{request.task.name} asks user question: {str(input_payload.get('question') or '')}"
+        ),
+        error_message_renderer=lambda request, input_payload, output_payload: (
+            f"{request.task.name} paused for user input: "
+            f"{str(output_payload.get('pause_reason') or input_payload.get('resume_hint') or '')}"
+        ),
     )
     request_approval_spec = ToolSpec(
         name="workflow.request_approval",
@@ -427,9 +526,106 @@ def build_default_tool_registry(
         description=(
             "Pause the workflow and request operator approval using a protocolized payload."
         ),
+        input_schema={
+            "type": "object",
+            "required": ["approval_reason", "requested_scope", "risk_summary", "resume_hint"],
+            "properties": {
+                "approval_reason": {"type": "string"},
+                "requested_scope": {"type": "string"},
+                "risk_summary": {"type": "string"},
+                "resume_hint": {"type": "string"},
+            },
+        },
         interaction_required=True,
         interrupt_behavior_value=ToolInterruptBehavior.REQUIRE_APPROVAL,
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "stdout": {"type": "string"},
+                "stderr": {"type": "string"},
+                "exit_code": {"type": "integer"},
+                "execution_blocked": {"type": "boolean"},
+                "interaction_required": {"type": "boolean"},
+                "interrupt_behavior": {"type": "string"},
+                "block_reason": {"type": "string"},
+                "protocol_payload": {
+                    "type": "object",
+                    "required": [
+                        "protocol_kind",
+                        "protocol_version",
+                        "approval",
+                        "deferred_continuation",
+                    ],
+                    "properties": {
+                        "protocol_kind": {"type": "string"},
+                        "protocol_version": {"type": "string"},
+                        "approval": {
+                            "type": "object",
+                            "required": [
+                                "approval_id",
+                                "approval_reason",
+                                "requested_scope",
+                                "risk_summary",
+                                "resume_hint",
+                            ],
+                            "properties": {
+                                "approval_id": {"type": "string"},
+                                "approval_reason": {"type": "string"},
+                                "requested_scope": {"type": "string"},
+                                "risk_summary": {"type": "string"},
+                                "resume_hint": {"type": "string"},
+                            },
+                        },
+                        "deferred_continuation": {
+                            "type": "object",
+                            "required": ["continuation_token", "resume_payload"],
+                            "properties": {
+                                "continuation_token": {"type": "string"},
+                                "resume_payload": {"type": "object"},
+                            },
+                        },
+                    },
+                },
+                "resume_payload": {"type": "object"},
+                "continuation_token": {"type": "string"},
+                "pause_reason": {"type": "string"},
+                "resume_condition": {"type": "string"},
+                "transcript_blocks": {"type": "array", "items": {"type": "object"}},
+                "approval_resolved": {"type": "boolean"},
+                "resolution": {"type": "object"},
+                "artifacts": {"type": "array"},
+                "observations": {"type": "array"},
+            },
+        },
+        input_normalizer=lambda payload: {
+            **dict(payload),
+            "approval_reason": str(
+                payload.get("approval_reason")
+                or payload.get("task_description")
+                or payload.get("task_name")
+                or ""
+            ),
+            "requested_scope": str(
+                payload.get("requested_scope")
+                or payload.get("stage_key")
+                or payload.get("task_name")
+                or ""
+            ),
+            "risk_summary": str(
+                payload.get("risk_summary")
+                or payload.get("task_description")
+                or "Approval required for stateful workflow step."
+            ),
+            "resume_hint": str(payload.get("resume_hint") or "approve workflow advance to resume"),
+        },
+        use_message_renderer=lambda request, input_payload: (
+            f"{request.task.name} requests approval: "
+            f"{str(input_payload.get('approval_reason') or '')}"
+        ),
+        error_message_renderer=lambda request, input_payload, output_payload: (
+            f"{request.task.name} paused for approval: "
+            f"{str(output_payload.get('pause_reason') or input_payload.get('resume_hint') or '')}"
+        ),
     )
 
     def _complete(
@@ -626,6 +822,7 @@ def build_default_tool_registry(
 
 def build_tool_input_payload(request: ToolExecutionRequest) -> dict[str, object]:
     task = request.task
+    metadata = task.metadata_json
     return {
         "trace_id": request.trace_id,
         "session_id": request.context.session_id,
@@ -633,10 +830,18 @@ def build_tool_input_payload(request: ToolExecutionRequest) -> dict[str, object]
         "project_id": request.context.project_id,
         "task_id": task.id,
         "task_name": task.name,
-        "stage_key": task.metadata_json.get("stage_key"),
-        "role": task.metadata_json.get("role"),
-        "role_prompt": task.metadata_json.get("role_prompt"),
-        "sub_agent_role_prompt": task.metadata_json.get("sub_agent_role_prompt"),
+        "stage_key": metadata.get("stage_key"),
+        "role": metadata.get("role"),
+        "role_prompt": metadata.get("role_prompt"),
+        "sub_agent_role_prompt": metadata.get("sub_agent_role_prompt"),
+        "task_description": metadata.get("description"),
+        "question": metadata.get("question"),
+        "expected_fields": metadata.get("expected_fields"),
+        "context_note": metadata.get("context_note"),
+        "approval_reason": metadata.get("approval_reason"),
+        "requested_scope": metadata.get("requested_scope"),
+        "risk_summary": metadata.get("risk_summary"),
+        "resume_hint": metadata.get("resume_hint"),
         "runtime_policy": dict(request.context.runtime_policy),
         "retrieval": dict(request.context.retrieval),
         "memory": dict(request.context.memory),

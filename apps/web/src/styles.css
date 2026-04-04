@@ -7082,14 +7082,6 @@ a {
   gap: var(--space-4);
 }
 
-.workspace-session-header {
-  padding: 0 2px;
-}
-
-.workspace-session-header-actions {
-  flex-wrap: wrap;
-}
-
 .workspace-session-grid {
   min-height: 0;
   display: grid;
@@ -7108,7 +7100,7 @@ a {
 }
 
 .workspace-session-grid-attack-main {
-  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  grid-template-columns: minmax(0, 1.52fr) minmax(320px, 0.68fr);
 }
 
 .workspace-graph-main-column,
@@ -7125,12 +7117,7 @@ a {
 }
 
 .workspace-graph-main-column .attack-graph-canvas-shell {
-  min-height: min(68vh, 860px);
-}
-
-.workspace-session-header-copy {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
+  min-height: min(74vh, 940px);
 }
 
 .workspace-session-summary-grid {
@@ -7335,12 +7322,6 @@ a {
   min-height: 0;
 }
 
-.workspace-graph-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, 150px));
-  gap: var(--space-3);
-}
-
 .workspace-graph-select {
   min-height: 44px;
 }
@@ -7368,6 +7349,15 @@ a {
 .workspace-node-detail-section {
   display: grid;
   gap: var(--space-3);
+}
+
+.workspace-node-detail-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.workspace-node-detail-modal-body {
+  display: grid;
+  gap: var(--space-4);
 }
 
 .workspace-runtime-run-row {
@@ -7510,7 +7500,6 @@ a {
   .workspace-session-summary-grid,
   .workspace-inline-field-grid,
   .workspace-inline-field-grid-tight,
-  .workspace-graph-toolbar,
   .workspace-runtime-output-grid {
     grid-template-columns: 1fr;
   }
@@ -7521,7 +7510,6 @@ a {
 }
 
 @media (max-width: 720px) {
-  .workspace-session-header-actions,
   .workspace-right-tabs,
   .workspace-runtime-run-row,
   .management-action-row {
@@ -7544,7 +7532,6 @@ a {
   position: relative;
 }
 
-.workspace-session-header,
 .conversation-main-shell.workspace-session-shell > .conversation-inline-notice {
   width: min(1080px, 100%);
   margin-inline: auto;
@@ -7554,7 +7541,7 @@ a {
 }
 
 .workspace-message-panel {
-  min-height: min(66vh, 860px);
+  min-height: min(62vh, 760px);
 }
 
 .workspace-message-panel .conversation-feed {

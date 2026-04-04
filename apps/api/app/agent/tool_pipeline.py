@@ -139,6 +139,21 @@ class ToolPipeline:
             status=runtime_result.status,
             runtime_protocol=runtime_protocol,
         )
+        output_with_transcript_blocks = {
+            **dict(runtime_result.output_payload),
+            "transcript_blocks": [block.as_dict() for block in transcript_blocks],
+        }
+        runtime_result = ToolRuntimeResult(
+            spec=runtime_result.spec,
+            source_type=runtime_result.source_type,
+            source_name=runtime_result.source_name,
+            command_or_action=runtime_result.command_or_action,
+            input_payload=dict(runtime_result.input_payload),
+            output_payload=output_with_transcript_blocks,
+            status=runtime_result.status,
+            started_at=runtime_result.started_at,
+            ended_at=runtime_result.ended_at,
+        )
         return ToolExecutionEnvelope(
             request=request,
             spec=spec,
@@ -192,6 +207,7 @@ class ToolPipeline:
             status=TaskNodeStatus.FAILED,
             runtime_protocol=runtime_protocol,
         )
+        output_with_protocol["transcript_blocks"] = [block.as_dict() for block in transcript_blocks]
         return ToolExecutionEnvelope(
             request=request,
             spec=spec,
@@ -245,6 +261,7 @@ class ToolPipeline:
             status=TaskNodeStatus.FAILED,
             runtime_protocol=runtime_protocol,
         )
+        output_with_protocol["transcript_blocks"] = [block.as_dict() for block in transcript_blocks]
         return ToolExecutionEnvelope(
             request=request,
             spec=spec,
@@ -324,6 +341,7 @@ class ToolPipeline:
             status=TaskNodeStatus.BLOCKED,
             runtime_protocol=runtime_protocol,
         )
+        output_with_protocol["transcript_blocks"] = [block.as_dict() for block in transcript_blocks]
         return ToolExecutionEnvelope(
             request=request,
             spec=spec,
@@ -446,15 +464,10 @@ class ToolPipeline:
         if resume_kind == "approval":
             approval_payload = {
                 "approval_id": f"approval-{request.trace_id}",
-                "reason": str(
-                    request.task.metadata_json.get("approval_reason")
-                    or request.task.metadata_json.get("description")
-                    or request.task.name
-                ),
-                "approval_scope": str(
-                    request.task.metadata_json.get("stage_key") or request.task.name
-                ),
-                "resume_condition": "approve workflow advance request",
+                "approval_reason": str(input_payload.get("approval_reason") or ""),
+                "requested_scope": str(input_payload.get("requested_scope") or ""),
+                "risk_summary": str(input_payload.get("risk_summary") or ""),
+                "resume_hint": str(input_payload.get("resume_hint") or ""),
             }
             return {
                 "protocol_kind": "approval",
@@ -476,14 +489,13 @@ class ToolPipeline:
             "interaction": {
                 "interaction_id": f"interaction-{request.trace_id}",
                 "question": question,
-                "expected_answer_schema": {
-                    "type": "object",
-                    "properties": {
-                        "user_input": {"type": "string"},
-                    },
-                    "required": ["user_input"],
-                },
-                "resume_condition": "supply user input to workflow advance request",
+                "expected_fields": (
+                    [item for item in expected_fields if isinstance(item, str)]
+                    if isinstance((expected_fields := input_payload.get("expected_fields")), list)
+                    else ["user_input"]
+                ),
+                "context_note": str(input_payload.get("context_note") or ""),
+                "resume_hint": str(input_payload.get("resume_hint") or ""),
             },
             "deferred_continuation": {
                 "continuation_token": continuation_token,

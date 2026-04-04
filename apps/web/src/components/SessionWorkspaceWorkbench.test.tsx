@@ -93,7 +93,7 @@ vi.mock("./AttackGraphCanvas", () => ({
     onSelectNode,
   }: {
     graph: SessionGraph;
-    onSelectNode: (nodeId: string) => void;
+    onSelectNode: (nodeId: string | null) => void;
   }) => (
     <div data-testid="attack-graph-canvas-mock">
       {graph.nodes.map((node) => (
@@ -343,8 +343,9 @@ describe("SessionWorkspaceWorkbench", () => {
       expect(screen.getByTestId("attack-graph-workbench")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("攻击图")).toBeInTheDocument();
-    expect(screen.getByText("节点详情")).toBeInTheDocument();
+    expect(screen.getByText("攻击路径主画布")).toBeInTheDocument();
+    expect(screen.queryByText("新对话")).not.toBeInTheDocument();
+    expect(screen.queryByText("攻击路径主视图，会话与图谱保持同步更新。")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "工作流控制" })).not.toBeInTheDocument();
     expect(screen.queryByText("任务图")).not.toBeInTheDocument();
     expect(screen.queryByText("证据图")).not.toBeInTheDocument();
@@ -407,6 +408,7 @@ describe("SessionWorkspaceWorkbench", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "可操作攻击节点" }));
+    expect(screen.getByRole("dialog", { name: "可操作攻击节点 详情" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "编辑" }));
     await user.click(screen.getByRole("button", { name: "重生成" }));
     await user.click(screen.getByRole("button", { name: "分叉" }));

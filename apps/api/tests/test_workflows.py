@@ -158,6 +158,14 @@ def test_advance_workflow_blocks_for_approval_and_supports_resume(client: TestCl
     active_pause = cast(dict[str, Any], blocked_pause["active"])
     assert active_pause["kind"] == "approval"
     assert active_pause["resume_payload"]["resolution_kind"] == "approval"
+    approval_protocol_payload = cast(dict[str, Any], active_pause["protocol_payload"])
+    approval_payload = cast(dict[str, Any], approval_protocol_payload["approval"])
+    assert approval_protocol_payload["protocol_kind"] == "approval"
+    assert isinstance(approval_payload["approval_reason"], str)
+    assert isinstance(approval_payload["requested_scope"], str)
+    assert isinstance(approval_payload["risk_summary"], str)
+    assert isinstance(approval_payload["resume_hint"], str)
+    assert isinstance(approval_protocol_payload["deferred_continuation"], dict)
     runtime_transcript = cast(dict[str, Any], blocked_state["runtime_transcript"])
     assert set(runtime_transcript.keys()) == {
         "turns",
@@ -297,6 +305,14 @@ def test_workflow_ask_user_question_protocol_pause_and_resume_updates_state_and_
     active_pause = cast(dict[str, Any], pause_state["active"])
     assert active_pause["kind"] == "interaction"
     assert active_pause["resume_payload"]["resolution_kind"] == "interaction"
+    interaction_protocol_payload = cast(dict[str, Any], active_pause["protocol_payload"])
+    interaction_payload = cast(dict[str, Any], interaction_protocol_payload["interaction"])
+    assert interaction_protocol_payload["protocol_kind"] == "interaction"
+    assert interaction_payload["question"] == "Which host should the agent validate first?"
+    assert interaction_payload["expected_fields"] == ["user_input"]
+    assert isinstance(interaction_payload["context_note"], str)
+    assert isinstance(interaction_payload["resume_hint"], str)
+    assert isinstance(interaction_protocol_payload["deferred_continuation"], dict)
     blocked_runtime = cast(dict[str, Any], blocked_state["runtime_transcript"])
     assert set(blocked_runtime.keys()) == {
         "turns",
@@ -361,6 +377,9 @@ def test_workflow_ask_user_question_protocol_pause_and_resume_updates_state_and_
     assert len(execution_records) == 2
     assert execution_records[0]["status"] == "blocked"
     assert execution_records[1]["status"] == "completed"
+    blocked_output = cast(dict[str, Any], execution_records[0]["output_json"])
+    assert blocked_output["protocol_payload"]["protocol_kind"] == "interaction"
+    assert isinstance(blocked_output["transcript_blocks"], list)
 
 
 def test_workflow_rehydrates_workspace_state_into_prompting_and_assistant_turn_after_compact() -> (
@@ -622,6 +641,11 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert isinstance(assistant_turn_input["memory_context"], dict)
     assert isinstance(assistant_turn_input["transcript_context"], dict)
     assert isinstance(assistant_turn_input["reasoning_frame"], dict)
+    assert isinstance(assistant_turn_input["workspace_context"], dict)
+    assert isinstance(assistant_turn_input["pending_protocol_context"], dict)
+    assert isinstance(assistant_turn_input["unresolved_questions_seed"], list)
+    assert isinstance(assistant_turn_input["recall_focus"], dict)
+    assert isinstance(assistant_turn_input["prior_turn_outcome_summary"], str)
     assert (
         cast(dict[str, Any], assistant_turn_input["retrieval_context"])["summary"]
         == latest_cycle["retrieval_summary"]
@@ -633,6 +657,22 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert cast(dict[str, Any], assistant_turn_input["transcript_context"])["source"] == (
         "runtime_transcript"
     )
+    assert cast(dict[str, Any], assistant_turn_input["workspace_context"])["active_stage"]
+    assert isinstance(
+        cast(dict[str, Any], assistant_turn_input["workspace_context"])[
+            "selected_project_memory_entries"
+        ],
+        list,
+    )
+    assert isinstance(
+        cast(dict[str, Any], assistant_turn_input["pending_protocol_context"])["kind"],
+        str,
+    )
+    assert cast(dict[str, Any], assistant_turn_input["recall_focus"])["scope"] in {
+        "project",
+        "session_local",
+        "",
+    }
     assert cast(dict[str, Any], assistant_turn_input["reasoning_frame"])["last_directive"] in {
         "continue",
         "retry_same_wave",
@@ -646,6 +686,7 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     assert assistant_turn_plan["turn_id"] == assistant_turn_input["turn_id"]
     assert assistant_turn_plan["cycle_id"] == latest_cycle["cycle_id"]
     assert isinstance(assistant_turn_plan["recommended_tool_wave"], dict)
+    assert assistant_turn_plan["wave_priority"] in {"resume", "investigate", "advance", "stabilize"}
     recommended_tool_wave = cast(dict[str, Any], assistant_turn_plan["recommended_tool_wave"])
     assert recommended_tool_wave["scheduler_mode"] == latest_cycle["scheduler_mode"]
     assert recommended_tool_wave["expected_task_ids"] == [
@@ -669,7 +710,29 @@ def test_workflow_persists_typed_loop_cycle_artifacts_without_breaking_batch_sta
     }
     assert isinstance(assistant_turn_outcome["next_turn_hint"], str)
     assert isinstance(assistant_turn_outcome["unresolved_questions"], list)
+    assert isinstance(assistant_turn_outcome["turn_focus"], dict)
+    assert isinstance(assistant_turn_outcome["resume_strategy"], dict)
+    assert isinstance(assistant_turn_outcome["recall_focus"], dict)
     assert assistant_turn_outcome["next_action"] == latest_cycle["next_action"]
+    assert cast(dict[str, Any], assistant_turn_outcome["turn_focus"])["focus_type"] in {
+        "pending_protocol",
+        "workflow_wave",
+        "investigation",
+        "stabilization",
+    }
+    assert cast(dict[str, Any], assistant_turn_outcome["resume_strategy"])["mode"] in {
+        "await_user_input",
+        "await_approval",
+        "continue_execution",
+        "replan",
+    }
+    assert (
+        cast(dict[str, Any], assistant_turn_outcome["recall_focus"])["focus"]
+        == cast(dict[str, Any], assistant_turn_input["recall_focus"])["focus"]
+    )
+    assert assistant_turn_outcome["turn_focus"] != {
+        "expected_task_ids": recommended_tool_wave["expected_task_ids"]
+    }
 
 
 def test_workflow_builds_retrieval_memory_and_projection_context_for_cycle_and_tool_inputs(

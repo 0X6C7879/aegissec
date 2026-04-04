@@ -11,7 +11,7 @@ vi.mock("./AttackGraphCanvas", () => ({
     onSelectNode,
   }: {
     graph: SessionGraph;
-    onSelectNode: (nodeId: string) => void;
+    onSelectNode: (nodeId: string | null) => void;
   }) => (
     <div data-testid="attack-graph-canvas-mock">
       {graph.nodes.map((node) => (
@@ -80,13 +80,16 @@ function StatefulAttackGraphWorkbench({
 }
 
 describe("AttackGraphWorkbench", () => {
-  it("disables node actions and shows the exact missing-anchor hint", async () => {
+  it("opens node details in a dialog and shows the exact missing-anchor hint", async () => {
     const user = userEvent.setup();
 
     render(<StatefulAttackGraphWorkbench />);
 
     await user.click(screen.getByRole("button", { name: "无锚点节点" }));
 
+    const dialog = screen.getByRole("dialog", { name: "无锚点节点 详情" });
+
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByText("该节点缺少会话锚点，无法直接操作对话")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "编辑" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "重生成" })).toBeDisabled();
@@ -94,16 +97,19 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.getByRole("button", { name: "回滚" })).toBeDisabled();
   });
 
-  it("enables node actions when source_message_id exists", async () => {
+  it("enables node actions when source_message_id exists and closes via close button", async () => {
     const user = userEvent.setup();
     const onEditNode = vi.fn().mockResolvedValue(undefined);
 
     render(<StatefulAttackGraphWorkbench onEditNode={onEditNode} />);
 
     await user.click(screen.getByRole("button", { name: "可操作节点" }));
+    expect(screen.getByRole("dialog", { name: "可操作节点 详情" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.click(screen.getByRole("button", { name: "关闭" }));
 
     expect(screen.queryByText("该节点缺少会话锚点，无法直接操作对话")).not.toBeInTheDocument();
     expect(onEditNode).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "可操作节点 详情" })).not.toBeInTheDocument();
   });
 });
