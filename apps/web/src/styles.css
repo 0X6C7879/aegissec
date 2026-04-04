@@ -63,10 +63,12 @@
   min-width: 0;
   min-height: 0;
   display: grid;
+  height: 100%;
 }
 
 .attack-graph-canvas-shell {
-  height: clamp(22rem, 52vh, 34rem);
+  height: 100%;
+  min-height: 0;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-card);
   overflow: hidden;
@@ -2568,10 +2570,9 @@ a {
 }
 
 .workbench-composer-shell {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 6;
-  margin-top: auto;
+  margin-top: 0;
   padding-top: 18px;
   background: linear-gradient(
     180deg,
@@ -4790,11 +4791,11 @@ a {
 
 .workbench-chat-input {
   width: 100%;
-  min-height: 2.25rem;
-  max-height: 7.5rem;
+  min-height: 44px;
+  max-height: 180px;
   padding: 0.5rem 0.8rem;
   resize: none;
-  overflow-y: hidden;
+  overflow-y: auto;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   background: var(--surface-subtle);
@@ -7102,8 +7103,11 @@ a {
 }
 
 .workspace-session-grid-attack-main {
-  grid-template-columns: minmax(0, 1.74fr) minmax(300px, 0.56fr);
+  grid-template-columns: minmax(0, 1.58fr) minmax(320px, 0.72fr);
   gap: clamp(12px, 1.25vw, 18px);
+  align-items: stretch;
+  min-height: min(80vh, 1040px);
+  height: min(80vh, 1040px);
 }
 
 .workspace-graph-main-column,
@@ -7111,6 +7115,7 @@ a {
   min-width: 0;
   min-height: 0;
   display: grid;
+  height: 100%;
 }
 
 .workspace-graph-main-column .workspace-right-stack,
@@ -7120,7 +7125,7 @@ a {
 }
 
 .workspace-graph-main-column .attack-graph-canvas-shell {
-  min-height: min(80vh, 1040px);
+  min-height: 100%;
 }
 
 .workspace-session-summary-grid {
@@ -7140,7 +7145,7 @@ a {
 .workspace-message-panel {
   flex: 1 1 auto;
   min-height: 0;
-  height: min(60vh, 740px);
+  height: 100%;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
@@ -7544,7 +7549,7 @@ a {
 }
 
 .workspace-message-panel {
-  min-height: min(58vh, 720px);
+  min-height: 0;
 }
 
 .workspace-message-panel .conversation-feed {

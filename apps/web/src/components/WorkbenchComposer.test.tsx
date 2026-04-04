@@ -148,4 +148,107 @@ describe("WorkbenchComposer", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("第一行\n第二行"));
     expect(useUiStore.getState().draftsBySession["session-enter"]?.content ?? "").toBe("");
   });
+
+  it("auto-resizes with draft content and resets after send clears the draft", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const originalScrollHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "scrollHeight",
+    );
+
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.value.length === 0 ? 44 : 132;
+      },
+    });
+
+    useUiStore.getState().setDraftContent("session-autosize", "恢复后的草稿内容");
+
+    try {
+      render(
+        <WorkbenchComposer
+          sessionId="session-autosize"
+          disabled={false}
+          isGenerating={false}
+          isInterrupting={false}
+          queuedCount={0}
+          onSend={onSend}
+          onInterrupt={vi.fn().mockResolvedValue(undefined)}
+        />,
+      );
+
+      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+
+      await waitFor(() => expect(textarea.style.height).toBe("132px"));
+      expect(textarea.style.overflowY).toBe("hidden");
+
+      await user.click(screen.getByRole("button", { name: "发送" }));
+
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith("恢复后的草稿内容"));
+      await waitFor(() => expect(textarea.style.height).toBe("44px"));
+      expect(textarea.style.overflowY).toBe("hidden");
+    } finally {
+      if (originalScrollHeightDescriptor) {
+        Object.defineProperty(
+          HTMLTextAreaElement.prototype,
+          "scrollHeight",
+          originalScrollHeightDescriptor,
+        );
+      }
+    }
+  });
+
+  it("caps textarea height and enables internal scrolling when content exceeds max height", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const originalScrollHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "scrollHeight",
+    );
+    const originalGetComputedStyle = window.getComputedStyle;
+
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.value.length === 0 ? 44 : 260;
+      },
+    });
+
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const styles = originalGetComputedStyle(element);
+      return Object.assign({}, styles, { maxHeight: "180px" }) as CSSStyleDeclaration;
+    });
+
+    useUiStore.getState().setDraftContent("session-autosize-cap", "超长草稿内容");
+
+    try {
+      render(
+        <WorkbenchComposer
+          sessionId="session-autosize-cap"
+          disabled={false}
+          isGenerating={false}
+          isInterrupting={false}
+          queuedCount={0}
+          onSend={onSend}
+          onInterrupt={vi.fn().mockResolvedValue(undefined)}
+        />,
+      );
+
+      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+
+      await waitFor(() => expect(textarea.style.height).toBe("180px"));
+      expect(textarea.style.overflowY).toBe("auto");
+    } finally {
+      vi.restoreAllMocks();
+
+      if (originalScrollHeightDescriptor) {
+        Object.defineProperty(
+          HTMLTextAreaElement.prototype,
+          "scrollHeight",
+          originalScrollHeightDescriptor,
+        );
+      }
+    }
+  });
 });

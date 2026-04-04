@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useUiStore } from "../store/uiStore";
 
 type WorkbenchComposerProps = {
@@ -23,6 +23,7 @@ export function WorkbenchComposer({
   const draft = useUiStore((state) => state.draftsBySession[sessionId]);
   const setDraftContent = useUiStore((state) => state.setDraftContent);
   const sendLockRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [isLocallySending, setIsLocallySending] = useState(false);
 
   const draftContent = draft?.content ?? "";
@@ -85,6 +86,28 @@ export function WorkbenchComposer({
       : "助手正在回复；现在发送的新消息会自动进入队列。"
     : "可直接发送，Shift + Enter 换行。";
 
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+
+    const computedMaxHeight = Number.parseFloat(window.getComputedStyle(textarea).maxHeight);
+    const measuredScrollHeight = Math.max(textarea.scrollHeight, 44);
+    const maxHeight = Number.isFinite(computedMaxHeight) ? computedMaxHeight : measuredScrollHeight;
+    const nextHeight = Math.min(measuredScrollHeight, maxHeight);
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = measuredScrollHeight > maxHeight ? "auto" : "hidden";
+
+    if (draftContent.length === 0) {
+      textarea.scrollTop = 0;
+    }
+  }, [draftContent]);
+
   return (
     <section className="workbench-composer-shell">
       <div className="workbench-composer-status-row">
@@ -95,6 +118,7 @@ export function WorkbenchComposer({
 
       <form className="workbench-chat-form" onSubmit={handleSubmitMessage}>
         <textarea
+          ref={textareaRef}
           className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
           rows={1}
           value={draftContent}
