@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
@@ -105,9 +106,21 @@ vi.mock("./WorkbenchComposer", () => ({
   WorkbenchComposer: () => <div data-testid="workbench-composer" />,
 }));
 
-vi.mock("./AttackGraphWorkbench", () => ({
-  AttackGraphWorkbench: ({ graph }: { graph: SessionGraph | undefined }) => (
-    <div data-testid="attack-graph-workbench">{graph?.graph_type ?? "none"}</div>
+vi.mock("./AttackGraphCanvas", () => ({
+  AttackGraphCanvas: ({
+    graph,
+    onSelectNode,
+  }: {
+    graph: SessionGraph;
+    onSelectNode: (nodeId: string) => void;
+  }) => (
+    <div data-testid="attack-graph-canvas-mock">
+      {graph.nodes.map((node) => (
+        <button key={node.id} type="button" onClick={() => onSelectNode(node.id)}>
+          {node.label}
+        </button>
+      ))}
+    </div>
   ),
 }));
 
@@ -162,6 +175,23 @@ function createGraph(
     nodes: [],
     edges: [],
     ...overrides,
+  };
+}
+
+function createAttackNode(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "attack-node-1",
+    graph_type: "attack" as const,
+    node_type: "exploit",
+    label: "可操作攻击节点",
+    data: {
+      status: "in_progress",
+      summary: "攻击图节点摘要",
+      source_message_id: "message-1",
+      branch_id: "branch-1",
+      generation_id: "generation-1",
+      ...overrides,
+    },
   };
 }
 
@@ -397,9 +427,11 @@ describe("SessionWorkspaceWorkbench", () => {
     renderWorkbench("/sessions/session-1/chat");
 
     await waitFor(() => {
-      expect(screen.getByTestId("attack-graph-workbench")).toHaveTextContent("attack");
+      expect(screen.getByTestId("attack-graph-workbench")).toBeInTheDocument();
     });
 
+    expect(screen.getByText("攻击图")).toBeInTheDocument();
+    expect(screen.getByText("节点详情")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "工作流控制" })).not.toBeInTheDocument();
     expect(screen.queryByText("任务图")).not.toBeInTheDocument();
     expect(screen.queryByText("证据图")).not.toBeInTheDocument();
@@ -407,5 +439,135 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.queryByText("任务树")).not.toBeInTheDocument();
     expect(screen.queryByText("任务与图谱")).not.toBeInTheDocument();
     expect(screen.queryByText("计划与推进")).not.toBeInTheDocument();
+  });
+
+  it("prefers run attack graph data once workflow_run_id is available", async () => {
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetAttackGraph.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [{ ...createAttackNode(), id: "session-node", label: "Session Graph Node" }],
+      }),
+    );
+    mockGetAttackGraphForRun.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [{ ...createAttackNode(), id: "run-node", label: "Run Graph Node" }],
+      }),
+    );
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run Graph Node" })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: "Session Graph Node" })).not.toBeInTheDocument();
+    expect(mockGetAttackGraphForRun).toHaveBeenCalled();
+  });
+
+  it("wires edit/regenerate/fork/rollback through the main workbench path", async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("修订后的消息");
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetAttackGraph.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [createAttackNode()],
+      }),
+    );
+    mockGetAttackGraphForRun.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [createAttackNode()],
+      }),
+    );
+    mockEditSessionMessage.mockResolvedValue({});
+    mockRegenerateSessionMessage.mockResolvedValue({});
+    mockForkSessionMessage.mockResolvedValue(createConversation("session-1"));
+    mockRollbackSessionMessage.mockResolvedValue(createConversation("session-1"));
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "可操作攻击节点" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "可操作攻击节点" }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.click(screen.getByRole("button", { name: "重生成" }));
+    await user.click(screen.getByRole("button", { name: "分叉" }));
+    await user.click(screen.getByRole("button", { name: "回滚" }));
+
+    await waitFor(() => {
+      expect(mockEditSessionMessage).toHaveBeenCalledWith(
+        "session-1",
+        "message-1",
+        expect.objectContaining({ content: "修订后的消息" }),
+      );
+      expect(mockRegenerateSessionMessage).toHaveBeenCalledWith(
+        "session-1",
+        "message-1",
+        expect.objectContaining({ branch_id: "branch-1" }),
+      );
+      expect(mockForkSessionMessage).toHaveBeenCalledWith("session-1", "message-1");
+      expect(mockRollbackSessionMessage).toHaveBeenCalledWith(
+        "session-1",
+        "message-1",
+        expect.objectContaining({ branch_id: "branch-1" }),
+      );
+    });
+
+    expect(mockGetSessionConversation.mock.calls.length).toBeGreaterThan(1);
+    expect(mockGetSessionQueue.mock.calls.length).toBeGreaterThan(1);
+    expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(1);
+    expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(1);
+
+    promptSpy.mockRestore();
+  });
+
+  it("refreshes attack graphs when a message.delta event arrives", async () => {
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetAttackGraph.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [createAttackNode({ source_message_id: undefined })],
+      }),
+    );
+    mockGetAttackGraphForRun.mockResolvedValue(
+      createGraph("session-1", {
+        workflow_run_id: "run-1",
+        nodes: [createAttackNode({ id: "run-node-1", source_message_id: undefined })],
+      }),
+    );
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("attack-graph-workbench")).toBeInTheDocument();
+    });
+
+    const sessionCallsBefore = mockGetAttackGraph.mock.calls.length;
+    const runCallsBefore = mockGetAttackGraphForRun.mock.calls.length;
+
+    await act(async () => {
+      useUiStore.setState({
+        eventsBySession: {
+          "session-1": [
+            {
+              id: "event-1",
+              session_id: "session-1",
+              type: "message.delta",
+              payload: {},
+              created_at: "2026-04-01T10:00:01.000Z",
+            },
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(sessionCallsBefore);
+      expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(runCallsBefore);
+    }, { timeout: 3000 });
   });
 });

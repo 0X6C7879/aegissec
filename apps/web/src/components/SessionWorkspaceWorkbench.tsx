@@ -1055,6 +1055,7 @@ export function SessionWorkspaceWorkbench() {
       eventType.startsWith("graph.") ||
       eventType === "message.created" ||
       eventType === "message.updated" ||
+      eventType === "message.delta" ||
       eventType === "message.completed" ||
       eventType === "generation.started" ||
       eventType === "generation.cancelled" ||
