@@ -320,6 +320,83 @@ def test_capability_facade_build_skill_snapshot_uses_compiled_skill_metadata() -
     assert resolved_identity["relative_path"] == "agent-browser/SKILL.md"
 
 
+def test_capability_facade_build_skill_context_preserves_selected_skill_payload() -> None:
+    class _SkillServiceStub:
+        def build_skill_context_payload(self, **_: object) -> dict[str, object]:
+            return {
+                "skills": [
+                    {
+                        "id": "skill-1",
+                        "directory_name": "agent-browser",
+                        "name": "agent-browser",
+                        "selected": True,
+                        "rank": 1,
+                    }
+                ],
+                "selected_skill": {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "selected": True,
+                    "rank": 1,
+                },
+                "selected_skill_id": "skill-1",
+                "selected_skill_rank": 1,
+            }
+
+    class _MCPServiceStub:
+        def list_servers(self) -> list[object]:
+            return []
+
+    facade = CapabilityFacade(
+        skill_service=cast(SkillService, _SkillServiceStub()),
+        mcp_service=cast(MCPService, _MCPServiceStub()),
+    )
+
+    payload = facade.build_skill_context(session_id="session-1")
+
+    assert cast(dict[str, object], payload["selected_skill"])["id"] == "skill-1"
+    assert payload["selected_skill_id"] == "skill-1"
+    assert payload["selected_skill_rank"] == 1
+
+
+def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing() -> None:
+    class _SkillServiceStub:
+        def build_skill_context_payload(self, **_: object) -> dict[str, object]:
+            return {
+                "skills": [
+                    {
+                        "id": "skill-1",
+                        "directory_name": "agent-browser",
+                        "name": "agent-browser",
+                        "selected": True,
+                        "rank": 1,
+                    }
+                ],
+                "selected_skill": {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "selected": True,
+                    "rank": 1,
+                },
+                "selected_skill_id": "skill-1",
+                "selected_skill_rank": 1,
+            }
+
+    class _MCPServiceStub:
+        def list_servers(self) -> list[object]:
+            return []
+
+    facade = CapabilityFacade(
+        skill_service=cast(SkillService, _SkillServiceStub()),
+        mcp_service=cast(MCPService, _MCPServiceStub()),
+    )
+
+    snapshot = facade.build_snapshot(session_id="session-1")
+
+    assert cast(dict[str, object], snapshot["selected_skill"])["id"] == "skill-1"
+    assert snapshot["selected_skill_id"] == "skill-1"
+
+
 def test_capability_facade_builds_mcp_tool_inventory_and_safe_prompt_text() -> None:
     class _SkillServiceStub:
         def build_active_skill_snapshot(self, **_: object) -> list[dict[str, object]]:

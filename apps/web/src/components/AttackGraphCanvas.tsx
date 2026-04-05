@@ -16,7 +16,16 @@ import "reactflow/dist/style.css";
 import type { SessionGraph, SessionGraphNode } from "../types/graphs";
 import {
   buildAttackGraphAutoFocusSignature,
+  displayExcerpt,
+  displayImportance,
+  displayTitle,
+  formatAttackNodeStatus,
+  formatAttackNodeType,
   getAttackGraphAutoFocusNodeId,
+  getAttackNodeStatusTone,
+  getAttackRelationLabel,
+  readBoolean,
+  readString,
   shouldAutoFocusAttackGraph,
 } from "./AttackGraphCanvas.utils";
 
@@ -42,156 +51,21 @@ type AttackCanvasNodeData = {
 };
 
 const NODE_WIDTH = 208;
-const NODE_BASE_HEIGHT = 78;
-const NODE_EXCERPT_HEIGHT = 18;
+const NODE_BASE_HEIGHT = 62;
+const NODE_EXCERPT_HEIGHT = 12;
 const AUTO_FOCUS_DURATION_MS = 280;
 const AUTO_FOCUS_ZOOM = 0.85;
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function readBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function formatNodeTypeLabel(nodeType: string): string {
-  switch (nodeType) {
-    case "goal":
-      return "目标";
-    case "surface":
-      return "攻击面";
-    case "observation":
-      return "观测";
-    case "hypothesis":
-      return "假设";
-    case "action":
-      return "动作";
-    case "vulnerability":
-      return "漏洞";
-    case "exploit":
-      return "验证";
-    case "pivot":
-      return "横向路径";
-    case "outcome":
-      return "结果";
-    default:
-      return nodeType;
-  }
-}
-
-function formatNodeStatus(status: string | null): string {
-  switch (status) {
-    case "completed":
-      return "已完成";
-    case "in_progress":
-      return "进行中";
-    case "blocked":
-      return "已阻塞";
-    case "failed":
-      return "异常";
-    case "ready":
-      return "就绪";
-    case "pending":
-      return "待执行";
-    case "done":
-      return "已完成";
-    default:
-      return status ?? "未标记";
-  }
-}
-
-function getNodeStatusTone(status: string | null): string {
-  switch (status) {
-    case "completed":
-    case "done":
-      return "tone-success";
-    case "in_progress":
-    case "running":
-      return "tone-connected";
-    case "blocked":
-    case "needs_approval":
-      return "tone-warning";
-    case "failed":
-    case "error":
-      return "tone-error";
-    default:
-      return "tone-neutral";
-  }
-}
-
-function truncateText(value: string | null, maxLength: number): string | null {
-  if (!value) {
-    return null;
-  }
-
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
-}
 
 function buildNodeDisplay(node: SessionGraphNode): {
   title: string;
   excerpt: string | null;
   emphasis: AttackCanvasNodeData["emphasis"];
 } {
-  const summary = readString(node.data.summary);
-  const command =
-    readString(node.data.command) ??
-    readString(node.data.tool_name) ??
-    readString(node.data.tool) ??
-    readString(node.data.intent);
-  const observation =
-    readString(node.data.stdout) ??
-    readString(node.data.observation) ??
-    readString(node.data.result_text) ??
-    readString(node.data.evidence);
-
-  switch (node.node_type) {
-    case "goal":
-      return { title: truncateText(node.label, 52) ?? node.label, excerpt: null, emphasis: "goal" };
-    case "action":
-      return {
-        title: truncateText(command ?? node.label, 52) ?? node.label,
-        excerpt: truncateText(summary, 68),
-        emphasis: "supporting",
-      };
-    case "exploit":
-      return {
-        title: truncateText(command ?? node.label, 52) ?? node.label,
-        excerpt: truncateText(summary, 68),
-        emphasis: "critical",
-      };
-    case "observation":
-      return {
-        title: truncateText(node.label, 52) ?? node.label,
-        excerpt: truncateText(summary ?? observation, 68),
-        emphasis: "supporting",
-      };
-    case "hypothesis":
-      return {
-        title: truncateText(summary ?? node.label, 52) ?? node.label,
-        excerpt: null,
-        emphasis: "supporting",
-      };
-    case "outcome":
-      return {
-        title: truncateText(summary ?? node.label, 52) ?? node.label,
-        excerpt: truncateText(summary && summary !== node.label ? summary : null, 68),
-        emphasis: "result",
-      };
-    default:
-      return {
-        title: truncateText(node.label, 52) ?? node.label,
-        excerpt: truncateText(summary, 68),
-        emphasis:
-          node.node_type === "surface" || node.node_type === "vulnerability"
-            ? "critical"
-            : "supporting",
-      };
-  }
+  return {
+    title: displayTitle(node),
+    excerpt: displayExcerpt(node),
+    emphasis: displayImportance(node),
+  };
 }
 
 function getSelectedNeighborhood(graph: SessionGraph, selectedNodeId: string | null): Set<string> {
@@ -211,37 +85,6 @@ function getSelectedNeighborhood(graph: SessionGraph, selectedNodeId: string | n
   }
 
   return ids;
-}
-
-function getRelationLabel(relation: string): string {
-  switch (relation) {
-    case "depends_on":
-      return "依赖";
-    case "precedes":
-      return "前置";
-    case "supports":
-      return "支持";
-    case "contradicts":
-      return "矛盾";
-    case "validates":
-      return "验证";
-    case "causes":
-      return "导致";
-    case "attempts":
-      return "尝试";
-    case "enables":
-      return "使能";
-    case "branches_from":
-      return "分支自";
-    case "blocks":
-      return "阻断";
-    case "discovers":
-      return "发现";
-    case "confirms":
-      return "确认";
-    default:
-      return relation;
-  }
 }
 
 function getEdgeStroke(status: string | null, highlighted: boolean, dimmed: boolean): string {
@@ -265,11 +108,11 @@ function AttackGraphFlowNode({ data }: NodeProps<AttackCanvasNodeData>) {
     <div
       className={`attack-graph-flow-node attack-graph-flow-node-${data.emphasis}${data.isActive ? " attack-graph-flow-node-active" : ""}${data.isLatest ? " attack-graph-flow-node-latest" : ""}${data.isSelected ? " attack-graph-flow-node-selected" : ""}${data.isDimmed ? " attack-graph-flow-node-dimmed" : ""}`}
     >
-      <Handle type="target" position={Position.Left} className="attack-graph-flow-handle" />
-      <div className="attack-graph-flow-node-header">
-        <span className="attack-graph-flow-node-type">{formatNodeTypeLabel(data.nodeType)}</span>
-        <span className={`attack-graph-flow-node-status ${getNodeStatusTone(data.status)}`}>
-          {formatNodeStatus(data.status)}
+        <Handle type="target" position={Position.Left} className="attack-graph-flow-handle" />
+        <div className="attack-graph-flow-node-header">
+        <span className="attack-graph-flow-node-type">{formatAttackNodeType(data.nodeType)}</span>
+        <span className={`attack-graph-flow-node-status ${getAttackNodeStatusTone(data.status)}`}>
+          {formatAttackNodeStatus(data.status)}
         </span>
       </div>
       <strong className="attack-graph-flow-node-title">{data.label}</strong>
@@ -283,10 +126,12 @@ const attackGraphNodeTypes = {
   attackNode: AttackGraphFlowNode,
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function buildAutoLayout(
   graph: SessionGraph,
   selectedNodeId: string | null,
   latestNodeId: string | null,
+  hoveredEdgeId: string | null = null,
 ): {
   nodes: Node<AttackCanvasNodeData>[];
   edges: Edge[];
@@ -361,13 +206,18 @@ export function buildAutoLayout(
 
   const edges = graph.edges.map<Edge>((edge) => {
     const targetNode = nodeMap.get(edge.target);
+    const sourceNode = nodeMap.get(edge.source);
     const edgeStatus = readString(edge.data.status) ?? readString(targetNode?.data.status) ?? null;
     const isSelectedEdge =
       selectedNodeId !== null && (edge.source === selectedNodeId || edge.target === selectedNodeId);
     const isActiveEdge = activeNodeIds.has(edge.source) || activeNodeIds.has(edge.target);
-    const showLabel = isSelectedEdge || isActiveEdge || edgeStatus === "failed" || edgeStatus === "blocked";
+    const isHoveredEdge = hoveredEdgeId === edge.id;
+    const touchesOutcome = sourceNode?.node_type === "outcome" || targetNode?.node_type === "outcome";
+    const isPathStateEdge = edgeStatus === "failed" || edgeStatus === "blocked";
+    const isSuccessEdge = touchesOutcome && (edgeStatus === "completed" || edgeStatus === "done");
+    const showLabel = isHoveredEdge || isSelectedEdge || isActiveEdge || isPathStateEdge || isSuccessEdge;
     const isDimmed = Boolean(selectedNodeId) && !isSelectedEdge;
-    const stroke = getEdgeStroke(edgeStatus, isSelectedEdge || isActiveEdge, isDimmed);
+    const stroke = getEdgeStroke(edgeStatus, isSelectedEdge || isActiveEdge || isHoveredEdge, isDimmed);
 
     return {
       id: edge.id,
@@ -375,7 +225,7 @@ export function buildAutoLayout(
       target: edge.target,
       type: "smoothstep",
       animated: readString(edge.data.status) === "in_progress",
-      label: showLabel ? getRelationLabel(edge.relation) : undefined,
+      label: showLabel ? getAttackRelationLabel(edge.relation) : undefined,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         color: stroke,
@@ -383,19 +233,17 @@ export function buildAutoLayout(
       style: {
         stroke,
         strokeOpacity: isDimmed ? 0.52 : 1,
-        strokeWidth: isSelectedEdge || isActiveEdge ? 2 : 1.25,
+        strokeWidth: isSelectedEdge || isActiveEdge || isHoveredEdge ? 1.9 : 1.1,
       },
       labelStyle: {
-        fill: "var(--text-secondary)",
-        fontSize: 11,
+        fill: isHoveredEdge || isSelectedEdge || isActiveEdge ? "var(--text-primary)" : "var(--text-secondary)",
+        fontSize: 10,
         fontWeight: 600,
       },
-      labelBgPadding: [8, 4],
-      labelBgBorderRadius: 999,
       labelBgStyle: {
-        fill: showLabel ? "rgba(255, 255, 252, 0.92)" : "transparent",
-        fillOpacity: showLabel ? 0.96 : 0,
-        stroke: showLabel ? "rgba(74, 89, 79, 0.1)" : "transparent",
+        fill: "transparent",
+        fillOpacity: 0,
+        stroke: "transparent",
       },
     };
   });
@@ -479,9 +327,10 @@ export function AttackGraphCanvas({
   overlayTitle = null,
   overlayCopy = null,
 }: AttackGraphCanvasProps) {
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const flowGraph = useMemo(
-    () => buildAutoLayout(graph, selectedNodeId, latestNodeId),
-    [graph, latestNodeId, selectedNodeId],
+    () => buildAutoLayout(graph, selectedNodeId, latestNodeId, hoveredEdgeId),
+    [graph, hoveredEdgeId, latestNodeId, selectedNodeId],
   );
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const programmaticMoveRef = useRef(false);
@@ -536,6 +385,8 @@ export function AttackGraphCanvas({
         nodesDraggable={false}
         elementsSelectable
         onNodeClick={(_event, node) => onSelectNode(node.id)}
+        onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
+        onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         onMoveStart={handleMoveStart}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}

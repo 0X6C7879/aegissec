@@ -100,8 +100,9 @@ describe("AttackGraphCanvas helpers", () => {
     const layout = buildAutoLayout(graph, null, null);
     const observationNode = layout.nodes.find((node) => node.id === "observation-1");
 
-    expect(observationNode?.data.excerpt).toContain("发现了非常长的一段观测文本");
-    expect(observationNode?.data.excerpt?.length).toBeLessThan(70);
+    expect(observationNode?.data.label).toContain("发现了非常长的一段观测文本");
+    expect(observationNode?.data.label.length).toBeLessThan(60);
+    expect(observationNode?.data.excerpt ?? null).toBeNull();
     expect(layout.edges[0]?.label).toBeUndefined();
   });
 
@@ -155,5 +156,43 @@ describe("AttackGraphCanvas helpers", () => {
     const layout = buildAutoLayout(graph, null, null);
 
     expect(layout.edges[0]?.label).toBe("阻断");
+  });
+
+  it("reveals relation labels when an edge is hovered", () => {
+    const graph: SessionGraph = {
+      ...createGraph(),
+      nodes: [
+        {
+          id: "surface-quiet",
+          graph_type: "attack",
+          node_type: "surface",
+          label: "静态入口",
+          data: { status: "completed" },
+        },
+        {
+          id: "observation-quiet",
+          graph_type: "attack",
+          node_type: "observation",
+          label: "发现响应特征",
+          data: { status: "completed" },
+        },
+      ],
+      edges: [
+        {
+          id: "edge-hover",
+          graph_type: "attack",
+          source: "surface-quiet",
+          target: "observation-quiet",
+          relation: "discovers",
+          data: {},
+        },
+      ],
+    };
+
+    const quietLayout = buildAutoLayout(graph, null, null);
+    const hoveredLayout = buildAutoLayout(graph, null, null, "edge-hover");
+
+    expect(quietLayout.edges[0]?.label).toBeUndefined();
+    expect(hoveredLayout.edges[0]?.label).toBe("发现");
   });
 });

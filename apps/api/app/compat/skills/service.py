@@ -233,6 +233,95 @@ class SkillService:
             for candidate in resolution_result.shortlisted_candidates
         ]
 
+    def resolve_best_skill(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = False,
+    ) -> dict[str, object]:
+        resolution_result = self.resolve_skill_candidates(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+        )
+        return self._best_skill_payload_from_resolution(
+            resolution_result,
+            touched_paths=touched_paths,
+            include_reference_only=include_reference_only,
+        )
+
+    def prepare_best_skill(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = False,
+    ) -> dict[str, object]:
+        best_skill_result = self.resolve_best_skill(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+        )
+        if best_skill_result.get("status") != "selected":
+            return best_skill_result
+
+        selected_skill = best_skill_result.get("selected_skill")
+        if not isinstance(selected_skill, dict):
+            return best_skill_result
+
+        selected_skill_identifier = selected_skill.get("id") or selected_skill.get("directory_name")
+        if not isinstance(selected_skill_identifier, str) or not selected_skill_identifier.strip():
+            return best_skill_result
+
+        execution_result = self.execute_skill_by_name_or_directory_name(
+            selected_skill_identifier,
+            arguments=invocation_arguments,
+            workspace_path=workspace_path,
+            touched_paths=touched_paths,
+            session_id=session_id,
+        )
+        prepared_result = dict(best_skill_result)
+        prepared_result["execution"] = execution_result.get("execution")
+        prepared_result["skill"] = execution_result.get("skill")
+        return prepared_result
+
     def build_ranked_skill_context_prompt_fragment(
         self,
         *,
@@ -386,6 +475,11 @@ class SkillService:
             invocation_arguments=invocation_arguments,
             include_reference_only=True,
         )
+        best_skill_result = self._best_skill_payload_from_resolution(
+            resolution_result,
+            touched_paths=touched_paths,
+            include_reference_only=True,
+        )
         return {
             "skills": [
                 self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
@@ -395,6 +489,9 @@ class SkillService:
                 self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
                 for candidate in resolution_result.reference_candidates
             ],
+            "selected_skill": best_skill_result.get("selected_skill"),
+            "selected_skill_id": best_skill_result.get("selected_skill_id"),
+            "selected_skill_rank": best_skill_result.get("selected_skill_rank"),
             "resolution": resolution_result.to_payload(
                 payload_builder=lambda candidate: self._compiled_skill_payload(
                     candidate.compiled_skill,
@@ -495,6 +592,37 @@ class SkillService:
             available_tools=available_tools,
             invocation_arguments=invocation_arguments,
         )
+
+    def build_best_skill_snapshot(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        best_skill_result = self.resolve_best_skill(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+        )
+        selected_skill = best_skill_result.get("selected_skill")
+        return selected_skill if isinstance(selected_skill, dict) else None
 
     def rescan_skills(self) -> list[SkillRecordRead]:
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
@@ -971,6 +1099,72 @@ class SkillService:
             }
         )
         return payload
+
+    def _selected_candidate_from_resolution(
+        self,
+        resolution_result: skill_models.SkillResolutionResult,
+    ) -> skill_models.ResolvedSkillCandidate | None:
+        selected_candidate = resolution_result.selected_candidate
+        if selected_candidate is not None:
+            return selected_candidate
+        if resolution_result.shortlisted_candidates:
+            return resolution_result.shortlisted_candidates[0]
+        return None
+
+    def _best_skill_payload_from_resolution(
+        self,
+        resolution_result: skill_models.SkillResolutionResult,
+        *,
+        touched_paths: list[str] | None,
+        include_reference_only: bool,
+    ) -> dict[str, object]:
+        selected_candidate = self._selected_candidate_from_resolution(resolution_result)
+        if selected_candidate is None:
+            reference_only_rejected = any(
+                candidate.rejected_reason == "reference_only_excluded"
+                for candidate in resolution_result.rejected_candidates
+            )
+            status = (
+                "reference_only_only"
+                if not include_reference_only
+                and (resolution_result.reference_candidates or reference_only_rejected)
+                else "no_match"
+            )
+            selected_skill = None
+            selected_skill_id = None
+            selected_skill_rank = None
+        else:
+            status = "selected"
+            selected_skill = self._resolved_skill_candidate_payload(
+                selected_candidate,
+                touched_paths=touched_paths,
+            )
+            selected_skill_id = selected_candidate.compiled_skill.skill_id
+            selected_skill_rank = selected_candidate.rank
+
+        resolution_payload = resolution_result.to_payload(
+            payload_builder=lambda candidate: self._compiled_skill_payload(
+                candidate.compiled_skill,
+                active_due_to_touched_paths=bool(touched_paths)
+                and candidate.compiled_skill.is_conditional,
+                selected=candidate.selected,
+            )
+        )
+        return {
+            "status": status,
+            "selected_skill": selected_skill,
+            "selected_skill_id": selected_skill_id,
+            "selected_skill_rank": selected_skill_rank,
+            "resolution_request": resolution_result.request.to_payload(),
+            "resolution_summary": {
+                "active_candidate_count": resolution_result.active_candidate_count,
+                "shortlisted_count": len(resolution_result.shortlisted_candidates),
+                "reference_count": len(resolution_result.reference_candidates),
+                "rejected_count": len(resolution_result.rejected_candidates),
+                "selected_skill_id": resolution_payload.get("selected_skill_id"),
+            },
+            "resolution": resolution_payload,
+        }
 
     def _discovery_paths(
         self,

@@ -99,18 +99,18 @@
 }
 
 .attack-graph-canvas-shell .react-flow__edge-textbg {
-  fill: rgba(255, 255, 252, 0.82);
+  fill: transparent;
 }
 
 .attack-graph-flow-node {
-  width: 208px;
-  padding: 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(74, 89, 79, 0.1);
-  background: rgba(255, 255, 252, 0.94);
-  box-shadow: 0 10px 24px rgba(30, 38, 33, 0.04);
+  width: 196px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(74, 89, 79, 0.08);
+  background: rgba(255, 255, 252, 0.92);
+  box-shadow: 0 4px 10px rgba(30, 38, 33, 0.025);
   display: grid;
-  gap: 8px;
+  gap: 5px;
   transition:
     border-color var(--transition-base),
     box-shadow var(--transition-base),
@@ -119,17 +119,17 @@
 }
 
 .attack-graph-flow-node-active {
-  border-color: rgba(36, 88, 69, 0.26);
-  box-shadow: 0 14px 28px rgba(24, 58, 45, 0.08);
+  border-color: rgba(36, 88, 69, 0.22);
+  box-shadow: 0 8px 18px rgba(24, 58, 45, 0.05);
 }
 
 .attack-graph-flow-node-latest {
-  border-color: rgba(154, 114, 39, 0.22);
+  border-color: rgba(154, 114, 39, 0.16);
 }
 
 .attack-graph-flow-node-selected {
-  border-color: rgba(36, 88, 69, 0.48);
-  box-shadow: 0 0 0 3px rgba(36, 88, 69, 0.08);
+  border-color: rgba(36, 88, 69, 0.36);
+  box-shadow: 0 0 0 2px rgba(36, 88, 69, 0.06);
   transform: translateY(-1px);
 }
 
@@ -141,43 +141,44 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .attack-graph-flow-node-type,
 .attack-graph-flow-node-status {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 0 8px;
-  border-radius: var(--radius-pill);
-  font-size: 0.7rem;
+  min-height: 16px;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.66rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .attack-graph-flow-node-type {
-  background: rgba(36, 88, 69, 0.08);
-  color: rgba(36, 88, 69, 0.82);
+  background: transparent;
+  color: rgba(36, 88, 69, 0.68);
+  text-transform: uppercase;
 }
 
 .attack-graph-flow-node-status {
-  background: rgba(74, 89, 79, 0.08);
+  background: transparent;
   color: var(--text-secondary);
 }
 
 .attack-graph-flow-node-title {
   color: var(--text-strong);
-  font-size: 0.88rem;
-  line-height: 1.35;
+  font-size: 0.82rem;
+  line-height: 1.28;
 }
 
 .attack-graph-flow-node-summary {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.35;
+  font-size: 0.7rem;
+  line-height: 1.2;
   display: -webkit-box;
   overflow: hidden;
   -webkit-line-clamp: 1;
@@ -191,7 +192,7 @@
 }
 
 .attack-graph-flow-node-supporting {
-  background: rgba(255, 255, 252, 0.9);
+  background: rgba(255, 255, 252, 0.88);
 }
 
 .attack-graph-flow-handle {
@@ -7388,12 +7389,12 @@ a {
 }
 
 .workspace-node-detail-modal {
-  width: min(620px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px));
 }
 
 .workspace-node-detail-modal-body {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .workspace-node-overview-header {
@@ -7406,7 +7407,7 @@ a {
 
 .workspace-node-advanced-disclosure {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .workspace-node-advanced-summary {
@@ -7414,6 +7415,9 @@ a {
   list-style: none;
   font-weight: 700;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .workspace-node-advanced-summary::-webkit-details-marker {
@@ -7423,7 +7427,7 @@ a {
 .workspace-node-advanced-body {
   display: grid;
   gap: var(--space-3);
-  padding-top: var(--space-2);
+  padding-top: 6px;
 }
 
 .workspace-runtime-run-row {

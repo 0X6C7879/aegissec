@@ -47,7 +47,10 @@ function createGraph(): SessionGraph {
         label: "可操作节点",
         data: {
           status: "in_progress",
-          summary: "可以映射到会话消息。",
+          summary: "命令执行后确认存在可利用入口。",
+          command: "nmap -sV target.internal",
+          tool_name: "nmap",
+          intent: "确认可利用入口",
           source_message_id: "message-1",
           branch_id: "branch-1",
           generation_id: "generation-1",
@@ -153,5 +156,30 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.getByText("source_message_id")).toBeVisible();
     expect(screen.getByText("branch_id")).toBeVisible();
     expect(screen.getByText("generation_id")).toBeVisible();
+  });
+
+  it("prioritizes high-value content and removes default active-node noise", async () => {
+    const user = userEvent.setup();
+
+    render(<StatefulAttackGraphWorkbench />);
+
+    await user.click(screen.getByRole("button", { name: "可操作节点" }));
+
+    expect(screen.getByText("高价值内容")).toBeInTheDocument();
+    expect(screen.getByText("命令")).toBeInTheDocument();
+    expect(screen.getByText("工具")).toBeInTheDocument();
+    expect(screen.getByText("结果")).toBeInTheDocument();
+    expect(screen.queryByText("活跃节点")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前节点没有额外的高价值展示内容。")).not.toBeInTheDocument();
+
+    const overviewHeading = screen.getByText("概览");
+    const highValueHeading = screen.getByText("高价值内容");
+    const actionsHeading = screen.getByText("会话动作");
+
+    const overviewPosition = overviewHeading.compareDocumentPosition(highValueHeading);
+    const highValuePosition = highValueHeading.compareDocumentPosition(actionsHeading);
+
+    expect(overviewPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(highValuePosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

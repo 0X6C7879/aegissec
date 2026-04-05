@@ -906,6 +906,13 @@ parameter_schema:
     assert payload["payload"]["skills"][0]["active"] is True
     assert payload["payload"]["skills"][0]["dynamic"] is False
     assert payload["payload"]["skills"][0]["prepared_invocation"]["context"]["skill_directory"]
+    assert payload["payload"]["selected_skill"]["id"] == payload["payload"]["skills"][0]["id"]
+    assert payload["payload"]["selected_skill"]["selected"] is True
+    assert (
+        payload["payload"]["selected_skill_id"]
+        == payload["payload"]["resolution"]["selected_skill_id"]
+    )
+    assert payload["payload"]["selected_skill_rank"] == payload["payload"]["selected_skill"]["rank"]
     assert "Top ranked skills for current context" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]
     assert (

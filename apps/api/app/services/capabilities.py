@@ -222,12 +222,17 @@ class CapabilityFacade:
                 )
                 return cached
 
+        skill_context = self.build_skill_context(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+        )
+        skills = skill_context.get("skills")
+        selected_skill = skill_context.get("selected_skill")
         snapshot: dict[str, object] = {
-            "skills": self.build_skill_snapshot(
-                touched_paths=touched_paths,
-                workspace_path=workspace_path,
-                session_id=session_id,
-            ),
+            "skills": skills if isinstance(skills, list) else [],
+            "selected_skill": selected_skill if isinstance(selected_skill, dict) else None,
+            "selected_skill_id": skill_context.get("selected_skill_id"),
             "mcp_servers": self.build_mcp_snapshot(),
         }
         if cache_allowed:
@@ -237,6 +242,7 @@ class CapabilityFacade:
             message="Built fresh capability snapshot.",
             payload={
                 "skill_count": len(cast(list[dict[str, object]], snapshot["skills"])),
+                "selected_skill_id": snapshot.get("selected_skill_id"),
                 "mcp_server_count": len(cast(list[dict[str, object]], snapshot["mcp_servers"])),
             },
             session_id=session_id,
@@ -269,7 +275,10 @@ class CapabilityFacade:
         self._log_capability_event(
             event_type="capability.skills.context",
             message="Built structured skill context payload.",
-            payload={"skill_count": len(skills) if isinstance(skills, list) else 0},
+            payload={
+                "skill_count": len(skills) if isinstance(skills, list) else 0,
+                "selected_skill_id": payload.get("selected_skill_id"),
+            },
         )
         return payload
 
