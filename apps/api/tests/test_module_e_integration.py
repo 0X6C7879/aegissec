@@ -45,29 +45,16 @@ def test_module_e_acceptance_smoke_covers_workspace_history_graph_and_runtime(
     assert chat_response.status_code == 200
     assert api_data(chat_response)["assistant_message"]["role"] == "assistant"
 
-    workflow_start = client.post(
-        "/api/workflows/authorized-assessment/start",
-        json={"session_id": session_id},
-    )
-    assert workflow_start.status_code == 201
-    run_id = api_data(workflow_start)["id"]
-
     for graph_type in ("task", "evidence", "causal"):
         graph_response = client.get(f"/api/sessions/{session_id}/graphs/{graph_type}")
         assert graph_response.status_code == 200
         assert api_data(graph_response)["graph_type"] == graph_type
 
-    export_response = client.get(f"/api/workflows/{run_id}/export")
-    replay_response = client.get(f"/api/workflows/{run_id}/replay")
     history_response = client.get(f"/api/sessions/{session_id}/history")
     runtime_status = client.get("/api/runtime/status")
 
-    assert export_response.status_code == 200
-    assert replay_response.status_code == 200
     assert history_response.status_code == 200
     assert runtime_status.status_code == 200
-    assert api_data(export_response)["run"]["id"] == run_id
-    assert api_data(replay_response)["run_id"] == run_id
     assert history_response.json()["meta"]["pagination"]["total"] >= 1
     assert "runtime" in api_data(runtime_status)
 

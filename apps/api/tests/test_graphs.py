@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session as DBSession
 
 from app.main import app
 from app.services.chat_runtime import (
@@ -11,6 +13,8 @@ from app.services.chat_runtime import (
     ToolExecutor,
     get_chat_runtime,
 )
+from app.services.runtime import get_runtime_backend
+from app.workflows.service import get_workflow_service
 from tests.utils import api_data
 
 
@@ -21,12 +25,42 @@ def _create_session(client: TestClient) -> str:
 
 
 def _start_workflow(client: TestClient, session_id: str) -> dict[str, object]:
-    response = client.post(
-        "/api/workflows/authorized-assessment/start",
-        json={"session_id": session_id},
-    )
-    assert response.status_code == 201
-    return cast(dict[str, object], api_data(response))
+    del client
+    with DBSession(app.state.database_engine) as db_session:
+        runtime_backend_factory = app.dependency_overrides.get(get_runtime_backend)
+        assert runtime_backend_factory is not None
+        workflow_service = get_workflow_service(
+            db_session=db_session,
+            settings=app.state.settings,
+            runtime_backend=runtime_backend_factory(),
+        )
+        workflow = workflow_service.start_workflow(
+            session_id=session_id,
+            template_name="authorized-assessment",
+            seed_message_id=None,
+        )
+        return cast(dict[str, object], workflow.model_dump(mode="json"))
+
+
+def _advance_workflow(run_id: str) -> dict[str, object]:
+    with DBSession(app.state.database_engine) as db_session:
+        runtime_backend_factory = app.dependency_overrides.get(get_runtime_backend)
+        assert runtime_backend_factory is not None
+        workflow_service = get_workflow_service(
+            db_session=db_session,
+            settings=app.state.settings,
+            runtime_backend=runtime_backend_factory(),
+        )
+        workflow = asyncio.run(
+            workflow_service.advance_workflow(
+                run_id,
+                approve=True,
+                user_input=None,
+                resume_token=None,
+                resolution_payload=None,
+            )
+        )
+        return cast(dict[str, object], workflow.model_dump(mode="json"))
 
 
 def test_task_graph_route_returns_persisted_dag_graph(client: TestClient) -> None:
@@ -219,8 +253,8 @@ def test_evidence_graph_includes_summary_and_confidence_after_execution(client: 
     workflow = _start_workflow(client, session_id)
     run_id = cast(str, workflow["id"])
 
-    advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
-    assert advance.status_code == 200
+    advance = _advance_workflow(run_id)
+    assert advance["id"] == run_id
 
     response = client.get(f"/api/workflows/{run_id}/graphs/evidence")
 
@@ -238,8 +272,8 @@ def test_attack_graph_for_run_includes_observations_after_execution(client: Test
     workflow = _start_workflow(client, session_id)
     run_id = cast(str, workflow["id"])
 
-    advance = client.post(f"/api/workflows/{run_id}/advance", json={"approve": True})
-    assert advance.status_code == 200
+    advance = _advance_workflow(run_id)
+    assert advance["id"] == run_id
 
     response = client.get(f"/api/workflows/{run_id}/graphs/attack")
 

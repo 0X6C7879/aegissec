@@ -51,4 +51,4 @@ def test_openapi_metadata_exposes_module_a_p2_tags() -> None:
     tags_by_name = {tag["name"]: tag for tag in payload["tags"]}
     assert payload["info"]["summary"] == "Local-first defensive security workbench API"
     assert "project-scoped defaults" in tags_by_name["projects"]["description"]
-    assert "Workflow templates" in tags_by_name["workflows"]["description"]
+    assert "workflows" not in tags_by_name
