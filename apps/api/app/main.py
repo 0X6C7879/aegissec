@@ -17,7 +17,6 @@ from app.api.routes_runtime import router as runtime_router
 from app.api.routes_sessions import router as sessions_router
 from app.api.routes_settings import router as settings_router
 from app.api.routes_skills import router as skills_router
-from app.api.routes_workflows import router as workflows_router
 from app.core.errors import register_exception_handlers
 from app.core.events import get_event_broker
 from app.core.logging_middleware import APIRequestMiddleware
@@ -41,7 +40,6 @@ OPENAPI_TAGS = [
     {"name": "settings", "description": "User-scoped settings backed by local environment files."},
     {"name": "skills", "description": "Skill discovery, scanning, and content lookup."},
     {"name": "mcp", "description": "MCP server import, inspection, and capability management."},
-    {"name": "workflows", "description": "Workflow templates, runs, approvals, and exports."},
 ]
 
 
@@ -58,7 +56,7 @@ app = FastAPI(
     version=settings.app_version,
     summary="Local-first defensive security workbench API",
     description=(
-        "FastAPI backend for authorized security research workflows, runtime execution, "
+        "FastAPI backend for authorized security research, runtime execution, "
         "session history, graph persistence, and project-scoped coordination."
     ),
     contact={"name": "AegisSec Local Workspace"},
@@ -92,4 +90,3 @@ app.include_router(workflow_graphs_router)
 app.include_router(settings_router)
 app.include_router(skills_router)
 app.include_router(mcp_router)
-app.include_router(workflows_router)
