@@ -17,6 +17,14 @@ class WorkflowQueueBackend(Protocol):
     ) -> RuntimeExecutionRunRead: ...
 
 
+def execute_runtime_command(
+    queue_backend: WorkflowQueueBackend,
+    payload: RuntimeExecuteRequest,
+    runtime_policy: RuntimePolicy | None = None,
+) -> RuntimeExecutionRunRead:
+    return queue_backend.execute(payload, runtime_policy=runtime_policy)
+
+
 @dataclass(slots=True)
 class InProcessWorkflowQueueBackend:
     settings: Settings

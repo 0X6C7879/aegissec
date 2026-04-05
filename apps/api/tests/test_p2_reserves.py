@@ -13,8 +13,11 @@ from app.db.models import (
     RuntimePolicy,
 )
 from app.db.repositories import RunLogRepository, RuntimeRepository
-from app.services.workflow_queue import RedisWorkflowQueueBackend, get_workflow_queue_backend
-from app.workflows.service import WorkflowService
+from app.services.workflow_queue import (
+    RedisWorkflowQueueBackend,
+    execute_runtime_command,
+    get_workflow_queue_backend,
+)
 
 
 def test_sqlmodel_json_columns_are_dialect_neutral() -> None:
@@ -62,7 +65,7 @@ class _RecordingQueueBackend:
         raise RuntimeError("queue invoked")
 
 
-def test_workflow_service_routes_runtime_execution_through_queue_backend(
+def test_execute_runtime_command_routes_through_queue_backend(
     tmp_path: Path,
     test_settings: Settings,
 ) -> None:
@@ -74,12 +77,10 @@ def test_workflow_service_routes_runtime_execution_through_queue_backend(
     db_session = DBSession(engine)
     queue_backend = _RecordingQueueBackend()
     try:
-        workflow_service = WorkflowService(
-            db_session,
-            settings=test_settings,
-            queue_backend=queue_backend,
+        execute_runtime_command(
+            queue_backend,
+            RuntimeExecuteRequest(command="pwd"),
         )
-        workflow_service._run_runtime_command(payload=RuntimeExecuteRequest(command="pwd"))
     except RuntimeError as exc:
         assert str(exc) == "queue invoked"
     finally:

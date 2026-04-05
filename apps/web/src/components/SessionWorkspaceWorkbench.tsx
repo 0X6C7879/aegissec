@@ -5,7 +5,6 @@ import {
   isApiError,
   forkSessionMessage,
   getAttackGraph,
-  getAttackGraphForRun,
   cancelGeneration,
   cancelSession,
   createSession,
@@ -368,24 +367,13 @@ export function SessionWorkspaceWorkbench() {
     invalidateStaleSessionSelection(routeSessionId, staleSessionNotFoundMessage);
   }, [invalidateStaleSessionSelection, routeSessionId, staleSessionNotFoundMessage]);
 
-  const inferredWorkflowRunId = sessionAttackGraphQuery.data?.workflow_run_id ?? null;
-
-  const workflowRunId = inferredWorkflowRunId;
-
   useEffect(() => {
-    if (workflowRunId) {
+    if (sessionAttackGraphQuery.data?.nodes.length) {
       return;
     }
 
     setSelectedAttackNodeId(null);
-  }, [workflowRunId]);
-
-  const runAttackGraphQuery = useQuery({
-    enabled: Boolean(workflowRunId),
-    queryKey: ["workflow", workflowRunId, "graph", "attack"],
-    queryFn: ({ signal }) => getAttackGraphForRun(workflowRunId!, signal),
-    placeholderData: (previousValue) => previousValue,
-  });
+  }, [sessionAttackGraphQuery.data?.nodes]);
 
   useSessionEvents(activeSessionId);
   const sessionRuns = useMemo(
@@ -814,7 +802,7 @@ export function SessionWorkspaceWorkbench() {
         branch_id: branchId,
       }),
     onSuccess: async (_response, variables) => {
-      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId);
     },
   });
 
@@ -827,7 +815,7 @@ export function SessionWorkspaceWorkbench() {
       messageId: string;
     }) => forkSessionMessage(targetSessionId, messageId),
     onSuccess: async (_response, variables) => {
-      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId);
     },
   });
 
@@ -845,28 +833,20 @@ export function SessionWorkspaceWorkbench() {
         branch_id: branchId,
       }),
     onSuccess: async (_response, variables) => {
-      await invalidatePrimaryViews(variables.sessionId, workflowRunId);
+      await invalidatePrimaryViews(variables.sessionId);
     },
   });
 
   const invalidatePrimaryViews = useCallback(
-    async (targetSessionId: string, targetRunId: string | null): Promise<void> => {
-      const invalidations = [
+    async (targetSessionId: string): Promise<void> => {
+      await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["conversation", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] }),
         queryClient.invalidateQueries({ queryKey: ["sessions"] }),
         queryClient.invalidateQueries({
           queryKey: ["session", targetSessionId, "graph", "attack"],
         }),
-      ];
-
-      if (targetRunId) {
-        invalidations.push(
-          queryClient.invalidateQueries({ queryKey: ["workflow", targetRunId, "graph", "attack"] }),
-        );
-      }
-
-      await Promise.all(invalidations);
+      ]);
     },
     [queryClient],
   );
@@ -880,8 +860,6 @@ export function SessionWorkspaceWorkbench() {
 
     const eventType = latestEvent.type;
     const shouldRefresh =
-      eventType.startsWith("workflow.") ||
-      eventType.startsWith("task.") ||
       eventType.startsWith("graph.") ||
       eventType === "message.created" ||
       eventType === "message.updated" ||
@@ -900,15 +878,15 @@ export function SessionWorkspaceWorkbench() {
     }
 
     const refreshTimer = window.setTimeout(() => {
-      void invalidatePrimaryViews(activeSessionId, workflowRunId);
+      void invalidatePrimaryViews(activeSessionId);
     }, 180);
 
     return () => {
       window.clearTimeout(refreshTimer);
     };
-  }, [activeSessionId, invalidatePrimaryViews, latestEvent, workflowRunId]);
+  }, [activeSessionId, invalidatePrimaryViews, latestEvent]);
 
-  const attackGraph = runAttackGraphQuery.data ?? sessionAttackGraphQuery.data;
+  const attackGraph = sessionAttackGraphQuery.data;
   const activeConversation = conversationQuery.data ?? null;
   const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
   const queuedGenerationCount =
@@ -985,7 +963,7 @@ export function SessionWorkspaceWorkbench() {
         messageId: sourceMessageId,
         content: trimmed,
       });
-      await invalidatePrimaryViews(activeSession.id, workflowRunId);
+      await invalidatePrimaryViews(activeSession.id);
     } finally {
       setMessageActionBusyId((currentValue) =>
         currentValue === sourceMessageId ? null : currentValue,

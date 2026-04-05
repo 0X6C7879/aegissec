@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import asyncio
+from datetime import UTC, datetime
 from typing import cast
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session as DBSession
 
+from app.db.models import GraphType, TaskNodeStatus, TaskNodeType, WorkflowRunStatus
+from app.db.repositories import GraphRepository, WorkflowRepository
 from app.main import app
 from app.services.chat_runtime import (
     GenerationCallbacks,
@@ -13,8 +15,6 @@ from app.services.chat_runtime import (
     ToolExecutor,
     get_chat_runtime,
 )
-from app.services.runtime import get_runtime_backend
-from app.workflows.service import get_workflow_service
 from tests.utils import api_data
 
 
@@ -27,40 +27,87 @@ def _create_session(client: TestClient) -> str:
 def _start_workflow(client: TestClient, session_id: str) -> dict[str, object]:
     del client
     with DBSession(app.state.database_engine) as db_session:
-        runtime_backend_factory = app.dependency_overrides.get(get_runtime_backend)
-        assert runtime_backend_factory is not None
-        workflow_service = get_workflow_service(
-            db_session=db_session,
-            settings=app.state.settings,
-            runtime_backend=runtime_backend_factory(),
-        )
-        workflow = workflow_service.start_workflow(
+        repository = WorkflowRepository(db_session)
+        run = repository.create_run(
             session_id=session_id,
             template_name="authorized-assessment",
-            seed_message_id=None,
+            status=WorkflowRunStatus.RUNNING,
+            current_stage="scope_guard",
+            started_at=datetime.now(UTC),
+            ended_at=None,
+            state={"current_stage": "scope_guard"},
+            last_error=None,
         )
-        return cast(dict[str, object], workflow.model_dump(mode="json"))
+        scope_stage = repository.create_task_node(
+            workflow_run_id=run.id,
+            name="scope_guard",
+            node_type=TaskNodeType.STAGE,
+            status=TaskNodeStatus.IN_PROGRESS,
+            sequence=1,
+            parent_id=None,
+            metadata={"title": "范围确认", "stage_key": "scope_guard"},
+        )
+        repository.create_task_node(
+            workflow_run_id=run.id,
+            name="scope_guard.confirm_scope",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.READY,
+            sequence=2,
+            parent_id=scope_stage.id,
+            metadata={
+                "title": "确认范围与约束",
+                "stage_key": "scope_guard",
+                "depends_on_task_ids": [scope_stage.id],
+            },
+        )
+        return cast(dict[str, object], {"id": run.id, "current_stage": run.current_stage})
 
 
 def _advance_workflow(run_id: str) -> dict[str, object]:
     with DBSession(app.state.database_engine) as db_session:
-        runtime_backend_factory = app.dependency_overrides.get(get_runtime_backend)
-        assert runtime_backend_factory is not None
-        workflow_service = get_workflow_service(
-            db_session=db_session,
-            settings=app.state.settings,
-            runtime_backend=runtime_backend_factory(),
+        workflow_repository = WorkflowRepository(db_session)
+        graph_repository = GraphRepository(db_session)
+        run = workflow_repository.get_run(run_id)
+        assert run is not None
+        run = workflow_repository.update_run(
+            run,
+            current_stage="safe_validation",
+            state={"current_stage": "safe_validation"},
         )
-        workflow = asyncio.run(
-            workflow_service.advance_workflow(
-                run_id,
-                approve=True,
-                user_input=None,
-                resume_token=None,
-                resolution_payload=None,
-            )
+        graph_repository.create_node(
+            session_id=run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+            node_type="evidence",
+            label="Collected evidence",
+            payload={"summary": "evidence summary", "confidence": "high"},
+            stable_key="evidence-1",
         )
-        return cast(dict[str, object], workflow.model_dump(mode="json"))
+        evidence_node = graph_repository.list_nodes(
+            run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+        )[0]
+        attack_node = graph_repository.create_node(
+            session_id=run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            node_type="observation",
+            label="Observed output",
+            payload={"summary": "observation", "confidence": "high"},
+            stable_key="attack-observation-1",
+        )
+        graph_repository.create_edge(
+            session_id=run.session_id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.ATTACK,
+            source_node_id=evidence_node.id,
+            target_node_id=attack_node.id,
+            relation="confirms",
+            payload={},
+            stable_key="attack-edge-1",
+        )
+        return cast(dict[str, object], {"id": run.id, "current_stage": run.current_stage})
 
 
 def test_task_graph_route_returns_persisted_dag_graph(client: TestClient) -> None:
@@ -74,11 +121,12 @@ def test_task_graph_route_returns_persisted_dag_graph(client: TestClient) -> Non
     assert payload["graph_type"] == "task"
     assert payload["workflow_run_id"] == workflow["id"]
     assert payload["current_stage"] == "scope_guard"
-    assert len(payload["nodes"]) >= 19
+    assert len(payload["nodes"]) == 2
     current_nodes = [node for node in payload["nodes"] if node["data"].get("current") is True]
-    assert len(current_nodes) == 2
-    assert {node["label"] for node in current_nodes} == {"范围确认", "确认范围与约束"}
-    assert len(payload["edges"]) >= 18
+    assert len(current_nodes) == 1
+    assert current_nodes[0]["label"] == "范围确认"
+    assert {node["label"] for node in payload["nodes"]} == {"范围确认", "确认范围与约束"}
+    assert len(payload["edges"]) == 1
     assert all(edge["relation"] == "depends_on" for edge in payload["edges"])
 
 
@@ -120,15 +168,19 @@ def test_attack_graph_route_returns_unified_attack_path_for_new_run(client: Test
     assert response.status_code == 200
     payload = api_data(response)
     assert payload["graph_type"] == "attack"
-    assert payload["workflow_run_id"] == workflow["id"]
-    assert payload["current_stage"] == "scope_guard"
-    nodes = cast(list[dict[str, object]], payload["nodes"])
-    edges = cast(list[dict[str, object]], payload["edges"])
-    assert any(node["node_type"] == "goal" for node in nodes)
-    assert any(node["label"] == "攻击面清点" for node in nodes)
-    assert any(
-        edge["relation"] in {"attempts", "enables", "branches_from", "blocks"} for edge in edges
-    )
+    assert payload["workflow_run_id"] == ""
+    assert payload["current_stage"] is None
+    assert payload["session_id"] == session_id
+    assert payload["nodes"] == []
+    assert payload["edges"] == []
+
+    run_response = client.get(f"/api/workflows/{cast(str, workflow['id'])}/graphs/attack")
+
+    assert run_response.status_code == 200
+    run_payload = api_data(run_response)
+    assert run_payload["workflow_run_id"] == workflow["id"]
+    assert run_payload["graph_type"] == "attack"
+    assert run_payload["nodes"]
 
 
 def test_graph_routes_return_404_for_missing_session(client: TestClient) -> None:

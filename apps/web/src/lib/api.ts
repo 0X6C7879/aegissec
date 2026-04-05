@@ -318,13 +318,6 @@ export async function getEvidenceGraph(
   return apiRequest<SessionGraph>(`/api/sessions/${sessionId}/graphs/evidence`, { signal });
 }
 
-export async function getAttackGraphForRun(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<SessionGraph> {
-  return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/attack`, { signal });
-}
-
 export async function createSession(title?: string): Promise<SessionSummary> {
   return apiRequest<SessionSummary>("/api/sessions", {
     method: "POST",

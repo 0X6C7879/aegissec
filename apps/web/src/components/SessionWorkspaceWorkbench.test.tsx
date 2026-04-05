@@ -11,7 +11,6 @@ import { SessionWorkspaceWorkbench } from "./SessionWorkspaceWorkbench";
 
 const {
   mockGetAttackGraph,
-  mockGetAttackGraphForRun,
   mockCancelGeneration,
   mockCancelSession,
   mockCreateSession,
@@ -29,7 +28,6 @@ const {
   mockUseSessionEvents,
 } = vi.hoisted(() => ({
   mockGetAttackGraph: vi.fn(),
-  mockGetAttackGraphForRun: vi.fn(),
   mockCancelGeneration: vi.fn(),
   mockCancelSession: vi.fn(),
   mockCreateSession: vi.fn(),
@@ -53,7 +51,6 @@ vi.mock("../lib/api", async () => {
   return {
     ...actual,
     getAttackGraph: mockGetAttackGraph,
-    getAttackGraphForRun: mockGetAttackGraphForRun,
     cancelGeneration: mockCancelGeneration,
     cancelSession: mockCancelSession,
     createSession: mockCreateSession,
@@ -240,7 +237,6 @@ describe("SessionWorkspaceWorkbench", () => {
     );
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
     mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
-    mockGetAttackGraphForRun.mockResolvedValue(createGraph("session-1"));
   });
 
   it("recovers when the route session is missing from the current session list", async () => {
@@ -319,17 +315,10 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(mockUseSessionEvents).not.toHaveBeenLastCalledWith(null);
   });
 
-  it("shows only the attack graph surface for active workflow sessions", async () => {
+  it("shows only the attack graph surface for active sessions", async () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetAttackGraph.mockResolvedValue(
       createGraph("session-1", {
-        workflow_run_id: "run-1",
-        current_stage: "safe_validation",
-      }),
-    );
-    mockGetAttackGraphForRun.mockResolvedValue(
-      createGraph("session-1", {
-        workflow_run_id: "run-1",
         current_stage: "safe_validation",
       }),
     );
@@ -352,29 +341,21 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.queryByText("计划与推进")).not.toBeInTheDocument();
   });
 
-  it("prefers run attack graph data once workflow_run_id is available", async () => {
+  it("renders the session attack graph data directly", async () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetAttackGraph.mockResolvedValue(
       createGraph("session-1", {
-        workflow_run_id: "run-1",
         nodes: [{ ...createAttackNode(), id: "session-node", label: "Session Graph Node" }],
-      }),
-    );
-    mockGetAttackGraphForRun.mockResolvedValue(
-      createGraph("session-1", {
-        workflow_run_id: "run-1",
-        nodes: [{ ...createAttackNode(), id: "run-node", label: "Run Graph Node" }],
       }),
     );
 
     renderWorkbench("/sessions/session-1/chat");
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run Graph Node" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Session Graph Node" })).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole("button", { name: "Session Graph Node" })).not.toBeInTheDocument();
-    expect(mockGetAttackGraphForRun).toHaveBeenCalled();
+    expect(mockGetAttackGraph).toHaveBeenCalled();
   });
 
   it("wires edit/regenerate/fork/rollback through the main workbench path", async () => {
@@ -383,13 +364,6 @@ describe("SessionWorkspaceWorkbench", () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetAttackGraph.mockResolvedValue(
       createGraph("session-1", {
-        workflow_run_id: "run-1",
-        nodes: [createAttackNode()],
-      }),
-    );
-    mockGetAttackGraphForRun.mockResolvedValue(
-      createGraph("session-1", {
-        workflow_run_id: "run-1",
         nodes: [createAttackNode()],
       }),
     );
@@ -433,7 +407,6 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(mockGetSessionConversation.mock.calls.length).toBeGreaterThan(1);
     expect(mockGetSessionQueue.mock.calls.length).toBeGreaterThan(1);
     expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(1);
-    expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(1);
 
     promptSpy.mockRestore();
   });
@@ -442,14 +415,7 @@ describe("SessionWorkspaceWorkbench", () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetAttackGraph.mockResolvedValue(
       createGraph("session-1", {
-        workflow_run_id: "run-1",
         nodes: [createAttackNode({ source_message_id: undefined })],
-      }),
-    );
-    mockGetAttackGraphForRun.mockResolvedValue(
-      createGraph("session-1", {
-        workflow_run_id: "run-1",
-        nodes: [createAttackNode({ id: "run-node-1", source_message_id: undefined })],
       }),
     );
     renderWorkbench("/sessions/session-1/chat");
@@ -459,7 +425,6 @@ describe("SessionWorkspaceWorkbench", () => {
     });
 
     const sessionCallsBefore = mockGetAttackGraph.mock.calls.length;
-    const runCallsBefore = mockGetAttackGraphForRun.mock.calls.length;
 
     await act(async () => {
       useUiStore.setState({
@@ -481,7 +446,6 @@ describe("SessionWorkspaceWorkbench", () => {
     await waitFor(
       () => {
         expect(mockGetAttackGraph.mock.calls.length).toBeGreaterThan(sessionCallsBefore);
-        expect(mockGetAttackGraphForRun.mock.calls.length).toBeGreaterThan(runCallsBefore);
       },
       { timeout: 3000 },
     );

@@ -4,7 +4,7 @@ import time
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Coroutine, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +45,14 @@ from app.services.chat_runtime import (
 )
 from app.services.session_generation import recover_abandoned_generations
 from tests.utils import api_data
+
+
+TEST_POLL_INTERVAL_SECONDS = 0.01
+TEST_EVENTUAL_TIMEOUT_SECONDS = 1.0
+
+
+def _yield_control() -> Coroutine[object, object, None]:
+    return asyncio.sleep(0)
 
 
 def test_chat_hidden_stream_tag_names_always_keep_think_visible() -> None:
@@ -340,9 +348,9 @@ def test_chat_defaults_to_non_blocking_enqueue_and_persists_timeline(client: Tes
             )
             assert callbacks is not None
             assert callbacks.on_text_delta is not None
-            await asyncio.sleep(0.05)
+            await _yield_control()
             await callbacks.on_text_delta("queued ")
-            await asyncio.sleep(0.05)
+            await _yield_control()
             await callbacks.on_text_delta("reply")
             return f"queued reply for {content}"
 
@@ -367,15 +375,14 @@ def test_chat_defaults_to_non_blocking_enqueue_and_persists_timeline(client: Tes
         assert chat_payload["generation"]["steps"][0]["kind"] == "status"
         assert chat_payload["generation"]["steps"][0]["state"] == "queued"
 
-        deadline = time.time() + 3
         conversation_payload = None
-        while time.time() < deadline:
+        for _ in range(int(TEST_EVENTUAL_TIMEOUT_SECONDS / TEST_POLL_INTERVAL_SECONDS)):
             conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
             conversation_payload = api_data(conversation_response)
             generations = conversation_payload["generations"]
             if generations and generations[0]["status"] == "completed":
                 break
-            time.sleep(0.05)
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
 
         assert conversation_payload is not None
         assert conversation_payload["active_generation_id"] is None
@@ -594,7 +601,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                 if callbacks.is_cancelled is not None and callbacks.is_cancelled():
                     raise asyncio.CancelledError
                 await callbacks.on_text_delta(chunk)
-                await asyncio.sleep(0.15)
+                await _yield_control()
             return f"{content}-done"
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -627,9 +634,8 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                     second_request_started.set()
                     break
 
-            deadline = time.time() + 2
             queue_payload = None
-            while time.time() < deadline:
+            for _ in range(int(TEST_EVENTUAL_TIMEOUT_SECONDS / TEST_POLL_INTERVAL_SECONDS)):
                 queue_response = client.get(f"/api/sessions/{session_id}/queue")
                 queue_payload = api_data(queue_response)
                 if (
@@ -637,7 +643,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                     and len(queue_payload["queued_generations"]) == 1
                 ):
                     break
-                time.sleep(0.05)
+                time.sleep(TEST_POLL_INTERVAL_SECONDS)
 
             assert queue_payload is not None
             assert queue_payload["active_generation"] is not None
@@ -825,7 +831,7 @@ def test_cancel_session_interrupts_active_generation(client: TestClient) -> None
                 if callbacks.is_cancelled is not None and callbacks.is_cancelled():
                     raise asyncio.CancelledError
                 await callbacks.on_text_delta(chunk)
-                await asyncio.sleep(0.05)
+                await _yield_control()
             return f"partial response for {content}"
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -903,7 +909,7 @@ def test_chat_queues_follow_up_prompt_while_generation_is_active(client: TestCli
                 await callbacks.on_text_delta(chunk)
                 if content == "first":
                     second_request_started.wait(timeout=1)
-                await asyncio.sleep(0.03)
+                await _yield_control()
             return f"reply[{content}] done"
 
     original_override = app.dependency_overrides[get_chat_runtime]

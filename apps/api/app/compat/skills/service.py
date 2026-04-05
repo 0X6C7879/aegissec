@@ -637,10 +637,12 @@ class SkillService:
             "activation_paths": list(parsed.activation_paths),
             "dynamic": parsed.source_identity is not None
             and parsed.source_identity.source_kind is skill_models.SkillSourceKind.MCP,
-            "invocable": False
-            if parsed.source_identity is not None
-            and parsed.source_identity.source_kind is skill_models.SkillSourceKind.MCP
-            else True,
+            "invocable": (
+                False
+                if parsed.source_identity is not None
+                and parsed.source_identity.source_kind is skill_models.SkillSourceKind.MCP
+                else True
+            ),
             "shell_enabled": not (
                 parsed.source_identity is not None
                 and parsed.source_identity.source_kind is skill_models.SkillSourceKind.MCP
@@ -1016,9 +1018,11 @@ def resolve_skill_scan_roots(
             (
                 root.source,
                 root.scope,
-                root.root_dir.strip().casefold()
-                if "://" in root.root_dir
-                else Path(root.root_dir).resolve(strict=False).as_posix().casefold(),
+                (
+                    root.root_dir.strip().casefold()
+                    if "://" in root.root_dir
+                    else Path(root.root_dir).resolve(strict=False).as_posix().casefold()
+                ),
             )
         ] = root
     return list(deduped.values())

@@ -7,12 +7,12 @@ from time import perf_counter
 from typing import Any, TypeVar, cast
 
 import httpx
-
-from app.compat.mcp.models import DiscoveredMCPCapability, ImportedMCPServer, MCPHealthCheckResult
-from app.db.models import MCPCapabilityKind, MCPTransport
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+
+from app.compat.mcp.models import DiscoveredMCPCapability, ImportedMCPServer, MCPHealthCheckResult
+from app.db.models import MCPCapabilityKind, MCPTransport
 
 _T = TypeVar("_T")
 _MAX_ERROR_DETAIL_LENGTH = 160
