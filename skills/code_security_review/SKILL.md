@@ -1,5 +1,5 @@
 ---
-name: dfyx_code_security_review
+name: code_security_review
 description: 高级白盒安全审计专家。基于深度数据流分析和业务逻辑理解的专家级代码安全审计工具。
 ---
 

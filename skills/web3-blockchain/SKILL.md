@@ -1,5 +1,5 @@
 ---
-name: exploiting-web3-smart-contracts
+name: web3-blockchain
 description: Audit and exploit smart contracts and Web3 applications including reentrancy, integer overflow, access control flaws, and DeFi-specific vulnerabilities. Use when testing blockchain applications or performing smart contract audits.
 ---
 

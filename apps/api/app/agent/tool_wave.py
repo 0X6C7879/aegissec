@@ -50,12 +50,16 @@ class ToolWaveCandidate:
             wave_id=wave_id,
             wave_type=wave_type,
             scheduler_mode=scheduler_mode if isinstance(scheduler_mode, str) else None,
-            task_ids=[item for item in task_ids_raw if isinstance(item, str)]
-            if isinstance(task_ids_raw, list)
-            else [],
-            task_names=[item for item in task_names_raw if isinstance(item, str)]
-            if isinstance(task_names_raw, list)
-            else [],
+            task_ids=(
+                [item for item in task_ids_raw if isinstance(item, str)]
+                if isinstance(task_ids_raw, list)
+                else []
+            ),
+            task_names=(
+                [item for item in task_names_raw if isinstance(item, str)]
+                if isinstance(task_names_raw, list)
+                else []
+            ),
             rationale=str(raw_dict.get("rationale") or ""),
             metadata=_dict(raw_dict.get("metadata")),
         )
@@ -130,12 +134,16 @@ class ToolWaveExecutionFrame:
         mode = raw_dict.get("mode")
         return cls(
             wave_id=wave_id,
-            task_ids=[item for item in task_ids_raw if isinstance(item, str)]
-            if isinstance(task_ids_raw, list)
-            else [],
-            task_names=[item for item in task_names_raw if isinstance(item, str)]
-            if isinstance(task_names_raw, list)
-            else [],
+            task_ids=(
+                [item for item in task_ids_raw if isinstance(item, str)]
+                if isinstance(task_ids_raw, list)
+                else []
+            ),
+            task_names=(
+                [item for item in task_names_raw if isinstance(item, str)]
+                if isinstance(task_names_raw, list)
+                else []
+            ),
             scheduler_group=scheduler_group if isinstance(scheduler_group, str) else None,
             mode=mode if isinstance(mode, str) else "execute",
         )
@@ -183,9 +191,11 @@ class TurnAssimilationResult:
             selected_wave_id=selected_wave_id,
             expected_task_count=expected_task_count,
             executed_task_count=executed_task_count,
-            executed_task_ids=[item for item in executed_task_ids if isinstance(item, str)]
-            if isinstance(executed_task_ids, list)
-            else [],
+            executed_task_ids=(
+                [item for item in executed_task_ids if isinstance(item, str)]
+                if isinstance(executed_task_ids, list)
+                else []
+            ),
             partial_failure_count=(
                 partial_failure_count if isinstance(partial_failure_count, int) else 0
             ),

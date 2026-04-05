@@ -1,5 +1,5 @@
 ---
-name: exploiting-containers
+name: container-security
 description: Escape Docker containers and exploit Kubernetes clusters using privileged containers, Docker socket access, misconfigurations, and API abuse. Use when testing container security or performing container escape.
 ---
 

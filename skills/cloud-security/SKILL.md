@@ -1,5 +1,5 @@
 ---
-name: exploiting-cloud-platforms
+name: cloud-security
 description: Exploit AWS, Azure, and GCP cloud misconfigurations including S3 buckets, IAM roles, metadata services, serverless functions, and cloud-specific privilege escalation. Use when pentesting cloud environments or assessing cloud security.
 ---
 

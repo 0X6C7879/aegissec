@@ -131,6 +131,24 @@ AegisSec Agent 不会直接照搬这两个项目，而是做如下取舍：
 - Graph：任务图、证据图、因果图
 - Memory：会话上下文、运行日志、节点历史
 
+#### Skills 兼容层现状
+
+当前 Skills 兼容层已经不再是“仅供阅读的提示文档列表”，而是统一编译为可被能力层、对话层、工作流层消费的技能对象，并保留现有审批/执行边界：
+
+- 支持来源：
+  - 文件系统技能：`skills/<name>/SKILL.md`
+  - 动态发现的 Claude 风格目录：`.claude/skills/<name>/SKILL.md`
+  - bundled 技能桥接（保守实现）
+  - MCP 能力桥接为 skill-like inventory（保守实现，默认不可通过 `execute_skill` 执行）
+  - legacy `.claude/commands/*.md` 兼容桥接（保守实现）
+- 支持的 Claude 风格元数据包括：`name`、`description`、`when_to_use`、`allowed_tools`、`model`、`effort`、`user-invocable` / `user_invocable`、`paths`、`context`、`agent`、`shell`、`argument-hint` / `argument_hint`、`aliases`。
+- 支持 `${CLAUDE_SKILL_DIR}`、`${CLAUDE_SESSION_ID}` 与普通参数替换，并能把内联 `!cmd` / fenced `!` shell 片段解析为待审批的准备态元数据。
+- `paths` 会影响条件激活；匹配触达路径时，技能会进入 active inventory。
+- MCP 来源技能强制 `shell_enabled=false`，不会通过 skill facade 执行 shell。
+- `execute_skill` 现在返回编译后的 prepared invocation 元数据，但真实执行仍必须经过现有 runtime / approval / tool pipeline，而不是在兼容层直接执行。
+
+也就是说，Skills 已经是 first-class capability object，但不是绕过审批链的 side executor。
+
 ### 3.3 Web UI
 
 - Workspace 主工作台

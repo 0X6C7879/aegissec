@@ -1,5 +1,5 @@
 ---
-name: testing-web-applications
+name: web-app-security
 description: Test web applications for security vulnerabilities including SQLi, XSS, command injection, JWT attacks, SSRF, file uploads, XXE, and API flaws. Use when pentesting web apps, analyzing authentication, or exploiting OWASP Top 10 vulnerabilities.
 ---
 

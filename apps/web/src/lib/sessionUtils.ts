@@ -803,6 +803,7 @@ function buildLiveGenerationStep(
   }
 
   if (type.startsWith("tool.call.")) {
+    const toolMetadata = buildToolStepMetadata(data);
     return {
       ...baseStep,
       kind: "tool",
@@ -824,6 +825,7 @@ function buildLiveGenerationStep(
       label: readFirstNonEmptyString(data, ["label", "tool_name", "tool", "command"]),
       safe_summary: buildToolStepSummary(type, data),
       delta_text: "",
+      metadata: toolMetadata,
       ended_at: type === "tool.call.started" ? null : baseStep.ended_at,
     };
   }
@@ -874,6 +876,29 @@ function buildLiveGenerationStep(
   }
 
   return null;
+}
+
+function buildToolStepMetadata(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = isRecord(data.metadata) ? { ...data.metadata } : {};
+  for (const key of [
+    "arguments",
+    "command",
+    "status",
+    "stdout",
+    "stderr",
+    "exit_code",
+    "result",
+    "artifact_paths",
+    "requested_timeout_seconds",
+    "run_id",
+    "created_at",
+  ] as const) {
+    if (data[key] !== undefined) {
+      metadata[key] = data[key];
+    }
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 function mergeGenerationStepList(

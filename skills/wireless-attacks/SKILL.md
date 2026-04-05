@@ -1,5 +1,5 @@
 ---
-name: attacking-wireless-networks
+name: wireless-attacks
 description: Attack WiFi networks using WPA/WPA2 cracking, WPS exploitation, Evil Twin attacks, deauthentication, and wireless reconnaissance. Use when pentesting wireless networks or performing WiFi security assessments.
 ---
 

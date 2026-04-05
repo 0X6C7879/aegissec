@@ -191,9 +191,7 @@ class AssistantTurnPlanner:
             resolved_chosen_wave = (
                 dict(chosen_wave)
                 if isinstance(chosen_wave, dict) and chosen_wave
-                else dict(resolved_candidate_waves[0])
-                if resolved_candidate_waves
-                else {}
+                else dict(resolved_candidate_waves[0]) if resolved_candidate_waves else {}
             )
             resolved_wave_decision = (
                 dict(wave_decision)
@@ -313,9 +311,9 @@ class AssistantTurnPlanner:
         return {
             "wave_id": chosen_execution_wave.wave_id,
             "wave_type": chosen_wave.wave_type if chosen_wave is not None else "execution",
-            "scheduler_mode": chosen_wave.scheduler_mode
-            if chosen_wave is not None
-            else schedule.scheduler_mode,
+            "scheduler_mode": (
+                chosen_wave.scheduler_mode if chosen_wave is not None else schedule.scheduler_mode
+            ),
             "expected_task_ids": expected_task_ids,
             "expected_task_names": expected_task_names,
             "parallel_read_task_ids": self._compatibility_wave_group_task_ids(
@@ -1100,28 +1098,39 @@ class AssistantTurnPlanner:
                 )
                 normalized.setdefault(
                     "pending_protocol",
-                    {str(key): value for key, value in pending_protocol_summary.items()}
-                    if isinstance(
-                        (pending_protocol_summary := normalized.get("pending_protocol_summary")),
-                        dict,
-                    )
-                    else {},
+                    (
+                        {str(key): value for key, value in pending_protocol_summary.items()}
+                        if isinstance(
+                            (
+                                pending_protocol_summary := normalized.get(
+                                    "pending_protocol_summary"
+                                )
+                            ),
+                            dict,
+                        )
+                        else {}
+                    ),
                 )
                 normalized.setdefault(
                     "selected_project_memory_entries",
-                    [item for item in active_memory_selection if isinstance(item, str)]
-                    if isinstance(
-                        (active_memory_selection := normalized.get("active_memory_selection")), list
-                    )
-                    else [],
+                    (
+                        [item for item in active_memory_selection if isinstance(item, str)]
+                        if isinstance(
+                            (active_memory_selection := normalized.get("active_memory_selection")),
+                            list,
+                        )
+                        else []
+                    ),
                 )
                 normalized.setdefault(
                     "active_retrieval_focus",
-                    {str(key): value for key, value in active_recall_focus.items()}
-                    if isinstance(
-                        (active_recall_focus := normalized.get("active_recall_focus")), dict
-                    )
-                    else {},
+                    (
+                        {str(key): value for key, value in active_recall_focus.items()}
+                        if isinstance(
+                            (active_recall_focus := normalized.get("active_recall_focus")), dict
+                        )
+                        else {}
+                    ),
                 )
                 return normalized
         workspace_rehydrate = continuity.get("workspace_rehydrate")

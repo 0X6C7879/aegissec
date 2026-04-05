@@ -1,5 +1,5 @@
 ---
-name: transferring-files
+name: file-transfer-techniques
 description: Transfer files between systems using HTTP, SMB, FTP, netcat, base64 encoding, and living-off-the-land techniques for both Linux and Windows. Use when moving tools or exfiltrating data.
 ---
 

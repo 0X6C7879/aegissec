@@ -863,6 +863,9 @@ def test_cancel_session_interrupts_active_generation(client: TestClient) -> None
         event_types = [event["type"] for event in events]
         assert "generation.started" in event_types
         assert "generation.cancelled" in event_types
+        graph_updates = [event for event in events if event["type"] == "graph.updated"]
+        assert graph_updates
+        assert any(event["payload"].get("graph_type") == "attack" for event in graph_updates)
 
         detail_response = client.get(f"/api/sessions/{session_id}")
         detail_payload = api_data(detail_response)
@@ -1103,9 +1106,24 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             "command": "printf 'auto tool' > reports/auto.txt",
             "timeout_seconds": 10,
             "artifact_paths": ["reports/auto.txt"],
+            "message_id": api_data(chat_response)["assistant_message"]["id"],
+            "assistant_message_id": api_data(chat_response)["assistant_message"]["id"],
+            "generation_id": api_data(chat_response)["generation"]["id"],
         }
         assert events[finished_index]["payload"]["tool"] == "execute_kali_command"
         assert events[finished_index]["payload"]["tool_call_id"] == "tool-call-1"
+        assert (
+            events[finished_index]["payload"]["message_id"]
+            == api_data(chat_response)["assistant_message"]["id"]
+        )
+        assert (
+            events[finished_index]["payload"]["assistant_message_id"]
+            == api_data(chat_response)["assistant_message"]["id"]
+        )
+        assert (
+            events[finished_index]["payload"]["generation_id"]
+            == api_data(chat_response)["generation"]["id"]
+        )
         assert isinstance(events[finished_index]["payload"].get("run_id"), str)
         assert isinstance(events[finished_index]["payload"].get("created_at"), str)
         assert (
@@ -1118,6 +1136,7 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert events[finished_index]["payload"]["stderr"] == ""
         assert events[finished_index]["payload"]["artifact_paths"] == ["reports/auto.txt"]
         assert events[finished_index]["payload"]["result"] == {
+            "command": "printf 'auto tool' > reports/auto.txt",
             "status": "success",
             "exit_code": 0,
             "stdout": "runtime command completed",
@@ -1137,6 +1156,21 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             and isinstance(event["payload"].get("assistant_transcript"), list)
         ]
         assert tool_update_payloads
+        graph_update_payloads = [
+            event["payload"] for event in events if event["type"] == "graph.updated"
+        ]
+        assert graph_update_payloads
+        assert any(
+            payload.get("graph_type") == "attack"
+            and payload.get("assistant_message_id")
+            == api_data(chat_response)["assistant_message"]["id"]
+            for payload in graph_update_payloads
+        )
+        assert any(
+            started_index < index < finished_index
+            for index, event in enumerate(events)
+            if event["type"] == "graph.updated"
+        )
         assert any(
             any(segment["kind"] == "tool_call" for segment in payload["assistant_transcript"])
             for payload in tool_update_payloads
@@ -1180,6 +1214,7 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert tool_result_segment["metadata"]["stderr"] == ""
         assert tool_result_segment["metadata"]["artifacts"] == ["reports/auto.txt"]
         assert tool_result_segment["metadata"]["result"] == {
+            "command": "printf 'auto tool' > reports/auto.txt",
             "status": "success",
             "exit_code": 0,
             "stdout": "runtime command completed",
@@ -1290,6 +1325,9 @@ def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClien
         event_types = [event["type"] for event in events]
         assert "generation.failed" in event_types
         assert "assistant.trace" in event_types
+        graph_updates = [event for event in events if event["type"] == "graph.updated"]
+        assert graph_updates
+        assert any(event["payload"].get("graph_type") == "attack" for event in graph_updates)
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -1903,6 +1941,94 @@ Use when performing Active Directory pentest orchestration without using ADscan 
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
+def test_chat_can_execute_skill_via_tool(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "adscan": """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration without using ADscan itself.
+""",
+        },
+    )
+
+    class ExecuteSkillChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+
+            tool_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="skills-call-execute-1",
+                    tool_name="execute_skill",
+                    arguments={"skill_name_or_id": "adscan"},
+                )
+            )
+            execution = tool_result.payload["execution"]
+            skill = tool_result.payload["skill"]
+            return f"{skill['directory_name']}: {execution['status']}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ExecuteSkillChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Execute Skill Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "执行 adscan skill", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 200
+        chat_payload = api_data(chat_response)
+        assert chat_payload["assistant_message"]["content"] == "adscan: prepared"
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        tool_call_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_call" and segment["tool_call_id"] == "skills-call-execute-1"
+        )
+        tool_result_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_result"
+            and segment["tool_call_id"] == "skills-call-execute-1"
+        )
+        assert tool_call_segment["tool_name"] == "execute_skill"
+        assert tool_result_segment["metadata"]["result"]["execution"]["status"] == "prepared"
+        assert tool_result_segment["metadata"]["result"]["skill"]["directory_name"] == "adscan"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
 def test_chat_can_call_mcp_tool_via_dynamic_alias(client: TestClient) -> None:
     class FakeMCPService:
         def __init__(self) -> None:
@@ -2071,6 +2197,7 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
             )
             assert skill_context_prompt is not None
             assert "Auto-selected skill: docx" in skill_context_prompt
+            assert "## Prepared skill context: docx" in skill_context_prompt
             assert "# docx" in skill_context_prompt
             return "已收到 docx 自动技能上下文"
 
@@ -2116,10 +2243,11 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
             "tool_result",
             "output",
         ]
-        assert relevant_segments[0]["tool_name"] == "read_skill_content"
+        assert relevant_segments[0]["tool_name"] == "execute_skill"
         assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "docx"
+        assert relevant_segments[1]["metadata"]["result"]["execution"]["status"] == "prepared"
         assert chat_payload["generation"]["metadata"]["prompt_provenance"]["autorouted_skill"] == {
-            "state": "skill.autoroute.selected",
+            "state": "skill.autoroute.finished",
             "skill": "docx",
             "confidence": 100,
             "reason": "matched explicit skill alias 'docx'",
@@ -2188,6 +2316,7 @@ Create and edit Word documents.
             )
             assert skill_context_prompt is not None
             assert "Auto-selected skill: ctf-web" in skill_context_prompt
+            assert "## Prepared skill context: ctf-web" in skill_context_prompt
             assert "# ctf-web" in skill_context_prompt
             return "已收到 ctf-web 自动技能上下文"
 
@@ -2227,10 +2356,11 @@ Create and edit Word documents.
             if segment["kind"] in {"tool_call", "tool_result", "output"}
         ]
         assert any(segment["text"] == "自动选择 ctf-web" for segment in status_segments)
-        assert relevant_segments[0]["tool_name"] == "read_skill_content"
+        assert relevant_segments[0]["tool_name"] == "execute_skill"
         assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
+        assert relevant_segments[1]["metadata"]["result"]["execution"]["status"] == "prepared"
         assert chat_payload["generation"]["metadata"]["prompt_provenance"]["autorouted_skill"] == {
-            "state": "skill.autoroute.selected",
+            "state": "skill.autoroute.finished",
             "skill": "ctf-web",
             "confidence": 72,
             "reason": "matched alias tokens 'ctf web'",
@@ -2363,7 +2493,7 @@ Create and edit Word documents.
     )
 
     monkeypatch.setattr(
-        "app.compat.skills.service.SkillService.read_skill_content_by_name_or_directory_name",
+        "app.compat.skills.service.SkillService.execute_skill_by_name_or_directory_name",
         lambda self, name_or_slug: (_ for _ in ()).throw(
             SkillContentReadError(f"无法读取 {name_or_slug} 内容")
         ),

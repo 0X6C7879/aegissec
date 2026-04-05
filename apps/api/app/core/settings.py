@@ -17,6 +17,14 @@ def _default_mcp_import_paths() -> list[str]:
     return []
 
 
+def _default_skill_extra_dirs() -> list[str]:
+    return []
+
+
+def _default_skill_compatibility_scan_enabled() -> bool:
+    return False
+
+
 def _default_runtime_profiles() -> dict[str, dict[str, object]]:
     return {"default": RuntimeProfileDefaults.DEFAULT_PROFILE}
 
@@ -93,6 +101,14 @@ class Settings(BaseSettings):
     mcp_import_paths: list[str] = Field(
         default_factory=_default_mcp_import_paths,
         alias="AEGISSEC_MCP_IMPORT_PATHS",
+    )
+    skill_extra_dirs: list[str] = Field(
+        default_factory=_default_skill_extra_dirs,
+        alias="AEGISSEC_SKILL_EXTRA_DIRS",
+    )
+    skill_compatibility_scan_enabled: bool = Field(
+        default_factory=_default_skill_compatibility_scan_enabled,
+        alias="AEGISSEC_SKILL_COMPATIBILITY_SCAN_ENABLED",
     )
     database_url: str = Field(default_factory=_default_database_url, alias="AEGISSEC_DATABASE_URL")
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")

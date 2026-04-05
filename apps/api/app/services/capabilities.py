@@ -116,21 +116,18 @@ class CapabilityFacade:
         )
         return run
 
-    def build_skill_snapshot(self) -> list[dict[str, object]]:
-        return [
-            {
-                "id": record.id,
-                "name": record.name,
-                "source": record.source.value,
-                "scope": record.scope.value,
-                "status": record.status.value,
-                "enabled": record.enabled,
-                "compatibility": list(record.compatibility),
-                "parameter_schema": dict(record.parameter_schema),
-            }
-            for record in self.list_skills()
-            if record.enabled
-        ]
+    def build_skill_snapshot(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        return self._skill_service.build_active_skill_snapshot(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+        )
 
     def build_mcp_snapshot(self) -> list[dict[str, object]]:
         return [
@@ -205,8 +202,11 @@ class CapabilityFacade:
         use_cache: bool = True,
         max_cache_age_seconds: int = 120,
         session_id: str | None = None,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
     ) -> dict[str, object]:
-        if use_cache:
+        cache_allowed = use_cache and not touched_paths and workspace_path is None
+        if cache_allowed:
             cached = self._load_cached_snapshot(
                 max_cache_age_seconds=max_cache_age_seconds,
                 session_id=session_id,
@@ -221,10 +221,15 @@ class CapabilityFacade:
                 return cached
 
         snapshot: dict[str, object] = {
-            "skills": self.build_skill_snapshot(),
+            "skills": self.build_skill_snapshot(
+                touched_paths=touched_paths,
+                workspace_path=workspace_path,
+                session_id=session_id,
+            ),
             "mcp_servers": self.build_mcp_snapshot(),
         }
-        self._save_cached_snapshot(snapshot, session_id=session_id)
+        if cache_allowed:
+            self._save_cached_snapshot(snapshot, session_id=session_id)
         self._log_capability_event(
             event_type="capability.snapshot.refresh",
             message="Built fresh capability snapshot.",
@@ -236,8 +241,18 @@ class CapabilityFacade:
         )
         return snapshot
 
-    def build_skill_context(self) -> dict[str, object]:
-        payload = self._skill_service.build_skill_context_payload()
+    def build_skill_context(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, object]:
+        payload = self._skill_service.build_skill_context_payload(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+        )
         skills = payload.get("skills")
         self._log_capability_event(
             event_type="capability.skills.context",
@@ -268,7 +283,7 @@ class CapabilityFacade:
                 )
                 return cached
 
-        payload = self.build_skill_context()
+        payload = self.build_skill_context(session_id=session_id)
         skills = payload.get("skills")
         mcp_servers = self.build_mcp_snapshot()
         if (not isinstance(skills, list) or not skills) and not mcp_servers:
@@ -285,7 +300,26 @@ class CapabilityFacade:
                         continue
                     label = str(item.get("directory_name") or item.get("name") or "unknown")
                     description = str(item.get("description") or "No description provided.")
-                    lines.append(f"- {label}: {description}")
+                    invocable = str(item.get("invocable", False)).lower()
+                    conditional_suffix = ""
+                    if bool(item.get("conditional")):
+                        conditional_suffix = f" | paths={item.get('paths') or []}"
+                        if bool(item.get("active_due_to_touched_paths")):
+                            conditional_suffix += " | active=touched_paths"
+                    prepared_invocation = item.get("prepared_invocation")
+                    prepared_suffix = ""
+                    if isinstance(prepared_invocation, dict) and prepared_invocation:
+                        shell_expansion_count = prepared_invocation.get("shell_expansion_count", 0)
+                        pending_action_count = prepared_invocation.get("pending_action_count", 0)
+                        prepared_suffix = (
+                            " | prepared="
+                            f"shell_expansions={shell_expansion_count},"
+                            f"pending_actions={pending_action_count}"
+                        )
+                    lines.append(
+                        f"- {label}: {description} | invocable={invocable}{conditional_suffix}"
+                        f"{prepared_suffix}"
+                    )
             if mcp_servers:
                 lines.extend(["", "Enabled MCP capability inventory:"])
                 tool_inventory = self.build_mcp_tool_inventory()
@@ -352,7 +386,7 @@ class CapabilityFacade:
                 )
                 return cached
 
-        payload = self.build_skill_context()
+        payload = self.build_skill_context(session_id=session_id)
         skills = payload.get("skills")
         mcp_tool_inventory = self.build_mcp_tool_inventory()
         if (not isinstance(skills, list) or not skills) and not mcp_tool_inventory:
@@ -373,6 +407,11 @@ class CapabilityFacade:
                         lines.append(f"- {label}: {parameter_schema}")
                     else:
                         lines.append(f"- {label}: no parameters")
+                    prepared_invocation = item.get("prepared_invocation")
+                    if isinstance(prepared_invocation, dict) and prepared_invocation:
+                        lines.append(
+                            f"  prepared_invocation: request={prepared_invocation.get('request')}"
+                        )
             if mcp_tool_inventory:
                 lines.extend(["", "Callable MCP tool input schemas:"])
                 for item in mcp_tool_inventory:
@@ -449,13 +488,16 @@ class CapabilityFacade:
                 inventory_summary,
                 schema_summary,
                 (
-                    "Never call a skill slug or skill name directly as a tool. Skills remain "
-                    "reference documents, so use read_skill_content with the skill slug, name, "
-                    "or id when you need SKILL.md content. Callable tools always include the "
-                    "fixed tools execute_kali_command, list_available_skills, and "
-                    "read_skill_content, plus any MCP tool aliases listed above in the format "
-                    "mcp__{server}__{tool}. MCP resources, prompts, and templates are visible "
-                    "for context but are not callable tools."
+                    "Never call a skill slug or skill name directly as a tool. Skills now expose "
+                    "compiled metadata and prepared invocation hints, but execution still flows "
+                    "through the existing runtime approval and tool pipeline. Use execute_skill "
+                    "when you need the server-side facade to resolve a specific skill and prepare "
+                    "its invocation metadata, and use read_skill_content with the skill slug, "
+                    "name, or id when you only need SKILL.md content. Callable tools always "
+                    "include the fixed tools execute_kali_command, list_available_skills, "
+                    "execute_skill, and read_skill_content, plus any MCP tool aliases listed "
+                    "above in the format mcp__{server}__{tool}. MCP resources, prompts, and "
+                    "templates are visible for context but are not callable tools."
                 ),
             ]
         )

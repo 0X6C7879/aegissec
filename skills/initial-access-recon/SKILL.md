@@ -1,5 +1,5 @@
 ---
-name: performing-reconnaissance
+name: initial-access-recon
 description: Perform OSINT, subdomain enumeration, port scanning, web reconnaissance, email harvesting, and cloud asset discovery for initial access. Use when gathering intelligence or mapping attack surface.
 ---
 

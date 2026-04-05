@@ -1,5 +1,5 @@
 ---
-name: php-audit
+name: PHP_AUDIT
 description: >
   This skill should be used when the user asks to "审计 PHP 代码", "PHP security audit",
   "扫描 PHP 漏洞", "PHP penetration test", "代码安全审计", "run php-audit", "php audit",

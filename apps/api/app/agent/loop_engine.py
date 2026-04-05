@@ -160,9 +160,9 @@ class WorkflowLoopEngine:
                         if resolved_task is not None
                         else run.current_stage
                     ),
-                    task_name=resolved_task.name
-                    if resolved_task is not None
-                    else "workflow-protocol",
+                    task_name=(
+                        resolved_task.name if resolved_task is not None else "workflow-protocol"
+                    ),
                     lifecycle_event=lifecycle_events[-1],
                 )
             self._transcript_runtime.set_last_directive(
@@ -2037,9 +2037,7 @@ class WorkflowLoopEngine:
             status=(
                 "waiting_approval"
                 if approval_required
-                else "blocked"
-                if resolved_status is WorkflowRunStatus.BLOCKED
-                else "completed"
+                else "blocked" if resolved_status is WorkflowRunStatus.BLOCKED else "completed"
             ),
             selected_task_ids=[task.task_id for task in schedule.selected_tasks],
             executed_task_ids=executed_task_ids,

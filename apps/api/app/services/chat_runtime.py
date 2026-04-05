@@ -522,6 +522,7 @@ class OpenAICompatibleChatRuntime:
         return [
             OpenAICompatibleChatRuntime._execute_kali_command_definition(),
             OpenAICompatibleChatRuntime._list_available_skills_definition(),
+            OpenAICompatibleChatRuntime._execute_skill_definition(),
             OpenAICompatibleChatRuntime._read_skill_content_definition(),
             *OpenAICompatibleChatRuntime._mcp_tool_definitions(mcp_tools),
         ]
@@ -617,6 +618,31 @@ class OpenAICompatibleChatRuntime:
                     "Read the real SKILL.md content for a loaded skill by its directory slug, "
                     "display name, or id. Use this before explaining or applying a specific "
                     "skill."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill_name_or_id": {
+                            "type": "string",
+                            "description": "Loaded skill directory slug, skill name, or skill id.",
+                        }
+                    },
+                    "required": ["skill_name_or_id"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    @staticmethod
+    def _execute_skill_definition() -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "execute_skill",
+                "description": (
+                    "Execute the minimal runtime skill facade for a loaded skill by its directory "
+                    "slug, display name, or id. Use this when you want to apply a skill and record "
+                    "a real tool execution instead of only reading SKILL.md."
                 ),
                 "parameters": {
                     "type": "object",
@@ -731,7 +757,7 @@ class OpenAICompatibleChatRuntime:
             return None
         return ToolCallRequest(
             tool_call_id=tool_call_id,
-            tool_name="read_skill_content",
+            tool_name="execute_skill",
             arguments={"skill_name_or_id": skill_identifier},
         )
 
@@ -790,6 +816,23 @@ class OpenAICompatibleChatRuntime:
                 if not isinstance(raw_identifier, str) or not raw_identifier.strip():
                     raise ChatRuntimeError(
                         "LLM read_skill_content tool call did not include a valid skill identifier."
+                    )
+                tool_calls.append(
+                    ToolCallRequest(
+                        tool_call_id=tool_call_id,
+                        tool_name=function_name,
+                        arguments={"skill_name_or_id": raw_identifier.strip()},
+                    )
+                )
+                continue
+
+            if function_name == "execute_skill":
+                raw_identifier = parsed_arguments.get(
+                    "skill_name_or_id", parsed_arguments.get("skill_id")
+                )
+                if not isinstance(raw_identifier, str) or not raw_identifier.strip():
+                    raise ChatRuntimeError(
+                        "LLM execute_skill tool call did not include a valid skill identifier."
                     )
                 tool_calls.append(
                     ToolCallRequest(
@@ -1203,6 +1246,7 @@ class AnthropicChatRuntime:
         return [
             AnthropicChatRuntime._execute_kali_command_definition(),
             AnthropicChatRuntime._list_available_skills_definition(),
+            AnthropicChatRuntime._execute_skill_definition(),
             AnthropicChatRuntime._read_skill_content_definition(),
             *AnthropicChatRuntime._mcp_tool_definitions(mcp_tools),
         ]
@@ -1301,6 +1345,28 @@ class AnthropicChatRuntime:
         }
 
     @staticmethod
+    def _execute_skill_definition() -> dict[str, object]:
+        return {
+            "name": "execute_skill",
+            "description": (
+                "Execute the minimal runtime skill facade for a loaded skill by its directory "
+                "slug, display name, or id. Use this when you want to apply a skill and record "
+                "a real tool execution instead of only reading SKILL.md."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "skill_name_or_id": {
+                        "type": "string",
+                        "description": "Loaded skill directory slug, skill name, or skill id.",
+                    }
+                },
+                "required": ["skill_name_or_id"],
+                "additionalProperties": False,
+            },
+        }
+
+    @staticmethod
     def _extract_response_content(
         response_payload: Mapping[str, object],
     ) -> tuple[str | None, list[dict[str, object]]]:
@@ -1366,6 +1432,19 @@ class AnthropicChatRuntime:
             if not isinstance(raw_identifier, str) or not raw_identifier.strip():
                 raise ChatRuntimeError(
                     "LLM read_skill_content tool call did not include a valid skill identifier."
+                )
+            return ToolCallRequest(
+                tool_call_id=tool_use_id,
+                tool_name=tool_name,
+                arguments={"skill_name_or_id": raw_identifier.strip()},
+            )
+        elif tool_name == "execute_skill":
+            raw_identifier = parsed_arguments.get(
+                "skill_name_or_id", parsed_arguments.get("skill_id")
+            )
+            if not isinstance(raw_identifier, str) or not raw_identifier.strip():
+                raise ChatRuntimeError(
+                    "LLM execute_skill tool call did not include a valid skill identifier."
                 )
             return ToolCallRequest(
                 tool_call_id=tool_use_id,
@@ -1451,7 +1530,8 @@ class AnthropicChatRuntime:
 
         lines = [
             "Loaded Skills Catalog "
-            "(summary only; use read_skill_content for the real SKILL.md body):"
+            "(summary only; use execute_skill to apply a skill or "
+            "read_skill_content for the real SKILL.md body):"
         ]
         for skill in available_skills:
             description = " ".join(skill.description.split()) or "No description provided."
@@ -1465,9 +1545,10 @@ class AnthropicChatRuntime:
         lines.append(
             "If the user asks to list skills, explain a skill, or use a skill, "
             "call the skills tools before asking broad clarification questions. "
-            "Skill names in this catalog are reference entries, not callable tools. "
-            "Fixed callable tool names are execute_kali_command, list_available_skills, "
-            "and read_skill_content. Additional callable MCP tool aliases may appear in the "
+            "Skill names in this catalog are reference entries unless coerced into "
+            "execute_skill by the runtime. Fixed callable tool names are "
+            "execute_kali_command, list_available_skills, execute_skill, and "
+            "read_skill_content. Additional callable MCP tool aliases may appear in the "
             "capability context."
         )
         return "\n".join(lines)

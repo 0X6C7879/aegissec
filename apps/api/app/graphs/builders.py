@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Sequence
 
 from app.db.models import (
+    ChatGeneration,
     GraphEdge,
     GraphNode,
     GraphType,
+    Message,
+    MessageRole,
+    Session,
     SessionGraphEdgeRead,
     SessionGraphNodeRead,
     SessionGraphRead,
     TaskNode,
     TaskNodeStatus,
     WorkflowRun,
+    resolve_message_assistant_transcript,
 )
 
 
@@ -187,6 +193,7 @@ class CausalGraphBuilder:
 
 
 class AttackGraphBuilder:
+    _THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
     _TASK_NODE_TYPE_MAP: dict[str, str] = {
         "context_collect.attack_surface": "surface",
         "context_collect.existing_evidence": "observation",
@@ -651,6 +658,315 @@ class AttackGraphBuilder:
             edges=sorted_edges,
         )
 
+    def build_from_conversation(
+        self,
+        *,
+        session: Session,
+        messages: list[Message],
+        generations: list[ChatGeneration],
+    ) -> SessionGraphRead:
+        nodes_by_id: dict[str, SessionGraphNodeRead] = {}
+        edges_by_id: dict[str, SessionGraphEdgeRead] = {}
+        generation_by_assistant_message_id = {
+            generation.assistant_message_id: generation for generation in generations
+        }
+        ordered_messages = sorted(
+            messages,
+            key=lambda message: (message.sequence, message.created_at, message.id),
+        )
+        if not ordered_messages and not (session.goal or "").strip():
+            return SessionGraphRead(
+                session_id=session.id,
+                workflow_run_id="",
+                graph_type=GraphType.ATTACK,
+                current_stage=None,
+                nodes=[],
+                edges=[],
+            )
+        first_user_message = next(
+            (message for message in ordered_messages if message.role == MessageRole.USER),
+            None,
+        )
+        goal_text = (
+            session.goal
+            or (first_user_message.content.strip() if first_user_message is not None else "")
+            or session.title
+        ).strip()
+
+        def add_node(*, node_id: str, node_type: str, label: str, data: dict[str, object]) -> None:
+            if node_id in nodes_by_id:
+                return
+            nodes_by_id[node_id] = SessionGraphNodeRead(
+                id=node_id,
+                graph_type=GraphType.ATTACK,
+                node_type=node_type,
+                label=label,
+                data=dict(data),
+            )
+
+        def add_edge(*, source: str, target: str, relation: str, data: dict[str, object]) -> None:
+            if source == target or source not in nodes_by_id or target not in nodes_by_id:
+                return
+            edge_id = f"attack:{source}:{relation}:{target}"
+            if edge_id in edges_by_id:
+                return
+            edges_by_id[edge_id] = SessionGraphEdgeRead(
+                id=edge_id,
+                graph_type=GraphType.ATTACK,
+                source=source,
+                target=target,
+                relation=relation,
+                data=dict(data),
+            )
+
+        goal_node_id = "goal:conversation"
+        if goal_text:
+            add_node(
+                node_id=goal_node_id,
+                node_type="goal",
+                label=self._truncate_label(goal_text, fallback="Conversation goal"),
+                data={
+                    "goal": goal_text,
+                    "session_id": session.id,
+                    "source_graphs": ["conversation"],
+                },
+            )
+
+        latest_anchor_node_id = goal_node_id if goal_text else None
+        for message in ordered_messages:
+            if message.role != MessageRole.ASSISTANT:
+                continue
+
+            generation = generation_by_assistant_message_id.get(message.id)
+            transcript = resolve_message_assistant_transcript(message)
+            message_action_id = f"action:message:{message.id}"
+            add_node(
+                node_id=message_action_id,
+                node_type="action",
+                label=self._conversation_action_label(message=message, generation=generation),
+                data={
+                    "message_id": message.id,
+                    "generation_id": generation.id if generation is not None else None,
+                    "generation_action": (
+                        generation.action.value if generation is not None else None
+                    ),
+                    "status": (
+                        generation.status.value
+                        if generation is not None
+                        else (message.status.value if message.status is not None else None)
+                    ),
+                    "source_graphs": ["conversation", "generation"],
+                },
+            )
+            if latest_anchor_node_id is not None:
+                add_edge(
+                    source=latest_anchor_node_id,
+                    target=message_action_id,
+                    relation="attempts",
+                    data={"source_graphs": ["conversation"]},
+                )
+
+            tool_action_ids: dict[str, str] = {}
+            seen_hypothesis_keys: set[str] = set()
+            latest_message_anchor_id = message_action_id
+            latest_message_observation_id: str | None = None
+
+            for segment in transcript:
+                if segment.kind == "tool_call":
+                    action_id = f"action:tool:{segment.tool_call_id or segment.id}"
+                    add_node(
+                        node_id=action_id,
+                        node_type=self._conversation_tool_node_type(segment),
+                        label=self._conversation_tool_action_label(segment),
+                        data={
+                            "message_id": message.id,
+                            "tool_call_id": segment.tool_call_id,
+                            "tool_name": segment.tool_name,
+                            "arguments": dict(segment.metadata_payload),
+                            "command": self._read_segment_command(segment),
+                            "source_graphs": ["conversation", "transcript"],
+                        },
+                    )
+                    add_edge(
+                        source=message_action_id,
+                        target=action_id,
+                        relation="attempts",
+                        data={"source_graphs": ["conversation", "transcript"]},
+                    )
+                    if isinstance(segment.tool_call_id, str) and segment.tool_call_id:
+                        tool_action_ids[segment.tool_call_id] = action_id
+                    latest_message_anchor_id = action_id
+                    continue
+
+                if segment.kind == "reasoning":
+                    reasoning_text = self._extract_reasoning_text(segment.text)
+                    if reasoning_text:
+                        hypothesis_key = reasoning_text.casefold()
+                        if hypothesis_key not in seen_hypothesis_keys:
+                            seen_hypothesis_keys.add(hypothesis_key)
+                            hypothesis_id = f"hypothesis:{message.id}:{segment.id}"
+                            add_node(
+                                node_id=hypothesis_id,
+                                node_type="hypothesis",
+                                label=self._truncate_label(reasoning_text, fallback="Hypothesis"),
+                                data={
+                                    "message_id": message.id,
+                                    "segment_id": segment.id,
+                                    "text": segment.text,
+                                    "source_graphs": ["conversation", "transcript"],
+                                },
+                            )
+                            add_edge(
+                                source=latest_message_anchor_id,
+                                target=hypothesis_id,
+                                relation="hypothesizes",
+                                data={"source_graphs": ["conversation", "transcript"]},
+                            )
+                            latest_message_anchor_id = hypothesis_id
+                    continue
+
+                if segment.kind not in {"tool_result", "output", "error"}:
+                    continue
+
+                observation_id = f"observation:{segment.id}"
+                observation_data = self._conversation_observation_data(
+                    message=message, segment=segment
+                )
+                add_node(
+                    node_id=observation_id,
+                    node_type="observation",
+                    label=self._conversation_observation_label(segment, observation_data),
+                    data=observation_data,
+                )
+                observation_source_id = (
+                    tool_action_ids.get(segment.tool_call_id or "")
+                    or latest_message_anchor_id
+                    or message_action_id
+                )
+                add_edge(
+                    source=observation_source_id,
+                    target=observation_id,
+                    relation=self._conversation_observation_relation(segment),
+                    data={"source_graphs": ["conversation", "transcript"]},
+                )
+                latest_message_anchor_id = observation_id
+                latest_message_observation_id = observation_id
+
+            for index, reasoning_text in enumerate(
+                self._conversation_reasoning_fragments(
+                    message=message,
+                    generation=generation,
+                    transcript=transcript,
+                ),
+                start=1,
+            ):
+                hypothesis_key = reasoning_text.casefold()
+                if hypothesis_key in seen_hypothesis_keys:
+                    continue
+                seen_hypothesis_keys.add(hypothesis_key)
+                hypothesis_id = f"hypothesis:{message.id}:extra:{index}"
+                add_node(
+                    node_id=hypothesis_id,
+                    node_type="hypothesis",
+                    label=self._truncate_label(reasoning_text, fallback="Hypothesis"),
+                    data={
+                        "message_id": message.id,
+                        "generation_id": generation.id if generation is not None else None,
+                        "text": reasoning_text,
+                        "source_graphs": ["conversation", "generation"],
+                    },
+                )
+                add_edge(
+                    source=message_action_id,
+                    target=hypothesis_id,
+                    relation="hypothesizes",
+                    data={"source_graphs": ["conversation", "generation"]},
+                )
+                if latest_message_observation_id is not None:
+                    add_edge(
+                        source=latest_message_observation_id,
+                        target=hypothesis_id,
+                        relation="validates",
+                        data={"source_graphs": ["conversation", "generation"]},
+                    )
+                latest_message_anchor_id = hypothesis_id
+
+            latest_anchor_node_id = latest_message_anchor_id or message_action_id
+
+        outcome_node_id = "outcome:conversation"
+        latest_assistant_message = next(
+            (
+                message
+                for message in reversed(ordered_messages)
+                if message.role == MessageRole.ASSISTANT
+            ),
+            None,
+        )
+        latest_generation = (
+            generation_by_assistant_message_id.get(latest_assistant_message.id)
+            if latest_assistant_message is not None
+            else None
+        )
+        latest_outcome_text = (
+            latest_assistant_message.content.strip() if latest_assistant_message is not None else ""
+        )
+        outcome_status = (
+            latest_generation.status.value
+            if latest_generation is not None
+            else (
+                latest_assistant_message.status.value
+                if latest_assistant_message is not None
+                and latest_assistant_message.status is not None
+                else "completed"
+            )
+        )
+        add_node(
+            node_id=outcome_node_id,
+            node_type="outcome",
+            label=self._truncate_label(
+                self._extract_reasoning_text(latest_outcome_text)
+                or latest_outcome_text
+                or "Conversation outcome",
+                fallback="Conversation outcome",
+            ),
+            data={
+                "session_id": session.id,
+                "message_id": (
+                    latest_assistant_message.id if latest_assistant_message is not None else None
+                ),
+                "generation_id": latest_generation.id if latest_generation is not None else None,
+                "status": outcome_status,
+                "content": latest_outcome_text,
+                "source_graphs": ["conversation", "generation"],
+            },
+        )
+        if latest_anchor_node_id is not None and latest_anchor_node_id in nodes_by_id:
+            add_edge(
+                source=latest_anchor_node_id,
+                target=outcome_node_id,
+                relation="blocks" if outcome_status in {"failed", "cancelled"} else "confirms",
+                data={"source_graphs": ["conversation"]},
+            )
+
+        return SessionGraphRead(
+            session_id=session.id,
+            workflow_run_id="",
+            graph_type=GraphType.ATTACK,
+            current_stage=None,
+            nodes=sorted(
+                nodes_by_id.values(),
+                key=lambda node: (
+                    self._NODE_TYPE_SORT_ORDER.get(node.node_type, 99),
+                    node.label,
+                    node.id,
+                ),
+            ),
+            edges=sorted(
+                edges_by_id.values(),
+                key=lambda edge: (edge.source, edge.relation, edge.target, edge.id),
+            ),
+        )
+
     @staticmethod
     def _task_dependencies(task: TaskNode) -> list[str]:
         raw_dependencies = task.metadata_json.get("depends_on_task_ids", [])
@@ -696,3 +1012,190 @@ class AttackGraphBuilder:
             if task.name == current_stage:
                 return task.id
         return task_stage_to_id.get(current_stage)
+
+    @classmethod
+    def _extract_reasoning_text(cls, value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        without_tags = cls._THINK_TAG_RE.sub(" ", value)
+        return re.sub(r"\s+", " ", without_tags).strip()
+
+    @staticmethod
+    def _truncate_label(value: str, *, fallback: str, max_length: int = 96) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return fallback
+        if len(normalized) <= max_length:
+            return normalized
+        return f"{normalized[: max_length - 1].rstrip()}…"
+
+    @classmethod
+    def _conversation_action_label(
+        cls, *, message: Message, generation: ChatGeneration | None
+    ) -> str:
+        if generation is not None:
+            return cls._truncate_label(
+                f"{generation.action.value} assistant response", fallback="Assistant action"
+            )
+        return cls._truncate_label("assistant response", fallback="Assistant action")
+
+    @classmethod
+    def _conversation_tool_action_label(cls, segment: object) -> str:
+        command = cls._read_segment_command(segment)
+        if command:
+            return cls._truncate_label(command, fallback="Tool action")
+        tool_name = getattr(segment, "tool_name", None)
+        if isinstance(tool_name, str) and tool_name:
+            return cls._truncate_label(tool_name, fallback="Tool action")
+        return "Tool action"
+
+    @staticmethod
+    def _read_segment_command(segment: object) -> str | None:
+        metadata = getattr(segment, "metadata_payload", {})
+        if not isinstance(metadata, dict):
+            return None
+        command = metadata.get("command")
+        if isinstance(command, str) and command.strip():
+            return command.strip()
+        arguments = metadata.get("arguments")
+        if isinstance(arguments, dict):
+            raw_command = arguments.get("command")
+            if isinstance(raw_command, str) and raw_command.strip():
+                return raw_command.strip()
+        result = metadata.get("result")
+        if isinstance(result, dict):
+            raw_command = result.get("command")
+            if isinstance(raw_command, str) and raw_command.strip():
+                return raw_command.strip()
+        text = getattr(segment, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        return None
+
+    @classmethod
+    def _conversation_tool_node_type(cls, segment: object) -> str:
+        tool_name = getattr(segment, "tool_name", None)
+        normalized_tool_name = tool_name.casefold() if isinstance(tool_name, str) else ""
+        if normalized_tool_name == "execute_kali_command":
+            return "exploit"
+
+        metadata = getattr(segment, "metadata_payload", {})
+        skill_identifier: str | None = None
+        if isinstance(metadata, dict):
+            arguments = metadata.get("arguments")
+            if isinstance(arguments, dict):
+                raw_identifier = arguments.get("skill_name_or_id")
+                if isinstance(raw_identifier, str) and raw_identifier.strip():
+                    skill_identifier = raw_identifier.strip().casefold()
+            if skill_identifier is None:
+                result = metadata.get("result")
+                if isinstance(result, dict):
+                    skill = result.get("skill")
+                    if isinstance(skill, dict):
+                        raw_identifier = skill.get("directory_name") or skill.get("name")
+                        if isinstance(raw_identifier, str) and raw_identifier.strip():
+                            skill_identifier = raw_identifier.strip().casefold()
+
+        if normalized_tool_name == "execute_skill" and skill_identifier is not None:
+            offensive_tokens = (
+                "adscan",
+                "adpwn",
+                "bypass",
+                "movement",
+                "privesc",
+                "persistence",
+                "tunnel",
+                "ctf-web",
+                "ctf-pwn",
+                "wooyun",
+                "c2",
+                "evasion",
+            )
+            if any(token in skill_identifier for token in offensive_tokens):
+                return "exploit"
+
+        return "action"
+
+    @classmethod
+    def _conversation_observation_data(
+        cls, *, message: Message, segment: object
+    ) -> dict[str, object]:
+        metadata = getattr(segment, "metadata_payload", {})
+        result = metadata.get("result") if isinstance(metadata, dict) else None
+        payload: dict[str, object] = {
+            "message_id": message.id,
+            "segment_id": getattr(segment, "id", None),
+            "tool_name": getattr(segment, "tool_name", None),
+            "tool_call_id": getattr(segment, "tool_call_id", None),
+            "status": getattr(segment, "status", None),
+            "text": getattr(segment, "text", None),
+            "source_graphs": ["conversation", "transcript"],
+        }
+        if isinstance(metadata, dict):
+            payload.update(metadata)
+        if isinstance(result, dict):
+            payload.update(result)
+        return payload
+
+    @classmethod
+    def _conversation_observation_label(
+        cls, segment: object, observation_data: dict[str, object]
+    ) -> str:
+        for candidate in (
+            observation_data.get("command"),
+            observation_data.get("stdout"),
+            getattr(segment, "text", None),
+            getattr(segment, "tool_name", None),
+        ):
+            normalized = cls._extract_reasoning_text(candidate)
+            if normalized:
+                return cls._truncate_label(normalized, fallback="Observation")
+        return "Observation"
+
+    @staticmethod
+    def _conversation_observation_relation(segment: object) -> str:
+        segment_kind = getattr(segment, "kind", None)
+        segment_status = str(getattr(segment, "status", "") or "")
+        if segment_kind == "error" or segment_status in {"failed", "cancelled"}:
+            return "blocks"
+        if segment_kind == "output":
+            return "observes"
+        return "discovers"
+
+    @classmethod
+    def _conversation_reasoning_fragments(
+        cls,
+        *,
+        message: Message,
+        generation: ChatGeneration | None,
+        transcript: Sequence[object],
+    ) -> list[str]:
+        existing = {
+            cls._extract_reasoning_text(getattr(segment, "text", None)).casefold()
+            for segment in transcript
+            if getattr(segment, "kind", None) == "reasoning"
+            and cls._extract_reasoning_text(getattr(segment, "text", None))
+        }
+        fragments: list[str] = []
+        candidates: list[object] = []
+        if generation is not None and generation.reasoning_summary:
+            candidates.append(generation.reasoning_summary)
+            candidates.extend(generation.reasoning_trace_json)
+        raw_trace = message.metadata_json.get("trace")
+        if isinstance(raw_trace, list):
+            candidates.extend(raw_trace)
+        for candidate in candidates:
+            text = ""
+            if isinstance(candidate, str):
+                text = cls._extract_reasoning_text(candidate)
+            elif isinstance(candidate, dict):
+                for key in ("summary", "safe_summary", "message", "text"):
+                    value = candidate.get(key)
+                    text = cls._extract_reasoning_text(value)
+                    if text:
+                        break
+            if not text or text.casefold() in existing:
+                continue
+            existing.add(text.casefold())
+            fragments.append(text)
+        return fragments

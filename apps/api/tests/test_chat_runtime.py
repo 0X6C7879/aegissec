@@ -92,6 +92,13 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
             {
                 "id": "call-3",
                 "function": {
+                    "name": "execute_skill",
+                    "arguments": {"skill_name_or_id": "adscan"},
+                },
+            },
+            {
+                "id": "call-4",
+                "function": {
                     "name": "read_skill_content",
                     "arguments": {"skill_name_or_id": "adscan"},
                 },
@@ -104,7 +111,8 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     assert [(tool_call.tool_call_id, tool_call.tool_name) for tool_call in tool_calls] == [
         ("call-1", "execute_kali_command"),
         ("call-2", "list_available_skills"),
-        ("call-3", "read_skill_content"),
+        ("call-3", "execute_skill"),
+        ("call-4", "read_skill_content"),
     ]
     assert tool_calls[0].arguments == {
         "command": "pwd",
@@ -113,9 +121,10 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     }
     assert tool_calls[1].arguments == {}
     assert tool_calls[2].arguments == {"skill_name_or_id": "adscan"}
+    assert tool_calls[3].arguments == {"skill_name_or_id": "adscan"}
 
 
-def test_extract_tool_calls_coerces_loaded_skill_name_to_read_skill_content() -> None:
+def test_extract_tool_calls_coerces_loaded_skill_name_to_execute_skill() -> None:
     message: dict[str, object] = {
         "tool_calls": [
             {
@@ -144,7 +153,7 @@ def test_extract_tool_calls_coerces_loaded_skill_name_to_read_skill_content() ->
 
     assert len(tool_calls) == 1
     assert tool_calls[0].tool_call_id == "call-1"
-    assert tool_calls[0].tool_name == "read_skill_content"
+    assert tool_calls[0].tool_name == "execute_skill"
     assert tool_calls[0].arguments == {"skill_name_or_id": "agent-browser"}
 
 
@@ -172,10 +181,11 @@ def test_openai_tool_definitions_include_mcp_tools_and_safe_schema_fallback() ->
     assert function_names[:3] == [
         "execute_kali_command",
         "list_available_skills",
-        "read_skill_content",
+        "execute_skill",
     ]
-    assert function_names[3] == "mcp__burp_suite__scan_target"
-    assert openai_functions[3]["parameters"] == {
+    assert function_names[3] == "read_skill_content"
+    assert function_names[4] == "mcp__burp_suite__scan_target"
+    assert openai_functions[4]["parameters"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": True,
@@ -203,10 +213,11 @@ def test_anthropic_tool_definitions_include_mcp_tools_and_safe_schema_fallback()
     assert [item["name"] for item in definitions[:4]] == [
         "execute_kali_command",
         "list_available_skills",
+        "execute_skill",
         "read_skill_content",
-        "mcp__burp_suite__scan_target",
     ]
-    assert definitions[3]["input_schema"] == {
+    assert definitions[4]["name"] == "mcp__burp_suite__scan_target"
+    assert definitions[4]["input_schema"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": True,
@@ -468,7 +479,7 @@ def test_anthropic_extract_tool_request_from_use_coerces_loaded_skill_name() -> 
     )
 
     assert request.tool_call_id == "call-456"
-    assert request.tool_name == "read_skill_content"
+    assert request.tool_name == "execute_skill"
     assert request.arguments == {"skill_name_or_id": "agent-browser"}
 
 

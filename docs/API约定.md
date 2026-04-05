@@ -125,6 +125,36 @@
 - `POST /api/skills/{skill_id}/enable`
 - `POST /api/skills/{skill_id}/disable`
 
+Skills 相关返回体在保留历史字段的前提下，已增加一组兼容 Claude Code / OpenCode 技能抽象的扩展字段。前端和 Agent 可按需消费，旧调用方可忽略：
+
+- 通用扩展字段：
+  - `source_kind`
+  - `loaded_from`
+  - `invocable`
+  - `conditional`
+  - `active`
+  - `dynamic`
+  - `when_to_use`
+  - `allowed_tools`
+  - `context`
+  - `agent`
+  - `effort`
+  - `aliases`
+  - `paths`
+  - `shell_enabled`
+  - `prepared_invocation`
+  - `resolved_identity`
+- Agent 摘要字段额外包含：
+  - `user_invocable`
+  - `argument_hint`
+  - `active_due_to_touched_paths`
+
+约束：
+
+- `execute_skill` 只返回 server-side prepared invocation，真实执行仍必须进入现有 runtime / approval / tool pipeline。
+- MCP bridge skill 一律 `invocable=false`、`shell_enabled=false`。
+- legacy command 与 bundled 目前是保守桥接语义，不代表已实现独立 slash-command 执行器。
+
 ### 4.6 MCP
 
 - `POST /api/mcp/import`

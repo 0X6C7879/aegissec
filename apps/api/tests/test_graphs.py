@@ -4,6 +4,13 @@ from typing import cast
 
 from fastapi.testclient import TestClient
 
+from app.main import app
+from app.services.chat_runtime import (
+    GenerationCallbacks,
+    ToolCallRequest,
+    ToolExecutor,
+    get_chat_runtime,
+)
 from tests.utils import api_data
 
 
@@ -102,7 +109,7 @@ def test_session_scoped_graph_routes_return_empty_graphs_without_workflow_run(
 ) -> None:
     session_id = _create_session(client)
 
-    for graph_type in ("task", "causal", "evidence", "attack"):
+    for graph_type in ("task", "causal", "evidence"):
         response = client.get(f"/api/sessions/{session_id}/graphs/{graph_type}")
 
         assert response.status_code == 200
@@ -113,6 +120,78 @@ def test_session_scoped_graph_routes_return_empty_graphs_without_workflow_run(
         assert payload["current_stage"] is None
         assert payload["nodes"] == []
         assert payload["edges"] == []
+
+
+def test_attack_graph_route_uses_conversation_fallback_without_workflow_run(
+    client: TestClient,
+) -> None:
+    class ConversationFallbackChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del content, attachments, conversation_messages, available_skills, skill_context_prompt
+            assert execute_tool is not None
+            assert callbacks is not None
+            assert callbacks.on_summary is not None
+            await callbacks.on_summary("<think>先验证 shell 输出</think>")
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="conversation-shell-1",
+                    tool_name="execute_kali_command",
+                    arguments={
+                        "command": "printf 'fallback' > reports/fallback.txt",
+                        "timeout_seconds": 10,
+                        "artifact_paths": ["reports/fallback.txt"],
+                    },
+                )
+            )
+            return "已拿到 shell 结果，继续分析。"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ConversationFallbackChatRuntime()
+
+    try:
+        session_id = _create_session(client)
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={
+                "content": "请直接运行命令并分析结果",
+                "attachments": [],
+                "wait_for_completion": True,
+            },
+        )
+        assert chat_response.status_code == 200
+
+        response = client.get(f"/api/sessions/{session_id}/graphs/attack")
+
+        assert response.status_code == 200
+        payload = api_data(response)
+        assert payload["graph_type"] == "attack"
+        assert payload["workflow_run_id"] == ""
+        assert payload["current_stage"] is None
+        nodes = cast(list[dict[str, object]], payload["nodes"])
+        edges = cast(list[dict[str, object]], payload["edges"])
+        assert any(node["node_type"] == "goal" for node in nodes)
+        assert any(node["node_type"] == "action" for node in nodes)
+        assert any(node["node_type"] == "observation" for node in nodes)
+        assert any(node["node_type"] == "hypothesis" for node in nodes)
+        assert any(node["node_type"] == "outcome" for node in nodes)
+        assert any(
+            "fallback" in str(cast(dict[str, object], node["data"]).get("command", ""))
+            for node in nodes
+        )
+        assert any(
+            edge["relation"] in {"attempts", "discovers", "confirms", "validates"} for edge in edges
+        )
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
 
 
 def test_run_scoped_graph_routes_return_graphs_for_specific_run(client: TestClient) -> None:

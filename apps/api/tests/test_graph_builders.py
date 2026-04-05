@@ -5,8 +5,20 @@ from datetime import UTC, datetime
 from sqlmodel import Session as DBSession
 from sqlmodel import SQLModel, create_engine
 
-from app.db.models import GraphType, Session, TaskNodeStatus, TaskNodeType, WorkflowRunStatus
-from app.db.repositories import GraphRepository, WorkflowRepository
+from app.db.models import (
+    AssistantTranscriptSegment,
+    AssistantTranscriptSegmentKind,
+    GenerationStatus,
+    GraphType,
+    MessageRole,
+    MessageStatus,
+    Session,
+    TaskNodeStatus,
+    TaskNodeType,
+    WorkflowRunStatus,
+    assistant_transcript_to_storage,
+)
+from app.db.repositories import GraphRepository, SessionRepository, WorkflowRepository
 from app.graphs.builders import AttackGraphBuilder, CausalGraphBuilder, TaskGraphBuilder
 
 
@@ -258,6 +270,251 @@ def test_attack_graph_builder_unifies_goal_tasks_observations_and_findings() -> 
         assert (collect.id, "discovers", "trace-attack-1") in relations
         assert ("trace-attack-1", "confirms", "finding-auth") in relations
         assert ("finding-auth", "supports", "finding-impact") in relations
+
+
+def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_reasoning() -> None:
+    with _db_session() as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.create_session(
+            title="Conversation Graph Session",
+            goal="确认登录逻辑中的薄弱点",
+        )
+        branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="帮我分析登录流程里可能的认证绕过点",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=1,
+            turn_index=1,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="<think>优先怀疑 token 校验顺序</think>先检查中间件执行顺序。",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=2,
+            turn_index=1,
+            metadata_json={
+                "trace": [
+                    {
+                        "state": "assistant.summary",
+                        "summary": "<think>优先怀疑 token 校验顺序</think>",
+                    }
+                ]
+            },
+            assistant_transcript_json=assistant_transcript_to_storage(
+                [
+                    AssistantTranscriptSegment(
+                        id="reasoning-1",
+                        sequence=1,
+                        kind=AssistantTranscriptSegmentKind.REASONING,
+                        status="completed",
+                        title="思路进展",
+                        text="<think>优先怀疑 token 校验顺序</think>",
+                        recorded_at=datetime(2026, 4, 5, 10, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 10, 0, tzinfo=UTC),
+                        metadata={"state": "summary.updated"},
+                    ),
+                    AssistantTranscriptSegment(
+                        id="output-1",
+                        sequence=2,
+                        kind=AssistantTranscriptSegmentKind.OUTPUT,
+                        status="completed",
+                        title="正文输出",
+                        text="先检查中间件执行顺序。",
+                        recorded_at=datetime(2026, 4, 5, 10, 1, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 10, 1, tzinfo=UTC),
+                        metadata={},
+                    ),
+                ]
+            ),
+        )
+        generation = repository.create_generation(
+            session_id=session.id,
+            branch_id=branch.id,
+            assistant_message_id=assistant_message.id,
+            user_message_id=user_message.id,
+            reasoning_summary="<think>优先怀疑 token 校验顺序</think>",
+            metadata_json={"source": "chat"},
+        )
+        repository.update_generation(generation, status=GenerationStatus.COMPLETED)
+        assistant_message = repository.update_message(
+            assistant_message,
+            generation_id=generation.id,
+            metadata_json={
+                "trace": [
+                    {
+                        "state": "assistant.summary",
+                        "summary": "<think>优先怀疑 token 校验顺序</think>",
+                    }
+                ]
+            },
+        )
+
+        graph = AttackGraphBuilder().build_from_conversation(
+            session=session,
+            messages=[user_message, assistant_message],
+            generations=[generation],
+        )
+
+        node_types = {node.id: node.node_type for node in graph.nodes}
+        assert graph.workflow_run_id == ""
+        assert node_types
+        assert "goal" in node_types.values()
+        assert "action" in node_types.values()
+        assert "observation" in node_types.values()
+        assert "hypothesis" in node_types.values()
+        assert "outcome" in node_types.values()
+        assert any(
+            "token 校验顺序" in node.label for node in graph.nodes if node.node_type == "hypothesis"
+        )
+        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+        assert any(relation == "attempts" for _, relation, _ in relations)
+        assert any(
+            relation in {"discovers", "observes", "confirms", "validates"}
+            for _, relation, _ in relations
+        )
+
+
+def test_attack_graph_builder_builds_conversation_fallback_for_shell_tool_results() -> None:
+    with _db_session() as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.create_session(title="Shell Graph Session", goal="验证 shell 输出")
+        branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="运行一条命令收集线索",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=1,
+            turn_index=1,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="已记录 shell 输出。",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=2,
+            turn_index=1,
+            assistant_transcript_json=assistant_transcript_to_storage(
+                [
+                    AssistantTranscriptSegment(
+                        id="tool-call-1",
+                        sequence=1,
+                        kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                        status="completed",
+                        title="execute_kali_command",
+                        text="printf 'hello'",
+                        tool_name="execute_kali_command",
+                        tool_call_id="tool-call-1",
+                        recorded_at=datetime(2026, 4, 5, 11, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 11, 0, tzinfo=UTC),
+                        metadata={"arguments": {"command": "printf 'hello'"}},
+                    ),
+                    AssistantTranscriptSegment(
+                        id="tool-result-1",
+                        sequence=2,
+                        kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                        status="completed",
+                        title="execute_kali_command",
+                        text=None,
+                        tool_name="execute_kali_command",
+                        tool_call_id="tool-call-1",
+                        recorded_at=datetime(2026, 4, 5, 11, 1, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 11, 1, tzinfo=UTC),
+                        metadata={
+                            "result": {
+                                "status": "success",
+                                "command": "printf 'hello'",
+                                "stdout": "hello",
+                                "stderr": "",
+                                "exit_code": 0,
+                                "artifacts": ["reports/hello.txt"],
+                            }
+                        },
+                    ),
+                ]
+            ),
+        )
+
+        graph = AttackGraphBuilder().build_from_conversation(
+            session=session,
+            messages=[user_message, assistant_message],
+            generations=[],
+        )
+
+        assert any(node.node_type == "goal" for node in graph.nodes)
+        assert any(
+            node.node_type == "exploit" and "printf 'hello'" in node.label for node in graph.nodes
+        )
+        assert any(
+            node.node_type == "observation" and "hello" in str(node.data.get("stdout"))
+            for node in graph.nodes
+        )
+        assert any(node.node_type == "outcome" for node in graph.nodes)
+        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+        assert any(relation == "discovers" for _, relation, _ in relations)
+
+
+def test_attack_graph_builder_classifies_execute_skill_security_tools_as_exploit() -> None:
+    with _db_session() as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.create_session(title="Skill Graph Session", goal="执行 adscan")
+        branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="自动执行 adscan skill",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=1,
+            turn_index=1,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="已准备 adscan 技能上下文。",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=2,
+            turn_index=1,
+            assistant_transcript_json=assistant_transcript_to_storage(
+                [
+                    AssistantTranscriptSegment(
+                        id="skill-call-1",
+                        sequence=1,
+                        kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                        status="completed",
+                        title="execute_skill",
+                        text="adscan",
+                        tool_name="execute_skill",
+                        tool_call_id="skill-call-1",
+                        recorded_at=datetime(2026, 4, 5, 12, 5, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 5, tzinfo=UTC),
+                        metadata={"arguments": {"skill_name_or_id": "adscan"}},
+                    )
+                ]
+            ),
+        )
+
+        graph = AttackGraphBuilder().build_from_conversation(
+            session=session,
+            messages=[user_message, assistant_message],
+            generations=[],
+        )
+
+    assert any(node.node_type == "exploit" and "adscan" in node.label for node in graph.nodes)
 
 
 def _db_session() -> DBSession:

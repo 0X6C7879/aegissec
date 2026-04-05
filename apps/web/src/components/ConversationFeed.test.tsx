@@ -123,12 +123,13 @@ function buildMessages(
           tool_call_id: "tool-call-1",
           text: "工具执行完成，状态：success。",
           metadata: {
-            stdout: "runtime command completed",
-            stderr: "",
-            artifacts: ["reports/auto.txt"],
             result: {
               status: "success",
+              command: "nmap 127.0.0.1",
               exit_code: 0,
+              stdout: "runtime command completed",
+              stderr: "",
+              artifacts: ["reports/auto.txt"],
             },
           },
         }),
@@ -186,12 +187,13 @@ describe("ConversationFeed", () => {
                 tool_call_id: "tool-call-1",
                 text: "工具执行完成，状态：success。",
                 metadata: {
-                  stdout: "runtime command completed",
-                  stderr: "",
-                  artifacts: ["reports/auto.txt"],
                   result: {
                     status: "success",
+                    command: "nmap 127.0.0.1",
                     exit_code: 0,
+                    stdout: "runtime command completed",
+                    stderr: "",
+                    artifacts: ["reports/auto.txt"],
                   },
                 },
               }),
@@ -280,26 +282,29 @@ describe("ConversationFeed", () => {
                 id: "segment-skill-call",
                 kind: "tool_call",
                 sequence: 1,
-                tool_name: "read_skill_content",
-                tool_call_id: "tool-skill-1",
-                text: "movement_tmux",
+                  tool_name: "execute_skill",
+                  tool_call_id: "tool-skill-1",
+                  text: "movement_tmux",
                 metadata: {
                   arguments: {
                     skill_name_or_id: "movement_tmux",
                   },
                 },
               }),
-              buildTranscriptSegment({
-                id: "segment-skill-result",
-                kind: "tool_result",
-                sequence: 2,
-                tool_name: "read_skill_content",
-                tool_call_id: "tool-skill-1",
-                text: "已读取 movement_tmux 的技能内容。",
-                metadata: {
-                  result: {
-                    skill: {
-                      title: "movement_tmux",
+                buildTranscriptSegment({
+                  id: "segment-skill-result",
+                  kind: "tool_result",
+                  sequence: 2,
+                    tool_name: "execute_skill",
+                    tool_call_id: "tool-skill-1",
+                    text: "已准备 movement_tmux 技能上下文。",
+                    metadata: {
+                      result: {
+                        execution: {
+                          status: "prepared",
+                        },
+                        skill: {
+                          title: "movement_tmux",
                       description: "Use tmux to move laterally.",
                       content: "# movement_tmux\nDetailed instructions",
                     },
@@ -369,6 +374,38 @@ describe("ConversationFeed", () => {
 
     expect(screen.getByText("正在持续更新当前回复。")).toBeInTheDocument();
     expect(document.querySelectorAll(".assistant-inline-cue")).toHaveLength(1);
+  });
+
+  it("preserves think blocks when rendering output-only generation fallback content", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "",
+            assistant_transcript: [],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            steps: [
+              buildStep({
+                id: "step-output-think",
+                kind: "output",
+                phase: "synthesis",
+                status: "completed",
+                delta_text: "<think>preserved</think>最终结论",
+                safe_summary: "",
+              }),
+            ],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getAllByText("preserved").length).toBeGreaterThan(0);
+    expect(screen.getByText("最终结论")).toBeInTheDocument();
   });
 
   it("uses a single icon-only inline edit control for user messages", () => {

@@ -38,6 +38,7 @@ from app.db.models import (
     GenerationStatus,
     GenerationStep,
     GenerationStepRead,
+    GraphType,
     Message,
     MessageEditRequest,
     MessageKind,
@@ -540,6 +541,35 @@ async def _publish_assistant_summary(
         session_id=session_id,
         message=assistant_message,
     )
+    await _publish_attack_graph_updated(
+        event_broker,
+        session_id=session_id,
+        assistant_message=assistant_message,
+    )
+
+
+async def _publish_attack_graph_updated(
+    event_broker: SessionEventBroker,
+    *,
+    session_id: str,
+    assistant_message: Message,
+) -> None:
+    payload: dict[str, object] = {
+        "run_id": "",
+        "graph_type": GraphType.ATTACK.value,
+        "current_stage": None,
+        "message_id": assistant_message.id,
+        "assistant_message_id": assistant_message.id,
+    }
+    if assistant_message.generation_id is not None:
+        payload["generation_id"] = assistant_message.generation_id
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.GRAPH_UPDATED,
+            session_id=session_id,
+            payload=payload,
+        )
+    )
 
 
 async def _publish_assistant_trace(
@@ -850,7 +880,7 @@ def _infer_trace_status(entry: dict[str, object]) -> str:
     state = str(entry.get("state") or "")
     if state in {"generation.completed", "tool.finished", "summary.updated"}:
         return "completed"
-    if state in {"skill.autoroute.selected", "skill.autoroute.skipped"}:
+    if state in {"skill.autoroute.selected", "skill.autoroute.finished", "skill.autoroute.skipped"}:
         return "completed"
     if state in {"generation.failed", "tool.failed"}:
         return "failed"
@@ -858,7 +888,12 @@ def _infer_trace_status(entry: dict[str, object]) -> str:
         return "failed"
     if state == "generation.cancelled":
         return "cancelled"
-    if state in {"generation.started", "tool.started", "skill.autoroute.started"}:
+    if state in {
+        "generation.started",
+        "tool.started",
+        "skill.autoroute.started",
+        "skill.autoroute.executing",
+    }:
         return "running"
     return "completed"
 
@@ -899,6 +934,10 @@ def _infer_trace_summary(entry: dict[str, object]) -> str | None:
         if isinstance(skill_name, str) and skill_name:
             return f"自动选择 {skill_name}"
         return "已自动选择技能"
+    if state == "skill.autoroute.executing":
+        return None
+    if state == "skill.autoroute.finished":
+        return None
     if state == "skill.autoroute.skipped":
         reason = entry.get("reason")
         if reason in {
@@ -1137,7 +1176,7 @@ async def _build_autorouted_skill_context(
     latest_message_text: str,
     recent_context_text: str,
     execute_tool: Any,
-) -> tuple[str | None, dict[str, object]]:
+) -> tuple[str | None, list[dict[str, object]], dict[str, object]]:
     selected_skill, route_report = _resolve_autorouted_skill_candidate(
         available_skills=available_skills,
         latest_message_text=latest_message_text,
@@ -1149,48 +1188,85 @@ async def _build_autorouted_skill_context(
         int(raw_route_confidence) if isinstance(raw_route_confidence, int | float | str) else 0
     )
     route_candidates = route_report.get("candidates")
+    candidate_list = route_candidates if isinstance(route_candidates, list) else []
     if selected_skill is None:
-        return None, {
+        skipped_entry = {
             "state": "skill.autoroute.skipped",
             "reason": route_reason,
             "confidence": route_confidence,
             "top_candidate": route_report.get("top_candidate"),
-            "candidates": route_candidates if isinstance(route_candidates, list) else [],
+            "candidates": candidate_list,
         }
+        return None, [skipped_entry], skipped_entry
 
     skill_identifier = _skill_autoroute_identifier(selected_skill)
     skill_display_name = _skill_autoroute_display_name(selected_skill)
+    selected_entry = {
+        "state": "skill.autoroute.selected",
+        "summary": f"自动选择 {skill_display_name}",
+        "skill": skill_display_name,
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+    }
+    executing_entry = {
+        "state": "skill.autoroute.executing",
+        "skill": skill_display_name,
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+    }
     try:
         tool_result = await execute_tool(
             ToolCallRequest(
                 tool_call_id=f"autoroute-skill-{uuid4()}",
-                tool_name="read_skill_content",
+                tool_name="execute_skill",
                 arguments={"skill_name_or_id": skill_identifier},
             )
         )
     except ChatRuntimeError as exc:
-        return None, {
+        failed_entry = {
             "state": "skill.autoroute.failed",
             "summary": f"自动预载技能失败：{skill_display_name}（{exc}）",
             "skill": skill_display_name,
             "reason": route_reason,
             "confidence": route_confidence,
             "top_candidate": route_report.get("top_candidate"),
-            "candidates": route_candidates if isinstance(route_candidates, list) else [],
+            "candidates": candidate_list,
             "error": str(exc),
         }
+        return None, [selected_entry, executing_entry, failed_entry], failed_entry
 
     skill_payload = tool_result.payload.get("skill")
+    execution_payload = tool_result.payload.get("execution")
+    finished_entry = {
+        "state": "skill.autoroute.finished",
+        "skill": skill_display_name,
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+        "execution": execution_payload if isinstance(execution_payload, dict) else {},
+    }
     if not isinstance(skill_payload, dict):
-        return f"## Auto-selected skill: {skill_display_name}", {
-            "state": "skill.autoroute.selected",
-            "summary": f"自动选择 {skill_display_name}",
-            "skill": skill_display_name,
-            "reason": route_reason,
-            "confidence": route_confidence,
-            "top_candidate": route_report.get("top_candidate"),
-            "candidates": route_candidates if isinstance(route_candidates, list) else [],
-        }
+        return (
+            f"## Auto-selected skill: {skill_display_name}",
+            [selected_entry, executing_entry, finished_entry],
+            finished_entry,
+        )
+
+    prepared_prompt = (
+        execution_payload.get("prepared_prompt") if isinstance(execution_payload, dict) else None
+    )
+    if isinstance(prepared_prompt, str) and prepared_prompt.strip():
+        finished_entry["skill"] = skill_display_name
+        return (
+            prepared_prompt.strip(),
+            [selected_entry, executing_entry, finished_entry],
+            finished_entry,
+        )
 
     directory_name = skill_payload.get("directory_name")
     resolved_skill_name = (
@@ -1219,15 +1295,13 @@ async def _build_autorouted_skill_context(
     if truncated_content:
         context_lines.extend(["", truncated_content])
 
-    return "\n".join(context_lines), {
-        "state": "skill.autoroute.selected",
-        "summary": f"自动选择 {resolved_skill_name}",
-        "skill": resolved_skill_name,
-        "reason": route_reason,
-        "confidence": route_confidence,
-        "top_candidate": route_report.get("top_candidate"),
-        "candidates": route_candidates if isinstance(route_candidates, list) else [],
-    }
+    finished_entry["skill"] = resolved_skill_name
+
+    return (
+        "\n".join(context_lines),
+        [selected_entry, executing_entry, finished_entry],
+        finished_entry,
+    )
 
 
 def _build_tool_executor(
@@ -1240,14 +1314,18 @@ def _build_tool_executor(
     skill_service: SkillService,
     mcp_service: MCPService,
 ) -> Any:
-    available_skills = skill_service.list_loaded_skills_for_agent()
+    available_skills = skill_service.list_loaded_skills_for_agent(session_id=session.id)
 
     async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
         started_payload: dict[str, Any] = {
             "tool": tool_request.tool_name,
             "tool_call_id": tool_request.tool_call_id,
             "arguments": tool_request.arguments,
+            "message_id": assistant_message.id,
+            "assistant_message_id": assistant_message.id,
         }
+        if assistant_message.generation_id is not None:
+            started_payload["generation_id"] = assistant_message.generation_id
         if tool_request.tool_name == "execute_kali_command":
             started_payload.update(
                 {
@@ -1302,6 +1380,11 @@ def _build_tool_executor(
                 session_id=session.id,
                 payload=started_payload,
             )
+        )
+        await _publish_attack_graph_updated(
+            event_broker,
+            session_id=session.id,
+            assistant_message=assistant_message,
         )
         if assistant_message.generation_id is not None:
             repository.create_generation_step(
@@ -1390,6 +1473,11 @@ def _build_tool_executor(
                 session_id=session.id,
                 message=assistant_message,
             )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+            )
 
         if tool_request.tool_name == "execute_kali_command":
             command = tool_request.arguments.get("command")
@@ -1429,6 +1517,7 @@ def _build_tool_executor(
                 raise ChatRuntimeError(str(exc)) from exc
 
             command_result_payload: dict[str, Any] = {
+                "command": run.command,
                 "status": run.status.value,
                 "exit_code": run.exit_code,
                 "stdout": run.stdout,
@@ -1463,6 +1552,8 @@ def _build_tool_executor(
                     "result": command_result_payload,
                     "run_id": run.id,
                     "command": run.command,
+                    "status": run.status.value,
+                    "exit_code": run.exit_code,
                     "stdout": run.stdout,
                     "stderr": run.stderr,
                     "artifacts": [artifact.relative_path for artifact in run.artifacts],
@@ -1506,6 +1597,11 @@ def _build_tool_executor(
                 event_type=SessionEventType.MESSAGE_UPDATED,
                 session_id=session.id,
                 message=assistant_message,
+            )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
             )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
@@ -1582,6 +1678,11 @@ def _build_tool_executor(
                 session_id=session.id,
                 message=assistant_message,
             )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+            )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
                     assistant_message.generation_id,
@@ -1603,21 +1704,21 @@ def _build_tool_executor(
                     )
             return ToolCallResult(tool_name=tool_request.tool_name, payload=skills_result_payload)
 
-        if tool_request.tool_name == "read_skill_content":
+        if tool_request.tool_name == "execute_skill":
             skill_name_or_id = tool_request.arguments.get("skill_name_or_id")
             if not isinstance(skill_name_or_id, str) or not skill_name_or_id.strip():
-                await publish_tool_failed("read_skill_content requires a valid skill identifier.")
-                raise ChatRuntimeError("read_skill_content requires a valid skill identifier.")
+                await publish_tool_failed("execute_skill requires a valid skill identifier.")
+                raise ChatRuntimeError("execute_skill requires a valid skill identifier.")
 
             try:
-                skill_content = skill_service.read_skill_content_by_name_or_directory_name(
-                    skill_name_or_id
+                skill_result_payload = skill_service.execute_skill_by_name_or_directory_name(
+                    skill_name_or_id,
+                    session_id=session.id,
                 )
             except (SkillLookupError, SkillContentReadError) as exc:
                 await publish_tool_failed(str(exc))
                 raise ChatRuntimeError(str(exc)) from exc
 
-            skill_result_payload: dict[str, Any] = {"skill": skill_content.model_dump(mode="json")}
             transcript_segments = _message_transcript_segments(repository, assistant_message)
             tool_call_segment = _find_transcript_segment(
                 transcript_segments,
@@ -1640,7 +1741,19 @@ def _build_tool_executor(
                 text=None,
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
-                metadata_json={"result": skill_result_payload},
+                metadata_json={
+                    "result": skill_result_payload,
+                    **(
+                        {"execution": dict(execution)}
+                        if isinstance((execution := skill_result_payload.get("execution")), dict)
+                        else {}
+                    ),
+                    **(
+                        {"skill": dict(skill_data)}
+                        if isinstance((skill_data := skill_result_payload.get("skill")), dict)
+                        else {}
+                    ),
+                },
             )
             await _publish_assistant_trace(
                 repository,
@@ -1666,6 +1779,107 @@ def _build_tool_executor(
                 session_id=session.id,
                 message=assistant_message,
             )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+            )
+            if assistant_message.generation_id is not None:
+                tool_step = repository.get_open_generation_step(
+                    assistant_message.generation_id,
+                    kind="tool",
+                    tool_call_id=tool_request.tool_call_id,
+                )
+                if tool_step is not None:
+                    skill_result = skill_result_payload.get("skill")
+                    skill_label = (
+                        str(skill_result.get("directory_name"))
+                        if isinstance(skill_result, dict)
+                        and isinstance(skill_result.get("directory_name"), str)
+                        else skill_name_or_id.strip()
+                    )
+                    repository.update_generation_step(
+                        tool_step,
+                        phase="tool_result",
+                        status="completed",
+                        state="finished",
+                        safe_summary=f"已准备 {skill_label} 技能上下文。",
+                        ended_at=utc_now(),
+                        metadata_json={
+                            **dict(tool_step.metadata_json),
+                            "result": skill_result_payload,
+                        },
+                    )
+            return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_result_payload)
+
+        if tool_request.tool_name == "read_skill_content":
+            skill_name_or_id = tool_request.arguments.get("skill_name_or_id")
+            if not isinstance(skill_name_or_id, str) or not skill_name_or_id.strip():
+                await publish_tool_failed("read_skill_content requires a valid skill identifier.")
+                raise ChatRuntimeError("read_skill_content requires a valid skill identifier.")
+
+            try:
+                skill_content = skill_service.read_skill_content_by_name_or_directory_name(
+                    skill_name_or_id
+                )
+            except (SkillLookupError, SkillContentReadError) as exc:
+                await publish_tool_failed(str(exc))
+                raise ChatRuntimeError(str(exc)) from exc
+
+            skill_content_payload: dict[str, Any] = {"skill": skill_content.model_dump(mode="json")}
+            transcript_segments = _message_transcript_segments(repository, assistant_message)
+            tool_call_segment = _find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                tool_call_id=tool_request.tool_call_id,
+            )
+            if tool_call_segment is not None:
+                _update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=tool_call_segment,
+                    status="completed",
+                )
+            _append_transcript_segment(
+                repository,
+                assistant_message=assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status="completed",
+                title=tool_request.tool_name,
+                text=None,
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json={"result": skill_content_payload},
+            )
+            await _publish_assistant_trace(
+                repository,
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+                entry={
+                    "state": "tool.finished",
+                    "tool": tool_request.tool_name,
+                    "tool_call_id": tool_request.tool_call_id,
+                },
+            )
+            await event_broker.publish(
+                SessionEvent(
+                    type=SessionEventType.TOOL_CALL_FINISHED,
+                    session_id=session.id,
+                    payload={**started_payload, "result": skill_content_payload},
+                )
+            )
+            await _publish_message_event(
+                event_broker,
+                event_type=SessionEventType.MESSAGE_UPDATED,
+                session_id=session.id,
+                message=assistant_message,
+            )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
+            )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
                     assistant_message.generation_id,
@@ -1682,10 +1896,10 @@ def _build_tool_executor(
                         ended_at=utc_now(),
                         metadata_json={
                             **dict(tool_step.metadata_json),
-                            "result": skill_result_payload,
+                            "result": skill_content_payload,
                         },
                     )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_result_payload)
+            return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_content_payload)
 
         if tool_request.mcp_server_id is not None and tool_request.mcp_tool_name is not None:
             try:
@@ -1764,6 +1978,11 @@ def _build_tool_executor(
                 event_type=SessionEventType.MESSAGE_UPDATED,
                 session_id=session.id,
                 message=assistant_message,
+            )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=assistant_message,
             )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
@@ -1887,7 +2106,7 @@ async def _process_generation(
             token_budget = generation.metadata_json.get("token_budget")
             total_token_budget = token_budget if isinstance(token_budget, int) else 12_000
 
-            available_skills = skill_service.list_loaded_skills_for_agent()
+            available_skills = skill_service.list_loaded_skills_for_agent(session_id=session.id)
             capability_facade = CapabilityFacade(
                 skill_service=skill_service,
                 mcp_service=mcp_service,
@@ -1978,7 +2197,11 @@ async def _process_generation(
                 assistant_message=assistant_message,
                 entry={"state": "skill.autoroute.started"},
             )
-            autorouted_skill_context, autoroute_trace_entry = await _build_autorouted_skill_context(
+            (
+                autorouted_skill_context,
+                autoroute_trace_entries,
+                autoroute_trace_entry,
+            ) = await _build_autorouted_skill_context(
                 available_skills=available_skills,
                 latest_message_text=latest_message_text,
                 recent_context_text="\n\n".join(
@@ -1988,13 +2211,14 @@ async def _process_generation(
                 ),
                 execute_tool=execute_tool,
             )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry=autoroute_trace_entry,
-            )
+            for trace_entry in autoroute_trace_entries:
+                await _publish_assistant_trace(
+                    repository,
+                    event_broker,
+                    session_id=session.id,
+                    assistant_message=assistant_message,
+                    entry=trace_entry,
+                )
             if autorouted_skill_context:
                 skill_context_prompt = "\n\n".join(
                     part
@@ -2166,6 +2390,11 @@ async def _process_generation(
                     state="completed",
                     ended_at=utc_now(),
                 )
+            await _publish_attack_graph_updated(
+                event_broker,
+                session_id=session.id,
+                assistant_message=loaded_assistant_message,
+            )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
@@ -2229,6 +2458,11 @@ async def _process_generation(
                     assistant_message=assistant_message,
                     entry={"state": "generation.cancelled", "generation_id": generation_id},
                 )
+                await _publish_attack_graph_updated(
+                    event_broker,
+                    session_id=session_id,
+                    assistant_message=assistant_message,
+                )
                 _record_generation_step(
                     repository,
                     assistant_message=assistant_message,
@@ -2286,6 +2520,11 @@ async def _process_generation(
                         "generation_id": generation_id,
                         "error": str(exc),
                     },
+                )
+                await _publish_attack_graph_updated(
+                    event_broker,
+                    session_id=session_id,
+                    assistant_message=assistant_message,
                 )
                 _record_generation_step(
                     repository,

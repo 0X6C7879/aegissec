@@ -1,5 +1,5 @@
 ---
-name: escalating-linux-privileges
+name: linux-privilege-escalation
 description: Escalate privileges on Linux systems using SUID/SGID binaries, capabilities, sudo misconfigurations, cron jobs, kernel exploits, and container escapes. Use when performing Linux post-exploitation or privilege escalation.
 ---
 

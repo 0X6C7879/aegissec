@@ -1,5 +1,5 @@
 ---
-name: cracking-passwords
+name: password-attacks
 description: Crack password hashes using hashcat/john, perform password spraying, brute force authentication, and execute pass-the-hash attacks. Use when cracking credentials or performing password-based attacks.
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: escalating-windows-privileges
+name: windows-privilege-escalation
 description: Escalate privileges on Windows systems using service misconfigurations, DLL hijacking, token manipulation, UAC bypasses, registry exploits, and credential dumping. Use when performing Windows post-exploitation or privilege escalation.
 ---
 

@@ -53,6 +53,12 @@ class GraphService:
             runs = self._workflow_repository.list_runs_for_session(session_id)
             run = runs[0] if runs else None
         if run is None:
+            if graph_type is GraphType.ATTACK:
+                return self._attack_graph_builder.build_from_conversation(
+                    session=session,
+                    messages=self._session_repository.list_messages(session_id),
+                    generations=self._session_repository.list_generations(session_id),
+                )
             return SessionGraphRead(
                 session_id=session_id,
                 workflow_run_id="",

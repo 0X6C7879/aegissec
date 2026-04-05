@@ -1,5 +1,5 @@
 ---
-name: enumerating-network-services
+name: network-service-enumeration
 description: Enumerate and exploit network services including SMB, FTP, SSH, RDP, HTTP, databases (MySQL, MSSQL, PostgreSQL, MongoDB), LDAP, NFS, DNS, and SNMP. Use when testing network service security or performing port-based exploitation.
 ---
 

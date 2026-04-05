@@ -423,6 +423,7 @@ function truncateCommand(value: string, maxLength = 64): string {
 function readSegmentCommand(segment: AssistantTranscriptSegment): string | null {
   const metadata = segment.metadata;
   const argumentsRecord = readNestedRecord(metadata, "arguments");
+  const resultRecord = readNestedRecord(metadata, "result");
   const shellLikeTool =
     segment.tool_name === "execute_kali_command" ||
     segment.tool_name === "bash" ||
@@ -431,6 +432,7 @@ function readSegmentCommand(segment: AssistantTranscriptSegment): string | null 
   return (
     readFirstString(metadata, ["command"]) ??
     readFirstString(argumentsRecord, ["command"]) ??
+    readFirstString(resultRecord, ["command"]) ??
     (shellLikeTool && segment.kind === "tool_call" && segment.text?.trim()
       ? segment.text.trim()
       : null)

@@ -215,13 +215,25 @@ def test_prompt_fragment_builder_builds_core_role_capability_and_task_local_laye
 
 def test_capability_prompt_fragment_builder_coexists_with_existing_prompt_behavior() -> None:
     class _SkillServiceStub:
-        def build_skill_context_payload(self) -> dict[str, object]:
+        def build_active_skill_snapshot(self, **_: object) -> list[dict[str, object]]:
+            return []
+
+        def build_skill_context_payload(self, **_: object) -> dict[str, object]:
             return {
                 "skills": [
                     {
                         "directory_name": "agent-browser",
                         "name": "agent-browser",
                         "description": "Browser automation skill",
+                        "invocable": True,
+                        "aliases": ["browser"],
+                        "allowed_tools": ["execute_skill"],
+                        "argument_hint": "--url <value>",
+                        "shell_enabled": True,
+                        "prepared_invocation": {
+                            "shell_expansion_count": 0,
+                            "pending_action_count": 0,
+                        },
                         "parameter_schema": {"type": "object"},
                     }
                 ]
@@ -242,12 +254,76 @@ def test_capability_prompt_fragment_builder_coexists_with_existing_prompt_behavi
     )
 
     assert "Loaded skills inventory:" in fragment
-    assert "Never call a skill slug or skill name directly as a tool." in fragment
+    assert "compiled metadata and prepared invocation hints" in fragment
+    assert "execute_skill" in fragment
+
+
+def test_capability_facade_build_skill_snapshot_uses_compiled_skill_metadata() -> None:
+    class _SkillServiceStub:
+        def build_active_skill_snapshot(self, **_: object) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "name": "agent-browser",
+                    "description": "Browser automation skill",
+                    "source": "local",
+                    "scope": "project",
+                    "source_kind": "filesystem",
+                    "invocable": True,
+                    "user_invocable": True,
+                    "conditional": False,
+                    "paths": [],
+                    "aliases": ["browser"],
+                    "allowed_tools": ["execute_skill"],
+                    "argument_hint": "--url <value>",
+                    "shell_enabled": True,
+                    "execution_mode": "reference_only",
+                    "resolved_identity": {"relative_path": "agent-browser/SKILL.md"},
+                    "prepared_invocation": {
+                        "request": {"session_id": "session-1"},
+                        "context": {"skill_directory": "skills/agent-browser"},
+                        "shell_expansion_count": 0,
+                        "pending_action_count": 0,
+                        "shell_expansions": [],
+                        "pending_actions": [],
+                    },
+                    "parameter_schema": {"type": "object"},
+                    "compatibility": ["claude"],
+                    "active_due_to_touched_paths": False,
+                }
+            ]
+
+        def build_skill_context_payload(self, **_: object) -> dict[str, object]:
+            return {"skills": []}
+
+    class _MCPServiceStub:
+        def list_servers(self) -> list[object]:
+            return []
+
+    facade = CapabilityFacade(
+        skill_service=cast(SkillService, _SkillServiceStub()),
+        mcp_service=cast(MCPService, _MCPServiceStub()),
+    )
+
+    snapshot = facade.build_skill_snapshot(session_id="session-1")
+    first_snapshot = snapshot[0]
+    prepared_invocation = cast(dict[str, object], first_snapshot["prepared_invocation"])
+    resolved_identity = cast(dict[str, object], first_snapshot["resolved_identity"])
+
+    assert first_snapshot["directory_name"] == "agent-browser"
+    assert first_snapshot["invocable"] is True
+    assert first_snapshot["allowed_tools"] == ["execute_skill"]
+    assert cast(dict[str, object], prepared_invocation["request"])["session_id"] == "session-1"
+    assert resolved_identity["relative_path"] == "agent-browser/SKILL.md"
 
 
 def test_capability_facade_builds_mcp_tool_inventory_and_safe_prompt_text() -> None:
     class _SkillServiceStub:
-        def build_skill_context_payload(self) -> dict[str, object]:
+        def build_active_skill_snapshot(self, **_: object) -> list[dict[str, object]]:
+            return []
+
+        def build_skill_context_payload(self, **_: object) -> dict[str, object]:
             return {"skills": []}
 
     class _MCPServiceStub:

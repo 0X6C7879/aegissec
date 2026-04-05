@@ -63,12 +63,16 @@ class AssistantExecutionContext:
             cycle_id=cycle_id,
             stage=stage if isinstance(stage, str) else None,
             goal=goal,
-            active_task_ids=[item for item in active_task_ids if isinstance(item, str)]
-            if isinstance(active_task_ids, list)
-            else [],
-            active_task_names=[item for item in active_task_names if isinstance(item, str)]
-            if isinstance(active_task_names, list)
-            else [],
+            active_task_ids=(
+                [item for item in active_task_ids if isinstance(item, str)]
+                if isinstance(active_task_ids, list)
+                else []
+            ),
+            active_task_names=(
+                [item for item in active_task_names if isinstance(item, str)]
+                if isinstance(active_task_names, list)
+                else []
+            ),
             pending_continuation_token=(
                 pending_continuation_token
                 if isinstance(pending_continuation_token, str) and pending_continuation_token

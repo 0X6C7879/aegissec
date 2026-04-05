@@ -898,6 +898,22 @@ class SkillRecordRead(SQLModel):
     error_message: str | None = None
     content_hash: str
     last_scanned_at: datetime
+    source_kind: str | None = None
+    loaded_from: str | None = None
+    invocable: bool = True
+    conditional: bool = False
+    active: bool = False
+    dynamic: bool = False
+    when_to_use: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    context: str | None = None
+    agent: str | None = None
+    effort: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    shell_enabled: bool = True
+    prepared_invocation: dict[str, object] | None = None
+    resolved_identity: dict[str, object] = Field(default_factory=dict)
 
 
 class SkillAgentSummaryRead(SQLModel):
@@ -907,6 +923,28 @@ class SkillAgentSummaryRead(SQLModel):
     description: str
     compatibility: list[str] = Field(default_factory=list)
     entry_file: str
+    source: CompatibilitySource | None = None
+    scope: CompatibilityScope | None = None
+    source_kind: str | None = None
+    loaded_from: str | None = None
+    invocable: bool = True
+    user_invocable: bool | None = None
+    conditional: bool = False
+    active: bool = False
+    dynamic: bool = False
+    paths: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    when_to_use: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    context: str | None = None
+    agent: str | None = None
+    effort: str | None = None
+    argument_hint: str | None = None
+    shell_enabled: bool = True
+    execution_mode: str | None = None
+    resolved_identity: dict[str, object] = Field(default_factory=dict)
+    prepared_invocation: dict[str, object] | None = None
+    active_due_to_touched_paths: bool = False
 
 
 class SkillContentRead(SQLModel):
@@ -915,6 +953,24 @@ class SkillContentRead(SQLModel):
     directory_name: str
     entry_file: str
     parameter_schema: dict[str, object] = Field(default_factory=dict)
+    source: CompatibilitySource | None = None
+    scope: CompatibilityScope | None = None
+    source_kind: str | None = None
+    loaded_from: str | None = None
+    invocable: bool = True
+    conditional: bool = False
+    active: bool = False
+    dynamic: bool = False
+    when_to_use: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    context: str | None = None
+    agent: str | None = None
+    effort: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    shell_enabled: bool = True
+    prepared_invocation: dict[str, object] | None = None
+    resolved_identity: dict[str, object] = Field(default_factory=dict)
     content: str
 
 
@@ -1418,7 +1474,7 @@ def to_runtime_execution_run_read(
 
 def to_skill_record_read(record: SkillRecord) -> SkillRecordRead:
     return SkillRecordRead(
-        **{"metadata": dict(record.metadata_json)},
+        metadata_payload=dict(record.metadata_json),  # pyright: ignore[reportCallIssue]
         id=record.id,
         source=record.source,
         scope=record.scope,
@@ -1429,7 +1485,9 @@ def to_skill_record_read(record: SkillRecord) -> SkillRecordRead:
         description=record.description,
         compatibility=list(record.compatibility_json),
         parameter_schema=dict(record.parameter_schema_json),
-        raw_frontmatter=dict(record.raw_frontmatter_json),
+        raw_frontmatter={
+            key: value for key, value in record.raw_frontmatter_json.items() if key != "_compat"
+        },
         status=record.status,
         enabled=record.enabled,
         error_message=record.error_message,

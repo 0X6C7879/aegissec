@@ -303,30 +303,38 @@ def load_workbench_runtime_state(mutable_state: dict[str, object]) -> WorkspaceR
     fallback_state = workspace_rehydrate.get("state")
     return WorkspaceRuntimeState.from_state(
         {
-            "active_stage": _dict(fallback_state).get("active_stage")
-            if isinstance(fallback_state, dict)
-            else None,
-            "active_tasks": _dict(fallback_state).get("active_tasks")
-            if isinstance(fallback_state, dict)
-            else [],
+            "active_stage": (
+                _dict(fallback_state).get("active_stage")
+                if isinstance(fallback_state, dict)
+                else None
+            ),
+            "active_tasks": (
+                _dict(fallback_state).get("active_tasks")
+                if isinstance(fallback_state, dict)
+                else []
+            ),
             "current_turn_id": None,
-            "latest_directive": str(
-                _dict(fallback_state).get("latest_turn_directive") or "continue"
-            )
-            if isinstance(fallback_state, dict)
-            else "continue",
+            "latest_directive": (
+                str(_dict(fallback_state).get("latest_turn_directive") or "continue")
+                if isinstance(fallback_state, dict)
+                else "continue"
+            ),
             "active_continuations": [],
-            "active_recall_focus": _dict(fallback_state).get("active_retrieval_focus")
-            if isinstance(fallback_state, dict)
-            else {},
-            "active_memory_selection": _dict(fallback_state).get("selected_project_memory_entries")
-            if isinstance(fallback_state, dict)
-            else [],
-            "recent_transcript_highlights": _dict(fallback_state).get(
-                "recent_transcript_highlights"
-            )
-            if isinstance(fallback_state, dict)
-            else [],
+            "active_recall_focus": (
+                _dict(fallback_state).get("active_retrieval_focus")
+                if isinstance(fallback_state, dict)
+                else {}
+            ),
+            "active_memory_selection": (
+                _dict(fallback_state).get("selected_project_memory_entries")
+                if isinstance(fallback_state, dict)
+                else []
+            ),
+            "recent_transcript_highlights": (
+                _dict(fallback_state).get("recent_transcript_highlights")
+                if isinstance(fallback_state, dict)
+                else []
+            ),
             "active_capability_summary": str(
                 _dict(fallback_state).get("active_capability_summary")
                 if isinstance(fallback_state, dict)
@@ -334,9 +342,11 @@ def load_workbench_runtime_state(mutable_state: dict[str, object]) -> WorkspaceR
             ),
             "open_questions": [],
             "carry_forward_context": "",
-            "pending_protocol_summary": _dict(fallback_state).get("pending_protocol")
-            if isinstance(fallback_state, dict)
-            else {},
+            "pending_protocol_summary": (
+                _dict(fallback_state).get("pending_protocol")
+                if isinstance(fallback_state, dict)
+                else {}
+            ),
             "latest_assimilation_summary": {},
         }
     )

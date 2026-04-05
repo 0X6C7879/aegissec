@@ -1,5 +1,5 @@
 ---
-name: java-audit-skill
+name: java-audit
 description: |
   AI驱动的Java/前端代码安全审计技能，实现系统化、高覆盖率的漏洞挖掘。使用场景：
   (1) 审计Java/Kotlin项目寻找安全漏洞（0day挖掘、代码审计、安全评估）
@@ -2107,4 +2107,3 @@ foreach ($file in $files) {
 | v1.9.0 | 2026-04-02 | 依赖安全检查重构（mvnrepository.com 联网核实）、新增质量校验脚本 |
 | v1.8.0 | 2026-04-01 | 重构报告格式：h1漏洞名称 + 漏洞列表 + 审计进度 + 三段式漏洞详情 |
 | v1.7.0 | 2026-03-31 | 初始版本
-

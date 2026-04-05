@@ -73,9 +73,7 @@ class PauseRuntimeService:
                 "required_fields": (
                     [item for item in expected_fields if isinstance(item, str)]
                     if isinstance(expected_fields, list)
-                    else ["approved"]
-                    if protocol_kind == "approval"
-                    else ["user_input"]
+                    else ["approved"] if protocol_kind == "approval" else ["user_input"]
                 ),
                 "kind": protocol_kind,
             },
