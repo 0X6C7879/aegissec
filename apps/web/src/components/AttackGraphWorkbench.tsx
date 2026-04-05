@@ -20,6 +20,11 @@ type TimelineItem = {
   value: string;
 };
 
+type DetailItem = {
+  label: string;
+  value: string;
+};
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -280,6 +285,98 @@ function NodeFieldList({ node }: { node: SessionGraphNode }) {
   );
 }
 
+function truncateText(value: string | null, maxLength: number): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function buildOverviewSummary(node: SessionGraphNode): string | null {
+  const summary = readString(node.data.summary);
+  const command = readString(node.data.command) ?? readString(node.data.tool_name) ?? readString(node.data.tool);
+  const stdout = readString(node.data.stdout) ?? readString(node.data.result_text) ?? readString(node.data.observation);
+
+  switch (node.node_type) {
+    case "goal":
+      return null;
+    case "action":
+    case "exploit":
+      return truncateText(command ?? summary, 120);
+    case "observation":
+      return truncateText(stdout ?? summary, 120);
+    case "hypothesis":
+      return truncateText(summary, 120);
+    case "outcome":
+      return truncateText(summary ?? stdout, 120);
+    default:
+      return truncateText(summary, 120);
+  }
+}
+
+function buildHighValueDetails(
+  node: SessionGraphNode,
+): DetailItem[] {
+  const tool = readString(node.data.tool_name) ?? readString(node.data.tool);
+  const command = readString(node.data.command);
+  const result =
+    readString(node.data.stdout) ??
+    readString(node.data.result_text) ??
+    readString(node.data.observation) ??
+    readString(node.data.evidence);
+  const summary = readString(node.data.summary);
+
+  const items: DetailItem[] = [];
+
+  switch (node.node_type) {
+    case "action":
+    case "exploit":
+      if (command) {
+        items.push({ label: "命令", value: truncateText(command, 160) ?? command });
+      }
+      if (tool) {
+        items.push({ label: "工具", value: tool });
+      }
+      if (summary && summary !== command) {
+        items.push({ label: "意图", value: truncateText(summary, 160) ?? summary });
+      }
+      break;
+    case "observation":
+      if (summary) {
+        items.push({ label: "发现", value: truncateText(summary, 160) ?? summary });
+      }
+      if (result && result !== summary) {
+        items.push({ label: "证据", value: truncateText(result, 200) ?? result });
+      }
+      break;
+    case "hypothesis":
+      if (summary) {
+        items.push({ label: "假设", value: truncateText(summary, 160) ?? summary });
+      }
+      break;
+    case "outcome":
+      if (summary) {
+        items.push({ label: "结果", value: truncateText(summary, 160) ?? summary });
+      }
+      if (result && result !== summary) {
+        items.push({ label: "输出", value: truncateText(result, 200) ?? result });
+      }
+      break;
+    default:
+      if (summary) {
+        items.push({ label: "摘要", value: truncateText(summary, 160) ?? summary });
+      }
+      break;
+  }
+
+  return items;
+}
+
 export function AttackGraphWorkbench({
   graph,
   selectedNodeId,
@@ -342,6 +439,10 @@ export function AttackGraphWorkbench({
       safeJsonSummary(selectedNode.data.provenance)
     : null;
   const actionBusy = Boolean(sourceMessageId) && actionBusyId === sourceMessageId;
+  const overviewSummary = selectedNode ? buildOverviewSummary(selectedNode) : null;
+  const highValueDetails = selectedNode ? buildHighValueDetails(selectedNode) : [];
+  const rawSummary = selectedNode ? readString(selectedNode.data.summary) : null;
+  const hasFullSummary = Boolean(rawSummary && rawSummary !== overviewSummary);
 
   useEffect(() => {
     if (!selectedNode) {
@@ -401,22 +502,20 @@ export function AttackGraphWorkbench({
 
             <div className="workspace-node-detail-modal-body">
               <div className="management-subcard">
-                {readString(selectedNode.data.summary) ? (
-                  <p className="session-graph-body-copy">{readString(selectedNode.data.summary)}</p>
-                ) : null}
-                <div className="session-graph-token-row">
+                <div className="workspace-node-overview-header">
+                  <span className="management-token-chip">{formatAttackNodeType(selectedNode.node_type)}</span>
                   <span
                     className={`management-status-badge ${getNodeStatusTone(getNodeStatus(selectedNode))}`}
                   >
                     {formatNodeStatusLabel(getNodeStatus(selectedNode))}
                   </span>
+                </div>
+                {overviewSummary ? <p className="session-graph-body-copy">{overviewSummary}</p> : null}
+                <div className="session-graph-token-row">
                   {readBoolean(selectedNode.data.current) ||
                   readBoolean(selectedNode.data.active) ? (
-                    <span className="management-token-chip">当前节点</span>
+                    <span className="management-token-chip">活跃节点</span>
                   ) : null}
-                  <span className="management-token-chip">
-                    {isEditable ? "可编辑" : "不可编辑"}
-                  </span>
                 </div>
               </div>
 
@@ -470,98 +569,137 @@ export function AttackGraphWorkbench({
 
               <div className="management-subcard workspace-node-detail-section">
                 <div className="management-list-card-header">
-                  <strong className="management-list-title">关键字段</strong>
+                  <strong className="management-list-title">概览</strong>
                 </div>
-                <dl className="session-graph-data-list attack-graph-detail-list">
+                <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
                   <div>
                     <dt>节点类型</dt>
                     <dd>{formatAttackNodeType(selectedNode.node_type)}</dd>
                   </div>
                   <div>
-                    <dt>节点标签</dt>
+                    <dt>标题</dt>
                     <dd>{selectedNode.label}</dd>
                   </div>
                   <div>
-                    <dt>摘要</dt>
-                    <dd>{readString(selectedNode.data.summary) ?? "—"}</dd>
+                    <dt>状态</dt>
+                    <dd>{formatNodeStatusLabel(getNodeStatus(selectedNode))}</dd>
                   </div>
-                  <div>
-                    <dt>source_message_id</dt>
-                    <dd>{sourceMessageId ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>branch_id</dt>
-                    <dd>{branchId ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>generation_id</dt>
-                    <dd>{generationId ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>来源上下文</dt>
-                    <dd>{provenanceText ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>关系上下文</dt>
-                    <dd>{relationContext ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>可编辑</dt>
-                    <dd>{isEditable ? "是" : "否"}</dd>
-                  </div>
+                  {overviewSummary ? (
+                    <div>
+                      <dt>摘要</dt>
+                      <dd>{overviewSummary}</dd>
+                    </div>
+                  ) : null}
                 </dl>
               </div>
 
               <div className="management-subcard workspace-node-detail-section">
                 <div className="management-list-card-header">
-                  <strong className="management-list-title">节点时间线</strong>
-                  <span className="management-status-badge tone-neutral">{timeline.length}</span>
+                  <strong className="management-list-title">高价值内容</strong>
                 </div>
-                {timeline.length === 0 ? (
-                  <p className="management-empty-copy">当前节点没有可展示的时间线字段。</p>
+                {highValueDetails.length === 0 ? (
+                  <p className="management-empty-copy">当前节点没有额外的高价值展示内容。</p>
                 ) : (
-                  <ul className="workspace-node-timeline-list">
-                    {timeline.map((item) => (
-                      <li key={item.id} className="workspace-node-timeline-item">
-                        <span className="workspace-node-timeline-label">{item.label}</span>
-                        <strong className="workspace-node-timeline-value">{item.value}</strong>
-                      </li>
+                  <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
+                    {highValueDetails.map((item) => (
+                      <div key={`${selectedNode.id}-${item.label}`}>
+                        <dt>{item.label}</dt>
+                        <dd>{item.value}</dd>
+                      </div>
                     ))}
-                  </ul>
+                  </dl>
                 )}
               </div>
 
-              <div className="management-subcard workspace-node-detail-section">
-                <div className="management-list-card-header">
-                  <strong className="management-list-title">关联边</strong>
-                  <span className="management-status-badge tone-neutral">
-                    {selectedEdges.length}
-                  </span>
-                </div>
-                {selectedEdges.length === 0 ? (
-                  <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p>
-                ) : (
-                  <ul className="management-list">
-                    {selectedEdges.map((edge) => (
-                      <li key={edge.id} className="management-subcard workspace-graph-edge-card">
-                        <strong className="management-list-title">
-                          {edge.source} → {edge.target}
-                        </strong>
-                        <span className="management-token-chip">
-                          {getRelationLabel(edge.relation)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              <details className="management-subcard workspace-node-advanced-disclosure">
+                <summary className="workspace-node-advanced-summary">高级信息</summary>
+                <div className="workspace-node-advanced-body">
+                  <div className="workspace-node-detail-section">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">调试字段</strong>
+                    </div>
+                    <dl className="session-graph-data-list attack-graph-detail-list">
+                      {hasFullSummary ? (
+                        <div>
+                          <dt>完整摘要</dt>
+                          <dd>{rawSummary}</dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>source_message_id</dt>
+                        <dd>{sourceMessageId ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>branch_id</dt>
+                        <dd>{branchId ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>generation_id</dt>
+                        <dd>{generationId ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>来源上下文</dt>
+                        <dd>{provenanceText ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>关系上下文</dt>
+                        <dd>{relationContext ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>可编辑</dt>
+                        <dd>{isEditable ? "是" : "否"}</dd>
+                      </div>
+                    </dl>
+                  </div>
 
-              <div className="management-subcard workspace-node-detail-section">
-                <div className="management-list-card-header">
-                  <strong className="management-list-title">其他字段</strong>
+                  <div className="workspace-node-detail-section">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">节点时间线</strong>
+                      <span className="management-status-badge tone-neutral">{timeline.length}</span>
+                    </div>
+                    {timeline.length === 0 ? (
+                      <p className="management-empty-copy">当前节点没有可展示的时间线字段。</p>
+                    ) : (
+                      <ul className="workspace-node-timeline-list">
+                        {timeline.map((item) => (
+                          <li key={item.id} className="workspace-node-timeline-item">
+                            <span className="workspace-node-timeline-label">{item.label}</span>
+                            <strong className="workspace-node-timeline-value">{item.value}</strong>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div className="workspace-node-detail-section">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">关联边</strong>
+                      <span className="management-status-badge tone-neutral">{selectedEdges.length}</span>
+                    </div>
+                    {selectedEdges.length === 0 ? (
+                      <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p>
+                    ) : (
+                      <ul className="management-list">
+                        {selectedEdges.map((edge) => (
+                          <li key={edge.id} className="management-subcard workspace-graph-edge-card">
+                            <strong className="management-list-title">
+                              {edge.source} → {edge.target}
+                            </strong>
+                            <span className="management-token-chip">{getRelationLabel(edge.relation)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div className="workspace-node-detail-section">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">其他字段</strong>
+                    </div>
+                    <NodeFieldList node={selectedNode} />
+                  </div>
                 </div>
-                <NodeFieldList node={selectedNode} />
-              </div>
+              </details>
             </div>
           </section>
         </div>

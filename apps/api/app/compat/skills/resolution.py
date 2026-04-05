@@ -142,17 +142,21 @@ def build_skill_candidate_prompt_fragment(
 
     lines = [
         (
-            "Ranked skill shortlist (top candidates from the active compiled-skill set; pick the "
-            "highest-ranked skill unless a lower-ranked skill is more specific to the exact "
-            "subtask):"
+            "Top ranked skills for current context: pick the highest-ranked skill unless a "
+            "lower-ranked skill is more specific to the exact subtask."
         )
     ]
     for index, candidate in enumerate(resolution_result.shortlisted_candidates, start=1):
         skill = candidate.compiled_skill
         score = candidate.total_score
         selected_label = " selected" if candidate.selected else ""
+        display_rank = index
+        global_rank_suffix = ""
+        if candidate.rank and candidate.rank != index:
+            global_rank_suffix = f" global-rank={candidate.rank}"
+        score_label = f"score={score}{selected_label}{global_rank_suffix}"
         lines.append(
-            f"{candidate.rank or index}. {skill.directory_name} [score={score}{selected_label}] "
+            f"{display_rank}. {skill.directory_name} [{score_label}] "
             f"agent={skill.agent or 'n/a'} effort={skill.effort or 'n/a'} "
             f"invocable={str(skill.invocable).lower()}"
         )

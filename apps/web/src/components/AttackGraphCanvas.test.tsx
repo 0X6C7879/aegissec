@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionGraph } from "../types/graphs";
+import { buildAutoLayout } from "./AttackGraphCanvas";
 import {
   buildAttackGraphAutoFocusSignature,
   getAttackGraphAutoFocusNodeId,
@@ -61,5 +62,98 @@ describe("AttackGraphCanvas helpers", () => {
         previousSignature: null,
       }),
     ).toBe(false);
+  });
+
+  it("builds compact node previews and keeps edge labels quiet by default", () => {
+    const graph: SessionGraph = {
+      ...createGraph(),
+      nodes: [
+        {
+          id: "goal-1",
+          graph_type: "attack",
+          node_type: "goal",
+          label: "拿到初始访问",
+          data: {},
+        },
+        {
+          id: "observation-1",
+          graph_type: "attack",
+          node_type: "observation",
+          label: "原始观测",
+          data: {
+            summary: "发现了非常长的一段观测文本，用来验证默认节点不会展示整段摘要，而只保留一行短摘录。",
+          },
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          graph_type: "attack",
+          source: "goal-1",
+          target: "observation-1",
+          relation: "discovers",
+          data: {},
+        },
+      ],
+    };
+
+    const layout = buildAutoLayout(graph, null, null);
+    const observationNode = layout.nodes.find((node) => node.id === "observation-1");
+
+    expect(observationNode?.data.excerpt).toContain("发现了非常长的一段观测文本");
+    expect(observationNode?.data.excerpt?.length).toBeLessThan(70);
+    expect(layout.edges[0]?.label).toBeUndefined();
+  });
+
+  it("shows relation labels for selected-path edges", () => {
+    const graph = createGraph();
+    graph.edges = [
+      {
+        id: "edge-1",
+        graph_type: "attack",
+        source: "surface-1",
+        target: "exploit-1",
+        relation: "attempts",
+        data: {},
+      },
+    ];
+
+    const layout = buildAutoLayout(graph, "exploit-1", "exploit-1");
+
+    expect(layout.edges[0]?.label).toBe("尝试");
+  });
+
+  it("shows relation labels for blocked paths even without selection", () => {
+    const graph = createGraph();
+    graph.nodes = [
+      {
+        id: "action-1",
+        graph_type: "attack",
+        node_type: "action",
+        label: "执行动作",
+        data: { status: "blocked" },
+      },
+      {
+        id: "outcome-1",
+        graph_type: "attack",
+        node_type: "outcome",
+        label: "结果节点",
+        data: { status: "blocked" },
+      },
+    ];
+    graph.edges = [
+      {
+        id: "edge-blocked",
+        graph_type: "attack",
+        source: "action-1",
+        target: "outcome-1",
+        relation: "blocks",
+        data: {},
+      },
+    ];
+
+    const layout = buildAutoLayout(graph, null, null);
+
+    expect(layout.edges[0]?.label).toBe("阻断");
   });
 });

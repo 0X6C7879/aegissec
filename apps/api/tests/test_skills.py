@@ -906,7 +906,7 @@ parameter_schema:
     assert payload["payload"]["skills"][0]["active"] is True
     assert payload["payload"]["skills"][0]["dynamic"] is False
     assert payload["payload"]["skills"][0]["prepared_invocation"]["context"]["skill_directory"]
-    assert "Ranked skill shortlist" in payload["prompt_fragment"]
+    assert "Top ranked skills for current context" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]
     assert (
         "pick the highest-ranked skill unless a lower-ranked skill is more specific"

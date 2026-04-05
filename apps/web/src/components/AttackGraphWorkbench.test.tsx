@@ -60,8 +60,14 @@ function createGraph(): SessionGraph {
 
 function StatefulAttackGraphWorkbench({
   onEditNode = vi.fn().mockResolvedValue(undefined),
+  onRegenerateNode = vi.fn().mockResolvedValue(undefined),
+  onForkNode = vi.fn().mockResolvedValue(undefined),
+  onRollbackNode = vi.fn().mockResolvedValue(undefined),
 }: {
   onEditNode?: ReturnType<typeof vi.fn>;
+  onRegenerateNode?: ReturnType<typeof vi.fn>;
+  onForkNode?: ReturnType<typeof vi.fn>;
+  onRollbackNode?: ReturnType<typeof vi.fn>;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
@@ -72,9 +78,9 @@ function StatefulAttackGraphWorkbench({
       actionBusyId={null}
       onSelectNode={setSelectedNodeId}
       onEditNode={onEditNode}
-      onRegenerateNode={vi.fn().mockResolvedValue(undefined)}
-      onForkNode={vi.fn().mockResolvedValue(undefined)}
-      onRollbackNode={vi.fn().mockResolvedValue(undefined)}
+      onRegenerateNode={onRegenerateNode}
+      onForkNode={onForkNode}
+      onRollbackNode={onRollbackNode}
     />
   );
 }
@@ -100,16 +106,52 @@ describe("AttackGraphWorkbench", () => {
   it("enables node actions when source_message_id exists and closes via close button", async () => {
     const user = userEvent.setup();
     const onEditNode = vi.fn().mockResolvedValue(undefined);
+    const onRegenerateNode = vi.fn().mockResolvedValue(undefined);
+    const onForkNode = vi.fn().mockResolvedValue(undefined);
+    const onRollbackNode = vi.fn().mockResolvedValue(undefined);
 
-    render(<StatefulAttackGraphWorkbench onEditNode={onEditNode} />);
+    render(
+      <StatefulAttackGraphWorkbench
+        onEditNode={onEditNode}
+        onRegenerateNode={onRegenerateNode}
+        onForkNode={onForkNode}
+        onRollbackNode={onRollbackNode}
+      />,
+    );
 
     await user.click(screen.getByRole("button", { name: "可操作节点" }));
     expect(screen.getByRole("dialog", { name: "可操作节点 详情" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.click(screen.getByRole("button", { name: "重生成" }));
+    await user.click(screen.getByRole("button", { name: "分叉" }));
+    await user.click(screen.getByRole("button", { name: "回滚" }));
     await user.click(screen.getByRole("button", { name: "关闭" }));
 
     expect(screen.queryByText("该节点缺少会话锚点，无法直接操作对话")).not.toBeInTheDocument();
     expect(onEditNode).toHaveBeenCalledTimes(1);
+    expect(onRegenerateNode).toHaveBeenCalledTimes(1);
+    expect(onForkNode).toHaveBeenCalledTimes(1);
+    expect(onRollbackNode).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog", { name: "可操作节点 详情" })).not.toBeInTheDocument();
+  });
+
+  it("keeps debug metadata hidden behind advanced information by default", async () => {
+    const user = userEvent.setup();
+
+    render(<StatefulAttackGraphWorkbench />);
+
+    await user.click(screen.getByRole("button", { name: "可操作节点" }));
+
+    expect(screen.getByText("会话动作")).toBeInTheDocument();
+    expect(screen.getByText("高价值内容")).toBeInTheDocument();
+    expect(screen.getByText("source_message_id")).not.toBeVisible();
+    expect(screen.getByText("branch_id")).not.toBeVisible();
+    expect(screen.getByText("generation_id")).not.toBeVisible();
+
+    await user.click(screen.getByText("高级信息"));
+
+    expect(screen.getByText("source_message_id")).toBeVisible();
+    expect(screen.getByText("branch_id")).toBeVisible();
+    expect(screen.getByText("generation_id")).toBeVisible();
   });
 });

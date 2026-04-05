@@ -1441,23 +1441,32 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
         with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
             chat_response = client.post(
                 f"/api/sessions/{session_id}/chat",
-                json={"content": "请给出结果", "attachments": [], "wait_for_completion": True},
+                json={"content": "请给出结果", "attachments": []},
             )
             assert chat_response.status_code == 200
-            chat_payload = api_data(chat_response)
+            initial_chat_payload = api_data(chat_response)
+            assert initial_chat_payload["generation"]["status"] == "queued"
 
             events = []
-            saw_tool_call_failed = False
             while True:
                 event = websocket.receive_json()
                 events.append(event)
-                if event["type"] == "tool.call.failed":
-                    saw_tool_call_failed = True
-                if saw_tool_call_failed and event["type"] in {
-                    "tool.call.failed",
-                    "session.updated",
-                }:
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
                     break
+
+        conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+        assert conversation_response.status_code == 200
+        conversation_payload = api_data(conversation_response)
+        assistant_messages = [
+            message
+            for message in conversation_payload["messages"]
+            if message["role"] == "assistant"
+        ]
+        assert assistant_messages
+        chat_payload = {
+            "assistant_message": assistant_messages[-1],
+            "generation": conversation_payload["generations"][0],
+        }
 
         summary_events = [event for event in events if event["type"] == "assistant.summary"]
         trace_events = [event for event in events if event["type"] == "assistant.trace"]
@@ -2506,7 +2515,7 @@ Create and edit Word documents.
 
     monkeypatch.setattr(
         "app.compat.skills.service.SkillService.execute_skill_by_name_or_directory_name",
-        lambda self, name_or_slug: (_ for _ in ()).throw(
+        lambda self, name_or_slug, **kwargs: (_ for _ in ()).throw(
             SkillContentReadError(f"无法读取 {name_or_slug} 内容")
         ),
     )
@@ -2546,13 +2555,30 @@ Create and edit Word documents.
             json={
                 "content": "请处理这个 docx 文件",
                 "attachments": [],
-                "wait_for_completion": True,
             },
         )
         assert chat_response.status_code == 200
         chat_payload = api_data(chat_response)
+        assert chat_payload["generation"]["status"] == "queued"
 
-        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        detail_payload = None
+        assistant_message = None
+        for _ in range(int(2 / TEST_POLL_INTERVAL_SECONDS)):
+            detail_response = client.get(f"/api/sessions/{session_id}")
+            assert detail_response.status_code == 200
+            detail_payload = api_data(detail_response)
+            assistant_messages = [
+                message for message in detail_payload["messages"] if message["role"] == "assistant"
+            ]
+            if assistant_messages and assistant_messages[-1]["content"] == "继续普通流程":
+                assistant_message = assistant_messages[-1]
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+        assert detail_payload is not None
+        assert assistant_message is not None
+
+        transcript = assistant_message["assistant_transcript"]
         autoroute_feedback_segments = [
             segment for segment in transcript if segment["kind"] in {"status", "error"}
         ]
@@ -2561,7 +2587,7 @@ Create and edit Word documents.
             for segment in autoroute_feedback_segments
         )
         assert any(segment["kind"] == "error" for segment in transcript)
-        assert chat_payload["assistant_message"]["content"] == "继续普通流程"
+        assert assistant_message["content"] == "继续普通流程"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

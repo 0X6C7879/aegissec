@@ -204,9 +204,10 @@ def test_prompt_fragment_shows_ranked_shortlist_with_selection_guidance() -> Non
 
     fragment = build_skill_candidate_prompt_fragment(result)
 
-    assert "Ranked skill shortlist" in fragment
+    assert "Top ranked skills for current context" in fragment
     assert "pick the highest-ranked skill unless a lower-ranked skill is more specific" in fragment
     assert "1. api-audit [score=" in fragment
+    assert "2. always-on [score=" in fragment
     assert "Reference-only ranked candidates" in fragment
 
 

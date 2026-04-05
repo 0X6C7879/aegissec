@@ -99,39 +99,45 @@
 }
 
 .attack-graph-canvas-shell .react-flow__edge-textbg {
-  fill: rgba(255, 255, 252, 0.92);
+  fill: rgba(255, 255, 252, 0.82);
 }
 
 .attack-graph-flow-node {
-  width: 280px;
-  padding: 16px;
-  border-radius: 20px;
-  border: 1px solid rgba(74, 89, 79, 0.16);
-  background:
-    radial-gradient(circle at top right, rgba(36, 88, 69, 0.14), transparent 34%),
-    rgba(255, 255, 252, 0.96);
-  box-shadow: 0 20px 40px rgba(30, 38, 33, 0.08);
+  width: 208px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(74, 89, 79, 0.1);
+  background: rgba(255, 255, 252, 0.94);
+  box-shadow: 0 10px 24px rgba(30, 38, 33, 0.04);
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  transition:
+    border-color var(--transition-base),
+    box-shadow var(--transition-base),
+    opacity var(--transition-base),
+    transform var(--transition-base);
 }
 
 .attack-graph-flow-node-active {
-  border-color: rgba(36, 88, 69, 0.38);
-  box-shadow: 0 22px 44px rgba(24, 58, 45, 0.16);
+  border-color: rgba(36, 88, 69, 0.26);
+  box-shadow: 0 14px 28px rgba(24, 58, 45, 0.08);
 }
 
 .attack-graph-flow-node-latest {
-  outline: 2px solid rgba(154, 114, 39, 0.28);
-  outline-offset: 2px;
+  border-color: rgba(154, 114, 39, 0.22);
 }
 
 .attack-graph-flow-node-selected {
-  border-color: rgba(36, 88, 69, 0.58);
-  box-shadow: 0 0 0 4px rgba(36, 88, 69, 0.12);
+  border-color: rgba(36, 88, 69, 0.48);
+  box-shadow: 0 0 0 3px rgba(36, 88, 69, 0.08);
+  transform: translateY(-1px);
 }
 
-.attack-graph-flow-node-header,
-.attack-graph-flow-node-flags {
+.attack-graph-flow-node-dimmed {
+  opacity: 0.46;
+}
+
+.attack-graph-flow-node-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -140,34 +146,52 @@
 }
 
 .attack-graph-flow-node-type,
-.attack-graph-flow-flag {
+.attack-graph-flow-node-status {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
+  min-height: 20px;
+  padding: 0 8px;
   border-radius: var(--radius-pill);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.attack-graph-flow-flag {
-  background: rgba(154, 114, 39, 0.12);
-  color: var(--warning);
+.attack-graph-flow-node-type {
+  background: rgba(36, 88, 69, 0.08);
+  color: rgba(36, 88, 69, 0.82);
+}
+
+.attack-graph-flow-node-status {
+  background: rgba(74, 89, 79, 0.08);
+  color: var(--text-secondary);
 }
 
 .attack-graph-flow-node-title {
   color: var(--text-strong);
-  font-size: 0.98rem;
-  line-height: 1.45;
+  font-size: 0.88rem;
+  line-height: 1.35;
 }
 
 .attack-graph-flow-node-summary {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.84rem;
-  line-height: 1.55;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.attack-graph-flow-node-goal,
+.attack-graph-flow-node-result,
+.attack-graph-flow-node-critical {
+  opacity: 1;
+}
+
+.attack-graph-flow-node-supporting {
+  background: rgba(255, 255, 252, 0.9);
 }
 
 .attack-graph-flow-handle {
@@ -179,6 +203,10 @@
 
 .attack-graph-detail-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.attack-graph-detail-list-compact {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .attack-graph-detail-list > div {
@@ -7360,12 +7388,42 @@ a {
 }
 
 .workspace-node-detail-modal {
-  width: min(760px, calc(100vw - 32px));
+  width: min(620px, calc(100vw - 32px));
 }
 
 .workspace-node-detail-modal-body {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
+}
+
+.workspace-node-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.workspace-node-advanced-disclosure {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.workspace-node-advanced-summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workspace-node-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-node-advanced-body {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
 }
 
 .workspace-runtime-run-row {

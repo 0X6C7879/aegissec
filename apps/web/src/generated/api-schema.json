@@ -3,7 +3,7 @@
   "info": {
     "title": "aegissec",
     "summary": "Local-first defensive security workbench API",
-    "description": "FastAPI backend for authorized security research workflows, runtime execution, session history, graph persistence, and project-scoped coordination.",
+    "description": "FastAPI backend for authorized security research, runtime execution, session history, graph persistence, and project-scoped coordination.",
     "contact": {
       "name": "AegisSec Local Workspace"
     },
@@ -3414,359 +3414,6 @@
           }
         }
       }
-    },
-    "/api/workflows/templates": {
-      "get": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "List workflow templates",
-        "description": "Return workflow templates that can be started for a session.",
-        "operationId": "list_workflow_templates_api_workflows_templates_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/WorkflowTemplateRead"
-                  },
-                  "type": "array",
-                  "title": "Response List Workflow Templates Api Workflows Templates Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/start": {
-      "post": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Start workflow",
-        "description": "Start a workflow run using an explicit template selection payload.",
-        "operationId": "start_workflow_with_selection_api_workflows_start_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkflowStartRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunDetailRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{template_name}/start": {
-      "post": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Start workflow by template",
-        "description": "Start a workflow run for a session using the template encoded in the route.",
-        "operationId": "start_workflow_api_workflows__template_name__start_post",
-        "parameters": [
-          {
-            "name": "template_name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Template Name"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkflowStartRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunDetailRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{run_id}": {
-      "get": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Get workflow run",
-        "description": "Return the current workflow run state, task DAG, and execution metadata.",
-        "operationId": "get_workflow_api_workflows__run_id__get",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunDetailRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{run_id}/advance": {
-      "post": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Advance workflow run",
-        "description": "Advance the workflow state machine, optionally satisfying an approval gate.",
-        "operationId": "advance_workflow_api_workflows__run_id__advance_post",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkflowAdvanceRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunDetailRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{run_id}/tasks/reorder-priority": {
-      "post": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Reorder Workflow Sibling Task Priorities",
-        "operationId": "reorder_workflow_sibling_task_priorities_api_workflows__run_id__tasks_reorder_priority_post",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkflowTaskPriorityReorderRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunDetailRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{run_id}/export": {
-      "get": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Export Workflow Run",
-        "operationId": "export_workflow_run_api_workflows__run_id__export_get",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunExportRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workflows/{run_id}/replay": {
-      "get": {
-        "tags": [
-          "workflows"
-        ],
-        "summary": "Replay Workflow Run",
-        "operationId": "replay_workflow_run_api_workflows__run_id__replay_get",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunReplayRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -6752,6 +6399,155 @@
             "type": "object",
             "title": "Parameter Schema"
           },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompatibilitySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompatibilityScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "loaded_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded From"
+          },
+          "invocable": {
+            "type": "boolean",
+            "title": "Invocable",
+            "default": true
+          },
+          "conditional": {
+            "type": "boolean",
+            "title": "Conditional",
+            "default": false
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
+          },
+          "dynamic": {
+            "type": "boolean",
+            "title": "Dynamic",
+            "default": false
+          },
+          "when_to_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When To Use"
+          },
+          "allowed_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Tools"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "shell_enabled": {
+            "type": "boolean",
+            "title": "Shell Enabled",
+            "default": true
+          },
+          "prepared_invocation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepared Invocation"
+          },
+          "resolved_identity": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resolved Identity"
+          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -6866,6 +6662,135 @@
             "type": "string",
             "format": "date-time",
             "title": "Last Scanned At"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "loaded_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded From"
+          },
+          "invocable": {
+            "type": "boolean",
+            "title": "Invocable",
+            "default": true
+          },
+          "conditional": {
+            "type": "boolean",
+            "title": "Conditional",
+            "default": false
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
+          },
+          "dynamic": {
+            "type": "boolean",
+            "title": "Dynamic",
+            "default": false
+          },
+          "when_to_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When To Use"
+          },
+          "allowed_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Tools"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "shell_enabled": {
+            "type": "boolean",
+            "title": "Shell Enabled",
+            "default": true
+          },
+          "prepared_invocation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepared Invocation"
+          },
+          "resolved_identity": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resolved Identity"
           }
         },
         "type": "object",
@@ -6893,85 +6818,6 @@
           "ignored"
         ],
         "title": "SkillRecordStatus"
-      },
-      "TaskNodeRead": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "workflow_run_id": {
-            "type": "string",
-            "title": "Workflow Run Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "node_type": {
-            "$ref": "#/components/schemas/TaskNodeType"
-          },
-          "status": {
-            "$ref": "#/components/schemas/TaskNodeStatus"
-          },
-          "sequence": {
-            "type": "integer",
-            "title": "Sequence"
-          },
-          "parent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Id"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Metadata"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "workflow_run_id",
-          "name",
-          "node_type",
-          "status",
-          "sequence",
-          "created_at"
-        ],
-        "title": "TaskNodeRead"
-      },
-      "TaskNodeStatus": {
-        "type": "string",
-        "enum": [
-          "pending",
-          "ready",
-          "in_progress",
-          "blocked",
-          "completed",
-          "failed",
-          "skipped"
-        ],
-        "title": "TaskNodeStatus"
-      },
-      "TaskNodeType": {
-        "type": "string",
-        "enum": [
-          "stage",
-          "task"
-        ],
-        "title": "TaskNodeType"
       },
       "ToggleMCPServerRequest": {
         "properties": {
@@ -7131,480 +6977,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "WorkflowAdvanceRequest": {
-        "properties": {
-          "approve": {
-            "type": "boolean",
-            "title": "Approve",
-            "default": false
-          },
-          "user_input": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Input"
-          },
-          "resume_token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resume Token"
-          },
-          "resolution_payload": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resolution Payload"
-          }
-        },
-        "type": "object",
-        "title": "WorkflowAdvanceRequest"
-      },
-      "WorkflowRunDetailRead": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "session_id": {
-            "type": "string",
-            "title": "Session Id"
-          },
-          "template_name": {
-            "type": "string",
-            "title": "Template Name"
-          },
-          "status": {
-            "$ref": "#/components/schemas/WorkflowRunStatus"
-          },
-          "current_stage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Stage"
-          },
-          "state": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "State"
-          },
-          "last_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Error"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Started At"
-          },
-          "ended_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ended At"
-          },
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/TaskNodeRead"
-            },
-            "type": "array",
-            "title": "Tasks"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "session_id",
-          "template_name",
-          "status",
-          "created_at",
-          "updated_at",
-          "started_at"
-        ],
-        "title": "WorkflowRunDetailRead"
-      },
-      "WorkflowRunExportRead": {
-        "properties": {
-          "run": {
-            "$ref": "#/components/schemas/WorkflowRunDetailRead"
-          },
-          "task_graph": {
-            "$ref": "#/components/schemas/SessionGraphRead"
-          },
-          "evidence_graph": {
-            "$ref": "#/components/schemas/SessionGraphRead"
-          },
-          "causal_graph": {
-            "$ref": "#/components/schemas/SessionGraphRead"
-          },
-          "attack_graph": {
-            "$ref": "#/components/schemas/SessionGraphRead"
-          },
-          "execution_records": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Execution Records"
-          },
-          "replan_records": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Replan Records"
-          },
-          "batch_state": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Batch State"
-          }
-        },
-        "type": "object",
-        "required": [
-          "run",
-          "task_graph",
-          "evidence_graph",
-          "causal_graph",
-          "attack_graph"
-        ],
-        "title": "WorkflowRunExportRead"
-      },
-      "WorkflowRunReplayRead": {
-        "properties": {
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          },
-          "session_id": {
-            "type": "string",
-            "title": "Session Id"
-          },
-          "template_name": {
-            "type": "string",
-            "title": "Template Name"
-          },
-          "status": {
-            "$ref": "#/components/schemas/WorkflowRunStatus"
-          },
-          "current_stage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Stage"
-          },
-          "replay_steps": {
-            "items": {
-              "$ref": "#/components/schemas/WorkflowRunReplayStepRead"
-            },
-            "type": "array",
-            "title": "Replay Steps"
-          },
-          "replan_records": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Replan Records"
-          },
-          "batch_state": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Batch State"
-          }
-        },
-        "type": "object",
-        "required": [
-          "run_id",
-          "session_id",
-          "template_name",
-          "status"
-        ],
-        "title": "WorkflowRunReplayRead"
-      },
-      "WorkflowRunReplayStepRead": {
-        "properties": {
-          "index": {
-            "type": "integer",
-            "title": "Index"
-          },
-          "trace_id": {
-            "type": "string",
-            "title": "Trace Id"
-          },
-          "task_node_id": {
-            "type": "string",
-            "title": "Task Node Id"
-          },
-          "task_name": {
-            "type": "string",
-            "title": "Task Name"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "started_at": {
-            "type": "string",
-            "title": "Started At"
-          },
-          "ended_at": {
-            "type": "string",
-            "title": "Ended At"
-          },
-          "summary": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Summary"
-          },
-          "evidence_confidence": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Evidence Confidence"
-          },
-          "retry_attempt": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retry Attempt"
-          },
-          "batch_cycle": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Batch Cycle"
-          }
-        },
-        "type": "object",
-        "required": [
-          "index",
-          "trace_id",
-          "task_node_id",
-          "task_name",
-          "status",
-          "started_at",
-          "ended_at"
-        ],
-        "title": "WorkflowRunReplayStepRead"
-      },
-      "WorkflowRunStatus": {
-        "type": "string",
-        "enum": [
-          "queued",
-          "running",
-          "needs_approval",
-          "paused",
-          "done",
-          "error",
-          "blocked"
-        ],
-        "title": "WorkflowRunStatus"
-      },
-      "WorkflowStartRequest": {
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "title": "Session Id"
-          },
-          "template_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Template Name"
-          },
-          "seed_message_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Seed Message Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "session_id"
-        ],
-        "title": "WorkflowStartRequest"
-      },
-      "WorkflowTaskPriorityReorderRequest": {
-        "properties": {
-          "ordered_task_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Ordered Task Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "ordered_task_ids"
-        ],
-        "title": "WorkflowTaskPriorityReorderRequest"
-      },
-      "WorkflowTemplateRead": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "title": {
-            "type": "string",
-            "title": "Title"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "template_kinds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Template Kinds"
-          },
-          "stages": {
-            "items": {
-              "$ref": "#/components/schemas/WorkflowTemplateStageRead"
-            },
-            "type": "array",
-            "title": "Stages"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "title",
-          "description"
-        ],
-        "title": "WorkflowTemplateRead"
-      },
-      "WorkflowTemplateStageRead": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "title": {
-            "type": "string",
-            "title": "Title"
-          },
-          "role": {
-            "type": "string",
-            "title": "Role"
-          },
-          "phase": {
-            "type": "string",
-            "title": "Phase"
-          },
-          "role_prompt": {
-            "type": "string",
-            "title": "Role Prompt",
-            "default": ""
-          },
-          "sub_agent_role_prompt": {
-            "type": "string",
-            "title": "Sub Agent Role Prompt",
-            "default": ""
-          },
-          "requires_approval": {
-            "type": "boolean",
-            "title": "Requires Approval",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "title",
-          "role",
-          "phase"
-        ],
-        "title": "WorkflowTemplateStageRead"
       }
     }
   },
@@ -7648,10 +7020,6 @@
     {
       "name": "mcp",
       "description": "MCP server import, inspection, and capability management."
-    },
-    {
-      "name": "workflows",
-      "description": "Workflow templates, runs, approvals, and exports."
     }
   ]
 }

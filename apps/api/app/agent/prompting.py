@@ -120,9 +120,9 @@ def render_skill_catalog_context(available_skills: list[SkillAgentSummaryRead]) 
         return None
     lines = [
         (
-            "Loaded Skills Catalog (ranked shortlist only; use read_skill_content for the real "
-            "SKILL.md body and prefer the highest-ranked skill unless a lower-ranked skill is "
-            "more specific to the exact subtask):"
+            "Top ranked skills for current context (catalog shortlist only; use "
+            "read_skill_content for the real SKILL.md body and prefer the highest-ranked "
+            "skill unless a lower-ranked skill is more specific to the exact subtask):"
         )
     ]
     for index, skill in enumerate(available_skills, start=1):
