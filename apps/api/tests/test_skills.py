@@ -892,6 +892,9 @@ parameter_schema:
     assert response.status_code == 200
     payload = api_data(response)
     assert payload["payload"]["skills"][0]["directory_name"] == "demo"
+    assert payload["payload"]["skills"][0]["selected"] is True
+    assert payload["payload"]["skills"][0]["total_score"] >= 0
+    assert isinstance(payload["payload"]["skills"][0]["score_breakdown"], dict)
     assert payload["payload"]["skills"][0]["parameter_schema"]["type"] == "object"
     assert payload["payload"]["skills"][0]["invocable"] is True
     assert payload["payload"]["skills"][0]["user_invocable"] is True
@@ -903,10 +906,13 @@ parameter_schema:
     assert payload["payload"]["skills"][0]["active"] is True
     assert payload["payload"]["skills"][0]["dynamic"] is False
     assert payload["payload"]["skills"][0]["prepared_invocation"]["context"]["skill_directory"]
-    assert "Loaded skills context" in payload["prompt_fragment"]
+    assert "Ranked skill shortlist" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]
-    assert "compiled metadata only" in payload["prompt_fragment"]
-    assert "prepared=shell_expansions=0,pending_actions=0" in payload["prompt_fragment"]
+    assert (
+        "pick the highest-ranked skill unless a lower-ranked skill is more specific"
+        in payload["prompt_fragment"]
+    )
+    assert payload["payload"]["resolution"]["active_candidate_count"] >= 1
 
 
 def test_skill_toggle_persists_across_rescan_and_scan_aliases(

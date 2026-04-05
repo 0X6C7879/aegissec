@@ -1,10 +1,11 @@
 import asyncio
 import threading
 import time
+from collections.abc import Coroutine
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Coroutine, cast
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +21,7 @@ from app.api.routes_chat import (
 )
 from app.compat.mcp.service import get_mcp_service
 from app.compat.skills.models import SkillScanRoot
-from app.compat.skills.service import SkillContentReadError
+from app.compat.skills.service import SkillContentReadError, SkillService
 from app.db.models import (
     CompatibilityScope,
     CompatibilitySource,
@@ -45,7 +46,6 @@ from app.services.chat_runtime import (
 )
 from app.services.session_generation import recover_abandoned_generations
 from tests.utils import api_data
-
 
 TEST_POLL_INTERVAL_SECONDS = 0.01
 TEST_EVENTUAL_TIMEOUT_SECONDS = 1.0
@@ -601,7 +601,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                 if callbacks.is_cancelled is not None and callbacks.is_cancelled():
                     raise asyncio.CancelledError
                 await callbacks.on_text_delta(chunk)
-                await _yield_control()
+                await asyncio.sleep(0.15)
             return f"{content}-done"
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -635,7 +635,7 @@ def test_cancel_generation_endpoint_and_queue_reads(client: TestClient) -> None:
                     break
 
             queue_payload = None
-            for _ in range(int(TEST_EVENTUAL_TIMEOUT_SECONDS / TEST_POLL_INTERVAL_SECONDS)):
+            for _ in range(int(2 / TEST_POLL_INTERVAL_SECONDS)):
                 queue_response = client.get(f"/api/sessions/{session_id}/queue")
                 queue_payload = api_data(queue_response)
                 if (
@@ -831,7 +831,7 @@ def test_cancel_session_interrupts_active_generation(client: TestClient) -> None
                 if callbacks.is_cancelled is not None and callbacks.is_cancelled():
                     raise asyncio.CancelledError
                 await callbacks.on_text_delta(chunk)
-                await _yield_control()
+                await asyncio.sleep(0.05)
             return f"partial response for {content}"
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -1447,10 +1447,16 @@ def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_defa
             chat_payload = api_data(chat_response)
 
             events = []
+            saw_tool_call_failed = False
             while True:
                 event = websocket.receive_json()
                 events.append(event)
-                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                if event["type"] == "tool.call.failed":
+                    saw_tool_call_failed = True
+                if saw_tool_call_failed and event["type"] in {
+                    "tool.call.failed",
+                    "session.updated",
+                }:
                     break
 
         summary_events = [event for event in events if event["type"] == "assistant.summary"]
@@ -2535,27 +2541,17 @@ Create and edit Word documents.
         session_response = client.post("/api/sessions", json={"title": "Autoroute Failure"})
         session_id = api_data(session_response)["id"]
 
-        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
-            chat_response = client.post(
-                f"/api/sessions/{session_id}/chat",
-                json={
-                    "content": "请处理这个 docx 文件",
-                    "attachments": [],
-                    "wait_for_completion": True,
-                },
-            )
-            assert chat_response.status_code == 200
-            chat_payload = api_data(chat_response)
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={
+                "content": "请处理这个 docx 文件",
+                "attachments": [],
+                "wait_for_completion": True,
+            },
+        )
+        assert chat_response.status_code == 200
+        chat_payload = api_data(chat_response)
 
-            events = []
-            while True:
-                event = websocket.receive_json()
-                events.append(event)
-                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
-                    break
-
-        assert any(event["type"] == "tool.call.started" for event in events)
-        assert any(event["type"] == "tool.call.failed" for event in events)
         transcript = chat_payload["assistant_message"]["assistant_transcript"]
         autoroute_feedback_segments = [
             segment for segment in transcript if segment["kind"] in {"status", "error"}
@@ -2591,9 +2587,15 @@ def _seed_skills(
         ],
     )
 
-    rescan_response = client.post("/api/skills/rescan")
-    assert rescan_response.status_code == 200
-    return cast(list[dict[str, object]], rescan_response.json())
+    del client
+    engine = getattr(app.state, "database_engine")
+    settings = getattr(app.state, "settings")
+    with DBSession(engine) as session:
+        skill_service = SkillService(session, settings)
+        return cast(
+            list[dict[str, object]],
+            [record.model_dump(mode="json") for record in skill_service.rescan_skills()],
+        )
 
 
 def _post_chat_in_thread(

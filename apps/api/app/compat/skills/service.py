@@ -53,6 +53,15 @@ class _CompiledSkillRegistryProtocol(Protocol):
 
 
 class SkillService:
+    DEFAULT_SKILL_SHORTLIST_K = 5
+    DEFAULT_AVAILABLE_TOOLS = (
+        "execute_kali_command",
+        "list_available_skills",
+        "execute_skill",
+        "read_skill_content",
+        "call_mcp_tool",
+    )
+
     def __init__(self, db_session: DBSession, settings: Settings) -> None:
         self._db_session = db_session
         self._repository = SkillRepository(db_session)
@@ -76,15 +85,32 @@ class SkillService:
         touched_paths: list[str] | None = None,
         workspace_path: str | None = None,
         session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
     ) -> list[SkillAgentSummaryRead]:
-        active_skills = self.list_active_compiled_skills(
+        resolution_result = self.resolve_skill_candidates(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
         )
         summaries: list[SkillAgentSummaryRead] = []
         active_due_to_touched_paths = bool(touched_paths)
-        for compiled_skill in active_skills:
+        for candidate in resolution_result.shortlisted_candidates:
+            compiled_skill = candidate.compiled_skill
             prepared_invocation = self._summarize_prepared_invocation(
                 compiled_skill.prepared_invocation
             )
@@ -120,9 +146,125 @@ class SkillService:
                     active_due_to_touched_paths=(
                         active_due_to_touched_paths and compiled_skill.is_conditional
                     ),
+                    rank=candidate.rank,
+                    total_score=candidate.total_score,
+                    score_breakdown=candidate.score_breakdown.to_payload(),
+                    reasons=list(candidate.reasons),
+                    selected=candidate.selected,
+                    rejected_reason=candidate.rejected_reason,
                 )
             )
         return summaries
+
+    def resolve_skill_candidates(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = False,
+    ) -> skill_models.SkillResolutionResult:
+        active_skills = self.list_active_compiled_skills(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+        )
+        request = skill_models.SkillResolutionRequest(
+            touched_paths=self._normalize_touched_paths(
+                touched_paths or [], workspace_path=workspace_path
+            ),
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            workspace_path=workspace_path,
+            available_tools=list(available_tools or self.DEFAULT_AVAILABLE_TOOLS),
+            invocation_arguments=dict(invocation_arguments or {}),
+            top_k=top_k or self.DEFAULT_SKILL_SHORTLIST_K,
+            include_reference_only=include_reference_only,
+        )
+        skill_resolution = import_module("app.compat.skills.resolution")
+        return cast(
+            skill_models.SkillResolutionResult,
+            skill_resolution.resolve_skill_candidates(active_skills, request),
+        )
+
+    def list_ranked_skill_candidates(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = False,
+    ) -> list[dict[str, object]]:
+        resolution_result = self.resolve_skill_candidates(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+        )
+        return [
+            self._resolved_skill_candidate_payload(candidate)
+            for candidate in resolution_result.shortlisted_candidates
+        ]
+
+    def build_ranked_skill_context_prompt_fragment(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = True,
+    ) -> str:
+        resolution_result = self.resolve_skill_candidates(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+        )
+        skill_resolution = import_module("app.compat.skills.resolution")
+        return cast(str, skill_resolution.build_skill_candidate_prompt_fragment(resolution_result))
 
     def find_skill_by_name_or_directory_name(self, name_or_slug: str) -> SkillRecordRead | None:
         record = self._find_skill_record_by_identifier(name_or_slug, loaded_only=True)
@@ -221,20 +363,46 @@ class SkillService:
         touched_paths: list[str] | None = None,
         workspace_path: str | None = None,
         session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        skills = self.list_active_compiled_skills(
+        resolution_result = self.resolve_skill_candidates(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=True,
         )
         return {
             "skills": [
-                self._compiled_skill_payload(
-                    skill,
-                    active_due_to_touched_paths=bool(touched_paths) and skill.is_conditional,
+                self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+                for candidate in resolution_result.shortlisted_candidates
+            ],
+            "reference_skills": [
+                self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+                for candidate in resolution_result.reference_candidates
+            ],
+            "resolution": resolution_result.to_payload(
+                payload_builder=lambda candidate: self._compiled_skill_payload(
+                    candidate.compiled_skill,
+                    active_due_to_touched_paths=bool(touched_paths)
+                    and candidate.compiled_skill.is_conditional,
+                    selected=candidate.selected,
                 )
-                for skill in skills
-            ]
+            ),
         }
 
     def build_skill_context_prompt_fragment(
@@ -243,73 +411,50 @@ class SkillService:
         touched_paths: list[str] | None = None,
         workspace_path: str | None = None,
         session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
     ) -> str:
         payload = self.build_skill_context_payload(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
         )
         skills = payload.get("skills", [])
-        if not isinstance(skills, list) or not skills:
+        reference_skills = payload.get("reference_skills", [])
+        if (not isinstance(skills, list) or not skills) and (
+            not isinstance(reference_skills, list) or not reference_skills
+        ):
             return "No loaded skills are currently available."
         lines = [
-            (
-                "Loaded skills context (compiled metadata only; use execute_skill to prepare a "
-                "skill for runtime/tool execution while preserving approval boundaries):"
+            self.build_ranked_skill_context_prompt_fragment(
+                touched_paths=touched_paths,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                top_k=top_k,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                agent_role=agent_role,
+                workflow_stage=workflow_stage,
+                available_tools=available_tools,
+                invocation_arguments=invocation_arguments,
+                include_reference_only=True,
             )
         ]
-        for item in skills:
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("directory_name") or item.get("name") or "unknown")
-            description = str(item.get("description") or "")
-            parameter_schema = item.get("parameter_schema")
-            aliases = item.get("aliases")
-            allowed_tools = item.get("allowed_tools")
-            argument_hint = item.get("argument_hint")
-            when_to_use = item.get("when_to_use")
-            context_hint = item.get("context")
-            agent = item.get("agent")
-            effort = item.get("effort")
-            invocable = bool(item.get("invocable", False))
-            shell_enabled = bool(item.get("shell_enabled", False))
-            prepared_invocation = item.get("prepared_invocation")
-            conditional_suffix = ""
-            if bool(item.get("conditional")):
-                active_suffix = ""
-                if bool(item.get("active_due_to_touched_paths")):
-                    active_suffix = " | active=touched_paths"
-                conditional_suffix = f" | paths={item.get('paths') or []}{active_suffix}"
-            metadata_suffix_parts = [f"invocable={str(invocable).lower()}"]
-            if isinstance(aliases, list) and aliases:
-                metadata_suffix_parts.append(f"aliases={aliases}")
-            if isinstance(allowed_tools, list) and allowed_tools:
-                metadata_suffix_parts.append(f"allowed_tools={allowed_tools}")
-            if isinstance(argument_hint, str) and argument_hint.strip():
-                metadata_suffix_parts.append(f"argument_hint={argument_hint.strip()}")
-            if isinstance(when_to_use, str) and when_to_use.strip():
-                metadata_suffix_parts.append(f"when_to_use={when_to_use.strip()}")
-            if isinstance(context_hint, str) and context_hint.strip():
-                metadata_suffix_parts.append(f"context={context_hint.strip()}")
-            if isinstance(agent, str) and agent.strip():
-                metadata_suffix_parts.append(f"agent={agent.strip()}")
-            if isinstance(effort, str) and effort.strip():
-                metadata_suffix_parts.append(f"effort={effort.strip()}")
-            metadata_suffix_parts.append(f"shell_enabled={str(shell_enabled).lower()}")
-            if isinstance(prepared_invocation, dict) and prepared_invocation:
-                metadata_suffix_parts.append(
-                    "prepared="
-                    f"shell_expansions={prepared_invocation.get('shell_expansion_count', 0)},"
-                    f"pending_actions={prepared_invocation.get('pending_action_count', 0)}"
-                )
-            metadata_suffix = " | ".join(metadata_suffix_parts)
-            if isinstance(parameter_schema, dict) and parameter_schema:
-                lines.append(
-                    f"- {label}: {description} | parameters={parameter_schema} | "
-                    f"{metadata_suffix}{conditional_suffix}"
-                )
-            else:
-                lines.append(f"- {label}: {description} | {metadata_suffix}{conditional_suffix}")
         lines.append(
             "Never call a skill slug or skill name directly as a tool alias unless the runtime "
             "explicitly exposes it. The fixed callable tool names are execute_kali_command, "
@@ -328,19 +473,28 @@ class SkillService:
         touched_paths: list[str] | None = None,
         workspace_path: str | None = None,
         session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
     ) -> list[dict[str, object]]:
-        skills = self.list_active_compiled_skills(
+        return self.list_ranked_skill_candidates(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
         )
-        return [
-            self._compiled_skill_payload(
-                skill,
-                active_due_to_touched_paths=bool(touched_paths) and skill.is_conditional,
-            )
-            for skill in skills
-        ]
 
     def rescan_skills(self) -> list[SkillRecordRead]:
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
@@ -758,6 +912,7 @@ class SkillService:
         compiled_skill: skill_models.CompiledSkill,
         *,
         active_due_to_touched_paths: bool,
+        selected: bool,
     ) -> dict[str, object]:
         return {
             "id": compiled_skill.skill_id,
@@ -791,7 +946,31 @@ class SkillService:
             ),
             "resolved_identity": self._resolved_identity_payload(compiled_skill),
             "active_due_to_touched_paths": active_due_to_touched_paths,
+            "selected": selected,
         }
+
+    def _resolved_skill_candidate_payload(
+        self,
+        candidate: skill_models.ResolvedSkillCandidate,
+        *,
+        touched_paths: list[str] | None = None,
+    ) -> dict[str, object]:
+        payload = self._compiled_skill_payload(
+            candidate.compiled_skill,
+            active_due_to_touched_paths=bool(touched_paths)
+            and candidate.compiled_skill.is_conditional,
+            selected=candidate.selected,
+        )
+        payload.update(
+            {
+                "rank": candidate.rank,
+                "total_score": candidate.total_score,
+                "score_breakdown": candidate.score_breakdown.to_payload(),
+                "reasons": list(candidate.reasons),
+                "rejected_reason": candidate.rejected_reason,
+            }
+        )
+        return payload
 
     def _discovery_paths(
         self,

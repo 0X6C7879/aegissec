@@ -123,11 +123,13 @@ class CapabilityFacade:
         workspace_path: str | None = None,
         session_id: str | None = None,
     ) -> list[dict[str, object]]:
-        return self._skill_service.build_active_skill_snapshot(
+        payload = self._skill_service.build_skill_context_payload(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
         )
+        skills = payload.get("skills")
+        return skills if isinstance(skills, list) else []
 
     def build_mcp_snapshot(self) -> list[dict[str, object]]:
         return [
@@ -247,11 +249,21 @@ class CapabilityFacade:
         touched_paths: list[str] | None = None,
         workspace_path: str | None = None,
         session_id: str | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
     ) -> dict[str, object]:
         payload = self._skill_service.build_skill_context_payload(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
         )
         skills = payload.get("skills")
         self._log_capability_event(
@@ -267,8 +279,16 @@ class CapabilityFacade:
         use_cache: bool = True,
         max_cache_age_seconds: int = 120,
         session_id: str | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
     ) -> str:
-        if use_cache:
+        context_sensitive = any(
+            part for part in (user_goal, current_prompt, scenario_type, agent_role, workflow_stage)
+        )
+        if use_cache and not context_sensitive:
             cached = self._load_cached_fragment(
                 event_type=self.INVENTORY_SUMMARY_CACHE_EVENT,
                 max_cache_age_seconds=max_cache_age_seconds,
@@ -283,7 +303,14 @@ class CapabilityFacade:
                 )
                 return cached
 
-        payload = self.build_skill_context(session_id=session_id)
+        payload = self.build_skill_context(
+            session_id=session_id,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+        )
         skills = payload.get("skills")
         mcp_servers = self.build_mcp_snapshot()
         if (not isinstance(skills, list) or not skills) and not mcp_servers:
@@ -301,6 +328,9 @@ class CapabilityFacade:
                     label = str(item.get("directory_name") or item.get("name") or "unknown")
                     description = str(item.get("description") or "No description provided.")
                     invocable = str(item.get("invocable", False)).lower()
+                    total_score = item.get("total_score")
+                    reasons = item.get("reasons")
+                    selected = bool(item.get("selected"))
                     conditional_suffix = ""
                     if bool(item.get("conditional")):
                         conditional_suffix = f" | paths={item.get('paths') or []}"
@@ -317,8 +347,23 @@ class CapabilityFacade:
                             f"pending_actions={pending_action_count}"
                         )
                     lines.append(
-                        f"- {label}: {description} | invocable={invocable}{conditional_suffix}"
-                        f"{prepared_suffix}"
+                        f"- {label}: {description} | score={total_score} "
+                        f"| selected={str(selected).lower()} | invocable={invocable}"
+                        f"{conditional_suffix}{prepared_suffix}"
+                    )
+                    if isinstance(reasons, list) and reasons:
+                        lines.append(f"  why: {'; '.join(str(reason) for reason in reasons[:3])}")
+            reference_skills = payload.get("reference_skills")
+            if isinstance(reference_skills, list) and reference_skills:
+                lines.extend(["", "Reference-only ranked skills:"])
+                for item in reference_skills:
+                    if not isinstance(item, dict):
+                        continue
+                    label = str(item.get("directory_name") or item.get("name") or "unknown")
+                    reasons = cast(list[object], item.get("reasons", []))
+                    lines.append(
+                        f"- {label}: score={item.get('total_score')} | invocable=false "
+                        f"| why={' ; '.join(str(reason) for reason in reasons[:2])}"
                     )
             if mcp_servers:
                 lines.extend(["", "Enabled MCP capability inventory:"])
@@ -370,8 +415,16 @@ class CapabilityFacade:
         use_cache: bool = True,
         max_cache_age_seconds: int = 120,
         session_id: str | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
     ) -> str:
-        if use_cache:
+        context_sensitive = any(
+            part for part in (user_goal, current_prompt, scenario_type, agent_role, workflow_stage)
+        )
+        if use_cache and not context_sensitive:
             cached = self._load_cached_fragment(
                 event_type=self.SCHEMA_SUMMARY_CACHE_EVENT,
                 max_cache_age_seconds=max_cache_age_seconds,
@@ -386,7 +439,14 @@ class CapabilityFacade:
                 )
                 return cached
 
-        payload = self.build_skill_context(session_id=session_id)
+        payload = self.build_skill_context(
+            session_id=session_id,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+        )
         skills = payload.get("skills")
         mcp_tool_inventory = self.build_mcp_tool_inventory()
         if (not isinstance(skills, list) or not skills) and not mcp_tool_inventory:
@@ -403,10 +463,11 @@ class CapabilityFacade:
                         continue
                     label = str(item.get("directory_name") or item.get("name") or "unknown")
                     parameter_schema = item.get("parameter_schema")
+                    total_score = item.get("total_score")
                     if isinstance(parameter_schema, dict) and parameter_schema:
-                        lines.append(f"- {label}: {parameter_schema}")
+                        lines.append(f"- {label}: score={total_score} | {parameter_schema}")
                     else:
-                        lines.append(f"- {label}: no parameters")
+                        lines.append(f"- {label}: score={total_score} | no parameters")
                     prepared_invocation = item.get("prepared_invocation")
                     if isinstance(prepared_invocation, dict) and prepared_invocation:
                         lines.append(
@@ -477,11 +538,21 @@ class CapabilityFacade:
             use_cache=use_cache,
             max_cache_age_seconds=max_cache_age_seconds,
             session_id=session_id,
+            user_goal=task_description,
+            current_prompt=projection_summary,
+            scenario_type=task_name,
+            agent_role=role_prompt,
+            workflow_stage=sub_agent_role_prompt,
         )
         schema_summary = self.build_skill_schema_summary(
             use_cache=use_cache,
             max_cache_age_seconds=max_cache_age_seconds,
             session_id=session_id,
+            user_goal=task_description,
+            current_prompt=projection_summary,
+            scenario_type=task_name,
+            agent_role=role_prompt,
+            workflow_stage=sub_agent_role_prompt,
         )
         prompt_fragment = "\n\n".join(
             [
@@ -489,7 +560,8 @@ class CapabilityFacade:
                 schema_summary,
                 (
                     "Never call a skill slug or skill name directly as a tool. Skills now expose "
-                    "compiled metadata and prepared invocation hints, but execution still flows "
+                    "ranked compiled metadata, selection rationale, and prepared invocation "
+                    "hints, but execution still flows "
                     "through the existing runtime approval and tool pipeline. Use execute_skill "
                     "when you need the server-side facade to resolve a specific skill and prepare "
                     "its invocation metadata, and use read_skill_content with the skill slug, "
@@ -545,11 +617,21 @@ class CapabilityFacade:
                 use_cache=use_cache,
                 max_cache_age_seconds=max_cache_age_seconds,
                 session_id=session_id,
+                user_goal=task_description,
+                current_prompt=projection_summary,
+                scenario_type=task_name,
+                agent_role=role_prompt,
+                workflow_stage=sub_agent_role_prompt,
             ),
             "schema_summary": self.build_skill_schema_summary(
                 use_cache=use_cache,
                 max_cache_age_seconds=max_cache_age_seconds,
                 session_id=session_id,
+                user_goal=task_description,
+                current_prompt=projection_summary,
+                scenario_type=task_name,
+                agent_role=role_prompt,
+                workflow_stage=sub_agent_role_prompt,
             ),
             "prompt_fragment": self.build_skill_prompt_fragment(
                 use_cache=use_cache,

@@ -2106,12 +2106,26 @@ async def _process_generation(
             token_budget = generation.metadata_json.get("token_budget")
             total_token_budget = token_budget if isinstance(token_budget, int) else 12_000
 
-            available_skills = skill_service.list_loaded_skills_for_agent(session_id=session.id)
+            latest_message_text = (
+                user_message.content
+                if user_message is not None
+                else loaded_assistant_message.content
+            )
+            available_skills = skill_service.list_loaded_skills_for_agent(
+                session_id=session.id,
+                current_prompt=latest_message_text,
+                scenario_type="chat_turn",
+            )
             capability_facade = CapabilityFacade(
                 skill_service=skill_service,
                 mcp_service=mcp_service,
             )
-            capability_fragments = capability_facade.build_prompt_fragments(session_id=session.id)
+            capability_fragments = capability_facade.build_prompt_fragments(
+                session_id=session.id,
+                task_name="chat_turn",
+                task_description=latest_message_text,
+                projection_summary=latest_message_text,
+            )
             mcp_tool_inventory = capability_facade.build_mcp_tool_inventory()
             execute_tool = _build_tool_executor(
                 session=session,

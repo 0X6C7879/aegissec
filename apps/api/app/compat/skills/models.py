@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -235,6 +236,189 @@ class PreparedSkillInvocation:
             "prompt_text": self.prompt_text,
             "shell_expansions": [item.to_payload() for item in self.shell_expansions],
             "pending_actions": [item.to_payload() for item in self.pending_actions],
+        }
+
+
+@dataclass(slots=True)
+class SkillCandidateScoreBreakdown:
+    path_score: int = 0
+    agent_score: int = 0
+    when_to_use_score: int = 0
+    compatibility_score: int = 0
+    allowed_tools_score: int = 0
+    argument_readiness_score: int = 0
+    effort_score: int = 0
+    source_kind_score: int = 0
+    matched_activation_paths: list[str] = field(default_factory=list)
+    matched_agent_terms: list[str] = field(default_factory=list)
+    matched_when_to_use_terms: list[str] = field(default_factory=list)
+    matched_compatibility_terms: list[str] = field(default_factory=list)
+    matched_allowed_tools: list[str] = field(default_factory=list)
+    missing_allowed_tools: list[str] = field(default_factory=list)
+    matched_argument_names: list[str] = field(default_factory=list)
+    missing_argument_names: list[str] = field(default_factory=list)
+    penalties: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    @property
+    def total_score(self) -> int:
+        return (
+            self.path_score
+            + self.agent_score
+            + self.when_to_use_score
+            + self.compatibility_score
+            + self.allowed_tools_score
+            + self.argument_readiness_score
+            + self.effort_score
+            + self.source_kind_score
+        )
+
+    @property
+    def total(self) -> int:
+        return self.total_score
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "path_score": self.path_score,
+            "agent_score": self.agent_score,
+            "when_to_use_score": self.when_to_use_score,
+            "compatibility_score": self.compatibility_score,
+            "allowed_tools_score": self.allowed_tools_score,
+            "argument_readiness_score": self.argument_readiness_score,
+            "effort_score": self.effort_score,
+            "source_kind_score": self.source_kind_score,
+            "total_score": self.total_score,
+            "matched_activation_paths": list(self.matched_activation_paths),
+            "matched_agent_terms": list(self.matched_agent_terms),
+            "matched_when_to_use_terms": list(self.matched_when_to_use_terms),
+            "matched_compatibility_terms": list(self.matched_compatibility_terms),
+            "matched_allowed_tools": list(self.matched_allowed_tools),
+            "missing_allowed_tools": list(self.missing_allowed_tools),
+            "matched_argument_names": list(self.matched_argument_names),
+            "missing_argument_names": list(self.missing_argument_names),
+            "penalties": list(self.penalties),
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(slots=True)
+class SkillResolutionRequest:
+    touched_paths: list[str] = field(default_factory=list)
+    user_goal: str | None = None
+    current_prompt: str | None = None
+    scenario_type: str | None = None
+    agent_role: str | None = None
+    workflow_stage: str | None = None
+    workspace_path: str | None = None
+    available_tools: list[str] = field(default_factory=list)
+    invocation_arguments: dict[str, object] = field(default_factory=dict)
+    top_k: int = 5
+    include_reference_only: bool = False
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "touched_paths": list(self.touched_paths),
+            "user_goal": self.user_goal,
+            "current_prompt": self.current_prompt,
+            "scenario_type": self.scenario_type,
+            "agent_role": self.agent_role,
+            "workflow_stage": self.workflow_stage,
+            "workspace_path": self.workspace_path,
+            "available_tools": list(self.available_tools),
+            "invocation_arguments": dict(self.invocation_arguments),
+            "top_k": self.top_k,
+            "include_reference_only": self.include_reference_only,
+        }
+
+
+@dataclass(slots=True)
+class ResolvedSkillCandidate:
+    compiled_skill: CompiledSkill
+    score_breakdown: SkillCandidateScoreBreakdown
+    rank: int = 0
+    reasons: list[str] = field(default_factory=list)
+    selected: bool = False
+    rejected_reason: str | None = None
+
+    @property
+    def total_score(self) -> int:
+        return self.score_breakdown.total_score
+
+    def to_payload(self, *, skill_payload: dict[str, object] | None = None) -> dict[str, object]:
+        payload = dict(skill_payload or {})
+        payload.update(
+            {
+                "total_score": self.total_score,
+                "rank": self.rank,
+                "score_breakdown": self.score_breakdown.to_payload(),
+                "reasons": list(self.reasons),
+                "selected": self.selected,
+                "rejected_reason": self.rejected_reason,
+            }
+        )
+        return payload
+
+
+@dataclass(slots=True)
+class SkillResolutionResult:
+    request: SkillResolutionRequest
+    considered_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+    shortlisted_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+    reference_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+    rejected_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+
+    @property
+    def selected_candidate(self) -> ResolvedSkillCandidate | None:
+        for candidate in self.shortlisted_candidates:
+            if candidate.selected:
+                return candidate
+        return None
+
+    @property
+    def active_candidate_count(self) -> int:
+        return len(self.considered_candidates)
+
+    @property
+    def candidates(self) -> list[ResolvedSkillCandidate]:
+        return self.considered_candidates
+
+    @property
+    def selected(self) -> list[ResolvedSkillCandidate]:
+        return self.shortlisted_candidates
+
+    @property
+    def rejected(self) -> list[ResolvedSkillCandidate]:
+        return self.rejected_candidates
+
+    def to_payload(
+        self,
+        *,
+        payload_builder: Callable[[ResolvedSkillCandidate], dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        def _serialize(candidate: ResolvedSkillCandidate) -> dict[str, object]:
+            skill_payload = None if payload_builder is None else payload_builder(candidate)
+            return candidate.to_payload(skill_payload=skill_payload)
+
+        return {
+            "request": self.request.to_payload(),
+            "active_candidate_count": self.active_candidate_count,
+            "selected_skill_id": (
+                None
+                if self.selected_candidate is None
+                else self.selected_candidate.compiled_skill.skill_id
+            ),
+            "candidates": [_serialize(candidate) for candidate in self.considered_candidates],
+            "shortlisted_candidates": [
+                _serialize(candidate) for candidate in self.shortlisted_candidates
+            ],
+            "selected": [_serialize(candidate) for candidate in self.shortlisted_candidates],
+            "reference_candidates": [
+                _serialize(candidate) for candidate in self.reference_candidates
+            ],
+            "rejected_candidates": [
+                _serialize(candidate) for candidate in self.rejected_candidates
+            ],
+            "rejected": [_serialize(candidate) for candidate in self.rejected_candidates],
         }
 
 

@@ -1,0 +1,253 @@
+from importlib import import_module
+from typing import cast
+
+from app.compat.skills import models as skill_models
+from app.db.models import CompatibilityScope, CompatibilitySource
+
+skill_resolution = import_module("app.compat.skills.resolution")
+build_skill_candidate_prompt_fragment = skill_resolution.build_skill_candidate_prompt_fragment
+score_skill_candidate = skill_resolution.score_skill_candidate
+resolve_skill_candidates = skill_resolution.resolve_skill_candidates
+
+
+def test_path_matched_skill_ranks_above_unconditional() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/app/main.py"],
+        top_k=5,
+    )
+    unconditional = _compiled_skill("always-on")
+    path_matched = _compiled_skill("api-skill", activation_paths=["apps/api/**"])
+
+    result = resolve_skill_candidates([unconditional, path_matched], request)
+
+    assert [candidate.compiled_skill.directory_name for candidate in result.shortlisted_candidates][
+        :2
+    ] == [
+        "api-skill",
+        "always-on",
+    ]
+    assert (
+        result.shortlisted_candidates[0].score_breakdown.path_score
+        > result.shortlisted_candidates[1].score_breakdown.path_score
+    )
+
+
+def test_agent_role_match_boosts_ranking() -> None:
+    request = skill_models.SkillResolutionRequest(agent_role="browser automation specialist")
+    matched = _compiled_skill("browser", agent="browser automation specialist")
+    unmatched = _compiled_skill("general", agent="triage")
+
+    result = resolve_skill_candidates([unmatched, matched], request)
+
+    assert result.shortlisted_candidates[0].compiled_skill.directory_name == "browser"
+    assert result.shortlisted_candidates[0].score_breakdown.agent_score > 0
+
+
+def test_when_to_use_overlap_boosts_ranking() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Need API audit and endpoint triage for auth flows"
+    )
+    matched = _compiled_skill(
+        "api-audit",
+        when_to_use="Use for API audit, endpoint triage, and auth review.",
+    )
+    unmatched = _compiled_skill("other", when_to_use="Use for binary reversing only.")
+
+    result = resolve_skill_candidates([unmatched, matched], request)
+
+    assert result.shortlisted_candidates[0].compiled_skill.directory_name == "api-audit"
+    assert result.shortlisted_candidates[0].score_breakdown.when_to_use_score > 0
+    assert result.shortlisted_candidates[0].score_breakdown.matched_when_to_use_terms
+
+
+def test_filesystem_skill_outranks_mcp_by_default_when_other_signals_are_equal() -> None:
+    request = skill_models.SkillResolutionRequest(current_prompt="Need browser automation")
+    filesystem_skill = _compiled_skill(
+        "browser-local",
+        source_kind=skill_models.SkillSourceKind.FILESYSTEM,
+        when_to_use="Use for browser automation",
+    )
+    mcp_skill = _compiled_skill(
+        "browser-mcp",
+        source_kind=skill_models.SkillSourceKind.MCP,
+        when_to_use="Use for browser automation",
+    )
+
+    result = resolve_skill_candidates([mcp_skill, filesystem_skill], request)
+
+    assert result.shortlisted_candidates[0].compiled_skill.directory_name == "browser-local"
+
+
+def test_invocable_false_excluded_from_executable_shortlist_by_default() -> None:
+    request = skill_models.SkillResolutionRequest(current_prompt="Need burp scan")
+    invocable = _compiled_skill("filesystem-scan")
+    reference_only = _compiled_skill("mcp-scan", invocable=False)
+
+    result = resolve_skill_candidates([reference_only, invocable], request)
+
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.shortlisted_candidates
+    ] == ["filesystem-scan"]
+    assert result.rejected_candidates[0].rejected_reason == "reference_only_excluded"
+
+
+def test_reference_only_candidates_can_be_included_separately() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Need burp scan",
+        include_reference_only=True,
+    )
+    reference_only = _compiled_skill("mcp-scan", invocable=False)
+
+    result = resolve_skill_candidates([reference_only], request)
+
+    assert result.shortlisted_candidates == []
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.reference_candidates
+    ] == ["mcp-scan"]
+
+
+def test_tie_breaker_is_stable_and_deterministic() -> None:
+    request = skill_models.SkillResolutionRequest(current_prompt="general help")
+    first = _compiled_skill("alpha", fingerprint="aaa")
+    second = _compiled_skill("beta", fingerprint="bbb")
+
+    first_result = resolve_skill_candidates([second, first], request)
+    second_result = resolve_skill_candidates([first, second], request)
+
+    assert [
+        candidate.compiled_skill.directory_name for candidate in first_result.shortlisted_candidates
+    ] == [
+        candidate.compiled_skill.directory_name
+        for candidate in second_result.shortlisted_candidates
+    ]
+
+
+def test_top_k_trimming_limits_shortlist_size() -> None:
+    request = skill_models.SkillResolutionRequest(top_k=2)
+    result = resolve_skill_candidates(
+        [_compiled_skill("one"), _compiled_skill("two"), _compiled_skill("three")],
+        request,
+    )
+
+    assert len(result.shortlisted_candidates) == 2
+
+
+def test_score_breakdown_contains_explanatory_fields() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/app/main.py"],
+        available_tools=["execute_skill"],
+        invocation_arguments={"target": "demo"},
+    )
+    candidate = _compiled_skill(
+        "api-audit",
+        activation_paths=["apps/api/**"],
+        allowed_tools=["execute_skill", "read_skill_content"],
+        parameter_schema={"type": "object", "required": ["target"]},
+    )
+
+    result = resolve_skill_candidates([candidate], request)
+    breakdown = result.shortlisted_candidates[0].score_breakdown.to_payload()
+
+    assert cast(int, breakdown["path_score"]) > 0
+    assert breakdown["matched_activation_paths"] == ["apps/api/**"]
+    assert breakdown["matched_allowed_tools"] == ["execute_skill"]
+    assert breakdown["missing_allowed_tools"] == ["read_skill_content"]
+    assert breakdown["matched_argument_names"] == ["target"]
+
+
+def test_score_skill_candidate_returns_breakdown_object_with_reasons_and_penalties() -> None:
+    request = skill_models.SkillResolutionRequest(current_prompt="Need browser automation")
+    breakdown = score_skill_candidate(
+        _compiled_skill(
+            "browser-mcp",
+            when_to_use="Use for browser automation",
+            invocable=False,
+            source_kind=skill_models.SkillSourceKind.MCP,
+        ),
+        request,
+    )
+
+    assert isinstance(breakdown, skill_models.SkillCandidateScoreBreakdown)
+    assert breakdown.total >= 0
+    assert breakdown.reasons
+    assert breakdown.penalties
+
+
+def test_ranked_candidates_receive_stable_rank_numbers() -> None:
+    request = skill_models.SkillResolutionRequest(top_k=3)
+    result = resolve_skill_candidates(
+        [_compiled_skill("one"), _compiled_skill("two"), _compiled_skill("three")],
+        request,
+    )
+
+    assert [candidate.rank for candidate in result.shortlisted_candidates] == [1, 2, 3]
+
+
+def test_prompt_fragment_shows_ranked_shortlist_with_selection_guidance() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/app/main.py"],
+        current_prompt="Need API audit",
+        include_reference_only=True,
+    )
+    result = resolve_skill_candidates(
+        [
+            _compiled_skill("always-on"),
+            _compiled_skill(
+                "api-audit", activation_paths=["apps/api/**"], when_to_use="Use for API audit"
+            ),
+            _compiled_skill(
+                "mcp-ref", invocable=False, source_kind=skill_models.SkillSourceKind.MCP
+            ),
+        ],
+        request,
+    )
+
+    fragment = build_skill_candidate_prompt_fragment(result)
+
+    assert "Ranked skill shortlist" in fragment
+    assert "pick the highest-ranked skill unless a lower-ranked skill is more specific" in fragment
+    assert "1. api-audit [score=" in fragment
+    assert "Reference-only ranked candidates" in fragment
+
+
+def _compiled_skill(
+    directory_name: str,
+    *,
+    activation_paths: list[str] | None = None,
+    when_to_use: str | None = None,
+    agent: str | None = None,
+    allowed_tools: list[str] | None = None,
+    parameter_schema: dict[str, object] | None = None,
+    invocable: bool = True,
+    source_kind: skill_models.SkillSourceKind = skill_models.SkillSourceKind.FILESYSTEM,
+    fingerprint: str | None = None,
+) -> skill_models.CompiledSkill:
+    return skill_models.CompiledSkill(
+        identity=skill_models.SkillSourceIdentity(
+            source_kind=source_kind,
+            source=CompatibilitySource.LOCAL,
+            scope=CompatibilityScope.PROJECT,
+            source_root="skills",
+            relative_path=f"{directory_name}/SKILL.md",
+            fingerprint=fingerprint or f"hash-{directory_name}",
+        ),
+        skill_id=f"{directory_name}-id",
+        name=directory_name,
+        directory_name=directory_name,
+        entry_file=f"skills/{directory_name}/SKILL.md",
+        description=f"{directory_name} description",
+        content=f"# {directory_name}\n",
+        compatibility=["opencode"],
+        parameter_schema=parameter_schema or {},
+        aliases=[],
+        allowed_tools=list(allowed_tools or []),
+        user_invocable=True,
+        argument_hint=None,
+        activation_paths=list(activation_paths or []),
+        invocable=invocable,
+        when_to_use=when_to_use,
+        context_hint=None,
+        agent=agent,
+        effort="medium",
+        loaded_from=f"skills/{directory_name}/SKILL.md",
+    )

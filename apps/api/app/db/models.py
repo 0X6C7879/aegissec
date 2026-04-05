@@ -945,6 +945,12 @@ class SkillAgentSummaryRead(SQLModel):
     resolved_identity: dict[str, object] = Field(default_factory=dict)
     prepared_invocation: dict[str, object] | None = None
     active_due_to_touched_paths: bool = False
+    rank: int = 0
+    total_score: int = 0
+    score_breakdown: dict[str, object] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+    selected: bool = False
+    rejected_reason: str | None = None
 
 
 class SkillContentRead(SQLModel):

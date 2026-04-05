@@ -119,16 +119,33 @@ def render_skill_catalog_context(available_skills: list[SkillAgentSummaryRead]) 
     if not available_skills:
         return None
     lines = [
-        "Loaded Skills Catalog (summary only; use read_skill_content for the real SKILL.md body):"
+        (
+            "Loaded Skills Catalog (ranked shortlist only; use read_skill_content for the real "
+            "SKILL.md body and prefer the highest-ranked skill unless a lower-ranked skill is "
+            "more specific to the exact subtask):"
+        )
     ]
-    for skill in available_skills:
+    for index, skill in enumerate(available_skills, start=1):
         description = " ".join(skill.description.split()) or "No description provided."
         if len(description) > 140:
             description = f"{description[:137].rstrip()}..."
         label = skill.directory_name
         if skill.name != skill.directory_name:
             label = f"{skill.directory_name} (name: {skill.name})"
-        lines.append(f"- {label}: {description}")
+        metadata_bits = [f"score={skill.total_score}"]
+        if skill.selected:
+            metadata_bits.append("selected=true")
+        if skill.agent:
+            metadata_bits.append(f"agent={skill.agent}")
+        if skill.effort:
+            metadata_bits.append(f"effort={skill.effort}")
+        if skill.when_to_use:
+            metadata_bits.append(f"when_to_use={skill.when_to_use}")
+        if skill.paths:
+            metadata_bits.append(f"paths={skill.paths}")
+        lines.append(f"- {index}. {label}: {description} | {' | '.join(metadata_bits)}")
+        if skill.reasons:
+            lines.append(f"  why: {'; '.join(skill.reasons[:3])}")
     lines.append(
         "If the user asks to list skills, explain a skill, or use a skill, call the skills "
         "tools before asking broad clarification questions. Skill names in this catalog are "

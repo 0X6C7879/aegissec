@@ -254,7 +254,9 @@ def test_capability_prompt_fragment_builder_coexists_with_existing_prompt_behavi
     )
 
     assert "Loaded skills inventory:" in fragment
-    assert "compiled metadata and prepared invocation hints" in fragment
+    assert (
+        "ranked compiled metadata, selection rationale, and prepared invocation hints" in fragment
+    )
     assert "execute_skill" in fragment
 
 
@@ -295,7 +297,7 @@ def test_capability_facade_build_skill_snapshot_uses_compiled_skill_metadata() -
             ]
 
         def build_skill_context_payload(self, **_: object) -> dict[str, object]:
-            return {"skills": []}
+            return {"skills": self.build_active_skill_snapshot()}
 
     class _MCPServiceStub:
         def list_servers(self) -> list[object]:
