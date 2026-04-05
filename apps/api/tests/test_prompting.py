@@ -379,6 +379,26 @@ def test_capability_facade_build_skill_context_preserves_selected_skill_payload(
                         "rank": 1,
                     }
                 ],
+                "primary_skill": {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "selected": True,
+                    "rank": 1,
+                    "role": "primary",
+                },
+                "supporting_skills": [],
+                "selected_skills": [
+                    {
+                        "id": "skill-1",
+                        "directory_name": "agent-browser",
+                        "selected": True,
+                        "rank": 1,
+                        "role": "primary",
+                    }
+                ],
+                "selected_skill_ids": ["skill-1"],
+                "reference_skills": [],
+                "rejected_skills": [],
                 "selected_skill": {
                     "id": "skill-1",
                     "directory_name": "agent-browser",
@@ -401,6 +421,8 @@ def test_capability_facade_build_skill_context_preserves_selected_skill_payload(
     payload = facade.build_skill_context(session_id="session-1")
 
     assert cast(dict[str, object], payload["selected_skill"])["id"] == "skill-1"
+    assert cast(dict[str, object], payload["primary_skill"])["id"] == "skill-1"
+    assert cast(list[str], payload["selected_skill_ids"]) == ["skill-1"]
     assert payload["selected_skill_id"] == "skill-1"
     assert payload["selected_skill_rank"] == 1
 
@@ -418,6 +440,26 @@ def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing(
                         "rank": 1,
                     }
                 ],
+                "primary_skill": {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "selected": True,
+                    "rank": 1,
+                    "role": "primary",
+                },
+                "supporting_skills": [],
+                "selected_skills": [
+                    {
+                        "id": "skill-1",
+                        "directory_name": "agent-browser",
+                        "selected": True,
+                        "rank": 1,
+                        "role": "primary",
+                    }
+                ],
+                "selected_skill_ids": ["skill-1"],
+                "reference_skills": [],
+                "rejected_skills": [],
                 "selected_skill": {
                     "id": "skill-1",
                     "directory_name": "agent-browser",
@@ -440,6 +482,8 @@ def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing(
     snapshot = facade.build_snapshot(session_id="session-1")
 
     assert cast(dict[str, object], snapshot["selected_skill"])["id"] == "skill-1"
+    assert cast(dict[str, object], snapshot["primary_skill"])["id"] == "skill-1"
+    assert cast(list[str], snapshot["selected_skill_ids"]) == ["skill-1"]
     assert snapshot["selected_skill_id"] == "skill-1"
 
 

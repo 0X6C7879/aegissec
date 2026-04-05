@@ -229,10 +229,17 @@ class CapabilityFacade:
         )
         skills = skill_context.get("skills")
         selected_skill = skill_context.get("selected_skill")
+        primary_skill = skill_context.get("primary_skill")
         snapshot: dict[str, object] = {
             "skills": skills if isinstance(skills, list) else [],
             "selected_skill": selected_skill if isinstance(selected_skill, dict) else None,
             "selected_skill_id": skill_context.get("selected_skill_id"),
+            "primary_skill": primary_skill if isinstance(primary_skill, dict) else None,
+            "supporting_skills": skill_context.get("supporting_skills", []),
+            "selected_skills": skill_context.get("selected_skills", []),
+            "selected_skill_ids": skill_context.get("selected_skill_ids", []),
+            "reference_skills": skill_context.get("reference_skills", []),
+            "rejected_skills": skill_context.get("rejected_skills", []),
             "mcp_servers": self.build_mcp_snapshot(),
         }
         if cache_allowed:
@@ -357,7 +364,8 @@ class CapabilityFacade:
                         )
                     lines.append(
                         f"- {label}: {description} | score={total_score} "
-                        f"| selected={str(selected).lower()} | invocable={invocable}"
+                        f"| selected={str(selected).lower()} "
+                        f"| role={item.get('role') or 'unassigned'} | invocable={invocable}"
                         f"{conditional_suffix}{prepared_suffix}"
                     )
                     if isinstance(reasons, list) and reasons:

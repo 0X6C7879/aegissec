@@ -564,8 +564,8 @@ Use when performing Active Directory pentest orchestration without using ADscan 
         "read_skill_content",
     ]
     assert result["execution"]["resolved_identity"]["relative_path"] == "adscan/SKILL.md"
-    assert result["execution"]["prepared_prompt"].startswith("Auto-selected skill: adscan")
-    assert "## Prepared skill context: adscan" in result["execution"]["prepared_prompt"]
+    assert result["execution"]["prepared_prompt"].startswith("Prepared primary skill: adscan")
+    assert "## Prepared skill context: primary=adscan" in result["execution"]["prepared_prompt"]
     assert result["skill"]["directory_name"] == "adscan"
     assert (
         "Use when performing Active Directory pentest orchestration" in result["skill"]["content"]
@@ -906,6 +906,7 @@ parameter_schema:
     assert payload["payload"]["skills"][0]["active"] is True
     assert payload["payload"]["skills"][0]["dynamic"] is False
     assert payload["payload"]["skills"][0]["prepared_invocation"]["context"]["skill_directory"]
+    assert payload["payload"]["primary_skill"]["id"] == payload["payload"]["skills"][0]["id"]
     assert payload["payload"]["selected_skill"]["id"] == payload["payload"]["skills"][0]["id"]
     assert payload["payload"]["selected_skill"]["selected"] is True
     assert (
@@ -913,6 +914,8 @@ parameter_schema:
         == payload["payload"]["resolution"]["selected_skill_id"]
     )
     assert payload["payload"]["selected_skill_rank"] == payload["payload"]["selected_skill"]["rank"]
+    assert payload["payload"]["selected_skill_id"] in payload["payload"]["selected_skill_ids"]
+    assert payload["payload"]["rejected_skills"] == []
     assert "Primary skill for current context" in payload["prompt_fragment"]
     assert "Supporting skills also loaded" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]

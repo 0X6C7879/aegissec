@@ -380,12 +380,7 @@ class SkillResolutionResult:
 
     @property
     def selected_candidate(self) -> ResolvedSkillCandidate | None:
-        if self.primary_candidate is not None:
-            return self.primary_candidate
-        for candidate in self.shortlisted_candidates:
-            if candidate.selected:
-                return candidate
-        return None
+        return self.primary_candidate
 
     @property
     def all_selected_candidates(self) -> list[ResolvedSkillCandidate]:
@@ -440,6 +435,9 @@ class SkillResolutionResult:
             ],
             "all_selected_candidates": [
                 _serialize(candidate) for candidate in self.all_selected_candidates
+            ],
+            "selected_skill_ids": [
+                candidate.compiled_skill.skill_id for candidate in self.all_selected_candidates
             ],
             "selected": [_serialize(candidate) for candidate in self.all_selected_candidates],
             "reference_candidates": [

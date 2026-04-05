@@ -324,7 +324,9 @@ class SkillService:
         prepared_result["primary_skill"] = best_skill_result.get("primary_skill")
         prepared_result["supporting_skills"] = best_skill_result.get("supporting_skills", [])
         prepared_result["reference_skills"] = best_skill_result.get("reference_skills", [])
+        prepared_result["rejected_skills"] = best_skill_result.get("rejected_skills", [])
         prepared_result["selected_skills"] = best_skill_result.get("selected_skills", [])
+        prepared_result["selected_skill_ids"] = best_skill_result.get("selected_skill_ids", [])
         return prepared_result
 
     def build_ranked_skill_context_prompt_fragment(
@@ -501,6 +503,7 @@ class SkillService:
             "primary_skill": primary_skill,
             "supporting_skills": supporting_skills,
             "reference_skills": reference_skills,
+            "rejected_skills": best_skill_result.get("rejected_skills", []),
             "selected_skills": selected_skills,
             "selected_skill_ids": selected_skill_ids,
             "selected_skill": best_skill_result.get("selected_skill"),
@@ -636,8 +639,8 @@ class SkillService:
             available_tools=available_tools,
             invocation_arguments=invocation_arguments,
         )
-        selected_skill = best_skill_result.get("selected_skill")
-        return selected_skill if isinstance(selected_skill, dict) else None
+        primary_skill = best_skill_result.get("primary_skill")
+        return primary_skill if isinstance(primary_skill, dict) else None
 
     def rescan_skills(self) -> list[SkillRecordRead]:
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
@@ -1121,14 +1124,7 @@ class SkillService:
         self,
         resolution_result: skill_models.SkillResolutionResult,
     ) -> skill_models.ResolvedSkillCandidate | None:
-        selected_candidate = resolution_result.selected_candidate
-        if selected_candidate is not None:
-            return selected_candidate
-        if resolution_result.primary_candidate is not None:
-            return resolution_result.primary_candidate
-        if resolution_result.all_selected_candidates:
-            return resolution_result.all_selected_candidates[0]
-        return None
+        return resolution_result.primary_candidate
 
     def _best_skill_payload_from_resolution(
         self,
@@ -1177,8 +1173,16 @@ class SkillService:
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
             for candidate in resolution_result.reference_candidates
         ]
+        rejected_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in resolution_result.rejected_candidates
+        ]
         selected_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in resolution_result.all_selected_candidates
+        ]
+        selected_skill_ids = [
+            candidate.compiled_skill.skill_id
             for candidate in resolution_result.all_selected_candidates
         ]
 
@@ -1198,15 +1202,19 @@ class SkillService:
             "primary_skill": primary_skill,
             "supporting_skills": supporting_skills,
             "reference_skills": reference_skills,
+            "rejected_skills": rejected_skills,
             "selected_skills": selected_skills,
+            "selected_skill_ids": selected_skill_ids,
             "resolution_request": resolution_result.request.to_payload(),
             "resolution_summary": {
                 "active_candidate_count": resolution_result.active_candidate_count,
                 "shortlisted_count": len(resolution_result.shortlisted_candidates),
+                "selected_count": len(resolution_result.all_selected_candidates),
+                "primary_skill_id": selected_skill_id,
                 "supporting_count": len(resolution_result.supporting_candidates),
                 "reference_count": len(resolution_result.reference_candidates),
                 "rejected_count": len(resolution_result.rejected_candidates),
-                "selected_skill_id": resolution_payload.get("selected_skill_id"),
+                "selected_skill_id": selected_skill_id,
             },
             "resolution": resolution_payload,
         }

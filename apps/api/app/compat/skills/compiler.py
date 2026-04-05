@@ -83,13 +83,15 @@ def build_prepared_prompt_fragment(
 ) -> str:
     resolved_name = compiled_skill.directory_name or compiled_skill.name or "unknown-skill"
     lines = [
-        f"Auto-selected skill: {resolved_name}",
-        f"## Prepared skill context: {resolved_name}",
+        f"Prepared primary skill: {resolved_name}",
+        f"## Prepared skill context: primary={resolved_name}",
         "Execution mode: server-side skill executor facade",
         f"Resolved skill id: {compiled_skill.skill_id}",
         (
-            "This context was prepared through execute_skill and remains reference-only "
-            "until the runtime approval and tool pipeline decide the next step."
+            "This prepared context represents the primary skill already loaded for the current "
+            "request. Supporting skills may also be active elsewhere in the resolution payload, "
+            "and this prepared primary context remains reference-only until the runtime approval "
+            "and tool pipeline decide the next step."
         ),
         ("Use the prepared guidance below before deciding on follow-up tools or the final answer."),
     ]

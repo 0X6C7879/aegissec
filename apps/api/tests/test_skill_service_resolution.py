@@ -74,15 +74,20 @@ parameter_schema:
         )
 
     selected_skill = cast(dict[str, object], best["selected_skill"])
+    primary_skill = cast(dict[str, object], best["primary_skill"])
+    selected_skill_ids = cast(list[str], best["selected_skill_ids"])
     assert best["status"] == "selected"
     assert resolution.selected_candidate is not None
     assert selected_skill["id"] == resolution.selected_candidate.compiled_skill.skill_id
+    assert primary_skill["id"] == selected_skill["id"]
     assert selected_skill["rank"] == 1
     assert selected_skill["selected"] is True
-    assert selected_skill["total_score"] == resolution.shortlisted_candidates[0].total_score
+    assert resolution.primary_candidate is not None
+    assert selected_skill["total_score"] == resolution.primary_candidate.total_score
     assert cast(list[object], selected_skill["reasons"])
     assert best["selected_skill_id"] == resolution.selected_candidate.compiled_skill.skill_id
     assert best["selected_skill_rank"] == 1
+    assert selected_skill["id"] in selected_skill_ids
 
 
 def test_resolve_best_skill_returns_reference_only_status_when_only_reference_candidates_exist(
@@ -273,7 +278,9 @@ Target ${target}
         skill["directory_name"]
         for skill in cast(list[dict[str, object]], prepared["supporting_skills"])
     ]
+    selected_skill_ids = cast(list[str], prepared["selected_skill_ids"])
     assert "triage-planner" in supporting_names
+    assert cast(dict[str, object], prepared["primary_skill"])["id"] in selected_skill_ids
     resolution_summary = cast(dict[str, object], prepared["resolution_summary"])
     supporting_count = cast(int, resolution_summary["supporting_count"])
     assert supporting_count >= 1
@@ -366,10 +373,15 @@ when_to_use: Use for API validation and endpoint review.
     selected_skill_ids = cast(list[str], payload["selected_skill_ids"])
     selected_skill_id = cast(str, payload["selected_skill_id"])
     assert selected_skill_id in selected_skill_ids
+    rejected_skills = cast(list[dict[str, object]], payload["rejected_skills"])
+    assert isinstance(rejected_skills, list)
+    assert all(item["role"] == "rejected" for item in rejected_skills)
+    assert all(item["rejected_reason"] for item in rejected_skills)
     assert "Primary skill for current context" in prompt_fragment
     assert "Supporting skills also loaded" in prompt_fragment
     assert "demo" in prompt_fragment
     assert snapshot[0]["selected"] is True
+    assert snapshot[0]["role"] == "primary"
     loaded_names = [item.directory_name for item in loaded]
     loaded_roles = [item.role for item in loaded]
     assert loaded_names[0] == "demo"

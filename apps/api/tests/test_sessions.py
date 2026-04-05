@@ -2217,8 +2217,8 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
                 for skill in available_skills
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill: docx" in skill_context_prompt
-            assert "## Prepared skill context: docx" in skill_context_prompt
+            assert "Prepared primary skill: docx" in skill_context_prompt
+            assert "## Prepared skill context: primary=docx" in skill_context_prompt
             assert "# docx" in skill_context_prompt
             return "已收到 docx 自动技能上下文"
 
@@ -2336,8 +2336,8 @@ Create and edit Word documents.
                 callbacks,
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill: ctf-web" in skill_context_prompt
-            assert "## Prepared skill context: ctf-web" in skill_context_prompt
+            assert "Prepared primary skill: ctf-web" in skill_context_prompt
+            assert "## Prepared skill context: primary=ctf-web" in skill_context_prompt
             assert "# ctf-web" in skill_context_prompt
             return "已收到 ctf-web 自动技能上下文"
 
@@ -2449,7 +2449,7 @@ Use for docx helper workflows.
                 callbacks,
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill:" not in skill_context_prompt
+            assert "Prepared primary skill:" not in skill_context_prompt
             return "保持手动选择"
 
     original_override = app.dependency_overrides[get_chat_runtime]
@@ -2540,7 +2540,7 @@ Create and edit Word documents.
                 callbacks,
             )
             assert skill_context_prompt is not None
-            assert "Auto-selected skill: docx" not in skill_context_prompt
+            assert "Prepared primary skill: docx" not in skill_context_prompt
             return "继续普通流程"
 
     original_override = app.dependency_overrides[get_chat_runtime]
