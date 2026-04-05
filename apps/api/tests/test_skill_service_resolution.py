@@ -203,17 +203,110 @@ Target ${target}
     }
 
 
-def test_build_skill_context_payload_exposes_selected_skill_and_resolution_identity(
+def test_prepare_best_skill_includes_primary_supporting_and_summary(
     tmp_path: Path,
     test_settings: Settings,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    skills_root = tmp_path / "skills"
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    touched_file = project_root / "apps" / "api" / "app" / "main.py"
+    touched_file.parent.mkdir(parents=True, exist_ok=True)
+    touched_file.write_text("print('ok')\n", encoding="utf-8")
+
+    _write_skill(
+        skills_root / "triage-planner" / "SKILL.md",
+        """---
+name: triage-planner
+description: General triage planner
+when_to_use: Use for triage planning and general validation.
+---
+# triage-planner
+""",
+    )
+    _write_skill(
+        skills_root / "api-skill" / "SKILL.md",
+        """---
+name: api-skill
+description: API specific skill
+paths:
+  - apps/api/**
+when_to_use: Use for API validation and endpoint review.
+parameter_schema:
+  type: object
+  required: [target]
+  properties:
+    target:
+      type: string
+---
+# api-skill
+Target ${target}
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-prepared.db") as (
+        _,
+        skill_service,
+    ):
+        skill_service.rescan_skills()
+        prepared = skill_service.prepare_best_skill(
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation",
+            invocation_arguments={"target": "srv-01"},
+            session_id="session-prepared-multi",
+        )
+
+    assert cast(dict[str, object], prepared["primary_skill"])["directory_name"] == "api-skill"
+    supporting_names = [
+        skill["directory_name"]
+        for skill in cast(list[dict[str, object]], prepared["supporting_skills"])
+    ]
+    assert "triage-planner" in supporting_names
+    resolution_summary = cast(dict[str, object], prepared["resolution_summary"])
+    supporting_count = cast(int, resolution_summary["supporting_count"])
+    assert supporting_count >= 1
+
+
+def test_build_skill_context_payload_exposes_supporting_selected_and_resolution_identity(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    touched_file = project_root / "apps" / "api" / "app" / "main.py"
+    touched_file.parent.mkdir(parents=True, exist_ok=True)
+    touched_file.write_text("print('ok')\n", encoding="utf-8")
+    _write_skill(
+        skills_root / "triage-planner" / "SKILL.md",
+        """---
+name: triage-planner
+description: Context triage skill
+when_to_use: Use for triage planning and general validation.
+---
+# triage-planner
+""",
+    )
     _write_skill(
         skills_root / "demo" / "SKILL.md",
         """---
 name: demo
-description: Context skill
+description: Context API skill
+paths:
+  - apps/api/**
+when_to_use: Use for API validation and endpoint review.
 ---
 # demo
 """,
@@ -232,17 +325,54 @@ description: Context skill
 
     with _create_service_session(test_settings, tmp_path / "service.db") as (_, skill_service):
         skill_service.rescan_skills()
-        payload = skill_service.build_skill_context_payload(session_id="session-context")
-        prompt_fragment = skill_service.build_skill_context_prompt_fragment(
-            session_id="session-context"
+        payload = skill_service.build_skill_context_payload(
+            session_id="session-context",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation",
         )
-        snapshot = skill_service.build_active_skill_snapshot(session_id="session-context")
+        prompt_fragment = skill_service.build_skill_context_prompt_fragment(
+            session_id="session-context",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation",
+        )
+        snapshot = skill_service.build_active_skill_snapshot(
+            session_id="session-context",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation",
+        )
+        loaded = skill_service.list_loaded_skills_for_agent(
+            session_id="session-context",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation",
+        )
 
     selected_skill = cast(dict[str, object], payload["selected_skill"])
     resolution = cast(dict[str, object], payload["resolution"])
     assert selected_skill["id"] == resolution["selected_skill_id"]
     assert payload["selected_skill_id"] == resolution["selected_skill_id"]
     assert payload["selected_skill_rank"] == selected_skill["rank"]
-    assert "Top ranked skills for current context" in prompt_fragment
+    assert cast(dict[str, object], payload["primary_skill"])["directory_name"] == "demo"
+    supporting_skills = cast(list[dict[str, object]], payload["supporting_skills"])
+    supporting_names = [item["directory_name"] for item in supporting_skills]
+    selected_skills = cast(list[dict[str, object]], payload["selected_skills"])
+    selected_names = [item["directory_name"] for item in selected_skills]
+    assert "triage-planner" in supporting_names
+    assert selected_names[0] == "demo"
+    assert "triage-planner" in selected_names
+    selected_skill_ids = cast(list[str], payload["selected_skill_ids"])
+    selected_skill_id = cast(str, payload["selected_skill_id"])
+    assert selected_skill_id in selected_skill_ids
+    assert "Primary skill for current context" in prompt_fragment
+    assert "Supporting skills also loaded" in prompt_fragment
     assert "demo" in prompt_fragment
     assert snapshot[0]["selected"] is True
+    loaded_names = [item.directory_name for item in loaded]
+    loaded_roles = [item.role for item in loaded]
+    assert loaded_names[0] == "demo"
+    assert "triage-planner" in loaded_names
+    assert loaded_roles[0] == "primary"
+    assert "supporting" in loaded_roles

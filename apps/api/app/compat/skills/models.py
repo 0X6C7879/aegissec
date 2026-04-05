@@ -25,6 +25,13 @@ class SkillPromptShellExpansionKind(str, Enum):
     FENCED = "fenced"
 
 
+class SkillCandidateRole(str, Enum):
+    PRIMARY = "primary"
+    SUPPORTING = "supporting"
+    REFERENCE = "reference"
+    REJECTED = "rejected"
+
+
 @dataclass(slots=True)
 class SkillScanRoot:
     source: CompatibilitySource
@@ -338,6 +345,7 @@ class ResolvedSkillCandidate:
     rank: int = 0
     reasons: list[str] = field(default_factory=list)
     selected: bool = False
+    role: SkillCandidateRole | None = None
     rejected_reason: str | None = None
 
     @property
@@ -353,6 +361,7 @@ class ResolvedSkillCandidate:
                 "score_breakdown": self.score_breakdown.to_payload(),
                 "reasons": list(self.reasons),
                 "selected": self.selected,
+                "role": None if self.role is None else self.role.value,
                 "rejected_reason": self.rejected_reason,
             }
         )
@@ -364,15 +373,27 @@ class SkillResolutionResult:
     request: SkillResolutionRequest
     considered_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
     shortlisted_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+    primary_candidate: ResolvedSkillCandidate | None = None
+    supporting_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
     reference_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
     rejected_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
 
     @property
     def selected_candidate(self) -> ResolvedSkillCandidate | None:
+        if self.primary_candidate is not None:
+            return self.primary_candidate
         for candidate in self.shortlisted_candidates:
             if candidate.selected:
                 return candidate
         return None
+
+    @property
+    def all_selected_candidates(self) -> list[ResolvedSkillCandidate]:
+        selected: list[ResolvedSkillCandidate] = []
+        if self.primary_candidate is not None:
+            selected.append(self.primary_candidate)
+        selected.extend(self.supporting_candidates)
+        return selected
 
     @property
     def active_candidate_count(self) -> int:
@@ -384,7 +405,7 @@ class SkillResolutionResult:
 
     @property
     def selected(self) -> list[ResolvedSkillCandidate]:
-        return self.shortlisted_candidates
+        return self.all_selected_candidates
 
     @property
     def rejected(self) -> list[ResolvedSkillCandidate]:
@@ -407,11 +428,20 @@ class SkillResolutionResult:
                 if self.selected_candidate is None
                 else self.selected_candidate.compiled_skill.skill_id
             ),
+            "primary_candidate": (
+                None if self.primary_candidate is None else _serialize(self.primary_candidate)
+            ),
             "candidates": [_serialize(candidate) for candidate in self.considered_candidates],
             "shortlisted_candidates": [
                 _serialize(candidate) for candidate in self.shortlisted_candidates
             ],
-            "selected": [_serialize(candidate) for candidate in self.shortlisted_candidates],
+            "supporting_candidates": [
+                _serialize(candidate) for candidate in self.supporting_candidates
+            ],
+            "all_selected_candidates": [
+                _serialize(candidate) for candidate in self.all_selected_candidates
+            ],
+            "selected": [_serialize(candidate) for candidate in self.all_selected_candidates],
             "reference_candidates": [
                 _serialize(candidate) for candidate in self.reference_candidates
             ],

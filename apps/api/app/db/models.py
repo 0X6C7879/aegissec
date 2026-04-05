@@ -950,6 +950,7 @@ class SkillAgentSummaryRead(SQLModel):
     score_breakdown: dict[str, object] = Field(default_factory=dict)
     reasons: list[str] = Field(default_factory=list)
     selected: bool = False
+    role: str | None = None
     rejected_reason: str | None = None
 
 

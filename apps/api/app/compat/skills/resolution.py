@@ -9,6 +9,9 @@ from app.compat.skills import models as skill_models
 _WORD_RE = re.compile(r"[a-z0-9_\-/\.]+")
 _ARG_HINT_RE = re.compile(r"--([a-zA-Z0-9_-]+)|<([a-zA-Z0-9_-]+)>")
 _DEFAULT_TOP_K = 5
+_DEFAULT_SUPPORTING_LIMIT = 2
+_SUPPORTING_SCORE_GAP_THRESHOLD = 8
+_MIN_SUPPORTING_SCORE = 8
 _FIXED_RUNTIME_TOOLS = {
     "execute_kali_command",
     "list_available_skills",
@@ -106,71 +109,176 @@ def resolve_skill_candidates(
 ) -> skill_models.SkillResolutionResult:
     ranked_candidates = rank_skill_candidates(compiled_skills, request)
 
-    executable_candidates: list[skill_models.ResolvedSkillCandidate] = []
+    return select_skill_set(ranked_candidates, request)
+
+
+def select_skill_set(
+    ranked_candidates: list[skill_models.ResolvedSkillCandidate],
+    request: skill_models.SkillResolutionRequest,
+) -> skill_models.SkillResolutionResult:
+    primary_candidate: skill_models.ResolvedSkillCandidate | None = None
+    supporting_candidates: list[skill_models.ResolvedSkillCandidate] = []
     reference_candidates: list[skill_models.ResolvedSkillCandidate] = []
     rejected_candidates: list[skill_models.ResolvedSkillCandidate] = []
+    executable_candidates: list[skill_models.ResolvedSkillCandidate] = []
 
     for candidate in ranked_candidates:
+        candidate.selected = False
+        candidate.role = None
+
         if candidate.compiled_skill.invocable:
             executable_candidates.append(candidate)
             continue
         if request.include_reference_only:
+            candidate.role = skill_models.SkillCandidateRole.REFERENCE
             reference_candidates.append(candidate)
             continue
+        candidate.role = skill_models.SkillCandidateRole.REJECTED
         candidate.rejected_reason = "reference_only_excluded"
         rejected_candidates.append(candidate)
 
     top_k = max(1, request.top_k or _DEFAULT_TOP_K)
-    shortlisted_candidates = executable_candidates[:top_k]
-    if shortlisted_candidates:
-        shortlisted_candidates[0].selected = True
+    primary_candidate, supporting_candidates, packing_rejections = pack_skill_candidates(
+        executable_candidates,
+        request,
+    )
+    rejected_candidates.extend(packing_rejections)
+
+    if primary_candidate is not None:
+        primary_candidate.selected = True
+        primary_candidate.role = skill_models.SkillCandidateRole.PRIMARY
+    for candidate in supporting_candidates:
+        candidate.selected = True
+        candidate.role = skill_models.SkillCandidateRole.SUPPORTING
+
+    shortlisted_candidates = [
+        candidate
+        for candidate in [primary_candidate, *supporting_candidates]
+        if candidate is not None
+    ][:top_k]
+    for candidate in reference_candidates[top_k:]:
+        candidate.role = skill_models.SkillCandidateRole.REJECTED
+        candidate.rejected_reason = "score_too_low"
+        rejected_candidates.append(candidate)
+    reference_candidates = reference_candidates[:top_k]
 
     return skill_models.SkillResolutionResult(
         request=request,
         considered_candidates=ranked_candidates,
         shortlisted_candidates=shortlisted_candidates,
-        reference_candidates=reference_candidates[:top_k],
+        primary_candidate=primary_candidate,
+        supporting_candidates=supporting_candidates,
+        reference_candidates=reference_candidates,
         rejected_candidates=rejected_candidates,
     )
+
+
+def pack_skill_candidates(
+    executable_candidates: list[skill_models.ResolvedSkillCandidate],
+    request: skill_models.SkillResolutionRequest,
+) -> tuple[
+    skill_models.ResolvedSkillCandidate | None,
+    list[skill_models.ResolvedSkillCandidate],
+    list[skill_models.ResolvedSkillCandidate],
+]:
+    if not executable_candidates:
+        return None, [], []
+
+    primary_candidate = executable_candidates[0]
+    supporting_candidates: list[skill_models.ResolvedSkillCandidate] = []
+    rejected_candidates: list[skill_models.ResolvedSkillCandidate] = []
+    supporting_limit = min(
+        max(1, request.top_k or _DEFAULT_SUPPORTING_LIMIT), _DEFAULT_SUPPORTING_LIMIT
+    )
+
+    for candidate in executable_candidates[1:]:
+        if candidate.total_score <= 0:
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "score_too_low"
+            rejected_candidates.append(candidate)
+            continue
+
+        if _has_missing_required_arguments(candidate):
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "missing_required_arguments_strict"
+            rejected_candidates.append(candidate)
+            continue
+
+        if _is_tool_incompatible(candidate, request):
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "incompatible_tools"
+            rejected_candidates.append(candidate)
+            continue
+
+        redundancy_with_primary = compute_skill_redundancy(primary_candidate, candidate)
+        complementarity_with_primary = compute_skill_complementarity(primary_candidate, candidate)
+        if redundancy_with_primary >= 7 and complementarity_with_primary <= 1:
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "redundant_with_primary"
+            rejected_candidates.append(candidate)
+            continue
+
+        if len(supporting_candidates) >= supporting_limit:
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "score_too_low"
+            rejected_candidates.append(candidate)
+            continue
+
+        if any(
+            compute_skill_redundancy(existing, candidate) >= 7
+            and compute_skill_complementarity(existing, candidate) <= 1
+            for existing in supporting_candidates
+        ):
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "redundant_with_supporting"
+            rejected_candidates.append(candidate)
+            continue
+
+        score_gap = max(0, primary_candidate.total_score - candidate.total_score)
+        if _should_select_as_supporting(
+            primary_candidate,
+            candidate,
+            score_gap=score_gap,
+            request=request,
+        ):
+            supporting_candidates.append(candidate)
+            continue
+
+        candidate.role = skill_models.SkillCandidateRole.REJECTED
+        candidate.rejected_reason = "score_too_low"
+        rejected_candidates.append(candidate)
+
+    return primary_candidate, supporting_candidates, rejected_candidates
 
 
 def build_skill_candidate_prompt_fragment(
     resolution_result: skill_models.SkillResolutionResult,
 ) -> str:
-    if not resolution_result.shortlisted_candidates and not resolution_result.reference_candidates:
+    if not resolution_result.all_selected_candidates and not resolution_result.reference_candidates:
         return "No ranked skill candidates are currently available."
 
     lines = [
-        (
-            "Top ranked skills for current context: pick the highest-ranked skill unless a "
-            "lower-ranked skill is more specific to the exact subtask."
-        )
+        "Primary skill for current context:",
     ]
-    for index, candidate in enumerate(resolution_result.shortlisted_candidates, start=1):
-        skill = candidate.compiled_skill
-        score = candidate.total_score
-        selected_label = " selected" if candidate.selected else ""
-        display_rank = index
-        global_rank_suffix = ""
-        if candidate.rank and candidate.rank != index:
-            global_rank_suffix = f" global-rank={candidate.rank}"
-        score_label = f"score={score}{selected_label}{global_rank_suffix}"
-        lines.append(
-            f"{display_rank}. {skill.directory_name} [{score_label}] "
-            f"agent={skill.agent or 'n/a'} effort={skill.effort or 'n/a'} "
-            f"invocable={str(skill.invocable).lower()}"
+    primary_candidate = resolution_result.primary_candidate
+    if primary_candidate is None:
+        lines.append("- None")
+    else:
+        lines.extend(
+            _format_candidate_block(primary_candidate, display_rank=1, selected_label=True)
         )
-        if skill.when_to_use:
-            lines.append(f"   when_to_use: {skill.when_to_use.strip()}")
-        if skill.activation_paths:
-            lines.append(f"   paths: {list(skill.activation_paths)}")
-        lines.append(f"   why: {'; '.join(candidate.reasons[:4])}")
+
+    lines.append("")
+    lines.append("Supporting skills also loaded:")
+    if not resolution_result.supporting_candidates:
+        lines.append("- None")
+    else:
+        for index, candidate in enumerate(resolution_result.supporting_candidates, start=2):
+            lines.extend(_format_candidate_block(candidate, display_rank=index))
 
     if resolution_result.reference_candidates:
         lines.append("")
-        lines.append(
-            "Reference-only ranked candidates (visible for context, not executable by default):"
-        )
+        lines.append("Reference-only related skills:")
         for candidate in resolution_result.reference_candidates:
             skill = candidate.compiled_skill
             lines.append(
@@ -178,7 +286,268 @@ def build_skill_candidate_prompt_fragment(
                 f"{'; '.join(candidate.reasons[:3])}"
             )
 
+    lines.append("")
+    lines.append(
+        "Use the primary skill by default. Combine supporting skills when the task spans "
+        "planning plus execution, validation plus specialization, or broader triage plus a "
+        "path-specific subtask."
+    )
     return "\n".join(lines)
+
+
+def _format_candidate_block(
+    candidate: skill_models.ResolvedSkillCandidate,
+    *,
+    display_rank: int,
+    selected_label: bool = False,
+) -> list[str]:
+    skill = candidate.compiled_skill
+    score = candidate.total_score
+    selected_suffix = " selected" if selected_label else ""
+    score_label = f"score={score}{selected_suffix}"
+    lines = [
+        f"{display_rank}. {skill.directory_name} [{score_label}] "
+        f"agent={skill.agent or 'n/a'} effort={skill.effort or 'n/a'} "
+        f"invocable={str(skill.invocable).lower()}"
+    ]
+    if skill.when_to_use:
+        lines.append(f"   when_to_use: {skill.when_to_use.strip()}")
+    if skill.activation_paths:
+        lines.append(f"   paths: {list(skill.activation_paths)}")
+    lines.append(f"   why: {'; '.join(candidate.reasons[:4])}")
+    return lines
+
+
+def _should_select_as_supporting(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+    *,
+    score_gap: int,
+    request: skill_models.SkillResolutionRequest,
+) -> bool:
+    if candidate.total_score < _MIN_SUPPORTING_SCORE:
+        return False
+    if score_gap <= _SUPPORTING_SCORE_GAP_THRESHOLD:
+        return True
+
+    complementarity = compute_skill_complementarity(primary_candidate, candidate)
+    if complementarity >= 3:
+        return True
+    if _has_strong_when_to_use_overlap(primary_candidate, candidate):
+        return True
+    if _is_general_specialized_pair(primary_candidate, candidate):
+        return True
+    if _is_orchestration_specialized_pair(primary_candidate, candidate):
+        return True
+    if _has_different_source_complement(primary_candidate, candidate):
+        return True
+    return bool(request.touched_paths and _has_distinct_path_coverage(primary_candidate, candidate))
+
+
+def compute_skill_complementarity(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> int:
+    score = 0
+    if _has_distinct_path_coverage(primary_candidate, candidate):
+        score += 2
+    if _has_complementary_agent_or_context(primary_candidate, candidate):
+        score += 2
+    if _is_general_specialized_pair(primary_candidate, candidate):
+        score += 2
+    if _is_orchestration_specialized_pair(primary_candidate, candidate):
+        score += 2
+    if _has_strong_when_to_use_overlap(primary_candidate, candidate):
+        score += 1
+    if _has_different_source_complement(primary_candidate, candidate):
+        score += 1
+    return score
+
+
+def compute_skill_redundancy(
+    first_candidate: skill_models.ResolvedSkillCandidate,
+    second_candidate: skill_models.ResolvedSkillCandidate,
+) -> int:
+    score = 0
+    first_skill = first_candidate.compiled_skill
+    second_skill = second_candidate.compiled_skill
+    first_when = _normalized_token_set(first_skill.when_to_use)
+    second_when = _normalized_token_set(second_skill.when_to_use)
+    if first_when and second_when and first_when == second_when:
+        score += 3
+    first_paths = set(first_skill.activation_paths)
+    second_paths = set(second_skill.activation_paths)
+    if first_paths and second_paths and first_paths == second_paths:
+        score += 2
+    if (first_skill.agent or "").casefold() == (
+        second_skill.agent or ""
+    ).casefold() and first_skill.agent:
+        score += 1
+    if (first_skill.context_hint or "").casefold() == (
+        second_skill.context_hint or ""
+    ).casefold() and first_skill.context_hint:
+        score += 1
+    first_tools = set(map(_normalize_tool_name, first_skill.allowed_tools))
+    second_tools = set(map(_normalize_tool_name, second_skill.allowed_tools))
+    if first_tools and second_tools and first_tools == second_tools:
+        score += 1
+    if first_skill.identity.source_kind == second_skill.identity.source_kind:
+        score += 1
+    return score
+
+
+def _has_missing_required_arguments(candidate: skill_models.ResolvedSkillCandidate) -> bool:
+    breakdown = candidate.score_breakdown
+    return bool(breakdown.missing_argument_names and breakdown.matched_argument_names == [])
+
+
+def _is_tool_incompatible(
+    candidate: skill_models.ResolvedSkillCandidate,
+    request: skill_models.SkillResolutionRequest,
+) -> bool:
+    allowed_tools = {
+        _normalize_tool_name(tool)
+        for tool in candidate.compiled_skill.allowed_tools
+        if tool.strip()
+    }
+    if not allowed_tools:
+        return False
+    available_tools = {
+        _normalize_tool_name(tool)
+        for tool in (request.available_tools or list(_FIXED_RUNTIME_TOOLS))
+        if isinstance(tool, str) and tool.strip()
+    }
+    return bool(allowed_tools and allowed_tools.isdisjoint(available_tools))
+
+
+def _has_distinct_path_coverage(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_paths = {path.casefold() for path in primary_candidate.compiled_skill.activation_paths}
+    candidate_paths = {path.casefold() for path in candidate.compiled_skill.activation_paths}
+    if not candidate_paths:
+        return False
+    if not primary_paths:
+        return True
+    return not candidate_paths.issubset(primary_paths)
+
+
+def _has_complementary_agent_or_context(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_skill = primary_candidate.compiled_skill
+    candidate_skill = candidate.compiled_skill
+    primary_agent = (primary_skill.agent or "").casefold()
+    candidate_agent = (candidate_skill.agent or "").casefold()
+    if primary_agent and candidate_agent and primary_agent != candidate_agent:
+        return True
+    primary_context = _normalized_token_set(primary_skill.context_hint)
+    candidate_context = _normalized_token_set(candidate_skill.context_hint)
+    return bool(primary_context and candidate_context and primary_context != candidate_context)
+
+
+def _is_general_specialized_pair(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_skill = primary_candidate.compiled_skill
+    candidate_skill = candidate.compiled_skill
+    primary_general = _is_general_skill(primary_skill)
+    candidate_general = _is_general_skill(candidate_skill)
+    primary_specialized = bool(
+        primary_skill.activation_paths or primary_skill.agent or primary_skill.context_hint
+    )
+    candidate_specialized = bool(
+        candidate_skill.activation_paths or candidate_skill.agent or candidate_skill.context_hint
+    )
+    return (primary_general and candidate_specialized) or (
+        candidate_general and primary_specialized
+    )
+
+
+def _is_orchestration_specialized_pair(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_orchestration = _is_orchestration_skill(primary_candidate.compiled_skill)
+    candidate_orchestration = _is_orchestration_skill(candidate.compiled_skill)
+    if primary_orchestration == candidate_orchestration:
+        return False
+    return True
+
+
+def _has_strong_when_to_use_overlap(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_terms = _normalized_token_set(primary_candidate.compiled_skill.when_to_use)
+    candidate_terms = _normalized_token_set(candidate.compiled_skill.when_to_use)
+    overlap = primary_terms & candidate_terms
+    return len(overlap) >= 2
+
+
+def _has_different_source_complement(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_skill = primary_candidate.compiled_skill
+    candidate_skill = candidate.compiled_skill
+    if primary_skill.identity.source_kind == candidate_skill.identity.source_kind:
+        return False
+    return _has_strong_when_to_use_overlap(
+        primary_candidate, candidate
+    ) or _has_complementary_agent_or_context(
+        primary_candidate,
+        candidate,
+    )
+
+
+def _is_general_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
+    tokens = _normalized_token_set(
+        " ".join(
+            part
+            for part in (
+                compiled_skill.name,
+                compiled_skill.directory_name,
+                compiled_skill.when_to_use or "",
+            )
+            if part
+        )
+    )
+    return any(
+        token in tokens for token in {"general", "triage", "planner", "planning", "baseline"}
+    )
+
+
+def _is_orchestration_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
+    tokens = _normalized_token_set(
+        " ".join(
+            part
+            for part in (
+                compiled_skill.name,
+                compiled_skill.directory_name,
+                compiled_skill.when_to_use or "",
+            )
+            if part
+        )
+    )
+    return any(
+        token in tokens
+        for token in {
+            "orchestration",
+            "orchestrate",
+            "workflow",
+            "planner",
+            "coordination",
+            "validation",
+        }
+    )
+
+
+def _normalized_token_set(text: str | None) -> set[str]:
+    return _tokenize(text or "")
 
 
 def _build_resolved_skill_candidate(

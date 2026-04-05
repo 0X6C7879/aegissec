@@ -118,42 +118,80 @@ def format_message_content(content: str, attachments: list[AttachmentMetadata]) 
 def render_skill_catalog_context(available_skills: list[SkillAgentSummaryRead]) -> str | None:
     if not available_skills:
         return None
-    lines = [
-        (
-            "Top ranked skills for current context (catalog shortlist only; use "
-            "read_skill_content for the real SKILL.md body and prefer the highest-ranked "
-            "skill unless a lower-ranked skill is more specific to the exact subtask):"
-        )
-    ]
-    for index, skill in enumerate(available_skills, start=1):
-        description = " ".join(skill.description.split()) or "No description provided."
-        if len(description) > 140:
-            description = f"{description[:137].rstrip()}..."
-        label = skill.directory_name
-        if skill.name != skill.directory_name:
-            label = f"{skill.directory_name} (name: {skill.name})"
-        metadata_bits = [f"score={skill.total_score}"]
-        if skill.selected:
-            metadata_bits.append("selected=true")
-        if skill.agent:
-            metadata_bits.append(f"agent={skill.agent}")
-        if skill.effort:
-            metadata_bits.append(f"effort={skill.effort}")
-        if skill.when_to_use:
-            metadata_bits.append(f"when_to_use={skill.when_to_use}")
-        if skill.paths:
-            metadata_bits.append(f"paths={skill.paths}")
-        lines.append(f"- {index}. {label}: {description} | {' | '.join(metadata_bits)}")
-        if skill.reasons:
-            lines.append(f"  why: {'; '.join(skill.reasons[:3])}")
+    primary_skills = [skill for skill in available_skills if skill.role == "primary"]
+    supporting_skills = [skill for skill in available_skills if skill.role == "supporting"]
+    reference_skills = [skill for skill in available_skills if skill.role == "reference"]
+    if not primary_skills and not supporting_skills and not reference_skills:
+        primary_skills = list(available_skills)
+
+    lines = ["Primary skill for current context:"]
+    if not primary_skills:
+        lines.append("- None")
+    else:
+        for index, skill in enumerate(primary_skills, start=1):
+            lines.extend(_render_skill_catalog_entry(skill, index=index))
+
+    lines.append("")
+    lines.append("Supporting skills also loaded:")
+    if not supporting_skills:
+        lines.append("- None")
+    else:
+        for index, skill in enumerate(supporting_skills, start=1):
+            lines.extend(_render_skill_catalog_entry(skill, index=index))
+
+    if reference_skills:
+        lines.append("")
+        lines.append("Reference-only related skills:")
+        for skill in reference_skills:
+            lines.extend(_render_skill_catalog_entry(skill, index=None))
+
+    lines.append("")
+    lines.append(
+        "Use the primary skill by default, and combine supporting skills when subtasks span "
+        "planning, execution, validation, or broader general-plus-specific overlap."
+    )
+    lines.append(
+        "For the real SKILL.md body, call read_skill_content before guessing implementation "
+        "details."
+    )
     lines.append(
         "If the user asks to list skills, explain a skill, or use a skill, call the skills "
         "tools before asking broad clarification questions. Skill names in this catalog are "
         "reference entries, not callable tools. Fixed callable tool names are "
-        "execute_kali_command, list_available_skills, and read_skill_content. Additional "
+        "execute_kali_command, list_available_skills, execute_skill, and "
+        "read_skill_content. Additional "
         "callable MCP tool aliases may appear in the capability context."
     )
     return "\n".join(lines)
+
+
+def _render_skill_catalog_entry(
+    skill: SkillAgentSummaryRead,
+    *,
+    index: int | None,
+) -> list[str]:
+    description = " ".join(skill.description.split()) or "No description provided."
+    if len(description) > 140:
+        description = f"{description[:137].rstrip()}..."
+    label = skill.directory_name
+    if skill.name != skill.directory_name:
+        label = f"{skill.directory_name} (name: {skill.name})"
+    prefix = f"- {index}." if index is not None else "-"
+    metadata_bits = [f"score={skill.total_score}"]
+    if skill.role:
+        metadata_bits.append(f"role={skill.role}")
+    if skill.agent:
+        metadata_bits.append(f"agent={skill.agent}")
+    if skill.effort:
+        metadata_bits.append(f"effort={skill.effort}")
+    if skill.when_to_use:
+        metadata_bits.append(f"when_to_use={skill.when_to_use}")
+    if skill.paths:
+        metadata_bits.append(f"paths={skill.paths}")
+    lines = [f"{prefix} {label}: {description} | {' | '.join(metadata_bits)}"]
+    if skill.reasons:
+        lines.append(f"  why: {'; '.join(skill.reasons[:3])}")
+    return lines
 
 
 def build_chat_capability_prompt(

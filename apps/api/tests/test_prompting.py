@@ -6,6 +6,7 @@ from app.agent.prompting import (
     build_chat_capability_prompt,
     build_openai_prompt_assembly,
     build_workflow_prompting_state,
+    render_skill_catalog_context,
     split_skill_context_prompt,
 )
 from app.compat.mcp.service import MCPService
@@ -135,6 +136,51 @@ def test_build_chat_capability_prompt_combines_inventory_schema_and_prompt_fragm
     assert "Inventory" in result
     assert "Schema" in result
     assert "Prompt" in result
+
+
+def test_render_skill_catalog_context_shows_primary_supporting_and_reference_sections() -> None:
+    rendered = render_skill_catalog_context(
+        [
+            SkillAgentSummaryRead(
+                id="skill-1",
+                name="api-skill",
+                directory_name="api-skill",
+                description="API validation skill.",
+                compatibility=[],
+                entry_file="skills/api-skill/SKILL.md",
+                total_score=42,
+                role="primary",
+                reasons=["path matched"],
+            ),
+            SkillAgentSummaryRead(
+                id="skill-2",
+                name="triage-planner",
+                directory_name="triage-planner",
+                description="General triage skill.",
+                compatibility=[],
+                entry_file="skills/triage-planner/SKILL.md",
+                total_score=18,
+                role="supporting",
+                reasons=["general + specialized pairing"],
+            ),
+            SkillAgentSummaryRead(
+                id="skill-3",
+                name="mcp-ref",
+                directory_name="mcp-ref",
+                description="Reference skill.",
+                compatibility=[],
+                entry_file="skills/mcp-ref/SKILL.md",
+                total_score=9,
+                role="reference",
+                reasons=["non-executable context"],
+            ),
+        ]
+    )
+
+    assert rendered is not None
+    assert "Primary skill for current context" in rendered
+    assert "Supporting skills also loaded" in rendered
+    assert "Reference-only related skills" in rendered
 
 
 def test_build_workflow_prompting_state_returns_budget_and_fragment_provenance() -> None:

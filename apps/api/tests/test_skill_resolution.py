@@ -20,16 +20,11 @@ def test_path_matched_skill_ranks_above_unconditional() -> None:
 
     result = resolve_skill_candidates([unconditional, path_matched], request)
 
-    assert [candidate.compiled_skill.directory_name for candidate in result.shortlisted_candidates][
-        :2
-    ] == [
-        "api-skill",
-        "always-on",
-    ]
-    assert (
-        result.shortlisted_candidates[0].score_breakdown.path_score
-        > result.shortlisted_candidates[1].score_breakdown.path_score
-    )
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.shortlisted_candidates
+    ] == ["api-skill"]
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.score_breakdown.path_score > 0
 
 
 def test_agent_role_match_boosts_ranking() -> None:
@@ -104,6 +99,98 @@ def test_reference_only_candidates_can_be_included_separately() -> None:
     assert [
         candidate.compiled_skill.directory_name for candidate in result.reference_candidates
     ] == ["mcp-scan"]
+
+
+def test_general_triage_and_path_specific_skill_are_both_kept() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/app/main.py"],
+        current_prompt="Need triage planning and API validation for auth flows",
+        top_k=5,
+    )
+    general_triage = _compiled_skill(
+        "triage-planner",
+        when_to_use="Use for triage planning and general validation.",
+    )
+    api_specific = _compiled_skill(
+        "api-auth",
+        activation_paths=["apps/api/**"],
+        when_to_use="Use for API auth validation and endpoint review.",
+    )
+
+    result = resolve_skill_candidates([general_triage, api_specific], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "api-auth"
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.supporting_candidates
+    ] == ["triage-planner"]
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.all_selected_candidates
+    ] == [
+        "api-auth",
+        "triage-planner",
+    ]
+
+
+def test_close_score_complementary_skill_becomes_supporting() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Need browser automation validation and planning",
+        agent_role="browser automation specialist",
+        top_k=5,
+    )
+    browser_primary = _compiled_skill(
+        "browser-executor",
+        when_to_use="Use for browser automation validation.",
+        agent="browser automation specialist",
+    )
+    planner_support = _compiled_skill(
+        "browser-planner",
+        when_to_use="Use for browser automation planning and validation.",
+        agent="planning analyst",
+    )
+
+    result = resolve_skill_candidates([planner_support, browser_primary], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "browser-executor"
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.supporting_candidates
+    ] == ["browser-planner"]
+
+
+def test_highly_redundant_skill_is_rejected() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/app/main.py"],
+        current_prompt="Need API audit",
+        top_k=5,
+    )
+    primary = _compiled_skill(
+        "api-audit-primary",
+        activation_paths=["apps/api/**"],
+        when_to_use="Use for API audit and endpoint review.",
+        agent="api analyst",
+        fingerprint="aaa-primary",
+    )
+    redundant = _compiled_skill(
+        "api-audit-redundant",
+        activation_paths=["apps/api/**"],
+        when_to_use="Use for API audit and endpoint review.",
+        agent="api analyst",
+        fingerprint="zzz-redundant",
+    )
+
+    result = resolve_skill_candidates([redundant, primary], request)
+
+    assert result.primary_candidate is not None
+    assert result.supporting_candidates == []
+    rejected = {
+        candidate.compiled_skill.directory_name: candidate
+        for candidate in result.rejected_candidates
+    }
+    primary_name = result.primary_candidate.compiled_skill.directory_name
+    assert primary_name in {"api-audit-primary", "api-audit-redundant"}
+    assert set(rejected) == ({"api-audit-primary", "api-audit-redundant"} - {primary_name})
+    assert result.rejected_candidates[0].rejected_reason == "redundant_with_primary"
 
 
 def test_tie_breaker_is_stable_and_deterministic() -> None:
@@ -204,11 +291,11 @@ def test_prompt_fragment_shows_ranked_shortlist_with_selection_guidance() -> Non
 
     fragment = build_skill_candidate_prompt_fragment(result)
 
-    assert "Top ranked skills for current context" in fragment
-    assert "pick the highest-ranked skill unless a lower-ranked skill is more specific" in fragment
+    assert "Primary skill for current context" in fragment
+    assert "Supporting skills also loaded" in fragment
     assert "1. api-audit [score=" in fragment
-    assert "2. always-on [score=" in fragment
-    assert "Reference-only ranked candidates" in fragment
+    assert "- None" in fragment
+    assert "Reference-only related skills" in fragment
 
 
 def _compiled_skill(
@@ -222,6 +309,7 @@ def _compiled_skill(
     invocable: bool = True,
     source_kind: skill_models.SkillSourceKind = skill_models.SkillSourceKind.FILESYSTEM,
     fingerprint: str | None = None,
+    context_hint: str | None = None,
 ) -> skill_models.CompiledSkill:
     return skill_models.CompiledSkill(
         identity=skill_models.SkillSourceIdentity(
@@ -247,7 +335,7 @@ def _compiled_skill(
         activation_paths=list(activation_paths or []),
         invocable=invocable,
         when_to_use=when_to_use,
-        context_hint=None,
+        context_hint=context_hint,
         agent=agent,
         effort="medium",
         loaded_from=f"skills/{directory_name}/SKILL.md",

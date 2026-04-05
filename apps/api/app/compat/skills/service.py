@@ -109,7 +109,7 @@ class SkillService:
         )
         summaries: list[SkillAgentSummaryRead] = []
         active_due_to_touched_paths = bool(touched_paths)
-        for candidate in resolution_result.shortlisted_candidates:
+        for candidate in resolution_result.all_selected_candidates:
             compiled_skill = candidate.compiled_skill
             prepared_invocation = self._summarize_prepared_invocation(
                 compiled_skill.prepared_invocation
@@ -151,6 +151,7 @@ class SkillService:
                     score_breakdown=candidate.score_breakdown.to_payload(),
                     reasons=list(candidate.reasons),
                     selected=candidate.selected,
+                    role=None if candidate.role is None else candidate.role.value,
                     rejected_reason=candidate.rejected_reason,
                 )
             )
@@ -230,7 +231,7 @@ class SkillService:
         )
         return [
             self._resolved_skill_candidate_payload(candidate)
-            for candidate in resolution_result.shortlisted_candidates
+            for candidate in resolution_result.all_selected_candidates
         ]
 
     def resolve_best_skill(
@@ -320,6 +321,10 @@ class SkillService:
         prepared_result = dict(best_skill_result)
         prepared_result["execution"] = execution_result.get("execution")
         prepared_result["skill"] = execution_result.get("skill")
+        prepared_result["primary_skill"] = best_skill_result.get("primary_skill")
+        prepared_result["supporting_skills"] = best_skill_result.get("supporting_skills", [])
+        prepared_result["reference_skills"] = best_skill_result.get("reference_skills", [])
+        prepared_result["selected_skills"] = best_skill_result.get("selected_skills", [])
         return prepared_result
 
     def build_ranked_skill_context_prompt_fragment(
@@ -480,15 +485,24 @@ class SkillService:
             touched_paths=touched_paths,
             include_reference_only=True,
         )
+        primary_skill = best_skill_result.get("primary_skill")
+        supporting_skills = best_skill_result.get("supporting_skills", [])
+        reference_skills = best_skill_result.get("reference_skills", [])
+        selected_skills = cast(
+            list[dict[str, object]], best_skill_result.get("selected_skills", [])
+        )
+        selected_skill_ids = [
+            item.get("id")
+            for item in selected_skills
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
         return {
-            "skills": [
-                self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
-                for candidate in resolution_result.shortlisted_candidates
-            ],
-            "reference_skills": [
-                self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
-                for candidate in resolution_result.reference_candidates
-            ],
+            "skills": selected_skills,
+            "primary_skill": primary_skill,
+            "supporting_skills": supporting_skills,
+            "reference_skills": reference_skills,
+            "selected_skills": selected_skills,
+            "selected_skill_ids": selected_skill_ids,
             "selected_skill": best_skill_result.get("selected_skill"),
             "selected_skill_id": best_skill_result.get("selected_skill_id"),
             "selected_skill_rank": best_skill_result.get("selected_skill_rank"),
@@ -530,9 +544,9 @@ class SkillService:
             available_tools=available_tools,
             invocation_arguments=invocation_arguments,
         )
-        skills = payload.get("skills", [])
+        selected_skills = payload.get("selected_skills", [])
         reference_skills = payload.get("reference_skills", [])
-        if (not isinstance(skills, list) or not skills) and (
+        if (not isinstance(selected_skills, list) or not selected_skills) and (
             not isinstance(reference_skills, list) or not reference_skills
         ):
             return "No loaded skills are currently available."
@@ -552,6 +566,7 @@ class SkillService:
                 include_reference_only=True,
             )
         ]
+        lines.append("")
         lines.append(
             "Never call a skill slug or skill name directly as a tool alias unless the runtime "
             "explicitly exposes it. The fixed callable tool names are execute_kali_command, "
@@ -1075,6 +1090,7 @@ class SkillService:
             "resolved_identity": self._resolved_identity_payload(compiled_skill),
             "active_due_to_touched_paths": active_due_to_touched_paths,
             "selected": selected,
+            "role": None,
         }
 
     def _resolved_skill_candidate_payload(
@@ -1095,6 +1111,7 @@ class SkillService:
                 "total_score": candidate.total_score,
                 "score_breakdown": candidate.score_breakdown.to_payload(),
                 "reasons": list(candidate.reasons),
+                "role": None if candidate.role is None else candidate.role.value,
                 "rejected_reason": candidate.rejected_reason,
             }
         )
@@ -1107,8 +1124,10 @@ class SkillService:
         selected_candidate = resolution_result.selected_candidate
         if selected_candidate is not None:
             return selected_candidate
-        if resolution_result.shortlisted_candidates:
-            return resolution_result.shortlisted_candidates[0]
+        if resolution_result.primary_candidate is not None:
+            return resolution_result.primary_candidate
+        if resolution_result.all_selected_candidates:
+            return resolution_result.all_selected_candidates[0]
         return None
 
     def _best_skill_payload_from_resolution(
@@ -1142,6 +1161,27 @@ class SkillService:
             selected_skill_id = selected_candidate.compiled_skill.skill_id
             selected_skill_rank = selected_candidate.rank
 
+        primary_skill = (
+            None
+            if resolution_result.primary_candidate is None
+            else self._resolved_skill_candidate_payload(
+                resolution_result.primary_candidate,
+                touched_paths=touched_paths,
+            )
+        )
+        supporting_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in resolution_result.supporting_candidates
+        ]
+        reference_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in resolution_result.reference_candidates
+        ]
+        selected_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in resolution_result.all_selected_candidates
+        ]
+
         resolution_payload = resolution_result.to_payload(
             payload_builder=lambda candidate: self._compiled_skill_payload(
                 candidate.compiled_skill,
@@ -1155,10 +1195,15 @@ class SkillService:
             "selected_skill": selected_skill,
             "selected_skill_id": selected_skill_id,
             "selected_skill_rank": selected_skill_rank,
+            "primary_skill": primary_skill,
+            "supporting_skills": supporting_skills,
+            "reference_skills": reference_skills,
+            "selected_skills": selected_skills,
             "resolution_request": resolution_result.request.to_payload(),
             "resolution_summary": {
                 "active_candidate_count": resolution_result.active_candidate_count,
                 "shortlisted_count": len(resolution_result.shortlisted_candidates),
+                "supporting_count": len(resolution_result.supporting_candidates),
                 "reference_count": len(resolution_result.reference_candidates),
                 "rejected_count": len(resolution_result.rejected_candidates),
                 "selected_skill_id": resolution_payload.get("selected_skill_id"),

@@ -913,12 +913,10 @@ parameter_schema:
         == payload["payload"]["resolution"]["selected_skill_id"]
     )
     assert payload["payload"]["selected_skill_rank"] == payload["payload"]["selected_skill"]["rank"]
-    assert "Top ranked skills for current context" in payload["prompt_fragment"]
+    assert "Primary skill for current context" in payload["prompt_fragment"]
+    assert "Supporting skills also loaded" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]
-    assert (
-        "pick the highest-ranked skill unless a lower-ranked skill is more specific"
-        in payload["prompt_fragment"]
-    )
+    assert "Use the primary skill by default" in payload["prompt_fragment"]
     assert payload["payload"]["resolution"]["active_candidate_count"] >= 1
 
 
