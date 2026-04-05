@@ -47,7 +47,6 @@
 | 领域 | 后端类型 | 前端类型 |
 | --- | --- | --- |
 | Session 列表/详情 | `SessionRead` / `SessionDetail` | `SessionSummary` / `SessionDetail` |
-| Task / Workflow | `WorkflowRunDetailRead` | `WorkflowRunDetail` / `WorkflowTaskNode` |
 | Graph | `SessionGraphRead` | `SessionGraph` / `SessionGraphNode` / `SessionGraphEdge` |
 | Skills | `SkillRecordRead` | `SkillRecord` |
 | MCP | `MCPServerRead` / `MCPToolInvokeResponse` | `MCPServer` / `MCPToolInvokeResponse` |
@@ -83,21 +82,18 @@
 - `POST /api/sessions/{session_id}/chat`
 - `WS /api/sessions/{session_id}/events`
 
-### 4.3 Workflows / Graphs
+### 4.3 Graphs
 
-- `GET /api/workflows/templates`
-- `POST /api/workflows/{template_name}/start`
-- `GET /api/workflows/{run_id}`
-- `POST /api/workflows/{run_id}/advance`
-- `POST /api/workflows/{run_id}/tasks/reorder-priority`
-- `GET /api/workflows/{run_id}/export`
-- `GET /api/workflows/{run_id}/replay`
 - `GET /api/sessions/{session_id}/graphs/task`
 - `GET /api/sessions/{session_id}/graphs/evidence`
 - `GET /api/sessions/{session_id}/graphs/causal`
+- `GET /api/sessions/{session_id}/graphs/attack`
 - `GET /api/workflows/{run_id}/graphs/task`
 - `GET /api/workflows/{run_id}/graphs/evidence`
 - `GET /api/workflows/{run_id}/graphs/causal`
+- `GET /api/workflows/{run_id}/graphs/attack`
+
+说明：run-scoped workflow graph 路由当前仍作为图谱兼容查询面保留，但不再代表一组公开的 workflow 管理 API。
 
 ### 4.4 Runtime
 
@@ -190,5 +186,5 @@ Session WebSocket 当前已使用下列事件：
 1. 不再使用 `TODO.md` 早期的 `/prompt`、`/messages`、`/control` 等旧占位命名。
 2. 会话输入统一走 `POST /api/sessions/{session_id}/chat`。
 3. 日志与历史统一走 `GET /api/sessions/{session_id}/history`。
-4. 导出/回放统一走 workflow run 维度接口。
+4. 图谱查询优先走 session 维度接口；run-scoped workflow graph 仅保留兼容查询用途。
 5. 前端环境变量仅暴露 `VITE_*` 前缀；服务端配置统一走 `.env` / `.env.local`。
