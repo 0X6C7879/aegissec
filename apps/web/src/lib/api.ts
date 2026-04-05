@@ -9,22 +9,8 @@ import type {
   SessionReplay,
   SessionSummary,
 } from "../types/sessions";
-import type {
-  ProjectCreateRequest,
-  ProjectDetail,
-  ProjectSummary,
-  ProjectUpdateRequest,
-} from "../types/projects";
 import type { SessionHistoryEntry } from "../types/history";
 import type { SessionGraph } from "../types/graphs";
-import type {
-  WorkflowRunDetail,
-  WorkflowRunExport,
-  WorkflowRunReplay,
-  WorkflowStartRequest,
-  WorkflowTaskPriorityReorderRequest,
-  WorkflowTemplate,
-} from "../types/workflows";
 import type {
   RuntimeArtifact,
   RuntimeArtifactsCleanupResult,
@@ -282,53 +268,6 @@ export async function getSessionArtifacts(
   );
 }
 
-export async function listProjects(
-  params: {
-    include_deleted?: boolean;
-    q?: string | null;
-    page?: number;
-    page_size?: number;
-    sort_by?: "updated_at" | "created_at" | "name";
-    sort_order?: "asc" | "desc";
-  } = {},
-  signal?: AbortSignal,
-): Promise<ProjectSummary[]> {
-  return apiRequest<ProjectSummary[]>(`/api/projects${buildQueryString(params)}`, { signal });
-}
-
-export async function getProject(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
-  return apiRequest<ProjectDetail>(`/api/projects/${projectId}`, { signal });
-}
-
-export async function createProject(payload: ProjectCreateRequest): Promise<ProjectSummary> {
-  return apiRequest<ProjectSummary>("/api/projects", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateProject(
-  projectId: string,
-  payload: ProjectUpdateRequest,
-): Promise<ProjectSummary> {
-  return apiRequest<ProjectSummary>(`/api/projects/${projectId}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function deleteProject(projectId: string): Promise<void> {
-  return apiRequest<void>(`/api/projects/${projectId}`, {
-    method: "DELETE",
-  });
-}
-
-export async function restoreProject(projectId: string): Promise<ProjectSummary> {
-  return apiRequest<ProjectSummary>(`/api/projects/${projectId}/restore`, {
-    method: "POST",
-  });
-}
-
 export async function getSession(sessionId: string, signal?: AbortSignal): Promise<SessionDetail> {
   return apiRequest<SessionDetail>(`/api/sessions/${sessionId}`, { signal });
 }
@@ -379,81 +318,11 @@ export async function getEvidenceGraph(
   return apiRequest<SessionGraph>(`/api/sessions/${sessionId}/graphs/evidence`, { signal });
 }
 
-export async function getTaskGraphForRun(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<SessionGraph> {
-  return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/task`, { signal });
-}
-
 export async function getAttackGraphForRun(
   runId: string,
   signal?: AbortSignal,
 ): Promise<SessionGraph> {
   return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/attack`, { signal });
-}
-
-export async function getCausalGraphForRun(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<SessionGraph> {
-  return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/causal`, { signal });
-}
-
-export async function getEvidenceGraphForRun(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<SessionGraph> {
-  return apiRequest<SessionGraph>(`/api/workflows/${runId}/graphs/evidence`, { signal });
-}
-
-export async function listWorkflowTemplates(signal?: AbortSignal): Promise<WorkflowTemplate[]> {
-  return apiRequest<WorkflowTemplate[]>("/api/workflows/templates", { signal });
-}
-
-export async function startWorkflow(payload: WorkflowStartRequest): Promise<WorkflowRunDetail> {
-  return apiRequest<WorkflowRunDetail>("/api/workflows/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function getWorkflow(runId: string, signal?: AbortSignal): Promise<WorkflowRunDetail> {
-  return apiRequest<WorkflowRunDetail>(`/api/workflows/${runId}`, { signal });
-}
-
-export async function advanceWorkflow(
-  runId: string,
-  payload: { approve?: boolean } = {},
-): Promise<WorkflowRunDetail> {
-  return apiRequest<WorkflowRunDetail>(`/api/workflows/${runId}/advance`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function reorderWorkflowTaskPriorities(
-  runId: string,
-  payload: WorkflowTaskPriorityReorderRequest,
-): Promise<WorkflowRunDetail> {
-  return apiRequest<WorkflowRunDetail>(`/api/workflows/${runId}/tasks/reorder-priority`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function getWorkflowExport(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<WorkflowRunExport> {
-  return apiRequest<WorkflowRunExport>(`/api/workflows/${runId}/export`, { signal });
-}
-
-export async function getWorkflowReplay(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<WorkflowRunReplay> {
-  return apiRequest<WorkflowRunReplay>(`/api/workflows/${runId}/replay`, { signal });
 }
 
 export async function createSession(title?: string): Promise<SessionSummary> {
