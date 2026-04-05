@@ -168,11 +168,11 @@ def test_attack_graph_route_returns_unified_attack_path_for_new_run(client: Test
     assert response.status_code == 200
     payload = api_data(response)
     assert payload["graph_type"] == "attack"
-    assert payload["workflow_run_id"] == ""
-    assert payload["current_stage"] is None
+    assert payload["workflow_run_id"] == workflow["id"]
+    assert payload["current_stage"] == "scope_guard"
     assert payload["session_id"] == session_id
-    assert payload["nodes"] == []
-    assert payload["edges"] == []
+    assert payload["nodes"]
+    assert any(node["node_type"] == "outcome" for node in payload["nodes"])
 
     run_response = client.get(f"/api/workflows/{cast(str, workflow['id'])}/graphs/attack")
 

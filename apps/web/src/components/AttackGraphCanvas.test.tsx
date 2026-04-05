@@ -195,4 +195,141 @@ describe("AttackGraphCanvas helpers", () => {
     expect(quietLayout.edges[0]?.label).toBeUndefined();
     expect(hoveredLayout.edges[0]?.label).toBe("发现");
   });
+
+  it("keeps the full ancestor and descendant path visible for a selected node", () => {
+    const graph: SessionGraph = {
+      ...createGraph(),
+      nodes: [
+        {
+          id: "goal-1",
+          graph_type: "attack",
+          node_type: "goal",
+          label: "目标",
+          data: {},
+        },
+        {
+          id: "surface-1",
+          graph_type: "attack",
+          node_type: "surface",
+          label: "攻击面",
+          data: {},
+        },
+        {
+          id: "exploit-1",
+          graph_type: "attack",
+          node_type: "exploit",
+          label: "验证链路",
+          data: {},
+        },
+        {
+          id: "outcome-1",
+          graph_type: "attack",
+          node_type: "outcome",
+          label: "结果",
+          data: {},
+        },
+        {
+          id: "side-1",
+          graph_type: "attack",
+          node_type: "observation",
+          label: "旁支",
+          data: {},
+        },
+      ],
+      edges: [
+        {
+          id: "edge-goal-surface",
+          graph_type: "attack",
+          source: "goal-1",
+          target: "surface-1",
+          relation: "attempts",
+          data: {},
+        },
+        {
+          id: "edge-surface-exploit",
+          graph_type: "attack",
+          source: "surface-1",
+          target: "exploit-1",
+          relation: "discovers",
+          data: {},
+        },
+        {
+          id: "edge-exploit-outcome",
+          graph_type: "attack",
+          source: "exploit-1",
+          target: "outcome-1",
+          relation: "confirms",
+          data: {},
+        },
+        {
+          id: "edge-side-outcome",
+          graph_type: "attack",
+          source: "side-1",
+          target: "outcome-1",
+          relation: "confirms",
+          data: {},
+        },
+      ],
+    };
+
+    const layout = buildAutoLayout(graph, "exploit-1", null);
+    const nodeById = new Map(layout.nodes.map((node) => [node.id, node]));
+    const edgeById = new Map(layout.edges.map((edge) => [edge.id, edge]));
+
+    expect(nodeById.get("goal-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("surface-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("exploit-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("outcome-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("side-1")?.data.isDimmed).toBe(true);
+    expect(edgeById.get("edge-goal-surface")?.label).toBe("尝试");
+    expect(edgeById.get("edge-surface-exploit")?.label).toBe("发现");
+    expect(edgeById.get("edge-exploit-outcome")?.label).toBe("确认");
+    expect(edgeById.get("edge-side-outcome")?.style?.strokeOpacity).toBe(0.52);
+  });
+
+  it("handles cycles when expanding selected path context", () => {
+    const graph: SessionGraph = {
+      ...createGraph(),
+      nodes: [
+        {
+          id: "surface-1",
+          graph_type: "attack",
+          node_type: "surface",
+          label: "入口",
+          data: {},
+        },
+        {
+          id: "exploit-1",
+          graph_type: "attack",
+          node_type: "exploit",
+          label: "利用",
+          data: {},
+        },
+      ],
+      edges: [
+        {
+          id: "edge-forward",
+          graph_type: "attack",
+          source: "surface-1",
+          target: "exploit-1",
+          relation: "discovers",
+          data: {},
+        },
+        {
+          id: "edge-cycle",
+          graph_type: "attack",
+          source: "exploit-1",
+          target: "surface-1",
+          relation: "branches_from",
+          data: {},
+        },
+      ],
+    };
+
+    const layout = buildAutoLayout(graph, "exploit-1", null);
+
+    expect(layout.nodes).toHaveLength(2);
+    expect(layout.edges.find((edge) => edge.id === "edge-forward")?.label).toBe("发现");
+    expect(layout.edges.find((edge) => edge.id === "edge-cycle")?.label).toBe("分支自");
+  });
 });

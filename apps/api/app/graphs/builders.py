@@ -637,6 +637,11 @@ class AttackGraphBuilder:
                     data={"source_graphs": ["task", "workflow"]},
                 )
 
+        nodes_by_id, edges_by_id = self._prune_attack_graph_for_default_view(
+            nodes_by_id=nodes_by_id,
+            edges_by_id=edges_by_id,
+        )
+
         sorted_nodes = sorted(
             nodes_by_id.values(),
             key=lambda node: (
@@ -657,6 +662,122 @@ class AttackGraphBuilder:
             nodes=sorted_nodes,
             edges=sorted_edges,
         )
+
+    def _prune_attack_graph_for_default_view(
+        self,
+        *,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        edges_by_id: dict[str, SessionGraphEdgeRead],
+    ) -> tuple[dict[str, SessionGraphNodeRead], dict[str, SessionGraphEdgeRead]]:
+        removable_node_ids = {
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type == "action"
+            and not self._node_is_active(node)
+            and not self._node_is_required_terminal(node, edges_by_id.values())
+        }
+        if not removable_node_ids:
+            return nodes_by_id, edges_by_id
+
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
+        for edge in edges_by_id.values():
+            incoming_edges_by_node.setdefault(edge.target, []).append(edge)
+            outgoing_edges_by_node.setdefault(edge.source, []).append(edge)
+
+        pruned_edges_by_id = {
+            edge_id: edge
+            for edge_id, edge in edges_by_id.items()
+            if edge.source not in removable_node_ids and edge.target not in removable_node_ids
+        }
+        for node_id in removable_node_ids:
+            incoming_edges = incoming_edges_by_node.get(node_id, [])
+            outgoing_edges = outgoing_edges_by_node.get(node_id, [])
+            for incoming_edge in incoming_edges:
+                if incoming_edge.source in removable_node_ids:
+                    continue
+                for outgoing_edge in outgoing_edges:
+                    if outgoing_edge.target in removable_node_ids:
+                        continue
+                    if incoming_edge.source == outgoing_edge.target:
+                        continue
+                    bridge_relation = self._bridge_attack_edge_relation(
+                        incoming_relation=incoming_edge.relation,
+                        outgoing_relation=outgoing_edge.relation,
+                    )
+                    bridge_edge_id = (
+                        f"attack:{incoming_edge.source}:{bridge_relation}:{outgoing_edge.target}"
+                    )
+                    if bridge_edge_id in pruned_edges_by_id:
+                        continue
+                    pruned_edges_by_id[bridge_edge_id] = SessionGraphEdgeRead(
+                        id=bridge_edge_id,
+                        graph_type=GraphType.ATTACK,
+                        source=incoming_edge.source,
+                        target=outgoing_edge.target,
+                        relation=bridge_relation,
+                        data=self._merge_attack_edge_data(incoming_edge, outgoing_edge),
+                    )
+
+        pruned_nodes_by_id = {
+            node_id: node
+            for node_id, node in nodes_by_id.items()
+            if node_id not in removable_node_ids
+        }
+        pruned_edges_by_id = {
+            edge_id: edge
+            for edge_id, edge in pruned_edges_by_id.items()
+            if edge.source in pruned_nodes_by_id and edge.target in pruned_nodes_by_id
+        }
+        return pruned_nodes_by_id, pruned_edges_by_id
+
+    def _node_is_active(self, node: SessionGraphNodeRead) -> bool:
+        status = node.data.get("status")
+        return bool(node.data.get("current") or node.data.get("active") or status == "in_progress")
+
+    def _node_is_required_terminal(
+        self,
+        node: SessionGraphNodeRead,
+        edges: Iterable[SessionGraphEdgeRead],
+    ) -> bool:
+        incoming_count = 0
+        outgoing_count = 0
+        for edge in edges:
+            if edge.target == node.id:
+                incoming_count += 1
+            if edge.source == node.id:
+                outgoing_count += 1
+        return incoming_count == 0 or outgoing_count == 0
+
+    def _bridge_attack_edge_relation(
+        self, *, incoming_relation: str, outgoing_relation: str
+    ) -> str:
+        if outgoing_relation != "attempts":
+            return outgoing_relation
+        return incoming_relation
+
+    def _merge_attack_edge_data(
+        self,
+        incoming_edge: SessionGraphEdgeRead,
+        outgoing_edge: SessionGraphEdgeRead,
+    ) -> dict[str, object]:
+        merged: dict[str, object] = {
+            **dict(incoming_edge.data),
+            **dict(outgoing_edge.data),
+        }
+        source_graphs: list[str] = []
+        for raw_value in (
+            incoming_edge.data.get("source_graphs"),
+            outgoing_edge.data.get("source_graphs"),
+        ):
+            if not isinstance(raw_value, list):
+                continue
+            for item in raw_value:
+                if isinstance(item, str) and item not in source_graphs:
+                    source_graphs.append(item)
+        if source_graphs:
+            merged["source_graphs"] = source_graphs
+        return merged
 
     def build_from_conversation(
         self,

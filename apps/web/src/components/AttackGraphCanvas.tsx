@@ -68,23 +68,61 @@ function buildNodeDisplay(node: SessionGraphNode): {
   };
 }
 
-function getSelectedNeighborhood(graph: SessionGraph, selectedNodeId: string | null): Set<string> {
-  const ids = new Set<string>();
+function getSelectedPathContext(
+  graph: SessionGraph,
+  selectedNodeId: string | null,
+): {
+  nodeIds: Set<string>;
+  edgeIds: Set<string>;
+} {
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
   if (!selectedNodeId) {
-    return ids;
+    return { nodeIds, edgeIds };
   }
 
-  ids.add(selectedNodeId);
+  nodeIds.add(selectedNodeId);
+  const outgoingEdgesByNode = new Map<string, SessionGraph["edges"]>();
+  const incomingEdgesByNode = new Map<string, SessionGraph["edges"]>();
   for (const edge of graph.edges) {
-    if (edge.source === selectedNodeId) {
-      ids.add(edge.target);
-    }
-    if (edge.target === selectedNodeId) {
-      ids.add(edge.source);
-    }
+    const outgoingEdges = outgoingEdgesByNode.get(edge.source) ?? [];
+    outgoingEdges.push(edge);
+    outgoingEdgesByNode.set(edge.source, outgoingEdges);
+
+    const incomingEdges = incomingEdgesByNode.get(edge.target) ?? [];
+    incomingEdges.push(edge);
+    incomingEdgesByNode.set(edge.target, incomingEdges);
   }
 
-  return ids;
+  const traverse = (
+    startNodeId: string,
+    edgeLookup: Map<string, SessionGraph["edges"]>,
+    readNextNodeId: (edge: SessionGraph["edges"][number]) => string,
+  ) => {
+    const queue = [startNodeId];
+    const visited = new Set<string>([startNodeId]);
+    while (queue.length > 0) {
+      const nodeId = queue.shift();
+      if (!nodeId) {
+        continue;
+      }
+      for (const edge of edgeLookup.get(nodeId) ?? []) {
+        edgeIds.add(edge.id);
+        const nextNodeId = readNextNodeId(edge);
+        nodeIds.add(nextNodeId);
+        if (visited.has(nextNodeId)) {
+          continue;
+        }
+        visited.add(nextNodeId);
+        queue.push(nextNodeId);
+      }
+    }
+  };
+
+  traverse(selectedNodeId, incomingEdgesByNode, (edge) => edge.source);
+  traverse(selectedNodeId, outgoingEdgesByNode, (edge) => edge.target);
+
+  return { nodeIds, edgeIds };
 }
 
 function getEdgeStroke(status: string | null, highlighted: boolean, dimmed: boolean): string {
@@ -136,7 +174,7 @@ export function buildAutoLayout(
   nodes: Node<AttackCanvasNodeData>[];
   edges: Edge[];
 } {
-  const selectedNeighborhood = getSelectedNeighborhood(graph, selectedNodeId);
+  const selectedPathContext = getSelectedPathContext(graph, selectedNodeId);
   const activeNodeIds = new Set(
     graph.nodes
       .filter(
@@ -176,8 +214,8 @@ export function buildAutoLayout(
     const { title, excerpt, emphasis } = buildNodeDisplay(node);
     const height = NODE_BASE_HEIGHT + (excerpt ? NODE_EXCERPT_HEIGHT : 0);
     const isSelected = selectedNodeId === node.id;
-    const isNeighborhoodNode = selectedNeighborhood.has(node.id);
-    const isDimmed = Boolean(selectedNodeId) && !isNeighborhoodNode;
+    const isContextNode = selectedPathContext.nodeIds.has(node.id);
+    const isDimmed = Boolean(selectedNodeId) && !isContextNode;
 
     return {
       id: node.id,
@@ -208,8 +246,7 @@ export function buildAutoLayout(
     const targetNode = nodeMap.get(edge.target);
     const sourceNode = nodeMap.get(edge.source);
     const edgeStatus = readString(edge.data.status) ?? readString(targetNode?.data.status) ?? null;
-    const isSelectedEdge =
-      selectedNodeId !== null && (edge.source === selectedNodeId || edge.target === selectedNodeId);
+    const isSelectedEdge = selectedPathContext.edgeIds.has(edge.id);
     const isActiveEdge = activeNodeIds.has(edge.source) || activeNodeIds.has(edge.target);
     const isHoveredEdge = hoveredEdgeId === edge.id;
     const touchesOutcome = sourceNode?.node_type === "outcome" || targetNode?.node_type === "outcome";

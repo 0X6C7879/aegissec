@@ -272,6 +272,69 @@ def test_attack_graph_builder_unifies_goal_tasks_observations_and_findings() -> 
         assert ("finding-auth", "supports", "finding-impact") in relations
 
 
+def test_attack_graph_builder_prunes_redundant_action_tasks_and_preserves_path_edges() -> None:
+    with _db_session() as db_session:
+        session = _create_session(db_session)
+        workflow_repository = WorkflowRepository(db_session)
+        run = workflow_repository.create_run(
+            session_id=session.id,
+            template_name="authorized-assessment",
+            status=WorkflowRunStatus.RUNNING,
+            current_stage="safe_validation",
+            started_at=datetime(2026, 4, 6, 9, 0, tzinfo=UTC),
+            ended_at=None,
+            state={
+                "goal": "Validate the semantic path.",
+                "current_stage": "safe_validation",
+                "execution_records": [],
+            },
+            last_error=None,
+        )
+        action_task = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="custom_stage.collect_runtime_context",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=1,
+            parent_id=None,
+            metadata={
+                "title": "收集运行时上下文",
+                "stage_key": "custom_stage",
+                "summary": "Generic action node that should collapse.",
+            },
+        )
+        run = workflow_repository.update_run(
+            run,
+            state={
+                "goal": "Validate the semantic path.",
+                "current_stage": "safe_validation",
+                "execution_records": [
+                    {
+                        "id": "trace-action-prune",
+                        "task_node_id": action_task.id,
+                        "status": "completed",
+                        "summary": "Observed reachable service.",
+                    }
+                ],
+            },
+        )
+
+        graph = AttackGraphBuilder().build(
+            run=run,
+            tasks=[action_task],
+            evidence_nodes=[],
+            evidence_edges=[],
+            causal_nodes=[],
+            causal_edges=[],
+        )
+
+        node_ids = {node.id for node in graph.nodes}
+        assert action_task.id not in node_ids
+        assert "trace-action-prune" in node_ids
+        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+        assert (f"goal:{run.id}", "discovers", "trace-action-prune") in relations
+
+
 def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_reasoning() -> None:
     with _db_session() as db_session:
         repository = SessionRepository(db_session)
