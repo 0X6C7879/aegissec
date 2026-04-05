@@ -154,7 +154,7 @@ AegisSec Agent 不会直接照搬这两个项目，而是做如下取舍：
 - Workspace 主工作台
 - Skills 管理页
 - MCP 管理页
-- Projects / History / Settings
+- Runtime / Settings
 - 右侧图谱与日志洞察面板
 - 审批卡与控制动作
 
@@ -165,7 +165,7 @@ AegisSec Agent 不会直接照搬这两个项目，而是做如下取舍：
 ```text
 ┌──────────────────────────────────────────────────────┐
 │                    Web UI (React)                   │
-│  Workspace / Skills / MCP / History / Settings     │
+│  Sessions / Skills / MCP / Runtime / Settings      │
 └───────────────────────┬──────────────────────────────┘
                         │ HTTP / WS
 ┌───────────────────────▼──────────────────────────────┐
@@ -215,7 +215,7 @@ AegisSec Agent 不会直接照搬这两个项目，而是做如下取舍：
 
 职责：
 - 接收用户目标
-- 选择 workflow 模板
+- 选择执行策略与下一步推进路径
 - 协调 Planner / Executor / Reflector
 - 维护会话状态机
 - 决定何时进入审批
@@ -372,8 +372,8 @@ UI 必须做到：
 - 工具 / 资源 / prompts 展示
 - 健康检查
 
-#### Projects / History / Settings
-做轻量管理，不做复杂后台。
+#### Runtime / Settings
+围绕运行时状态、执行记录与本地设置提供轻量管理，不做复杂后台。
 
 ### 7.3 UI 不做什么
 
@@ -458,7 +458,7 @@ python scripts/check.py
 python scripts/seed_demo.py
 ```
 
-该脚本会写入一个 Demo Project 和一个 Demo Session，方便在 Workspace / History 页面做浏览器验收。
+该脚本会写入一个 Demo Session，方便在 Sessions / Runtime 页面做浏览器验收。
 
 ### 9.4 Docker Compose 一键启动
 
@@ -527,7 +527,7 @@ aegissec/
 - 审批机制
 - Reflector 纠偏
 - 报告导出
-- 项目空间与历史回放
+- Runtime 执行记录与设置完善
 
 ### v0.4
 - 角色模板
