@@ -420,6 +420,10 @@ def test_attack_graph_builder_merges_evidence_nodes_and_execution_records() -> N
 
         action_node = next(node for node in graph.nodes if node.id == "action:trace-combined-1")
         assert action_node.data["trace_id"] == "trace-combined-1"
+        assert action_node.data["attempts_count"] == 2
+        merged_from = action_node.data["merged_from"]
+        assert isinstance(merged_from, list)
+        assert len(merged_from) == 2
         assert action_node.data["response_excerpt"] == "HTTP 200 from /health"
         assert action_node.data["stdout"] == "200 OK"
         source_graphs = action_node.data["source_graphs"]
@@ -427,11 +431,11 @@ def test_attack_graph_builder_merges_evidence_nodes_and_execution_records() -> N
         assert sorted(source_graphs) == ["evidence", "task", "workflow"]
 
 
-def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> None:
+def test_attack_graph_builder_aggregates_repetitive_low_value_actions_into_single_milestone(
+) -> None:
     with _db_session() as db_session:
         session = _create_session(db_session)
         workflow_repository = WorkflowRepository(db_session)
-        graph_repository = GraphRepository(db_session)
         run = workflow_repository.create_run(
             session_id=session.id,
             template_name="authorized-assessment",
@@ -440,11 +444,10 @@ def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> No
             started_at=datetime(2026, 4, 6, 10, 0, tzinfo=UTC),
             ended_at=datetime(2026, 4, 6, 10, 30, tzinfo=UTC),
             state={
-                "goal": "Keep the semantic attack path readable.",
+                "goal": "Keep the milestone attack path readable.",
                 "current_stage": "safe_validation",
                 "seed_message_id": "message-seed-1",
                 "execution_records": [],
-                "hypothesis_updates": [],
             },
             last_error=None,
         )
@@ -465,7 +468,7 @@ def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> No
             workflow_run_id=run.id,
             name="safe_validation.validate_primary_hypothesis",
             node_type=TaskNodeType.TASK,
-            status=TaskNodeStatus.COMPLETED,
+            status=TaskNodeStatus.BLOCKED,
             sequence=2,
             parent_id=None,
             metadata={
@@ -475,115 +478,67 @@ def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> No
                 "depends_on_task_ids": [collect.id],
             },
         )
-        noise_action = workflow_repository.create_task_node(
-            workflow_run_id=run.id,
-            name="custom_stage.collect_runtime_context",
-            node_type=TaskNodeType.TASK,
-            status=TaskNodeStatus.COMPLETED,
-            sequence=3,
-            parent_id=None,
-            metadata={
-                "title": "收集运行时上下文",
-                "stage_key": "custom_stage",
-                "summary": "Generic action node that should collapse.",
-            },
-        )
+        repeated_probe_records = [
+            {
+                "task_node_id": collect.id,
+                "status": "completed",
+                "command": "curl -s -I https://target.internal/health",
+                "request_summary": "Probe the health endpoint",
+                "observation_summary": "Health endpoint returned 200.",
+            }
+            for _ in range(9)
+        ]
         run = workflow_repository.update_run(
             run,
             state={
-                "goal": "Keep the semantic attack path readable.",
+                "goal": "Keep the milestone attack path readable.",
                 "current_stage": "safe_validation",
                 "seed_message_id": "message-seed-1",
-                "execution_records": [
+                "execution_records": repeated_probe_records
+                + [
                     {
                         "id": "trace-keep",
-                        "task_node_id": collect.id,
-                        "status": "completed",
-                        "summary": "Observed exposed admin surface.",
-                    },
-                    {
-                        "id": "trace-drop",
-                        "task_node_id": noise_action.id,
-                        "status": "completed",
-                        "summary": "Observed unrelated banner text.",
-                    },
-                ],
-                "hypothesis_updates": [
-                    {
-                        "task": noise_action.name,
-                        "summary": "Unfocused hypothesis branch.",
+                        "task_node_id": validate.id,
+                        "status": "blocked",
+                        "command": "nmap -sV target.internal",
+                        "summary": "Validation halted at the guarded admin surface.",
+                        "observation_summary": (
+                            "Discovered an exposed admin surface that now needs approval."
+                        ),
                     }
                 ],
             },
         )
-        finding_node = graph_repository.create_node(
-            session_id=session.id,
-            workflow_run_id=run.id,
-            graph_type=GraphType.CAUSAL,
-            node_type="finding",
-            label="Weak auth boundary",
-            payload={
-                "id": "finding-auth",
-                "title": "Weak auth boundary",
-                "kind": "finding",
-                "trace_id": "trace-keep",
-                "task": validate.name,
-            },
-            stable_key="causal-node:finding-auth",
-        )
-        impact_node = graph_repository.create_node(
-            session_id=session.id,
-            workflow_run_id=run.id,
-            graph_type=GraphType.CAUSAL,
-            node_type="impact",
-            label="Privilege exposure",
-            payload={
-                "id": "finding-impact",
-                "title": "Privilege exposure",
-                "kind": "impact",
-            },
-            stable_key="causal-node:finding-impact",
-        )
-        graph_repository.create_edge(
-            session_id=session.id,
-            workflow_run_id=run.id,
-            graph_type=GraphType.CAUSAL,
-            source_node_id=finding_node.id,
-            target_node_id=impact_node.id,
-            relation="supports",
-            payload={},
-            stable_key="causal-edge:finding-auth:supports:finding-impact",
-        )
 
         graph = AttackGraphBuilder().build(
             run=run,
-            tasks=[collect, validate, noise_action],
+            tasks=[collect, validate],
             evidence_nodes=[],
             evidence_edges=[],
-            causal_nodes=[finding_node, impact_node],
-            causal_edges=graph_repository.list_edges(
-                session.id,
-                workflow_run_id=run.id,
-                graph_type=GraphType.CAUSAL,
-            ),
+            causal_nodes=[],
+            causal_edges=[],
         )
 
         node_ids = {node.id for node in graph.nodes}
-        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+        action_nodes = [node for node in graph.nodes if node.node_type == "action"]
+        aggregated_probe = next(node for node in action_nodes if node.id != "action:trace-keep")
 
-        assert noise_action.id in node_ids
-        assert "action:trace-drop" in node_ids
+        assert len(action_nodes) == 2
         assert "action:trace-keep" in node_ids
+        assert aggregated_probe.data["attempts_count"] == 9
+        merged_from = aggregated_probe.data["merged_from"]
+        assert isinstance(merged_from, list)
+        assert len(merged_from) == 9
+        assert aggregated_probe.data["primary_command"] == "curl -s -I https://target.internal/health"
+        assert "curl -s -I https://target.internal/health" in aggregated_probe.label
         assert f"outcome:{run.id}" in node_ids
-        assert (collect.id, "enables", validate.id) in relations
-        assert any(edge.target == f"outcome:{run.id}" for edge in graph.edges)
         assert all(node.node_type != "observation" for node in graph.nodes)
         for edge in graph.edges:
             assert edge.source in node_ids
             assert edge.target in node_ids
 
 
-def test_attack_graph_builder_keeps_preserved_status_noise_nodes() -> None:
+def test_attack_graph_builder_keeps_best_path_supporting_blocked_actions_visible() -> None:
     with _db_session() as db_session:
         session = _create_session(db_session)
         workflow_repository = WorkflowRepository(db_session)
@@ -700,20 +655,21 @@ def test_attack_graph_builder_keeps_preserved_status_noise_nodes() -> None:
         )
 
         node_ids = {node.id for node in graph.nodes}
-        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
 
         assert blocked_action.id in node_ids
         assert "action:trace-blocked" in node_ids
         blocked_node = next(node for node in graph.nodes if node.id == "action:trace-blocked")
-        validate_node = next(
-            node
-            for node in graph.nodes
-            if node.node_type == "action" and node.id != "action:trace-blocked"
-        )
         assert blocked_node.data["trace_id"] == "trace-blocked"
         assert blocked_node.data["related_hypotheses"]
-        assert validate_node.data["related_findings"]
-        assert (blocked_action.id, "blocks", "action:trace-blocked") in relations
+        milestone_reasons = blocked_node.data["milestone_reasons"]
+        assert isinstance(milestone_reasons, list)
+        assert "blocked" in milestone_reasons
+        assert any(
+            edge.source == blocked_action.id
+            and edge.target == "action:trace-blocked"
+            and edge.relation in {"attempts", "blocks"}
+            for edge in graph.edges
+        )
         assert any(
             edge.source == "action:trace-blocked"
             and edge.target == f"outcome:{run.id}"
@@ -910,6 +866,7 @@ def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_rea
         assert "outcome" in node_types.values()
         assert "observation" not in node_types.values()
         assert "hypothesis" not in node_types.values()
+        assert len([node for node in graph.nodes if node.node_type == "action"]) == 1
         assert any("token 校验顺序" in str(node.data.get("thought")) for node in graph.nodes)
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
         assert any(relation == "attempts" for _, relation, _ in relations)
@@ -987,14 +944,13 @@ def test_attack_graph_builder_builds_conversation_fallback_for_shell_tool_result
             generations=[],
         )
 
+        action_nodes = [node for node in graph.nodes if node.node_type == "action"]
         assert any(node.node_type == "root" for node in graph.nodes)
-        assert any(
-            node.node_type == "action" and "printf 'hello'" in node.label for node in graph.nodes
-        )
-        assert any(
-            node.node_type == "action" and "hello" in str(node.data.get("stdout"))
-            for node in graph.nodes
-        )
+        assert len(action_nodes) == 1
+        assert action_nodes[0].data["command"] == "printf 'hello'"
+        assert "printf 'hello'" in action_nodes[0].label
+        assert "hello" in str(action_nodes[0].data.get("observation_summary"))
+        assert "hello" in str(action_nodes[0].data.get("stdout"))
         assert any(node.node_type == "outcome" for node in graph.nodes)
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
         assert any(relation == "attempts" for _, relation, _ in relations)

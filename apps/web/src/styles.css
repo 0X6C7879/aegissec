@@ -31,13 +31,16 @@
     "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   --font-code:
     "JetBrains Mono", "Cascadia Code", "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  --shell-gap: 18px;
-  --shell-padding: 18px;
-  --drawer-width: 118px;
-  --sidebar-width: 248px;
-  --workspace-columns: minmax(0, 1.02fr) minmax(420px, 0.98fr);
+  --shell-gap: 10px;
+  --shell-padding: 12px;
+  --drawer-width: 164px;
+  --drawer-width-collapsed: 66px;
+  --sidebar-width: 228px;
+  --sidebar-width-collapsed: 60px;
+  --workspace-columns: minmax(0, 1.72fr) minmax(360px, 0.74fr);
   --control-height: 42px;
-  --feed-padding: 18px;
+  --feed-padding: 16px;
+  --management-detail-width: clamp(380px, 32vw, 480px);
 }
 
 :root[data-theme="light"] {
@@ -50,9 +53,10 @@
 }
 
 :root[data-ui-density="comfortable"] {
-  --shell-gap: 20px;
-  --shell-padding: 20px;
-  --sidebar-width: 284px;
+  --shell-gap: 12px;
+  --shell-padding: 14px;
+  --drawer-width: 172px;
+  --sidebar-width: 236px;
   --control-height: 46px;
   --feed-padding: 20px;
 }
@@ -239,16 +243,19 @@ textarea::placeholder {
 }
 
 .workbench-shell-collapsed {
-  --drawer-width: 78px;
+  --drawer-width: var(--drawer-width-collapsed);
 }
 
 .workbench-shell-drawer {
-  position: relative;
+  position: sticky;
+  top: var(--shell-padding);
+  align-self: start;
   z-index: 12;
 }
 
 .workbench-shell-main {
   position: relative;
+  min-height: 0;
 }
 
 .workbench-shell-stage {
@@ -306,7 +313,7 @@ textarea::placeholder {
   gap: 16px;
   height: 100%;
   min-height: calc(100dvh - (var(--shell-padding) * 2));
-  padding: 14px 10px;
+  padding: 14px 8px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(12, 19, 32, 0.98), rgba(7, 12, 21, 0.92));
   border-color: var(--panel-border);
@@ -420,18 +427,18 @@ textarea::placeholder {
 }
 
 .workspace-drawer-item {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 72px;
-  padding: 12px 8px;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 56px;
+  padding: 10px 10px;
   border: 1px solid transparent;
   border-radius: 14px;
   background: transparent;
   color: var(--text-secondary);
-  text-align: center;
+  text-align: left;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -487,7 +494,8 @@ textarea::placeholder {
 
 .workspace-drawer-item-copy {
   display: grid;
-  gap: 4px;
+  gap: 3px;
+  min-width: 0;
 }
 
 .workspace-drawer-item-short {
@@ -498,12 +506,12 @@ textarea::placeholder {
 }
 
 .workspace-drawer-item-label {
-  font-size: 0.74rem;
-  line-height: 1.2;
+  font-size: 0.78rem;
+  line-height: 1.25;
 }
 
 .workspace-drawer-collapsed {
-  padding-inline: 8px;
+  padding-inline: 6px;
 }
 
 .workspace-drawer-collapsed .workspace-drawer-brand-row {
@@ -516,8 +524,10 @@ textarea::placeholder {
 }
 
 .workspace-drawer-collapsed .workspace-drawer-item {
-  min-height: 64px;
-  padding-inline: 4px;
+  grid-template-columns: 1fr;
+  min-height: 52px;
+  padding-inline: 0;
+  justify-items: center;
 }
 
 .conversation-workbench {
@@ -528,7 +538,7 @@ textarea::placeholder {
 }
 
 .conversation-workbench-sidebar-collapsed {
-  --sidebar-width: 82px;
+  --sidebar-width: var(--sidebar-width-collapsed);
 }
 
 .conversation-sidebar {
@@ -536,7 +546,9 @@ textarea::placeholder {
   flex-direction: column;
   gap: 14px;
   height: 100%;
-  padding: 12px;
+  position: sticky;
+  top: 0;
+  padding: 10px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(12, 19, 32, 0.98), rgba(8, 13, 22, 0.92));
   border-color: var(--panel-border);
@@ -820,12 +832,13 @@ textarea::placeholder {
 
 .conversation-workbench-sidebar-collapsed .conversation-sidebar {
   align-items: center;
-  padding-inline: 8px;
+  padding-inline: 6px;
 }
 
 .conversation-workbench-sidebar-collapsed .conversation-sidebar-actions {
-  width: 100%;
+  width: auto;
   flex-direction: column;
+  align-items: center;
 }
 
 .conversation-workbench-sidebar-collapsed .conversation-sidebar-body {
@@ -834,7 +847,8 @@ textarea::placeholder {
 
 .conversation-workbench-sidebar-collapsed .conversation-sidebar-toggle,
 .conversation-workbench-sidebar-collapsed .conversation-new-button {
-  width: 100%;
+  width: 44px;
+  height: 44px;
   min-width: 0;
   justify-content: center;
   padding-inline: 0;
@@ -847,8 +861,9 @@ textarea::placeholder {
 .conversation-main-shell {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(9, 15, 26, 0.92), rgba(6, 10, 18, 0.95));
 }
@@ -866,6 +881,7 @@ textarea::placeholder {
   grid-template-columns: var(--workspace-columns);
   gap: var(--shell-gap);
   flex: 1;
+  min-height: 0;
 }
 
 .workspace-attack-graph-workbench,
@@ -873,12 +889,22 @@ textarea::placeholder {
   display: flex;
   flex: 1 1 auto;
   width: 100%;
+  min-height: 0;
+}
+
+.workspace-session-side-column,
+.workspace-session-side-column-transcript {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .workspace-message-panel {
   display: grid;
   width: 100%;
   grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(8, 13, 22, 0.94), rgba(5, 8, 15, 0.98));
   border-color: var(--panel-border);
@@ -946,13 +972,15 @@ textarea::placeholder {
 }
 
 .attack-graph-canvas-shell .react-flow__controls {
-  bottom: 16px;
-  right: 16px;
+  bottom: 18px;
+  right: 18px;
+  z-index: 6;
   overflow: hidden;
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: rgba(7, 12, 21, 0.96);
-  box-shadow: none;
+  border: 1px solid rgba(0, 217, 255, 0.34);
+  border-radius: 14px;
+  background: rgba(6, 14, 24, 0.98);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(0, 217, 255, 0.08);
+  backdrop-filter: blur(10px);
 }
 
 .attack-graph-canvas-shell .react-flow {
@@ -961,12 +989,17 @@ textarea::placeholder {
 }
 
 .attack-graph-canvas-shell .react-flow__controls-button {
-  width: 38px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: transparent;
-  color: var(--text-secondary);
+  background: rgba(8, 17, 29, 0.96);
+  color: #f5fbff;
+}
+
+.attack-graph-canvas-shell .react-flow__controls-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 .attack-graph-canvas-shell .react-flow__controls-button:last-child {
@@ -974,20 +1007,28 @@ textarea::placeholder {
 }
 
 .attack-graph-canvas-shell .react-flow__controls-button:hover {
-  background: var(--accent-soft);
+  background: rgba(0, 217, 255, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(0, 217, 255, 0.18);
   color: var(--text-strong);
 }
 
-.attack-graph-canvas-shell .react-flow__handle {
+.attack-graph-canvas-shell .react-flow__controls-button:disabled {
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
+.attack-graph-canvas-shell .react-flow__handle,
+.attack-graph-canvas-shell .attack-graph-flow-handle {
   width: 10px;
   height: 10px;
   border: 2px solid var(--accent-strong);
   background: #08111d;
+  box-shadow: 0 0 0 3px rgba(8, 17, 29, 0.92);
 }
 
 .attack-graph-flow-node {
-  width: 236px;
-  padding: 12px 14px 14px;
+  width: 256px;
+  padding: 14px 16px 16px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(14, 23, 38, 0.98), rgba(8, 13, 22, 0.96));
@@ -1015,6 +1056,11 @@ textarea::placeholder {
   box-shadow: 0 0 0 1px var(--ring);
 }
 
+.attack-graph-flow-node-active {
+  border-color: rgba(66, 214, 197, 0.28);
+  box-shadow: 0 0 0 1px rgba(66, 214, 197, 0.18), 0 12px 28px rgba(0, 0, 0, 0.2);
+}
+
 .attack-graph-flow-node-latest {
   background: linear-gradient(180deg, rgba(0, 217, 255, 0.14), rgba(9, 15, 25, 0.95));
 }
@@ -1036,44 +1082,48 @@ textarea::placeholder {
 .assistant-tool-detail-label,
 .management-info-label,
 .panel-kicker {
-  font: 600 0.68rem/1 var(--font-code);
+  font: 600 0.72rem/1 var(--font-code);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .attack-graph-flow-node-type {
-  color: var(--text-muted);
+  color: #9fb0c8;
 }
 
 .attack-graph-flow-node-status {
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
+  padding: 5px 9px;
   border: 1px solid transparent;
   border-radius: var(--pill-radius);
-  font: 600 0.66rem/1 var(--font-code);
+  font: 600 0.7rem/1 var(--font-code);
 }
 
 .attack-graph-flow-node-title {
   display: block;
   color: var(--text-strong);
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 0.98rem;
+  line-height: 1.5;
 }
 
 .attack-graph-flow-node-summary {
   margin: 8px 0 0;
   color: var(--text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.55;
+  font-size: 0.81rem;
+  line-height: 1.6;
 }
 
 .conversation-feed {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  overflow: auto;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: var(--feed-padding);
+  scroll-padding-bottom: 20px;
 }
 
 .conversation-feed-empty {
@@ -1539,6 +1589,10 @@ textarea::placeholder {
   display: flex;
 }
 
+.management-workbench-master-detail {
+  display: flex;
+}
+
 .management-workbench-settings {
   display: grid;
   grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
@@ -1556,8 +1610,84 @@ textarea::placeholder {
   background: linear-gradient(180deg, rgba(9, 15, 25, 0.94), rgba(6, 10, 18, 0.97));
 }
 
+.management-master-detail-shell {
+  display: grid;
+  grid-template-columns: minmax(540px, 1fr) var(--management-detail-width);
+  gap: var(--shell-gap);
+  flex: 1;
+  min-height: 0;
+}
+
+.management-master-detail-shell-mcp {
+  grid-template-columns: minmax(560px, 1fr) var(--management-detail-width);
+}
+
+.management-pane-surface {
+  min-height: calc(100dvh - (var(--shell-padding) * 2));
+  padding: 18px;
+  background: linear-gradient(180deg, rgba(9, 15, 25, 0.94), rgba(6, 10, 18, 0.97));
+}
+
+.management-master-pane,
+.management-detail-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.management-master-pane-scrollable,
+.management-detail-panel,
+.management-detail-empty-state,
+.management-list-shell-scrollable {
+  min-height: 0;
+}
+
+.management-master-pane-scrollable,
+.management-detail-panel {
+  overflow: auto;
+}
+
+.management-pane-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.management-list-shell-scrollable {
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.management-card-grid-stack,
+.management-card-grid-stack.skills-card-grid,
+.management-card-grid-stack.mcp-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.management-detail-pane {
+  overflow: hidden;
+}
+
+.management-detail-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding-right: 4px;
+}
+
+.management-detail-empty-state {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
 .management-unified-header,
 .management-modal-header,
+.management-detail-panel-header,
 .management-section-header,
 .management-list-card-header,
 .management-toolbar-row,
@@ -1568,6 +1698,14 @@ textarea::placeholder {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.management-sticky-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 10px;
+  background: linear-gradient(180deg, rgba(9, 15, 25, 0.98), rgba(9, 15, 25, 0.92) 78%, transparent);
 }
 
 .management-detail-copy {
@@ -1670,6 +1808,22 @@ textarea::placeholder {
 
 .management-info-card-full {
   grid-column: 1 / -1;
+}
+
+.management-detail-pane .management-modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 10px;
+  background: linear-gradient(180deg, rgba(9, 15, 25, 0.98), rgba(9, 15, 25, 0.92) 78%, transparent);
+}
+
+.management-detail-pane .management-info-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.management-detail-pane .management-info-card-full {
+  grid-column: auto;
 }
 
 .management-info-label {
@@ -2209,6 +2363,24 @@ textarea::placeholder {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .management-master-detail-shell,
+  .management-master-detail-shell-mcp {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation-sidebar {
+    position: relative;
+    top: auto;
+  }
+
+  .management-pane-surface {
+    min-height: 0;
+  }
+
+  .management-detail-pane {
+    max-height: min(52dvh, 640px);
+  }
+
   .workspace-session-grid,
   .management-dual-column,
   .field-inline-group {
@@ -2270,6 +2442,26 @@ textarea::placeholder {
 
   .conversation-list-shell {
     max-height: 240px;
+  }
+
+  .management-master-pane,
+  .management-detail-pane,
+  .management-master-pane-scrollable,
+  .management-detail-panel,
+  .management-list-shell-scrollable {
+    overflow: visible;
+  }
+
+  .management-detail-pane .management-modal-header {
+    position: static;
+    background: transparent;
+    padding-bottom: 0;
+  }
+
+  .management-sticky-toolbar {
+    position: static;
+    background: transparent;
+    padding-bottom: 0;
   }
 
   .mcp-view-tabs {

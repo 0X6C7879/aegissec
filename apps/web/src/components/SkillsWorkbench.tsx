@@ -270,6 +270,162 @@ export function SkillsWorkbench() {
           ? refreshMutation.error.message
           : null;
 
+  const detailContent = !selectedSkillId || !activeSkill
+    ? null
+    : createPortal(
+        <div className="management-modal-backdrop" role="presentation">
+          <button
+            className="management-modal-dismiss"
+            type="button"
+            aria-label="关闭 Skill 详情"
+            onClick={() => navigate("/skills")}
+          />
+          <section
+            className="management-modal-card panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${activeSkill.name} 详情`}
+          >
+      <div className="management-modal-header management-sticky-toolbar">
+        <div className="management-detail-copy">
+          <h3 className="panel-title">{activeSkill.name}</h3>
+          <p className="management-unified-description">{activeSkill.directory_name}</p>
+        </div>
+
+        <div className="management-action-row">
+          <button
+            className={activeSkill.enabled ? "button button-secondary" : "button button-primary"}
+            type="button"
+            disabled={toggleMutation.isPending}
+            onClick={() =>
+              void toggleMutation.mutateAsync({
+                id: activeSkill.id,
+                enabled: !activeSkill.enabled,
+              })
+            }
+          >
+            {toggleMutation.isPending
+              ? "提交中"
+              : activeSkill.enabled
+                ? "禁用 Skill"
+                : "启用 Skill"}
+          </button>
+          <button className="button button-secondary" type="button" onClick={() => navigate("/skills")}>
+            清空选择
+          </button>
+        </div>
+      </div>
+
+      <div className="workspace-node-detail-modal-body">
+        {skillDetailQuery.isLoading ? <div className="management-inline-notice">正在加载详情。</div> : null}
+        {skillDetailQuery.isError ? <div className="management-error-banner">{skillDetailQuery.error.message}</div> : null}
+        {activeSkill.error_message ? <div className="management-error-banner">{activeSkill.error_message}</div> : null}
+        {skillContextQuery.isError ? <div className="management-error-banner">{skillContextQuery.error.message}</div> : null}
+
+        <p className="skills-modal-description">{activeSkill.description || "暂无描述。"}</p>
+
+        <div className="management-info-grid">
+          <div className="management-info-card">
+            <span className="management-info-label">状态</span>
+            <strong className={`management-status-badge ${getSkillTone(activeSkill.status)}`}>
+              {activeSkill.status}
+            </strong>
+          </div>
+          <div className="management-info-card">
+            <span className="management-info-label">启用状态</span>
+            <strong className={`management-status-badge ${activeSkill.enabled ? "tone-success" : "tone-neutral"}`}>
+              {activeSkill.enabled ? "已启用" : "已禁用"}
+            </strong>
+          </div>
+          <div className="management-info-card">
+            <span className="management-info-label">来源</span>
+            <strong className="management-info-value">{activeSkill.source}</strong>
+          </div>
+          <div className="management-info-card">
+            <span className="management-info-label">范围</span>
+            <strong className="management-info-value">{activeSkill.scope}</strong>
+          </div>
+          <div className="management-info-card management-info-card-full">
+            <span className="management-info-label">根目录</span>
+            <strong className="management-info-value management-info-code">{activeSkill.root_dir}</strong>
+          </div>
+          <div className="management-info-card management-info-card-full">
+            <span className="management-info-label">入口文件</span>
+            <strong className="management-info-value management-info-code">{activeSkill.entry_file}</strong>
+          </div>
+        </div>
+
+        <section className="management-section-card management-section-card-compact">
+          <div className="management-section-header">
+            <h4 className="management-section-title">参数 Schema</h4>
+            <span className="management-status-badge tone-neutral">
+              {Object.keys(activeSkillParameterSchema).length > 0 ? "已提供" : "未提供"}
+            </span>
+          </div>
+
+          {Object.keys(activeSkillParameterSchema).length > 0 ? (
+            <pre className="management-code-block">{stringifyJson(activeSkillParameterSchema)}</pre>
+          ) : (
+            <div className="management-inline-notice">该 Skill 当前没有声明 parameter schema。</div>
+          )}
+        </section>
+
+        <section className="management-section-card management-section-card-compact">
+          <div className="management-section-header">
+            <h4 className="management-section-title">Skill Context</h4>
+            <span className={`management-status-badge ${activeSkillContextEntry ? "tone-success" : "tone-neutral"}`}>
+              {activeSkillContextEntry ? "已进入上下文" : "当前未进入"}
+            </span>
+          </div>
+
+          <div className="management-info-grid">
+            <div className="management-info-card">
+              <span className="management-info-label">上下文纳入条件</span>
+              <strong className="management-info-value">已加载且已启用</strong>
+            </div>
+            <div className="management-info-card">
+              <span className="management-info-label">已加载技能数</span>
+              <strong className="management-info-value">{skillContextQuery.data?.payload.skills.length ?? 0}</strong>
+            </div>
+          </div>
+
+          {activeSkillContextEntry ? (
+            <div className="management-subcard">
+              <span className="management-info-label">当前上下文条目</span>
+              <pre className="management-code-block">{stringifyJson(activeSkillContextEntry)}</pre>
+            </div>
+          ) : (
+            <div className="management-inline-notice">
+              该 Skill 未出现在 `/api/skills/skill-context` 结果里，通常表示它尚未启用、未加载或被忽略。
+            </div>
+          )}
+
+          {skillContextQuery.data ? (
+            <div className="management-subcard">
+              <span className="management-info-label">Prompt Fragment</span>
+              <pre className="management-code-block">{skillContextQuery.data.prompt_fragment}</pre>
+            </div>
+          ) : null}
+        </section>
+
+        {skillContentQuery.isLoading ? <div className="management-inline-notice">正在加载 SKILL.md。</div> : null}
+        {skillContentQuery.isError ? <div className="management-error-banner">{skillContentQuery.error.message}</div> : null}
+
+        {skillContentQuery.data ? (
+          <section className="management-section-card management-section-card-compact">
+            <div className="management-section-header">
+              <h4 className="management-section-title">SKILL.md</h4>
+              <span className="management-status-badge tone-neutral">{activeSkill.directory_name}</span>
+            </div>
+            <pre className="management-code-block">{skillContentQuery.data.content}</pre>
+          </section>
+        ) : null}
+      </div>
+          </section>
+        </div>,
+        document.body,
+      );
+
   return (
     <main className="management-workbench management-workbench-single">
       <section className="management-unified-panel panel" aria-label="Skills 管理">
@@ -340,239 +496,40 @@ export function SkillsWorkbench() {
             <p className="management-empty-copy">{skillsQuery.error.message}</p>
           </div>
         ) : (
-          <div className="management-unified-body management-unified-stack">
-            <section className="management-section-card management-section-card-compact">
-              <div className="management-section-header">
-                <h3 className="management-section-title">技能列表</h3>
-                <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
-              </div>
+          <section className="management-section-card management-section-card-compact">
+            <div className="management-section-header">
+              <h3 className="management-section-title">技能列表</h3>
+              <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+            </div>
 
-              <div className="management-list-shell">
-                {filteredSkills.length === 0 ? (
-                  <div className="management-empty-state">
-                    <p className="management-empty-title">没有匹配的 Skills</p>
-                    <p className="management-empty-copy">试试更短的关键词，或重新扫描一次。</p>
-                  </div>
-                ) : (
-                  <ul className="management-card-grid skills-card-grid">
-                    {filteredSkills.map((skill) => {
-                      const isActive = skill.id === selectedSkillId;
+            <div className="management-list-shell">
+              {filteredSkills.length === 0 ? (
+                <div className="management-empty-state">
+                  <p className="management-empty-title">没有匹配的 Skills</p>
+                  <p className="management-empty-copy">试试更短的关键词，或重新扫描一次。</p>
+                </div>
+              ) : (
+                <ul className="management-card-grid skills-card-grid">
+                  {filteredSkills.map((skill) => {
+                    const isActive = skill.id === selectedSkillId;
 
-                      return (
-                        <li key={skill.id}>
-                          <SkillListCard
-                            isActive={isActive}
-                            onOpen={() => navigate(`/skills/${skill.id}`)}
-                            skill={skill}
-                          />
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            </section>
-          </div>
+                    return (
+                      <li key={skill.id}>
+                        <SkillListCard
+                          isActive={isActive}
+                          onOpen={() => navigate(`/skills/${skill.id}`)}
+                          skill={skill}
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </section>
         )}
-
-        {selectedSkillId && activeSkill && typeof document !== "undefined"
-          ? createPortal(
-              <div className="management-modal-backdrop" role="presentation">
-                <button
-                  className="management-modal-dismiss"
-                  type="button"
-                  aria-label="关闭详情弹窗"
-                  onClick={() => navigate("/skills")}
-                />
-                <section
-                  className="management-modal-card panel"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label={`${activeSkill.name} 详情`}
-                >
-                  <div className="management-modal-header">
-                    <div className="management-detail-copy">
-                      <h3 className="panel-title">{activeSkill.name}</h3>
-                    </div>
-
-                    <div className="management-action-row">
-                      <button
-                        className={
-                          activeSkill.enabled ? "button button-secondary" : "button button-primary"
-                        }
-                        type="button"
-                        disabled={toggleMutation.isPending}
-                        onClick={() =>
-                          void toggleMutation.mutateAsync({
-                            id: activeSkill.id,
-                            enabled: !activeSkill.enabled,
-                          })
-                        }
-                      >
-                        {toggleMutation.isPending
-                          ? "提交中"
-                          : activeSkill.enabled
-                            ? "禁用 Skill"
-                            : "启用 Skill"}
-                      </button>
-                      <button
-                        className="button button-secondary"
-                        type="button"
-                        onClick={() => navigate("/skills")}
-                      >
-                        关闭
-                      </button>
-                    </div>
-                  </div>
-
-                  {skillDetailQuery.isLoading ? (
-                    <div className="management-inline-notice">正在加载详情。</div>
-                  ) : null}
-                  {skillDetailQuery.isError ? (
-                    <div className="management-error-banner">{skillDetailQuery.error.message}</div>
-                  ) : null}
-                  {activeSkill.error_message ? (
-                    <div className="management-error-banner">{activeSkill.error_message}</div>
-                  ) : null}
-                  {skillContextQuery.isError ? (
-                    <div className="management-error-banner">{skillContextQuery.error.message}</div>
-                  ) : null}
-
-                  <p className="skills-modal-description">
-                    {activeSkill.description || "暂无描述。"}
-                  </p>
-
-                  <div className="management-info-grid">
-                    <div className="management-info-card">
-                      <span className="management-info-label">状态</span>
-                      <strong
-                        className={`management-status-badge ${getSkillTone(activeSkill.status)}`}
-                      >
-                        {activeSkill.status}
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">启用状态</span>
-                      <strong
-                        className={`management-status-badge ${activeSkill.enabled ? "tone-success" : "tone-neutral"}`}
-                      >
-                        {activeSkill.enabled ? "已启用" : "已禁用"}
-                      </strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">来源</span>
-                      <strong className="management-info-value">{activeSkill.source}</strong>
-                    </div>
-                    <div className="management-info-card">
-                      <span className="management-info-label">范围</span>
-                      <strong className="management-info-value">{activeSkill.scope}</strong>
-                    </div>
-                    <div className="management-info-card management-info-card-full">
-                      <span className="management-info-label">根目录</span>
-                      <strong className="management-info-value management-info-code">
-                        {activeSkill.root_dir}
-                      </strong>
-                    </div>
-                    <div className="management-info-card management-info-card-full">
-                      <span className="management-info-label">入口文件</span>
-                      <strong className="management-info-value management-info-code">
-                        {activeSkill.entry_file}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <section className="management-section-card management-section-card-compact">
-                    <div className="management-section-header">
-                      <h4 className="management-section-title">参数 Schema</h4>
-                      <span className="management-status-badge tone-neutral">
-                        {Object.keys(activeSkillParameterSchema).length > 0 ? "已提供" : "未提供"}
-                      </span>
-                    </div>
-
-                    {Object.keys(activeSkillParameterSchema).length > 0 ? (
-                      <pre className="management-code-block">
-                        {stringifyJson(activeSkillParameterSchema)}
-                      </pre>
-                    ) : (
-                      <div className="management-inline-notice">
-                        该 Skill 当前没有声明 parameter schema。
-                      </div>
-                    )}
-                  </section>
-
-                  <section className="management-section-card management-section-card-compact">
-                    <div className="management-section-header">
-                      <h4 className="management-section-title">Skill Context</h4>
-                      <span
-                        className={`management-status-badge ${
-                          activeSkillContextEntry ? "tone-success" : "tone-neutral"
-                        }`}
-                      >
-                        {activeSkillContextEntry ? "已进入上下文" : "当前未进入"}
-                      </span>
-                    </div>
-
-                    <div className="management-info-grid">
-                      <div className="management-info-card">
-                        <span className="management-info-label">上下文纳入条件</span>
-                        <strong className="management-info-value">已加载且已启用</strong>
-                      </div>
-                      <div className="management-info-card">
-                        <span className="management-info-label">已加载技能数</span>
-                        <strong className="management-info-value">
-                          {skillContextQuery.data?.payload.skills.length ?? 0}
-                        </strong>
-                      </div>
-                    </div>
-
-                    {activeSkillContextEntry ? (
-                      <div className="management-subcard">
-                        <span className="management-info-label">当前上下文条目</span>
-                        <pre className="management-code-block">
-                          {stringifyJson(activeSkillContextEntry)}
-                        </pre>
-                      </div>
-                    ) : (
-                      <div className="management-inline-notice">
-                        该 Skill 未出现在 `/api/skills/skill-context`
-                        结果里，通常表示它尚未启用、未加载或被忽略。
-                      </div>
-                    )}
-
-                    {skillContextQuery.data ? (
-                      <div className="management-subcard">
-                        <span className="management-info-label">Prompt Fragment</span>
-                        <pre className="management-code-block">
-                          {skillContextQuery.data.prompt_fragment}
-                        </pre>
-                      </div>
-                    ) : null}
-                  </section>
-
-                  {skillContentQuery.isLoading ? (
-                    <div className="management-inline-notice">正在加载 SKILL.md。</div>
-                  ) : null}
-                  {skillContentQuery.isError ? (
-                    <div className="management-error-banner">{skillContentQuery.error.message}</div>
-                  ) : null}
-
-                  {skillContentQuery.data ? (
-                    <section className="management-section-card management-section-card-compact">
-                      <div className="management-section-header">
-                        <h4 className="management-section-title">SKILL.md</h4>
-                        <span className="management-status-badge tone-neutral">
-                          {activeSkill.directory_name}
-                        </span>
-                      </div>
-                      <pre className="management-code-block">{skillContentQuery.data.content}</pre>
-                    </section>
-                  ) : null}
-                </section>
-              </div>,
-              document.body,
-            )
-          : null}
       </section>
+      {detailContent}
     </main>
   );
 }

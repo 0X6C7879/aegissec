@@ -98,11 +98,12 @@ def test_graph_service_uses_conversation_fallback_without_workflow_run() -> None
         )
 
         node_types = {node.node_type for node in graph.nodes}
+        action_nodes = [node for node in graph.nodes if node.node_type == "action"]
         assert graph.workflow_run_id == ""
         assert {"root", "action", "outcome"}.issubset(node_types)
         assert "observation" not in node_types
         assert "hypothesis" not in node_types
-        assert any(node.id.startswith("action:message:") for node in graph.nodes)
+        assert 1 <= len(action_nodes) <= 2
 
 
 def test_graph_service_prefers_latest_historical_workflow_run_when_no_active_run() -> None:

@@ -21,6 +21,7 @@ import {
   displayTitle,
   formatAttackNodeStatus,
   formatAttackNodeType,
+  getBestExecutionPathContext,
   getAttackGraphAutoFocusNodeId,
   getAttackNodeStatusTone,
   getAttackRelationLabel,
@@ -50,7 +51,7 @@ type AttackCanvasNodeData = {
   emphasis: "goal" | "critical" | "result" | "supporting";
 };
 
-const NODE_WIDTH = 236;
+const NODE_WIDTH = 256;
 const NODE_BASE_HEIGHT = 112;
 const NODE_EXCERPT_HEIGHT = 30;
 const AUTO_FOCUS_DURATION_MS = 280;
@@ -66,137 +67,6 @@ function buildNodeDisplay(node: SessionGraphNode): {
     excerpt: displayExcerpt(node),
     emphasis: displayImportance(node),
   };
-}
-
-function getSelectedPathContext(
-  graph: SessionGraph,
-  selectedNodeId: string | null,
-): {
-  nodeIds: Set<string>;
-  edgeIds: Set<string>;
-} {
-  const nodeIds = new Set<string>();
-  const edgeIds = new Set<string>();
-  if (!selectedNodeId) {
-    return { nodeIds, edgeIds };
-  }
-
-  nodeIds.add(selectedNodeId);
-  const outgoingEdgesByNode = new Map<string, SessionGraph["edges"]>();
-  const incomingEdgesByNode = new Map<string, SessionGraph["edges"]>();
-  for (const edge of graph.edges) {
-    const outgoingEdges = outgoingEdgesByNode.get(edge.source) ?? [];
-    outgoingEdges.push(edge);
-    outgoingEdgesByNode.set(edge.source, outgoingEdges);
-
-    const incomingEdges = incomingEdgesByNode.get(edge.target) ?? [];
-    incomingEdges.push(edge);
-    incomingEdgesByNode.set(edge.target, incomingEdges);
-  }
-
-  const traverse = (
-    startNodeId: string,
-    edgeLookup: Map<string, SessionGraph["edges"]>,
-    readNextNodeId: (edge: SessionGraph["edges"][number]) => string,
-  ) => {
-    const queue = [startNodeId];
-    const visited = new Set<string>([startNodeId]);
-    while (queue.length > 0) {
-      const nodeId = queue.shift();
-      if (!nodeId) {
-        continue;
-      }
-      for (const edge of edgeLookup.get(nodeId) ?? []) {
-        edgeIds.add(edge.id);
-        const nextNodeId = readNextNodeId(edge);
-        nodeIds.add(nextNodeId);
-        if (visited.has(nextNodeId)) {
-          continue;
-        }
-        visited.add(nextNodeId);
-        queue.push(nextNodeId);
-      }
-    }
-  };
-
-  traverse(selectedNodeId, incomingEdgesByNode, (edge) => edge.source);
-  traverse(selectedNodeId, outgoingEdgesByNode, (edge) => edge.target);
-
-  return { nodeIds, edgeIds };
-}
-
-function isExecutionNodeType(nodeType: string): boolean {
-  return (
-    nodeType === "root" || nodeType === "task" || nodeType === "action" || nodeType === "outcome"
-  );
-}
-
-function getExecutionPathContext(
-  graph: SessionGraph,
-  selectedNodeId: string | null,
-): {
-  nodeIds: Set<string>;
-  edgeIds: Set<string>;
-} {
-  const selectedContext = getSelectedPathContext(graph, selectedNodeId);
-  if (!selectedNodeId) {
-    return selectedContext;
-  }
-
-  const visibleExecutionNodeIds = new Set(
-    graph.nodes.filter((node) => isExecutionNodeType(node.node_type)).map((node) => node.id),
-  );
-  if (!visibleExecutionNodeIds.has(selectedNodeId)) {
-    return selectedContext;
-  }
-
-  const nodeIds = new Set<string>();
-  const edgeIds = new Set<string>();
-  const outgoingEdgesByNode = new Map<string, SessionGraph["edges"]>();
-  const incomingEdgesByNode = new Map<string, SessionGraph["edges"]>();
-  for (const edge of graph.edges) {
-    if (!visibleExecutionNodeIds.has(edge.source) || !visibleExecutionNodeIds.has(edge.target)) {
-      continue;
-    }
-
-    const outgoingEdges = outgoingEdgesByNode.get(edge.source) ?? [];
-    outgoingEdges.push(edge);
-    outgoingEdgesByNode.set(edge.source, outgoingEdges);
-
-    const incomingEdges = incomingEdgesByNode.get(edge.target) ?? [];
-    incomingEdges.push(edge);
-    incomingEdgesByNode.set(edge.target, incomingEdges);
-  }
-
-  const traverse = (
-    startNodeId: string,
-    edgeLookup: Map<string, SessionGraph["edges"]>,
-    readNextNodeId: (edge: SessionGraph["edges"][number]) => string,
-  ) => {
-    const queue = [startNodeId];
-    const visited = new Set<string>([startNodeId]);
-    nodeIds.add(startNodeId);
-    while (queue.length > 0) {
-      const nodeId = queue.shift();
-      if (!nodeId) {
-        continue;
-      }
-      for (const edge of edgeLookup.get(nodeId) ?? []) {
-        edgeIds.add(edge.id);
-        const nextNodeId = readNextNodeId(edge);
-        nodeIds.add(nextNodeId);
-        if (visited.has(nextNodeId)) {
-          continue;
-        }
-        visited.add(nextNodeId);
-        queue.push(nextNodeId);
-      }
-    }
-  };
-
-  traverse(selectedNodeId, incomingEdgesByNode, (edge) => edge.source);
-  traverse(selectedNodeId, outgoingEdgesByNode, (edge) => edge.target);
-  return { nodeIds, edgeIds };
 }
 
 function getEdgeStroke(status: string | null, highlighted: boolean, dimmed: boolean): string {
@@ -248,7 +118,8 @@ export function buildAutoLayout(
   nodes: Node<AttackCanvasNodeData>[];
   edges: Edge[];
 } {
-  const selectedPathContext = getExecutionPathContext(graph, selectedNodeId);
+  const selectedPathContext = getBestExecutionPathContext(graph, selectedNodeId, latestNodeId);
+  const hasFocusedContext = selectedPathContext.nodeIds.size > 0;
   const activeNodeIds = new Set(
     graph.nodes
       .filter(
@@ -291,7 +162,7 @@ export function buildAutoLayout(
     const height = NODE_BASE_HEIGHT + (excerpt ? NODE_EXCERPT_HEIGHT : 0);
     const isSelected = selectedNodeId === node.id;
     const isContextNode = selectedPathContext.nodeIds.has(node.id);
-    const isDimmed = Boolean(selectedNodeId) && !isContextNode;
+    const isDimmed = hasFocusedContext && !isContextNode;
 
     return {
       id: node.id,
@@ -331,7 +202,7 @@ export function buildAutoLayout(
     const isSuccessEdge = touchesOutcome && (edgeStatus === "completed" || edgeStatus === "done");
     const showLabel =
       isHoveredEdge || isSelectedEdge || isActiveEdge || isPathStateEdge || isSuccessEdge;
-    const isDimmed = Boolean(selectedNodeId) && !isSelectedEdge;
+    const isDimmed = hasFocusedContext && !isSelectedEdge;
     const stroke = getEdgeStroke(
       edgeStatus,
       isSelectedEdge || isActiveEdge || isHoveredEdge,
