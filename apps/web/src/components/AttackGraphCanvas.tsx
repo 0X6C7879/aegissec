@@ -50,11 +50,11 @@ type AttackCanvasNodeData = {
   emphasis: "goal" | "critical" | "result" | "supporting";
 };
 
-const NODE_WIDTH = 208;
+const NODE_WIDTH = 196;
 const NODE_BASE_HEIGHT = 62;
 const NODE_EXCERPT_HEIGHT = 12;
 const AUTO_FOCUS_DURATION_MS = 280;
-const AUTO_FOCUS_ZOOM = 0.85;
+const AUTO_FOCUS_ZOOM = 0.88;
 
 function buildNodeDisplay(node: SessionGraphNode): {
   title: string;
@@ -261,10 +261,10 @@ export function buildAutoLayout(
   layoutGraph.setDefaultEdgeLabel(() => ({}));
   layoutGraph.setGraph({
     rankdir: "LR",
-    ranksep: 84,
-    nodesep: 32,
-    marginx: 24,
-    marginy: 24,
+    ranksep: 56,
+    nodesep: 24,
+    marginx: 16,
+    marginy: 16,
   });
 
   for (const node of graph.nodes) {
@@ -371,7 +371,7 @@ function AttackGraphViewportController({
   autoFocusSignature: string;
   hasUserInteracted: boolean;
 }) {
-  const { fitView, setCenter, viewportInitialized } = useReactFlow<AttackCanvasNodeData>();
+  const { fitView, viewportInitialized } = useReactFlow<AttackCanvasNodeData>();
   const lastAutoFocusSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -392,27 +392,10 @@ function AttackGraphViewportController({
     lastAutoFocusSignatureRef.current = autoFocusSignature;
     const focusNode = focusNodeId ? (nodes.find((node) => node.id === focusNodeId) ?? null) : null;
 
-    if (!focusNode) {
-      fitView({ padding: 0.18, minZoom: 0.55, duration: AUTO_FOCUS_DURATION_MS });
-      return;
-    }
-
     fitView({
-      padding: 0.28,
-      minZoom: 0.55,
+      padding: 0.06,
+      minZoom: 0.68,
       maxZoom: AUTO_FOCUS_ZOOM,
-      duration: AUTO_FOCUS_DURATION_MS,
-      nodes: [{ id: focusNode.id }],
-    });
-
-    const targetWidth = typeof focusNode.width === "number" ? focusNode.width : NODE_WIDTH;
-    const targetHeight =
-      typeof focusNode.height === "number"
-        ? focusNode.height
-        : NODE_BASE_HEIGHT + (focusNode.data.excerpt ? NODE_EXCERPT_HEIGHT : 0);
-
-    setCenter(focusNode.position.x + targetWidth / 2, focusNode.position.y + targetHeight / 2, {
-      zoom: AUTO_FOCUS_ZOOM,
       duration: AUTO_FOCUS_DURATION_MS,
     });
   }, [
@@ -421,7 +404,6 @@ function AttackGraphViewportController({
     focusNodeId,
     hasUserInteracted,
     nodes,
-    setCenter,
     viewportInitialized,
   ]);
 
@@ -487,8 +469,8 @@ export function AttackGraphCanvas({
         edges={flowGraph.edges}
         nodeTypes={attackGraphNodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.18, minZoom: 0.55 }}
-        minZoom={0.3}
+        fitViewOptions={{ padding: 0.06, minZoom: 0.68, maxZoom: AUTO_FOCUS_ZOOM }}
+        minZoom={0.45}
         maxZoom={1.8}
         nodesConnectable={false}
         nodesDraggable={false}

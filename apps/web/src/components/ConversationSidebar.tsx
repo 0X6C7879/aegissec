@@ -85,7 +85,15 @@ export function ConversationSidebar({
                 xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
                 focusable="false"
-              ></svg>
+              >
+                <path
+                  d={collapsed ? "M5 3.5v9M8 5.5l3 2.5-3 2.5" : "M11 3.5v9M8 5.5L5 8l3 2.5"}
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </span>
           </button>
 

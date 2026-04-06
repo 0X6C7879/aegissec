@@ -87,9 +87,6 @@ export function SettingsWorkbench() {
         <div className="management-unified-header">
           <div>
             <h2 className="management-section-title">Settings</h2>
-            <p className="management-unified-description">
-              保留轻量设置：主题、密度、模型配置与运行策略概览。
-            </p>
           </div>
         </div>
 
