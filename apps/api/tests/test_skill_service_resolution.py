@@ -359,10 +359,11 @@ when_to_use: Use for web CTF exploitation.
         )
 
     assert prepared["status"] == "selected"
-    assert (
-        cast(dict[str, object], prepared["prepared_primary_skill"])["directory_name"]
-        == "solve-challenge"
-    )
+    selected_names = {
+        item["directory_name"]
+        for item in cast(list[dict[str, object]], prepared["prepared_selected_skills"])
+    }
+    assert {"solve-challenge", "ctf-web"}.issubset(selected_names)
     assert len(cast(list[dict[str, object]], prepared["prepared_selected_skills"])) >= 2
     assert cast(list[dict[str, object]], prepared["prepared_supporting_skills"])
     assert isinstance(prepared["prepared_context_prompt"], str)
@@ -477,6 +478,7 @@ when_to_use: Use for API validation and endpoint review.
     assert "Task intent profile:" in prompt_fragment
     assert "Primary skill:" in prompt_fragment
     assert "Supporting skills prepared for context:" in prompt_fragment
+    assert "Why these skills were selected together:" in prompt_fragment
     assert "Guidance:" in prompt_fragment
     assert "Skill set plan for this stage" in prompt_fragment
     assert "demo" in prompt_fragment
@@ -683,12 +685,14 @@ when_to_use: Trace Java request mappings and controller flows.
             session_id="session-ctf-web",
         )
 
-    assert cast(dict[str, object], payload["primary_skill"])["directory_name"] == "solve-challenge"
-    supporting_names = [
+    assert (
+        cast(dict[str, object], payload["primary_skill"])["directory_name"] != "java-route-tracer"
+    )
+    selected_names = {
         skill["directory_name"]
-        for skill in cast(list[dict[str, object]], payload["supporting_skills"])
-    ]
-    assert "ctf-web" in supporting_names
+        for skill in cast(list[dict[str, object]], payload["selected_skills"])
+    }
+    assert {"solve-challenge", "ctf-web"}.issubset(selected_names)
     suppressed_names = [
         skill["directory_name"]
         for skill in cast(list[dict[str, object]], payload["suppressed_skills"])
@@ -699,15 +703,17 @@ when_to_use: Trace Java request mappings and controller flows.
         skill["directory_name"] == "ctf-web" and skill["prepared_for_context"] is True
         for skill in prepared_selected
     )
-    assert any(
-        skill["directory_name"] == "ctf-web" and skill["prepared_for_execution"] is False
-        for skill in prepared_selected
-    )
+    assert any(skill["prepared_for_execution"] is False for skill in prepared_selected)
     suppression_reasons = cast(dict[str, object], payload["suppression_reasons"])
     assert suppression_reasons
     prompt_fragment = cast(str, payload["prepared_context_prompt"])
+    assert "Why these skills were selected together:" in prompt_fragment
     assert "Suppressed skills:" in prompt_fragment
     assert "java-route-tracer | reason=" in prompt_fragment
+    primary_selection = cast(dict[str, object], payload["prepared_primary_skill"]).get(
+        "selection_explanation"
+    )
+    assert isinstance(primary_selection, dict)
 
 
 def test_prepare_best_skill_honors_preferred_skill_identifier(
@@ -770,5 +776,17 @@ when_to_use: Use for web CTF exploitation.
 
     assert (
         cast(dict[str, object], prepared["prepared_primary_skill"])["directory_name"]
+        == "solve-challenge"
+    )
+    assert (
+        cast(
+            dict[str, object], cast(dict[str, object], prepared["resolution"])["primary_candidate"]
+        )["directory_name"]
+        == "solve-challenge"
+    )
+    assert (
+        cast(
+            dict[str, object], cast(dict[str, object], prepared["skill_set_plan"])["primary_skill"]
+        )["directory_name"]
         == "solve-challenge"
     )

@@ -240,6 +240,9 @@ def test_score_breakdown_contains_explanatory_fields() -> None:
     assert breakdown["matched_allowed_tools"] == ["execute_skill"]
     assert breakdown["missing_allowed_tools"] == ["read_skill_content"]
     assert breakdown["matched_argument_names"] == ["target"]
+    assert "family_fit_score" in breakdown
+    assert "domain_fit_score" in breakdown
+    assert "task_mode_fit_score" in breakdown
 
 
 def test_score_skill_candidate_returns_breakdown_object_with_reasons_and_penalties() -> None:
@@ -291,14 +294,15 @@ def test_prompt_fragment_shows_ranked_shortlist_with_selection_guidance() -> Non
 
     fragment = build_skill_candidate_prompt_fragment(result)
 
-    assert "Primary skill for current context" in fragment
-    assert "Supporting skills also loaded" in fragment
+    assert "Selected skill set" in fragment
+    assert "Supporting skills selected for complement" in fragment
     assert "1. api-audit [score=" in fragment
     assert "- None" in fragment
     assert "Reference-only related skills" in fragment
+    assert "selection:" in fragment
 
 
-def test_remote_ctf_web_url_prefers_dispatcher_and_ctf_web_over_java_route_tracer() -> None:
+def test_remote_ctf_web_url_soft_selects_ctf_pair_and_suppresses_java_route_tracer() -> None:
     request = skill_models.SkillResolutionRequest(
         current_prompt="解答这道 ctf web 题目: http://target.local/challenge",
         top_k=5,
@@ -332,15 +336,50 @@ def test_remote_ctf_web_url_prefers_dispatcher_and_ctf_web_over_java_route_trace
     assert result.intent_profile is not None
     assert result.intent_profile.dominant_domain == "ctf_web"
     assert result.primary_candidate is not None
-    assert result.primary_candidate.compiled_skill.directory_name == "solve-challenge"
-    assert [
-        candidate.compiled_skill.directory_name for candidate in result.supporting_candidates
-    ] == ["ctf-web"]
+    assert result.primary_candidate.compiled_skill.directory_name != "java-route-tracer"
+    selected_names = [
+        candidate.compiled_skill.directory_name for candidate in result.all_selected_candidates
+    ]
+    assert "solve-challenge" in selected_names
+    assert "ctf-web" in selected_names
+    assert result.primary_candidate.selection_explanation
+    assert any(candidate.packing_explanation for candidate in result.supporting_candidates)
     rejected = {
         candidate.compiled_skill.directory_name: candidate
         for candidate in result.rejected_candidates
     }
     assert rejected["java-route-tracer"].rejected_reason == "suppressed_by_intent"
+
+
+def test_clear_specialized_web_task_allows_ctf_web_to_outrank_dispatcher() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="专注分析这个 HTTP challenge 的 Web 漏洞点: http://target.local/challenge",
+        top_k=5,
+    )
+    solve_challenge = _compiled_skill(
+        "solve-challenge",
+        when_to_use="Use for CTF challenges and flag-oriented solving.",
+        semantic_family="ctf",
+        semantic_task_mode="dispatcher",
+        semantic_tags=["ctf", "dispatcher", "challenge"],
+    )
+    ctf_web = _compiled_skill(
+        "ctf-web",
+        when_to_use="Use for CTF web exploitation against HTTP services.",
+        semantic_family="ctf",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["ctf-web", "web"],
+    )
+
+    result = resolve_skill_candidates([solve_challenge, ctf_web], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "ctf-web"
+    selected_names = [
+        candidate.compiled_skill.directory_name for candidate in result.all_selected_candidates
+    ]
+    assert "ctf-web" in selected_names
 
 
 def test_java_audit_family_is_suppressed_without_java_code_evidence() -> None:
@@ -389,8 +428,58 @@ def test_local_java_audit_with_code_evidence_allows_java_route_tracer() -> None:
 
     assert result.intent_profile is not None
     assert result.intent_profile.dominant_domain in {"java_code_audit", "java_route_trace"}
-    assert result.primary_candidate is not None
-    assert result.primary_candidate.compiled_skill.directory_name == "java-route-tracer"
+    selected_names = [
+        candidate.compiled_skill.directory_name for candidate in result.all_selected_candidates
+    ]
+    assert "java-route-tracer" in selected_names
+    assert not any(
+        candidate.compiled_skill.directory_name == "java-route-tracer"
+        and candidate.rejected_reason == "suppressed_by_intent"
+        for candidate in result.rejected_candidates
+    )
+
+
+def test_semantic_redundancy_rejects_duplicate_specialized_web_skill() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="专注分析这个 HTTP challenge 的 Web 漏洞点: http://target.local/challenge",
+        top_k=5,
+    )
+    ctf_web = _compiled_skill(
+        "ctf-web",
+        when_to_use="Use for CTF web exploitation against HTTP services.",
+        semantic_family="ctf",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["ctf-web", "web"],
+    )
+    web_xss = _compiled_skill(
+        "web-xss-specialist",
+        when_to_use="Use for CTF web exploitation against HTTP services.",
+        semantic_family="ctf",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["ctf-web", "web"],
+        fingerprint="zzz-web-xss",
+    )
+    solve_challenge = _compiled_skill(
+        "solve-challenge",
+        when_to_use="Use for CTF challenges and flag-oriented solving.",
+        semantic_family="ctf",
+        semantic_task_mode="dispatcher",
+        semantic_tags=["ctf", "dispatcher", "challenge"],
+    )
+
+    result = resolve_skill_candidates([solve_challenge, web_xss, ctf_web], request)
+
+    selected_names = [
+        candidate.compiled_skill.directory_name for candidate in result.all_selected_candidates
+    ]
+    assert len({"ctf-web", "web-xss-specialist"} & set(selected_names)) == 1
+    assert any(
+        candidate.rejected_reason in {"redundant_with_primary", "redundant_with_supporting"}
+        for candidate in result.rejected_candidates
+        if candidate.compiled_skill.directory_name in {"ctf-web", "web-xss-specialist"}
+    )
 
 
 def _compiled_skill(
