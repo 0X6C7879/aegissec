@@ -3,8 +3,7 @@ import { formatDateTime } from "../lib/format";
 import type { SessionGraph, SessionGraphEdge, SessionGraphNode } from "../types/graphs";
 import { AttackGraphCanvas } from "./AttackGraphCanvas";
 import {
-  buildAttackNodeHighValueDetails,
-  buildAttackNodeOverviewSummary,
+  buildAttackNodeDetailSections,
   formatAttackNodeStatus,
   formatAttackNodeType,
   getAttackNodeStatusTone,
@@ -28,11 +27,6 @@ type AttackGraphWorkbenchProps = {
 
 type TimelineItem = {
   id: string;
-  label: string;
-  value: string;
-};
-
-type DetailItem = {
   label: string;
   value: string;
 };
@@ -223,10 +217,13 @@ export function AttackGraphWorkbench({
       safeJsonSummary(selectedNode.data.provenance)
     : null;
   const actionBusy = Boolean(sourceMessageId) && actionBusyId === sourceMessageId;
-  const overviewSummary = selectedNode ? buildAttackNodeOverviewSummary(selectedNode) : null;
-  const highValueDetails: DetailItem[] = selectedNode ? buildAttackNodeHighValueDetails(selectedNode) : [];
+  const detailSections = selectedNode ? buildAttackNodeDetailSections(selectedNode) : [];
   const rawSummary = selectedNode ? readString(selectedNode.data.summary) : null;
-  const hasFullSummary = Boolean(rawSummary && rawSummary !== overviewSummary);
+  const basicSection = detailSections.find((section) => section.title === "Basic") ?? null;
+  const rawSection = detailSections.find((section) => section.title === "Raw") ?? null;
+  const visibleSections = detailSections.filter((section) => section.title !== "Raw");
+  const basicSummary = rawSummary ?? null;
+  const hasFullSummary = Boolean(rawSummary && rawSummary !== basicSummary);
 
   useEffect(() => {
     if (!selectedNode) {
@@ -287,7 +284,7 @@ export function AttackGraphWorkbench({
             <div className="workspace-node-detail-modal-body">
               <div className="management-subcard">
                 <div className="management-list-card-header">
-                  <strong className="management-list-title">概览</strong>
+                  <strong className="management-list-title">Basic</strong>
                 </div>
                 <div className="workspace-node-overview-header">
                   <span className="management-token-chip">{formatAttackNodeType(selectedNode.node_type)}</span>
@@ -297,24 +294,39 @@ export function AttackGraphWorkbench({
                     {formatAttackNodeStatus(getNodeStatus(selectedNode))}
                   </span>
                 </div>
-                {overviewSummary ? <p className="session-graph-body-copy">{overviewSummary}</p> : null}
+                {basicSummary ? <p className="session-graph-body-copy">{basicSummary}</p> : null}
+                {basicSection && basicSection.items.length > 0 ? (
+                  <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
+                    {basicSection.items.map((item) => (
+                      <div key={`${selectedNode.id}-${basicSection.title}-${item.label}`}>
+                        <dt>{item.label}</dt>
+                        <dd>{item.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
               </div>
 
-              {highValueDetails.length > 0 ? (
-                <div className="management-subcard workspace-node-detail-section">
+              {visibleSections.map((section) =>
+                section.title === "Basic" || section.items.length === 0 ? null : (
+                <div
+                  key={`${selectedNode.id}-${section.title}`}
+                  className="management-subcard workspace-node-detail-section"
+                >
                   <div className="management-list-card-header">
-                    <strong className="management-list-title">高价值内容</strong>
+                    <strong className="management-list-title">{section.title}</strong>
                   </div>
                   <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
-                    {highValueDetails.map((item) => (
-                      <div key={`${selectedNode.id}-${item.label}`}>
+                    {section.items.map((item) => (
+                      <div key={`${selectedNode.id}-${section.title}-${item.label}`}>
                         <dt>{item.label}</dt>
                         <dd>{item.value}</dd>
                       </div>
                     ))}
                   </dl>
                 </div>
-              ) : null}
+                ),
+              )}
 
               <div className="management-subcard workspace-node-detail-section">
                 <div className="management-list-card-header">
@@ -369,7 +381,7 @@ export function AttackGraphWorkbench({
                 <div className="workspace-node-advanced-body">
                   <div className="workspace-node-detail-section">
                     <div className="management-list-card-header">
-                      <strong className="management-list-title">调试字段</strong>
+                      <strong className="management-list-title">Raw</strong>
                     </div>
                     <dl className="session-graph-data-list attack-graph-detail-list">
                       {hasFullSummary ? (
@@ -402,6 +414,12 @@ export function AttackGraphWorkbench({
                         <dt>可编辑</dt>
                         <dd>{isEditable ? "是" : "否"}</dd>
                       </div>
+                      {rawSection?.items.map((item) => (
+                        <div key={`${selectedNode.id}-raw-${item.label}`}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
                     </dl>
                   </div>
 

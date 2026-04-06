@@ -125,6 +125,78 @@ function getSelectedPathContext(
   return { nodeIds, edgeIds };
 }
 
+function isExecutionNodeType(nodeType: string): boolean {
+  return nodeType === "goal" || nodeType === "task" || nodeType === "action" || nodeType === "outcome";
+}
+
+function getExecutionPathContext(
+  graph: SessionGraph,
+  selectedNodeId: string | null,
+): {
+  nodeIds: Set<string>;
+  edgeIds: Set<string>;
+} {
+  const selectedContext = getSelectedPathContext(graph, selectedNodeId);
+  if (!selectedNodeId) {
+    return selectedContext;
+  }
+
+  const visibleExecutionNodeIds = new Set(
+    graph.nodes.filter((node) => isExecutionNodeType(node.node_type)).map((node) => node.id),
+  );
+  if (!visibleExecutionNodeIds.has(selectedNodeId)) {
+    return selectedContext;
+  }
+
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+  const outgoingEdgesByNode = new Map<string, SessionGraph["edges"]>();
+  const incomingEdgesByNode = new Map<string, SessionGraph["edges"]>();
+  for (const edge of graph.edges) {
+    if (!visibleExecutionNodeIds.has(edge.source) || !visibleExecutionNodeIds.has(edge.target)) {
+      continue;
+    }
+
+    const outgoingEdges = outgoingEdgesByNode.get(edge.source) ?? [];
+    outgoingEdges.push(edge);
+    outgoingEdgesByNode.set(edge.source, outgoingEdges);
+
+    const incomingEdges = incomingEdgesByNode.get(edge.target) ?? [];
+    incomingEdges.push(edge);
+    incomingEdgesByNode.set(edge.target, incomingEdges);
+  }
+
+  const traverse = (
+    startNodeId: string,
+    edgeLookup: Map<string, SessionGraph["edges"]>,
+    readNextNodeId: (edge: SessionGraph["edges"][number]) => string,
+  ) => {
+    const queue = [startNodeId];
+    const visited = new Set<string>([startNodeId]);
+    nodeIds.add(startNodeId);
+    while (queue.length > 0) {
+      const nodeId = queue.shift();
+      if (!nodeId) {
+        continue;
+      }
+      for (const edge of edgeLookup.get(nodeId) ?? []) {
+        edgeIds.add(edge.id);
+        const nextNodeId = readNextNodeId(edge);
+        nodeIds.add(nextNodeId);
+        if (visited.has(nextNodeId)) {
+          continue;
+        }
+        visited.add(nextNodeId);
+        queue.push(nextNodeId);
+      }
+    }
+  };
+
+  traverse(selectedNodeId, incomingEdgesByNode, (edge) => edge.source);
+  traverse(selectedNodeId, outgoingEdgesByNode, (edge) => edge.target);
+  return { nodeIds, edgeIds };
+}
+
 function getEdgeStroke(status: string | null, highlighted: boolean, dimmed: boolean): string {
   if (status === "failed" || status === "blocked") {
     return dimmed ? "rgba(150, 93, 93, 0.28)" : "rgba(150, 93, 93, 0.72)";
@@ -174,7 +246,7 @@ export function buildAutoLayout(
   nodes: Node<AttackCanvasNodeData>[];
   edges: Edge[];
 } {
-  const selectedPathContext = getSelectedPathContext(graph, selectedNodeId);
+  const selectedPathContext = getExecutionPathContext(graph, selectedNodeId);
   const activeNodeIds = new Set(
     graph.nodes
       .filter(

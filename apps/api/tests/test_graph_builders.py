@@ -251,25 +251,25 @@ def test_attack_graph_builder_unifies_goal_tasks_observations_and_findings() -> 
         assert f"goal:{run.id}" in node_ids
         assert collect.id in node_ids
         assert validate.id in node_ids
-        assert "trace-attack-1" in node_ids
-        assert "finding-auth" in node_ids
-        assert "finding-impact" in node_ids
+        assert "trace-attack-1" not in node_ids
+        assert "finding-auth" not in node_ids
+        assert "finding-impact" not in node_ids
         assert f"outcome:{run.id}" in node_ids
         node_types = {node.id: node.node_type for node in graph.nodes}
-        assert node_types[collect.id] == "surface"
-        assert node_types[validate.id] == "exploit"
-        assert node_types["trace-attack-1"] == "observation"
-        assert node_types["finding-auth"] == "vulnerability"
-        assert node_types["finding-impact"] == "outcome"
+        assert node_types[collect.id] == "action"
+        assert node_types[validate.id] == "action"
         anchor_map = {node.id: node.data.get("source_message_id") for node in graph.nodes}
         assert anchor_map[collect.id] == "message-seed-1"
-        assert anchor_map["trace-attack-1"] == "message-seed-1"
-        assert anchor_map["finding-auth"] == "message-seed-1"
+        assert anchor_map[validate.id] == "message-seed-1"
+        collect_node = next(node for node in graph.nodes if node.id == collect.id)
+        validate_node = next(node for node in graph.nodes if node.id == validate.id)
+        assert collect_node.data["trace_id"] == "trace-attack-1"
+        assert collect_node.data["observation_summary"] == "Observed exposed admin surface."
+        assert validate_node.data["related_findings"]
+        assert validate_node.data["related_hypotheses"]
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
         assert (collect.id, "enables", validate.id) in relations
-        assert (collect.id, "discovers", "trace-attack-1") in relations
-        assert ("trace-attack-1", "confirms", "finding-auth") in relations
-        assert ("finding-auth", "supports", "finding-impact") in relations
+        assert (validate.id, "attempts", f"outcome:{run.id}") in relations
 
 
 def test_attack_graph_builder_prunes_redundant_action_only_branch_from_default_view() -> None:
@@ -329,10 +329,89 @@ def test_attack_graph_builder_prunes_redundant_action_only_branch_from_default_v
         )
 
         node_ids = {node.id for node in graph.nodes}
-        assert action_task.id not in node_ids
+        action_node = next(node for node in graph.nodes if node.id == action_task.id)
+        assert action_task.id in node_ids
         assert "trace-action-prune" not in node_ids
-        assert node_ids == {f"goal:{run.id}", f"outcome:{run.id}"}
+        assert node_ids == {f"goal:{run.id}", action_task.id, f"outcome:{run.id}"}
+        assert action_node.data["trace_id"] == "trace-action-prune"
+        assert action_node.data["observation_summary"] == "Observed reachable service."
         assert all(edge.source in node_ids and edge.target in node_ids for edge in graph.edges)
+
+
+def test_attack_graph_builder_merges_evidence_nodes_and_execution_records() -> None:
+    with _db_session() as db_session:
+        session = _create_session(db_session)
+        workflow_repository = WorkflowRepository(db_session)
+        graph_repository = GraphRepository(db_session)
+        run = workflow_repository.create_run(
+            session_id=session.id,
+            template_name="authorized-assessment",
+            status=WorkflowRunStatus.RUNNING,
+            current_stage="safe_validation",
+            started_at=datetime(2026, 4, 6, 9, 30, tzinfo=UTC),
+            ended_at=None,
+            state={
+                "goal": "Keep execution steps visible when evidence and runtime records coexist.",
+                "current_stage": "safe_validation",
+                "execution_records": [
+                    {
+                        "id": "trace-combined-1",
+                        "task_node_id": "task-runtime-1",
+                        "task_name": "safe_validation.execute_check",
+                        "status": "completed",
+                        "command_or_action": "curl https://target.internal/health",
+                        "stdout": "200 OK",
+                    }
+                ],
+            },
+            last_error=None,
+        )
+        task = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="safe_validation.execute_check",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=1,
+            parent_id=None,
+            metadata={
+                "title": "执行健康检查",
+                "stage_key": "safe_validation",
+                "summary": "Runtime health check.",
+            },
+        )
+        evidence_node = graph_repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.EVIDENCE,
+            node_type="execution",
+            label="执行健康检查",
+            payload={
+                "trace_id": "trace-combined-1",
+                "task_id": task.id,
+                "task_name": task.name,
+                "status": "completed",
+                "summary": "Observed healthy endpoint.",
+                "response_excerpt": "HTTP 200 from /health",
+            },
+            stable_key="evidence-node:trace-combined-1",
+        )
+
+        graph = AttackGraphBuilder().build(
+            run=run,
+            tasks=[task],
+            evidence_nodes=[evidence_node],
+            evidence_edges=[],
+            causal_nodes=[],
+            causal_edges=[],
+        )
+
+        task_node = next(node for node in graph.nodes if node.id == task.id)
+        assert task_node.data["trace_id"] == "trace-combined-1"
+        assert task_node.data["response_excerpt"] == "HTTP 200 from /health"
+        assert task_node.data["stdout"] == "200 OK"
+        source_graphs = task_node.data["source_graphs"]
+        assert isinstance(source_graphs, list)
+        assert sorted(source_graphs) == ["evidence", "task", "workflow"]
 
 
 def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> None:
@@ -482,12 +561,11 @@ def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> No
         assert noise_action.id not in node_ids
         assert "trace-drop" not in node_ids
         assert f"hypothesis:{noise_action.name}" not in node_ids
-        assert "trace-keep" in node_ids
-        assert "finding-auth" in node_ids
+        assert "trace-keep" not in node_ids
+        assert "finding-auth" not in node_ids
         assert f"outcome:{run.id}" in node_ids
         assert (collect.id, "enables", validate.id) in relations
-        assert ("trace-keep", "confirms", "finding-auth") in relations
-        assert ("finding-auth", "confirms", f"outcome:{run.id}") in relations
+        assert (validate.id, "confirms", f"outcome:{run.id}") in relations
         for edge in graph.edges:
             assert edge.source in node_ids
             assert edge.target in node_ids
@@ -613,11 +691,14 @@ def test_attack_graph_builder_keeps_preserved_status_noise_nodes() -> None:
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
 
         assert blocked_action.id in node_ids
-        assert "trace-blocked" in node_ids
-        assert f"hypothesis:{blocked_action.name}" in node_ids
-        assert (blocked_action.id, "blocks", "trace-blocked") in relations
-        assert (blocked_action.id, "attempts", f"hypothesis:{blocked_action.name}") in relations
-        assert ("trace-keep", "confirms", "finding-auth") in relations
+        assert "trace-blocked" not in node_ids
+        assert f"hypothesis:{blocked_action.name}" not in node_ids
+        blocked_node = next(node for node in graph.nodes if node.id == blocked_action.id)
+        validate_node = next(node for node in graph.nodes if node.id == validate.id)
+        assert blocked_node.data["trace_id"] == "trace-blocked"
+        assert blocked_node.data["related_hypotheses"]
+        assert validate_node.data["related_findings"]
+        assert (blocked_action.id, "blocks", f"outcome:{run.id}") in relations
 
 
 def test_attack_graph_builder_uses_status_specific_outcome_relations() -> None:
@@ -705,7 +786,7 @@ def test_attack_graph_builder_uses_status_specific_outcome_relations() -> None:
             )
 
             relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
-            assert ("finding-auth", expected_relation, f"outcome:{run.id}") in relations
+            assert (validate.id, expected_relation, f"outcome:{run.id}") in relations
 
 
 def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_reasoning() -> None:
@@ -803,18 +884,13 @@ def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_rea
         assert node_types
         assert "goal" in node_types.values()
         assert "action" in node_types.values()
-        assert "observation" in node_types.values()
-        assert "hypothesis" in node_types.values()
         assert "outcome" in node_types.values()
-        assert any(
-            "token 校验顺序" in node.label for node in graph.nodes if node.node_type == "hypothesis"
-        )
+        assert "observation" not in node_types.values()
+        assert "hypothesis" not in node_types.values()
+        assert any("token 校验顺序" in str(node.data.get("thought")) for node in graph.nodes)
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
         assert any(relation == "attempts" for _, relation, _ in relations)
-        assert any(
-            relation in {"discovers", "observes", "confirms", "validates"}
-            for _, relation, _ in relations
-        )
+        assert any(relation in {"confirms", "blocks"} for _, relation, _ in relations)
 
 
 def test_attack_graph_builder_builds_conversation_fallback_for_shell_tool_results() -> None:
@@ -890,15 +966,15 @@ def test_attack_graph_builder_builds_conversation_fallback_for_shell_tool_result
 
         assert any(node.node_type == "goal" for node in graph.nodes)
         assert any(
-            node.node_type == "exploit" and "printf 'hello'" in node.label for node in graph.nodes
+            node.node_type == "action" and "printf 'hello'" in node.label for node in graph.nodes
         )
         assert any(
-            node.node_type == "observation" and "hello" in str(node.data.get("stdout"))
+            node.node_type == "action" and "hello" in str(node.data.get("stdout"))
             for node in graph.nodes
         )
         assert any(node.node_type == "outcome" for node in graph.nodes)
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
-        assert any(relation == "discovers" for _, relation, _ in relations)
+        assert any(relation == "attempts" for _, relation, _ in relations)
 
 
 def test_attack_graph_builder_classifies_execute_skill_security_tools_as_exploit() -> None:
@@ -950,7 +1026,7 @@ def test_attack_graph_builder_classifies_execute_skill_security_tools_as_exploit
             generations=[],
         )
 
-    assert any(node.node_type == "exploit" and "adscan" in node.label for node in graph.nodes)
+    assert any(node.node_type == "action" and "adscan" in node.label for node in graph.nodes)
 
 
 def _db_session() -> DBSession:

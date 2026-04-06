@@ -99,7 +99,9 @@ def test_graph_service_uses_conversation_fallback_without_workflow_run() -> None
 
         node_types = {node.node_type for node in graph.nodes}
         assert graph.workflow_run_id == ""
-        assert {"goal", "action", "observation", "hypothesis", "outcome"}.issubset(node_types)
+        assert {"goal", "action", "outcome"}.issubset(node_types)
+        assert "observation" not in node_types
+        assert "hypothesis" not in node_types
         assert any(node.id.startswith("action:message:") for node in graph.nodes)
 
 

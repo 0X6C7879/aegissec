@@ -16,6 +16,7 @@ from app.db.models import (
     SessionGraphRead,
     TaskNode,
     TaskNodeStatus,
+    TaskNodeType,
     WorkflowRun,
     WorkflowRunStatus,
     resolve_message_assistant_transcript,
@@ -217,48 +218,16 @@ class CausalGraphBuilder:
 
 class AttackGraphBuilder:
     _THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
-    _SEMANTIC_ATTACK_CORE_NODE_TYPES = frozenset(
-        {"goal", "surface", "vulnerability", "exploit", "pivot", "outcome"}
-    )
-    _PRESERVED_ATTACK_STATUS_VALUES = frozenset({"in_progress", "blocked", "failed"})
-    _OBSERVATION_KEEP_NEIGHBOR_TYPES = frozenset({"vulnerability", "exploit", "pivot", "outcome"})
-    _HYPOTHESIS_KEEP_NEIGHBOR_TYPES = frozenset({"vulnerability", "exploit", "pivot", "outcome"})
-    _TASK_NODE_TYPE_MAP: dict[str, str] = {
-        "context_collect.attack_surface": "surface",
-        "context_collect.existing_evidence": "observation",
-        "hypothesis_build.hypothesis_draft": "hypothesis",
-        "safe_validation.validate_primary_hypothesis": "exploit",
-        "causal_graph_update.update_causal_chain": "pivot",
-        "report_export.report_summary": "outcome",
-    }
-    _TASK_STAGE_NODE_TYPE_MAP: dict[str, str] = {
-        "context_collect": "surface",
-        "hypothesis_build": "hypothesis",
-        "safe_validation": "exploit",
-        "findings_merge": "vulnerability",
-        "causal_graph_update": "pivot",
-        "report_export": "outcome",
-    }
-    _FINDING_NODE_TYPE_MAP: dict[str, str] = {
-        "finding": "vulnerability",
-        "impact": "outcome",
-        "outcome": "outcome",
-        "pivot": "pivot",
-        "exploit": "exploit",
-        "observation": "observation",
-        "hypothesis": "hypothesis",
-    }
     _NODE_TYPE_SORT_ORDER: dict[str, int] = {
         "goal": 0,
-        "surface": 1,
-        "observation": 2,
-        "hypothesis": 3,
-        "action": 4,
-        "vulnerability": 5,
-        "exploit": 6,
-        "pivot": 7,
-        "outcome": 8,
+        "task": 1,
+        "action": 2,
+        "outcome": 3,
     }
+    _EXECUTION_SOURCE_GRAPHS = frozenset(
+        {"task", "workflow", "conversation", "generation", "transcript"}
+    )
+    _PRESERVED_ATTACK_STATUS_VALUES = frozenset({"in_progress", "blocked", "failed"})
 
     def build(
         self,
@@ -276,10 +245,11 @@ class AttackGraphBuilder:
         edges_by_id: dict[str, SessionGraphEdgeRead] = {}
         task_ids = {task.id for task in ordered_tasks}
         task_name_to_id = {task.name: task.id for task in ordered_tasks}
+        action_node_ids_by_trace: dict[str, str] = {}
         task_stage_to_id: dict[str, str] = {}
         for task in ordered_tasks:
             stage_key = task.metadata_json.get("stage_key")
-            if isinstance(stage_key, str) and task.node_type.value == "stage":
+            if isinstance(stage_key, str) and task.node_type is TaskNodeType.STAGE:
                 task_stage_to_id[stage_key] = task.id
 
         seed_message_id = run.state_json.get("seed_message_id")
@@ -298,14 +268,24 @@ class AttackGraphBuilder:
             return anchored
 
         def add_node(*, node_id: str, node_type: str, label: str, data: dict[str, object]) -> None:
-            if node_id in nodes_by_id:
+            anchored_data = with_anchor_data(data)
+            existing = nodes_by_id.get(node_id)
+            if existing is not None:
+                merged_type = self._prefer_attack_node_type(existing.node_type, node_type)
+                nodes_by_id[node_id] = SessionGraphNodeRead(
+                    id=node_id,
+                    graph_type=GraphType.ATTACK,
+                    node_type=merged_type,
+                    label=self._choose_node_label(existing.label, label),
+                    data=self._merge_attack_node_data(existing.data, anchored_data),
+                )
                 return
             nodes_by_id[node_id] = SessionGraphNodeRead(
                 id=node_id,
                 graph_type=GraphType.ATTACK,
                 node_type=node_type,
                 label=label,
-                data=with_anchor_data(data),
+                data=anchored_data,
             )
 
         def add_edge(
@@ -365,6 +345,10 @@ class AttackGraphBuilder:
                     "requires_approval": bool(task.metadata_json.get("approval_required", False)),
                     "current": task.metadata_json.get("stage_key") == run.current_stage
                     or task.name == run.current_stage,
+                    "thought": task.metadata_json.get("thought"),
+                    "observation_summary": task.metadata_json.get("summary"),
+                    "related_findings": [],
+                    "related_hypotheses": [],
                     "source_graphs": ["task"],
                 },
             )
@@ -392,79 +376,62 @@ class AttackGraphBuilder:
                     data={"source_graphs": ["task"]},
                 )
 
-        observation_ids_by_trace: dict[str, str] = {}
         if evidence_nodes:
             for node in sorted(
                 evidence_nodes, key=lambda item: (item.stable_key, item.created_at, item.id)
             ):
-                trace_id = node.payload_json.get("trace_id")
-                observation_id = (
-                    str(trace_id)
-                    if isinstance(trace_id, str) and trace_id
-                    else f"observation:{node.stable_key or node.id}"
+                payload = dict(node.payload_json)
+                trace_id = payload.get("trace_id")
+                task_id = payload.get("task_id")
+                task_name = payload.get("task_name")
+                node_id = self._resolve_execution_node_id(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    task_name=task_name,
+                    task_ids=task_ids,
+                    task_name_to_id=task_name_to_id,
+                    fallback=f"action:{node.stable_key or node.id}",
                 )
-                status = str(node.payload_json.get("status") or "unknown")
                 add_node(
-                    node_id=observation_id,
-                    node_type="observation",
-                    label=node.label,
-                    data={
-                        **dict(node.payload_json),
-                        "source_graphs": ["evidence"],
-                    },
+                    node_id=node_id,
+                    node_type=self._execution_node_type_for_id(node_id, nodes_by_id.get(node_id)),
+                    label=self._execution_node_label(node.label, payload),
+                    data=self._execution_payload(payload, source_graphs=["evidence"]),
                 )
                 if isinstance(trace_id, str) and trace_id:
-                    observation_ids_by_trace[trace_id] = observation_id
-                task_id = node.payload_json.get("task_id")
-                if isinstance(task_id, str) and task_id in task_ids:
-                    add_edge(
-                        source=task_id,
-                        target=observation_id,
-                        relation=self._execution_relation(status),
-                        data={
-                            "source_graphs": ["task", "evidence"],
-                            "status": status,
-                        },
-                    )
-        else:
-            execution_records = run.state_json.get("execution_records", [])
-            if isinstance(execution_records, list):
-                for index, record in enumerate(execution_records):
-                    if not isinstance(record, dict):
-                        continue
-                    trace_id = record.get("id")
-                    observation_id = (
-                        str(trace_id)
-                        if isinstance(trace_id, str) and trace_id
-                        else f"observation:{run.id}:{index + 1}"
-                    )
-                    status = str(record.get("status") or "unknown")
-                    add_node(
-                        node_id=observation_id,
-                        node_type="observation",
-                        label=str(
+                    action_node_ids_by_trace[trace_id] = node_id
+        execution_records = run.state_json.get("execution_records", [])
+        if isinstance(execution_records, list):
+            for index, record in enumerate(execution_records):
+                if not isinstance(record, dict):
+                    continue
+                trace_id = record.get("id")
+                task_id = record.get("task_node_id")
+                task_name = record.get("task_name")
+                node_id = self._resolve_execution_node_id(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    task_name=task_name,
+                    task_ids=task_ids,
+                    task_name_to_id=task_name_to_id,
+                    fallback=f"action:{run.id}:{index + 1}",
+                    trace_to_node_id=action_node_ids_by_trace,
+                )
+                add_node(
+                    node_id=node_id,
+                    node_type=self._execution_node_type_for_id(node_id, nodes_by_id.get(node_id)),
+                    label=self._execution_node_label(
+                        str(
                             record.get("task_name")
                             or record.get("command_or_action")
-                            or f"Observation {index + 1}"
+                            or f"Action {index + 1}"
                         ),
-                        data={
-                            **dict(record),
-                            "source_graphs": ["workflow"],
-                        },
-                    )
-                    if isinstance(trace_id, str) and trace_id:
-                        observation_ids_by_trace[trace_id] = observation_id
-                    task_id = record.get("task_node_id")
-                    if isinstance(task_id, str) and task_id in task_ids:
-                        add_edge(
-                            source=task_id,
-                            target=observation_id,
-                            relation=self._execution_relation(status),
-                            data={
-                                "source_graphs": ["task", "workflow"],
-                                "status": status,
-                            },
-                        )
+                        record,
+                    ),
+                    data=self._execution_payload(dict(record), source_graphs=["workflow"]),
+                )
+                if isinstance(trace_id, str) and trace_id:
+                    action_node_ids_by_trace[trace_id] = node_id
 
         hypothesis_updates = run.state_json.get("hypothesis_updates", [])
         if isinstance(hypothesis_updates, list):
@@ -474,156 +441,130 @@ class AttackGraphBuilder:
                 result = str(update.get("result") or "unknown")
                 trace_id = update.get("trace_id")
                 task_name = update.get("task")
-                hypothesis_id = (
-                    f"hypothesis:{trace_id}"
-                    if isinstance(trace_id, str) and trace_id
-                    else (
-                        f"hypothesis:{task_name}"
-                        if isinstance(task_name, str) and task_name
-                        else f"hypothesis:{run.id}:{index + 1}"
+                target_node_id = (
+                    task_name_to_id[task_name]
+                    if isinstance(task_name, str) and task_name in task_name_to_id
+                    else self._resolve_execution_node_id(
+                        trace_id=trace_id,
+                        task_id=None,
+                        task_name=task_name,
+                        task_ids=task_ids,
+                        task_name_to_id=task_name_to_id,
+                        fallback=f"action:hypothesis:{run.id}:{index + 1}",
+                        trace_to_node_id=action_node_ids_by_trace,
                     )
                 )
                 add_node(
-                    node_id=hypothesis_id,
-                    node_type="hypothesis",
-                    label=str(update.get("kind") or f"Hypothesis {index + 1}"),
+                    node_id=target_node_id,
+                    node_type=self._execution_node_type_for_id(
+                        target_node_id, nodes_by_id.get(target_node_id)
+                    ),
+                    label=self._execution_node_label(
+                        str(
+                            update.get("kind") or update.get("summary") or f"Hypothesis {index + 1}"
+                        ),
+                        update,
+                    ),
                     data={
-                        **dict(update),
+                        "status": update.get("status")
+                        or ("blocked" if result == "blocked" else None),
+                        "thought": update.get("summary") or update.get("kind"),
+                        "related_hypotheses": [
+                            {
+                                "kind": update.get("kind"),
+                                "summary": update.get("summary"),
+                                "result": update.get("result"),
+                                "status": update.get("status"),
+                                "trace_id": trace_id,
+                                "task": task_name,
+                            }
+                        ],
                         "source_graphs": ["workflow"],
                     },
                 )
-                if isinstance(task_name, str) and task_name in task_name_to_id:
-                    add_edge(
-                        source=task_name_to_id[task_name],
-                        target=hypothesis_id,
-                        relation="attempts",
-                        data={"source_graphs": ["task", "workflow"]},
-                    )
-                if isinstance(trace_id, str) and trace_id in observation_ids_by_trace:
-                    add_edge(
-                        source=observation_ids_by_trace[trace_id],
-                        target=hypothesis_id,
-                        relation="validates" if result == "supported" else "blocks",
-                        data={
-                            "result": result,
-                            "source_graphs": ["workflow"],
-                        },
-                    )
+                if isinstance(trace_id, str) and trace_id:
+                    action_node_ids_by_trace[trace_id] = target_node_id
 
-        finding_ids_by_source: dict[str, str] = {}
-        causal_node_id_map: dict[str, str] = {}
         if causal_nodes:
             for node in sorted(
                 causal_nodes, key=lambda item: (item.stable_key, item.created_at, item.id)
             ):
-                finding_source_id = node.payload_json.get("id")
-                finding_id = (
-                    str(finding_source_id)
-                    if isinstance(finding_source_id, str) and finding_source_id
-                    else f"finding:{node.stable_key or node.id}"
+                payload = dict(node.payload_json)
+                trace_id = payload.get("trace_id")
+                task_name = payload.get("task")
+                target_node_id = (
+                    task_name_to_id[task_name]
+                    if isinstance(task_name, str) and task_name in task_name_to_id
+                    else self._resolve_execution_node_id(
+                        trace_id=trace_id,
+                        task_id=None,
+                        task_name=task_name,
+                        task_ids=task_ids,
+                        task_name_to_id=task_name_to_id,
+                        fallback=f"action:finding:{node.id}",
+                        trace_to_node_id=action_node_ids_by_trace,
+                    )
                 )
-                causal_node_id_map[node.id] = finding_id
                 add_node(
-                    node_id=finding_id,
-                    node_type=self._finding_node_type(node.payload_json, node.node_type),
-                    label=node.label,
+                    node_id=target_node_id,
+                    node_type=self._execution_node_type_for_id(
+                        target_node_id, nodes_by_id.get(target_node_id)
+                    ),
+                    label=self._execution_node_label(node.label, payload),
                     data={
-                        **dict(node.payload_json),
+                        "related_findings": [self._finding_summary(payload, node.label)],
                         "source_graphs": ["causal"],
                     },
                 )
-                if isinstance(finding_source_id, str) and finding_source_id:
-                    finding_ids_by_source[finding_source_id] = finding_id
-                trace_id = node.payload_json.get("trace_id")
-                if isinstance(trace_id, str) and trace_id in observation_ids_by_trace:
-                    add_edge(
-                        source=observation_ids_by_trace[trace_id],
-                        target=finding_id,
-                        relation="confirms",
-                        data={"source_graphs": ["evidence", "causal"]},
-                    )
-                task_name = node.payload_json.get("task")
-                if isinstance(task_name, str) and task_name in task_name_to_id:
-                    add_edge(
-                        source=task_name_to_id[task_name],
-                        target=finding_id,
-                        relation="confirms",
-                        data={"source_graphs": ["task", "causal"]},
-                    )
-            for edge in causal_edges or []:
-                source_id = causal_node_id_map.get(edge.source_node_id)
-                target_id = causal_node_id_map.get(edge.target_node_id)
-                if source_id is None or target_id is None:
-                    continue
-                add_edge(
-                    source=source_id,
-                    target=target_id,
-                    relation=edge.relation,
-                    data={
-                        **dict(edge.payload_json),
-                        "source_graphs": ["causal"],
-                    },
-                )
+                if isinstance(trace_id, str) and trace_id:
+                    action_node_ids_by_trace[trace_id] = target_node_id
         else:
             findings = run.state_json.get("findings", [])
             if isinstance(findings, list):
                 normalized_findings = [finding for finding in findings if isinstance(finding, dict)]
                 for index, finding in enumerate(normalized_findings):
-                    finding_source_id = finding.get("id")
-                    finding_id = (
-                        str(finding_source_id)
-                        if isinstance(finding_source_id, str) and finding_source_id
-                        else f"finding:{run.id}:{index + 1}"
+                    trace_id = finding.get("trace_id")
+                    task_name = finding.get("task")
+                    target_node_id = (
+                        task_name_to_id[task_name]
+                        if isinstance(task_name, str) and task_name in task_name_to_id
+                        else self._resolve_execution_node_id(
+                            trace_id=trace_id,
+                            task_id=None,
+                            task_name=task_name,
+                            task_ids=task_ids,
+                            task_name_to_id=task_name_to_id,
+                            fallback=f"action:finding:{run.id}:{index + 1}",
+                            trace_to_node_id=action_node_ids_by_trace,
+                        )
                     )
                     add_node(
-                        node_id=finding_id,
-                        node_type=self._finding_node_type(finding),
-                        label=str(
-                            finding.get("title") or finding.get("id") or f"Finding {index + 1}"
+                        node_id=target_node_id,
+                        node_type=self._execution_node_type_for_id(
+                            target_node_id, nodes_by_id.get(target_node_id)
+                        ),
+                        label=self._execution_node_label(
+                            str(
+                                finding.get("title") or finding.get("id") or f"Finding {index + 1}"
+                            ),
+                            finding,
                         ),
                         data={
-                            **dict(finding),
+                            "related_findings": [
+                                self._finding_summary(
+                                    finding,
+                                    str(
+                                        finding.get("title")
+                                        or finding.get("id")
+                                        or f"Finding {index + 1}"
+                                    ),
+                                )
+                            ],
                             "source_graphs": ["workflow"],
                         },
                     )
-                    if isinstance(finding_source_id, str) and finding_source_id:
-                        finding_ids_by_source[finding_source_id] = finding_id
-                    trace_id = finding.get("trace_id")
-                    if isinstance(trace_id, str) and trace_id in observation_ids_by_trace:
-                        add_edge(
-                            source=observation_ids_by_trace[trace_id],
-                            target=finding_id,
-                            relation="confirms",
-                            data={"source_graphs": ["workflow"]},
-                        )
-                    task_name = finding.get("task")
-                    if isinstance(task_name, str) and task_name in task_name_to_id:
-                        add_edge(
-                            source=task_name_to_id[task_name],
-                            target=finding_id,
-                            relation="confirms",
-                            data={"source_graphs": ["task", "workflow"]},
-                        )
-                for finding in normalized_findings:
-                    source_key = finding.get("id")
-                    if not isinstance(source_key, str) or source_key not in finding_ids_by_source:
-                        continue
-                    for relation in ("supports", "contradicts", "validates", "causes"):
-                        raw_targets = finding.get(relation, [])
-                        if not isinstance(raw_targets, list):
-                            continue
-                        for target_key in raw_targets:
-                            if (
-                                not isinstance(target_key, str)
-                                or target_key not in finding_ids_by_source
-                            ):
-                                continue
-                            add_edge(
-                                source=finding_ids_by_source[source_key],
-                                target=finding_ids_by_source[target_key],
-                                relation=relation,
-                                data={"source_graphs": ["workflow"]},
-                            )
+                    if isinstance(trace_id, str) and trace_id:
+                        action_node_ids_by_trace[trace_id] = target_node_id
 
         outcome_node_id = f"outcome:{run.id}"
         outcome_relation = self._workflow_outcome_relation(run.status)
@@ -636,35 +577,39 @@ class AttackGraphBuilder:
                 "status": run.status.value,
                 "current_stage": run.current_stage,
                 "last_error": run.last_error,
+                "related_findings": [],
+                "related_hypotheses": [],
                 "source_graphs": ["workflow"],
             },
         )
-        finding_node_ids = [
-            node.id
-            for node in nodes_by_id.values()
-            if node.node_type in {"vulnerability", "pivot", "exploit"}
-        ]
-        if finding_node_ids:
-            for node_id in finding_node_ids:
-                add_edge(
-                    source=node_id,
-                    target=outcome_node_id,
-                    relation=outcome_relation,
-                    data={"source_graphs": ["attack"]},
-                )
-        else:
+        leaf_node_ids = self._execution_leaf_node_ids(
+            nodes_by_id=nodes_by_id, edges_by_id=edges_by_id
+        )
+        if not leaf_node_ids:
             anchor_task_id = self._current_stage_task_id(
                 ordered_tasks,
                 current_stage=run.current_stage,
                 task_stage_to_id=task_stage_to_id,
             )
             if anchor_task_id is not None:
-                add_edge(
-                    source=anchor_task_id,
-                    target=outcome_node_id,
-                    relation=outcome_relation,
-                    data={"source_graphs": ["task", "workflow"]},
-                )
+                leaf_node_ids = {anchor_task_id}
+        if goal_node_id is not None and not leaf_node_ids:
+            leaf_node_ids = {goal_node_id}
+        for node_id in sorted(leaf_node_ids):
+            if node_id == outcome_node_id:
+                continue
+            node_status = str(nodes_by_id[node_id].data.get("status") or "")
+            leaf_relation = (
+                self._execution_relation(node_status)
+                if outcome_relation == "attempts"
+                else outcome_relation
+            )
+            add_edge(
+                source=node_id,
+                target=outcome_node_id,
+                relation=leaf_relation,
+                data={"source_graphs": ["task", "workflow"]},
+            )
 
         nodes_by_id, edges_by_id = self._prune_attack_graph_for_default_view(
             nodes_by_id=nodes_by_id,
@@ -698,279 +643,107 @@ class AttackGraphBuilder:
         nodes_by_id: dict[str, SessionGraphNodeRead],
         edges_by_id: dict[str, SessionGraphEdgeRead],
     ) -> tuple[dict[str, SessionGraphNodeRead], dict[str, SessionGraphEdgeRead]]:
-        all_edges = tuple(edges_by_id.values())
-        incoming_edges_by_node, outgoing_edges_by_node = self._index_attack_edges(all_edges)
-        keep_node_ids = self._collect_attack_graph_keep_node_ids(
-            nodes_by_id=nodes_by_id,
-            incoming_edges_by_node=incoming_edges_by_node,
-            outgoing_edges_by_node=outgoing_edges_by_node,
-        )
+        normalized_nodes_by_id = {
+            node_id: normalized
+            for node_id, node in nodes_by_id.items()
+            if (normalized := self._normalize_attack_view_node(node)) is not None
+        }
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
+        for edge in edges_by_id.values():
+            outgoing_edges_by_node.setdefault(edge.source, []).append(edge)
+
         removable_node_ids = {
-            node.id
-            for node in nodes_by_id.values()
-            if not self._should_keep_attack_node(
+            node_id
+            for node_id, node in normalized_nodes_by_id.items()
+            if self._should_remove_low_signal_execution_node(
                 node=node,
-                keep_node_ids=keep_node_ids,
-                edges=all_edges,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+                execution_node_count=sum(
+                    1
+                    for candidate in normalized_nodes_by_id.values()
+                    if candidate.node_type in {"task", "action"}
+                ),
             )
         }
-        if not removable_node_ids:
-            return nodes_by_id, edges_by_id
+        if removable_node_ids:
+            normalized_nodes_by_id = {
+                node_id: node
+                for node_id, node in normalized_nodes_by_id.items()
+                if node_id not in removable_node_ids
+            }
 
-        pruned_edges_by_id = {
-            edge_id: edge
-            for edge_id, edge in edges_by_id.items()
-            if edge.source not in removable_node_ids and edge.target not in removable_node_ids
-        }
-        for node_id in removable_node_ids:
-            incoming_edges = incoming_edges_by_node.get(node_id, [])
-            outgoing_edges = outgoing_edges_by_node.get(node_id, [])
-            for incoming_edge in incoming_edges:
-                if incoming_edge.source in removable_node_ids:
-                    continue
-                for outgoing_edge in outgoing_edges:
-                    if outgoing_edge.target in removable_node_ids:
-                        continue
-                    if incoming_edge.source == outgoing_edge.target:
-                        continue
-                    bridge_relation = self._bridge_attack_edge_relation(
-                        incoming_relation=incoming_edge.relation,
-                        outgoing_relation=outgoing_edge.relation,
-                    )
-                    bridge_edge_id = (
-                        f"attack:{incoming_edge.source}:{bridge_relation}:{outgoing_edge.target}"
-                    )
-                    if bridge_edge_id in pruned_edges_by_id:
-                        continue
-                    pruned_edges_by_id[bridge_edge_id] = SessionGraphEdgeRead(
-                        id=bridge_edge_id,
-                        graph_type=GraphType.ATTACK,
-                        source=incoming_edge.source,
-                        target=outgoing_edge.target,
-                        relation=bridge_relation,
-                        data=self._merge_attack_edge_data(incoming_edge, outgoing_edge),
-                    )
+        pruned_edges_by_id: dict[str, SessionGraphEdgeRead] = {}
+        for node_id in normalized_nodes_by_id:
+            self._collect_visible_attack_edges(
+                source_id=node_id,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+                pruned_edges_by_id=pruned_edges_by_id,
+            )
 
-        pruned_nodes_by_id = {
-            node_id: node
-            for node_id, node in nodes_by_id.items()
-            if node_id not in removable_node_ids
-        }
         pruned_edges_by_id = {
             edge_id: edge
             for edge_id, edge in pruned_edges_by_id.items()
-            if edge.source in pruned_nodes_by_id and edge.target in pruned_nodes_by_id
+            if edge.source in normalized_nodes_by_id and edge.target in normalized_nodes_by_id
         }
-        return pruned_nodes_by_id, pruned_edges_by_id
+        return normalized_nodes_by_id, pruned_edges_by_id
 
-    def _collect_attack_graph_keep_node_ids(
+    def _collect_visible_attack_edges(
         self,
         *,
-        nodes_by_id: dict[str, SessionGraphNodeRead],
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        source_id: str,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
         outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-    ) -> set[str]:
-        path_node_ids = self._collect_attack_path_node_ids(
-            nodes_by_id=nodes_by_id,
-            incoming_edges_by_node=incoming_edges_by_node,
-            outgoing_edges_by_node=outgoing_edges_by_node,
-        )
-        keep_node_ids = {
-            node.id
-            for node in nodes_by_id.values()
-            if node.node_type in self._SEMANTIC_ATTACK_CORE_NODE_TYPES
-            or self._node_has_preserved_status(node)
-            or (node.id in path_node_ids and node.node_type != "action")
-        }
-        kept_hypothesis_ids = {
-            node.id
-            for node in nodes_by_id.values()
-            if node.node_type == "hypothesis"
-            and self._hypothesis_node_should_be_kept(
-                node=node,
-                nodes_by_id=nodes_by_id,
-                incoming_edges_by_node=incoming_edges_by_node,
-                outgoing_edges_by_node=outgoing_edges_by_node,
-                path_node_ids=path_node_ids,
-            )
-        }
-        keep_node_ids.update(kept_hypothesis_ids)
-        keep_node_ids.update(
-            node.id
-            for node in nodes_by_id.values()
-            if node.node_type == "observation"
-            and self._observation_node_should_be_kept(
-                node=node,
-                nodes_by_id=nodes_by_id,
-                incoming_edges_by_node=incoming_edges_by_node,
-                outgoing_edges_by_node=outgoing_edges_by_node,
-                path_node_ids=path_node_ids,
-                kept_hypothesis_ids=kept_hypothesis_ids,
-            )
-        )
-        return keep_node_ids
+        pruned_edges_by_id: dict[str, SessionGraphEdgeRead],
+    ) -> None:
+        pending: list[tuple[str, str, dict[str, object]]] = []
+        seen_states: set[tuple[str, str, str]] = set()
+        for edge in outgoing_edges_by_node.get(source_id, []):
+            pending.append((edge.target, edge.relation, dict(edge.data)))
 
-    def _collect_attack_path_node_ids(
-        self,
-        *,
-        nodes_by_id: dict[str, SessionGraphNodeRead],
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-    ) -> set[str]:
-        goal_node_ids = [node.id for node in nodes_by_id.values() if node.node_type == "goal"]
-        target_node_ids = [
-            node.id
-            for node in nodes_by_id.values()
-            if node.node_type in {"vulnerability", "exploit", "pivot", "outcome"}
-        ]
-        if not goal_node_ids or not target_node_ids:
-            return set()
-        reachable_from_goal_ids = self._walk_attack_graph(
-            start_ids=goal_node_ids,
-            edges_by_node=outgoing_edges_by_node,
-            reverse=False,
-        )
-        reaches_target_ids = self._walk_attack_graph(
-            start_ids=target_node_ids,
-            edges_by_node=incoming_edges_by_node,
-            reverse=True,
-        )
-        return reachable_from_goal_ids & reaches_target_ids
-
-    def _walk_attack_graph(
-        self,
-        *,
-        start_ids: Iterable[str],
-        edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        reverse: bool,
-    ) -> set[str]:
-        visited: set[str] = set()
-        pending = [node_id for node_id in start_ids if node_id]
         while pending:
-            node_id = pending.pop()
-            if node_id in visited:
+            target_id, relation, data = pending.pop()
+            state_key = (source_id, target_id, relation)
+            if state_key in seen_states:
                 continue
-            visited.add(node_id)
-            for edge in edges_by_node.get(node_id, []):
-                neighbor_id = edge.source if reverse else edge.target
-                if neighbor_id not in visited:
-                    pending.append(neighbor_id)
-        return visited
-
-    def _index_attack_edges(
-        self,
-        edges: Iterable[SessionGraphEdgeRead],
-    ) -> tuple[dict[str, list[SessionGraphEdgeRead]], dict[str, list[SessionGraphEdgeRead]]]:
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
-        for edge in edges:
-            incoming_edges_by_node.setdefault(edge.target, []).append(edge)
-            outgoing_edges_by_node.setdefault(edge.source, []).append(edge)
-        return incoming_edges_by_node, outgoing_edges_by_node
-
-    def _should_keep_attack_node(
-        self,
-        *,
-        node: SessionGraphNodeRead,
-        keep_node_ids: set[str],
-        edges: Iterable[SessionGraphEdgeRead],
-    ) -> bool:
-        if node.node_type == "action":
-            return self._node_has_preserved_status(node) or self._node_is_required_terminal(
-                node, edges
-            )
-        if node.node_type in {"observation", "hypothesis"}:
-            return node.id in keep_node_ids
-        return True
-
-    def _observation_node_should_be_kept(
-        self,
-        *,
-        node: SessionGraphNodeRead,
-        nodes_by_id: dict[str, SessionGraphNodeRead],
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        path_node_ids: set[str],
-        kept_hypothesis_ids: set[str],
-    ) -> bool:
-        if self._node_has_preserved_status(node) or node.id in path_node_ids:
-            return True
-        if self._node_has_attack_neighbor_types(
-            node_id=node.id,
-            nodes_by_id=nodes_by_id,
-            incoming_edges_by_node=incoming_edges_by_node,
-            outgoing_edges_by_node=outgoing_edges_by_node,
-            neighbor_types=self._OBSERVATION_KEEP_NEIGHBOR_TYPES,
-        ):
-            return True
-        return self._node_has_attack_neighbor_ids(
-            node_id=node.id,
-            incoming_edges_by_node=incoming_edges_by_node,
-            outgoing_edges_by_node=outgoing_edges_by_node,
-            neighbor_ids=kept_hypothesis_ids,
-        )
-
-    def _hypothesis_node_should_be_kept(
-        self,
-        *,
-        node: SessionGraphNodeRead,
-        nodes_by_id: dict[str, SessionGraphNodeRead],
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        path_node_ids: set[str],
-    ) -> bool:
-        if self._node_has_preserved_status(node) or node.id in path_node_ids:
-            return True
-        if self._node_has_attack_neighbor_types(
-            node_id=node.id,
-            nodes_by_id=nodes_by_id,
-            incoming_edges_by_node=incoming_edges_by_node,
-            outgoing_edges_by_node=outgoing_edges_by_node,
-            neighbor_types=self._HYPOTHESIS_KEEP_NEIGHBOR_TYPES,
-        ):
-            return True
-        for edge in incoming_edges_by_node.get(node.id, []):
-            if edge.relation not in {"validates", "blocks"}:
+            seen_states.add(state_key)
+            if target_id == source_id:
                 continue
-            source_node = nodes_by_id.get(edge.source)
-            if source_node is not None and source_node.node_type == "observation":
-                return True
-        return False
-
-    def _node_has_attack_neighbor_types(
-        self,
-        *,
-        node_id: str,
-        nodes_by_id: dict[str, SessionGraphNodeRead],
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        neighbor_types: frozenset[str],
-    ) -> bool:
-        for edge in incoming_edges_by_node.get(node_id, []):
-            source_node = nodes_by_id.get(edge.source)
-            if source_node is not None and source_node.node_type in neighbor_types:
-                return True
-        for edge in outgoing_edges_by_node.get(node_id, []):
-            target_node = nodes_by_id.get(edge.target)
-            if target_node is not None and target_node.node_type in neighbor_types:
-                return True
-        return False
-
-    def _node_has_attack_neighbor_ids(
-        self,
-        *,
-        node_id: str,
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
-        neighbor_ids: set[str],
-    ) -> bool:
-        for edge in incoming_edges_by_node.get(node_id, []):
-            if edge.source in neighbor_ids:
-                return True
-        for edge in outgoing_edges_by_node.get(node_id, []):
-            if edge.target in neighbor_ids:
-                return True
-        return False
+            if target_id in normalized_nodes_by_id:
+                edge_id = f"attack:{source_id}:{relation}:{target_id}"
+                existing = pruned_edges_by_id.get(edge_id)
+                edge_data = self._dedupe_edge_data(data)
+                if existing is None:
+                    pruned_edges_by_id[edge_id] = SessionGraphEdgeRead(
+                        id=edge_id,
+                        graph_type=GraphType.ATTACK,
+                        source=source_id,
+                        target=target_id,
+                        relation=relation,
+                        data=edge_data,
+                    )
+                else:
+                    pruned_edges_by_id[edge_id] = SessionGraphEdgeRead(
+                        id=edge_id,
+                        graph_type=GraphType.ATTACK,
+                        source=source_id,
+                        target=target_id,
+                        relation=relation,
+                        data=self._merge_attack_edge_dicts(existing.data, edge_data),
+                    )
+                continue
+            for outgoing_edge in outgoing_edges_by_node.get(target_id, []):
+                pending.append(
+                    (
+                        outgoing_edge.target,
+                        self._bridge_attack_edge_relation(
+                            incoming_relation=relation,
+                            outgoing_relation=outgoing_edge.relation,
+                        ),
+                        self._merge_attack_edge_dicts(data, outgoing_edge.data),
+                    )
+                )
 
     def _node_is_active(self, node: SessionGraphNodeRead) -> bool:
         status = node.data.get("status")
@@ -980,19 +753,66 @@ class AttackGraphBuilder:
         status = node.data.get("status")
         return self._node_is_active(node) or status in self._PRESERVED_ATTACK_STATUS_VALUES
 
-    def _node_is_required_terminal(
+    def _should_remove_low_signal_execution_node(
         self,
+        *,
         node: SessionGraphNodeRead,
-        edges: Iterable[SessionGraphEdgeRead],
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        execution_node_count: int,
     ) -> bool:
-        incoming_count = 0
-        outgoing_count = 0
-        for edge in edges:
-            if edge.target == node.id:
-                incoming_count += 1
-            if edge.source == node.id:
-                outgoing_count += 1
-        return incoming_count == 0 or outgoing_count == 0
+        if node.node_type not in {"task", "action"}:
+            return False
+        if execution_node_count <= 1 and self._node_has_runtime_provenance(node):
+            return False
+        if self._node_has_preserved_status(node):
+            return False
+        if node.data.get("current"):
+            return False
+        if isinstance(node.data.get("related_findings"), list) and node.data.get(
+            "related_findings"
+        ):
+            return False
+        if self._node_has_execution_signal(node):
+            return False
+        for edge in outgoing_edges_by_node.get(node.id, []):
+            if edge.target in normalized_nodes_by_id and not edge.target.startswith("outcome:"):
+                return False
+        return True
+
+    def _node_has_execution_signal(self, node: SessionGraphNodeRead) -> bool:
+        execution_fields = (
+            "tool_name",
+            "command",
+            "request_summary",
+            "arguments",
+            "result",
+            "observation",
+            "response_excerpt",
+            "stdout",
+            "stderr",
+            "exit_code",
+        )
+        for field in execution_fields:
+            value = node.data.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            return True
+        return False
+
+    def _node_has_runtime_provenance(self, node: SessionGraphNodeRead) -> bool:
+        source_graphs = node.data.get("source_graphs")
+        if not isinstance(source_graphs, list):
+            return False
+        return any(
+            isinstance(source, str)
+            and source in {"workflow", "evidence", "conversation", "transcript", "generation"}
+            for source in source_graphs
+        ) or isinstance(node.data.get("trace_id"), str)
 
     def _bridge_attack_edge_relation(
         self, *, incoming_relation: str, outgoing_relation: str
@@ -1001,28 +821,21 @@ class AttackGraphBuilder:
             return outgoing_relation
         return incoming_relation
 
-    def _merge_attack_edge_data(
+    def _merge_attack_edge_dicts(
         self,
-        incoming_edge: SessionGraphEdgeRead,
-        outgoing_edge: SessionGraphEdgeRead,
+        first: dict[str, object],
+        second: dict[str, object],
     ) -> dict[str, object]:
-        merged: dict[str, object] = {
-            **dict(incoming_edge.data),
-            **dict(outgoing_edge.data),
-        }
-        source_graphs: list[str] = []
-        for raw_value in (
-            incoming_edge.data.get("source_graphs"),
-            outgoing_edge.data.get("source_graphs"),
-        ):
-            if not isinstance(raw_value, list):
-                continue
-            for item in raw_value:
-                if isinstance(item, str) and item not in source_graphs:
-                    source_graphs.append(item)
-        if source_graphs:
-            merged["source_graphs"] = source_graphs
-        return merged
+        merged: dict[str, object] = {**dict(first), **dict(second)}
+        merged["source_graphs"] = self._merge_source_graphs(
+            first.get("source_graphs"), second.get("source_graphs")
+        )
+        return self._dedupe_edge_data(merged)
+
+    def _dedupe_edge_data(self, data: dict[str, object]) -> dict[str, object]:
+        deduped = dict(data)
+        deduped["source_graphs"] = self._merge_source_graphs(deduped.get("source_graphs"))
+        return deduped
 
     def _workflow_outcome_relation(self, status: WorkflowRunStatus) -> str:
         if status is WorkflowRunStatus.DONE:
@@ -1067,14 +880,22 @@ class AttackGraphBuilder:
         ).strip()
 
         def add_node(*, node_id: str, node_type: str, label: str, data: dict[str, object]) -> None:
-            if node_id in nodes_by_id:
+            existing = nodes_by_id.get(node_id)
+            if existing is not None:
+                nodes_by_id[node_id] = SessionGraphNodeRead(
+                    id=node_id,
+                    graph_type=GraphType.ATTACK,
+                    node_type=self._prefer_attack_node_type(existing.node_type, node_type),
+                    label=self._choose_node_label(existing.label, label),
+                    data=self._merge_attack_node_data(existing.data, data),
+                )
                 return
             nodes_by_id[node_id] = SessionGraphNodeRead(
                 id=node_id,
                 graph_type=GraphType.ATTACK,
                 node_type=node_type,
                 label=label,
-                data=dict(data),
+                data=self._merge_attack_node_data({}, data),
             )
 
         def add_edge(*, source: str, target: str, relation: str, data: dict[str, object]) -> None:
@@ -1128,6 +949,10 @@ class AttackGraphBuilder:
                         if generation is not None
                         else (message.status.value if message.status is not None else None)
                     ),
+                    "response_excerpt": self._extract_reasoning_text(message.content)
+                    or message.content,
+                    "related_hypotheses": [],
+                    "related_findings": [],
                     "source_graphs": ["conversation", "generation"],
                 },
             )
@@ -1149,7 +974,7 @@ class AttackGraphBuilder:
                     action_id = f"action:tool:{segment.tool_call_id or segment.id}"
                     add_node(
                         node_id=action_id,
-                        node_type=self._conversation_tool_node_type(segment),
+                        node_type="action",
                         label=self._conversation_tool_action_label(segment),
                         data={
                             "message_id": message.id,
@@ -1157,6 +982,8 @@ class AttackGraphBuilder:
                             "tool_name": segment.tool_name,
                             "arguments": dict(segment.metadata_payload),
                             "command": self._read_segment_command(segment),
+                            "related_hypotheses": [],
+                            "related_findings": [],
                             "source_graphs": ["conversation", "transcript"],
                         },
                     )
@@ -1177,53 +1004,49 @@ class AttackGraphBuilder:
                         hypothesis_key = reasoning_text.casefold()
                         if hypothesis_key not in seen_hypothesis_keys:
                             seen_hypothesis_keys.add(hypothesis_key)
-                            hypothesis_id = f"hypothesis:{message.id}:{segment.id}"
                             add_node(
-                                node_id=hypothesis_id,
-                                node_type="hypothesis",
-                                label=self._truncate_label(reasoning_text, fallback="Hypothesis"),
+                                node_id=latest_message_anchor_id,
+                                node_type="action",
+                                label=nodes_by_id[latest_message_anchor_id].label,
                                 data={
-                                    "message_id": message.id,
-                                    "segment_id": segment.id,
-                                    "text": segment.text,
+                                    "thought": reasoning_text,
+                                    "related_hypotheses": [
+                                        {
+                                            "message_id": message.id,
+                                            "segment_id": segment.id,
+                                            "summary": reasoning_text,
+                                            "text": segment.text,
+                                        }
+                                    ],
                                     "source_graphs": ["conversation", "transcript"],
                                 },
                             )
-                            add_edge(
-                                source=latest_message_anchor_id,
-                                target=hypothesis_id,
-                                relation="hypothesizes",
-                                data={"source_graphs": ["conversation", "transcript"]},
-                            )
-                            latest_message_anchor_id = hypothesis_id
                     continue
 
                 if segment.kind not in {"tool_result", "output", "error"}:
                     continue
 
-                observation_id = f"observation:{segment.id}"
                 observation_data = self._conversation_observation_data(
                     message=message, segment=segment
                 )
                 add_node(
-                    node_id=observation_id,
-                    node_type="observation",
+                    node_id=(
+                        tool_action_ids.get(segment.tool_call_id or "")
+                        or latest_message_anchor_id
+                        or message_action_id
+                    ),
+                    node_type="action",
                     label=self._conversation_observation_label(segment, observation_data),
-                    data=observation_data,
+                    data=self._execution_payload(
+                        observation_data, source_graphs=["conversation", "transcript"]
+                    ),
                 )
-                observation_source_id = (
+                latest_message_observation_id = (
                     tool_action_ids.get(segment.tool_call_id or "")
                     or latest_message_anchor_id
                     or message_action_id
                 )
-                add_edge(
-                    source=observation_source_id,
-                    target=observation_id,
-                    relation=self._conversation_observation_relation(segment),
-                    data={"source_graphs": ["conversation", "transcript"]},
-                )
-                latest_message_anchor_id = observation_id
-                latest_message_observation_id = observation_id
+                latest_message_anchor_id = latest_message_observation_id
 
             for index, reasoning_text in enumerate(
                 self._conversation_reasoning_fragments(
@@ -1237,32 +1060,24 @@ class AttackGraphBuilder:
                 if hypothesis_key in seen_hypothesis_keys:
                     continue
                 seen_hypothesis_keys.add(hypothesis_key)
-                hypothesis_id = f"hypothesis:{message.id}:extra:{index}"
                 add_node(
-                    node_id=hypothesis_id,
-                    node_type="hypothesis",
-                    label=self._truncate_label(reasoning_text, fallback="Hypothesis"),
+                    node_id=message_action_id,
+                    node_type="action",
+                    label=nodes_by_id[message_action_id].label,
                     data={
-                        "message_id": message.id,
-                        "generation_id": generation.id if generation is not None else None,
-                        "text": reasoning_text,
+                        "thought": reasoning_text,
+                        "related_hypotheses": [
+                            {
+                                "message_id": message.id,
+                                "generation_id": generation.id if generation is not None else None,
+                                "summary": reasoning_text,
+                                "index": index,
+                            }
+                        ],
                         "source_graphs": ["conversation", "generation"],
                     },
                 )
-                add_edge(
-                    source=message_action_id,
-                    target=hypothesis_id,
-                    relation="hypothesizes",
-                    data={"source_graphs": ["conversation", "generation"]},
-                )
-                if latest_message_observation_id is not None:
-                    add_edge(
-                        source=latest_message_observation_id,
-                        target=hypothesis_id,
-                        relation="validates",
-                        data={"source_graphs": ["conversation", "generation"]},
-                    )
-                latest_message_anchor_id = hypothesis_id
+                latest_message_anchor_id = latest_message_observation_id or message_action_id
 
             latest_anchor_node_id = latest_message_anchor_id or message_action_id
 
@@ -1348,20 +1163,7 @@ class AttackGraphBuilder:
         return [dependency for dependency in raw_dependencies if isinstance(dependency, str)]
 
     def _task_node_type(self, task: TaskNode) -> str:
-        if task.name in self._TASK_NODE_TYPE_MAP:
-            return self._TASK_NODE_TYPE_MAP[task.name]
-        stage_key = task.metadata_json.get("stage_key")
-        if isinstance(stage_key, str) and task.node_type.value == "stage":
-            return self._TASK_STAGE_NODE_TYPE_MAP.get(stage_key, "action")
-        return "action"
-
-    def _finding_node_type(self, finding: dict[str, object], fallback: str | None = None) -> str:
-        kind = finding.get("kind")
-        if isinstance(kind, str):
-            return self._FINDING_NODE_TYPE_MAP.get(kind, kind)
-        if isinstance(fallback, str) and fallback:
-            return self._FINDING_NODE_TYPE_MAP.get(fallback, fallback)
-        return "vulnerability"
+        return "task" if task.node_type is TaskNodeType.STAGE else "action"
 
     @staticmethod
     def _execution_relation(status: str) -> str:
@@ -1447,46 +1249,6 @@ class AttackGraphBuilder:
 
     @classmethod
     def _conversation_tool_node_type(cls, segment: object) -> str:
-        tool_name = getattr(segment, "tool_name", None)
-        normalized_tool_name = tool_name.casefold() if isinstance(tool_name, str) else ""
-        if normalized_tool_name == "execute_kali_command":
-            return "exploit"
-
-        metadata = getattr(segment, "metadata_payload", {})
-        skill_identifier: str | None = None
-        if isinstance(metadata, dict):
-            arguments = metadata.get("arguments")
-            if isinstance(arguments, dict):
-                raw_identifier = arguments.get("skill_name_or_id")
-                if isinstance(raw_identifier, str) and raw_identifier.strip():
-                    skill_identifier = raw_identifier.strip().casefold()
-            if skill_identifier is None:
-                result = metadata.get("result")
-                if isinstance(result, dict):
-                    skill = result.get("skill")
-                    if isinstance(skill, dict):
-                        raw_identifier = skill.get("directory_name") or skill.get("name")
-                        if isinstance(raw_identifier, str) and raw_identifier.strip():
-                            skill_identifier = raw_identifier.strip().casefold()
-
-        if normalized_tool_name == "execute_skill" and skill_identifier is not None:
-            offensive_tokens = (
-                "adscan",
-                "adpwn",
-                "bypass",
-                "movement",
-                "privesc",
-                "persistence",
-                "tunnel",
-                "ctf-web",
-                "ctf-pwn",
-                "wooyun",
-                "c2",
-                "evasion",
-            )
-            if any(token in skill_identifier for token in offensive_tokens):
-                return "exploit"
-
         return "action"
 
     @classmethod
@@ -1534,6 +1296,262 @@ class AttackGraphBuilder:
         if segment_kind == "output":
             return "observes"
         return "discovers"
+
+    def _resolve_execution_node_id(
+        self,
+        *,
+        trace_id: object,
+        task_id: object,
+        task_name: object,
+        task_ids: set[str],
+        task_name_to_id: dict[str, str],
+        fallback: str,
+        trace_to_node_id: dict[str, str] | None = None,
+    ) -> str:
+        if isinstance(trace_id, str) and trace_id:
+            if trace_to_node_id is not None and trace_id in trace_to_node_id:
+                return trace_to_node_id[trace_id]
+            if isinstance(task_id, str) and task_id in task_ids:
+                return task_id
+            if isinstance(task_name, str) and task_name in task_name_to_id:
+                return task_name_to_id[task_name]
+            return trace_id
+        if isinstance(task_id, str) and task_id in task_ids:
+            return task_id
+        if isinstance(task_name, str) and task_name in task_name_to_id:
+            return task_name_to_id[task_name]
+        return fallback
+
+    def _execution_node_type_for_id(
+        self, node_id: str, existing: SessionGraphNodeRead | None
+    ) -> str:
+        if existing is not None:
+            return existing.node_type
+        if node_id.startswith("goal:"):
+            return "goal"
+        if node_id.startswith("outcome:"):
+            return "outcome"
+        return "action"
+
+    def _execution_node_label(self, fallback_label: str, payload: dict[str, object]) -> str:
+        return self._truncate_label(
+            self._pick_first_str(
+                payload.get("task_name"),
+                payload.get("command"),
+                payload.get("command_or_action"),
+                payload.get("request_summary"),
+                payload.get("summary"),
+                payload.get("observation_summary"),
+                payload.get("stdout"),
+                fallback_label,
+            )
+            or fallback_label,
+            fallback=fallback_label or "Action",
+        )
+
+    def _execution_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        source_graphs: list[str],
+    ) -> dict[str, object]:
+        summary = self._pick_first_str(
+            payload.get("observation_summary"),
+            payload.get("summary"),
+            payload.get("result_summary"),
+            payload.get("observation"),
+            payload.get("stdout"),
+            payload.get("text"),
+        )
+        return {
+            "task_id": payload.get("task_id") or payload.get("task_node_id"),
+            "task_name": payload.get("task_name") or payload.get("task"),
+            "status": payload.get("status"),
+            "current": payload.get("current") or payload.get("active"),
+            "thought": payload.get("thought"),
+            "tool_name": payload.get("tool_name"),
+            "command": payload.get("command") or payload.get("command_or_action"),
+            "request_summary": payload.get("request_summary") or payload.get("intent"),
+            "arguments": payload.get("arguments"),
+            "result": payload.get("result") if isinstance(payload.get("result"), dict) else None,
+            "observation": payload.get("observation") or payload.get("text"),
+            "observation_summary": summary,
+            "response_excerpt": payload.get("response_excerpt") or payload.get("text"),
+            "stdout": payload.get("stdout"),
+            "stderr": payload.get("stderr"),
+            "exit_code": payload.get("exit_code"),
+            "trace_id": payload.get("trace_id") or payload.get("id"),
+            "updated_at": payload.get("updated_at"),
+            "completed_at": payload.get("completed_at") or payload.get("ended_at"),
+            "related_findings": [],
+            "related_hypotheses": [],
+            "source_graphs": source_graphs,
+        }
+
+    def _finding_summary(self, finding: dict[str, object], label: str) -> dict[str, object]:
+        return {
+            "id": finding.get("id"),
+            "title": finding.get("title") or label,
+            "label": label,
+            "kind": finding.get("kind"),
+            "summary": finding.get("summary"),
+            "confidence": finding.get("confidence"),
+            "trace_id": finding.get("trace_id"),
+            "task": finding.get("task"),
+            "supports": finding.get("supports"),
+            "contradicts": finding.get("contradicts"),
+            "validates": finding.get("validates"),
+            "causes": finding.get("causes"),
+        }
+
+    def _execution_leaf_node_ids(
+        self,
+        *,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        edges_by_id: dict[str, SessionGraphEdgeRead],
+    ) -> set[str]:
+        outgoing_counts: dict[str, int] = {}
+        for edge in edges_by_id.values():
+            if edge.target.startswith("outcome:"):
+                continue
+            outgoing_counts[edge.source] = outgoing_counts.get(edge.source, 0) + 1
+        return {
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type in {"task", "action"} and outgoing_counts.get(node.id, 0) == 0
+        }
+
+    def _normalize_attack_view_node(
+        self, node: SessionGraphNodeRead
+    ) -> SessionGraphNodeRead | None:
+        normalized_type: str | None
+        if node.node_type in {"goal", "task", "action", "outcome"}:
+            normalized_type = node.node_type
+        elif node.node_type in {"observation", "hypothesis"}:
+            normalized_type = None
+        else:
+            source_graphs = set(self._merge_source_graphs(node.data.get("source_graphs")))
+            normalized_type = "action" if source_graphs & self._EXECUTION_SOURCE_GRAPHS else None
+        if normalized_type is None:
+            return None
+        return SessionGraphNodeRead(
+            id=node.id,
+            graph_type=node.graph_type,
+            node_type=normalized_type,
+            label=node.label,
+            data=self._merge_attack_node_data({}, node.data),
+        )
+
+    def _prefer_attack_node_type(self, current_type: str, incoming_type: str) -> str:
+        if current_type == incoming_type:
+            return current_type
+        return (
+            current_type
+            if self._NODE_TYPE_SORT_ORDER.get(current_type, 99)
+            <= self._NODE_TYPE_SORT_ORDER.get(incoming_type, 99)
+            else incoming_type
+        )
+
+    def _choose_node_label(self, current_label: str, incoming_label: str) -> str:
+        if not current_label.strip():
+            return incoming_label
+        if current_label.startswith("Workflow ") and incoming_label.strip():
+            return incoming_label
+        if len(incoming_label.strip()) > len(current_label.strip()) and incoming_label.strip():
+            return incoming_label
+        return current_label
+
+    def _merge_attack_node_data(
+        self,
+        current: dict[str, object],
+        incoming: dict[str, object],
+    ) -> dict[str, object]:
+        merged: dict[str, object] = {**dict(current)}
+        incoming_dict = dict(incoming)
+        for key, value in incoming_dict.items():
+            if key in {"related_findings", "related_hypotheses", "source_graphs"}:
+                continue
+            if value is None:
+                continue
+            existing = merged.get(key)
+            if isinstance(value, str):
+                if key in {
+                    "observation_summary",
+                    "response_excerpt",
+                    "stdout",
+                    "stderr",
+                    "trace_id",
+                }:
+                    if value.strip():
+                        merged[key] = value
+                    continue
+                if value.strip() and (not isinstance(existing, str) or not existing.strip()):
+                    merged[key] = value
+                elif key == "status" and value in self._PRESERVED_ATTACK_STATUS_VALUES:
+                    merged[key] = value
+            elif isinstance(value, list):
+                if value and not isinstance(existing, list):
+                    merged[key] = list(value)
+            elif isinstance(value, dict):
+                if value and not isinstance(existing, dict):
+                    merged[key] = dict(value)
+            else:
+                if existing is None:
+                    merged[key] = value
+                elif key == "current" and value:
+                    merged[key] = value
+        merged["source_graphs"] = self._merge_source_graphs(
+            current.get("source_graphs"), incoming_dict.get("source_graphs")
+        )
+        merged["related_findings"] = self._merge_related_items(
+            current.get("related_findings"),
+            incoming_dict.get("related_findings"),
+            ("id", "title", "label"),
+        )
+        merged["related_hypotheses"] = self._merge_related_items(
+            current.get("related_hypotheses"),
+            incoming_dict.get("related_hypotheses"),
+            ("trace_id", "summary", "kind", "index"),
+        )
+        return merged
+
+    def _merge_source_graphs(self, *values: object) -> list[str]:
+        merged: list[str] = []
+        for value in values:
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, str) and item not in merged:
+                    merged.append(item)
+        return merged
+
+    def _merge_related_items(
+        self,
+        current: object,
+        incoming: object,
+        key_fields: tuple[str, ...],
+    ) -> list[dict[str, object]]:
+        merged: list[dict[str, object]] = []
+        seen: set[tuple[object, ...]] = set()
+        for raw_items in (current, incoming):
+            if not isinstance(raw_items, list):
+                continue
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                key = tuple(item.get(field) for field in key_fields)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(dict(item))
+        return merged
+
+    @staticmethod
+    def _pick_first_str(*values: object) -> str | None:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     @classmethod
     def _conversation_reasoning_fragments(

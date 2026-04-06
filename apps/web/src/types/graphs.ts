@@ -2,6 +2,7 @@ export type GraphType = "task" | "causal" | "evidence" | "attack" | (string & {}
 
 export type AttackGraphNodeType =
   | "goal"
+  | "task"
   | "surface"
   | "observation"
   | "hypothesis"

@@ -33,24 +33,37 @@ function createGraph(): SessionGraph {
       {
         id: "node-without-anchor",
         graph_type: "attack",
-        node_type: "observation",
+        node_type: "action",
         label: "无锚点节点",
         data: {
           status: "completed",
-          summary: "没有 source_message_id。",
+          observation_summary: "没有 source_message_id。",
         },
       },
       {
         id: "node-with-anchor",
         graph_type: "attack",
-        node_type: "exploit",
+        node_type: "action",
         label: "可操作节点",
         data: {
           status: "in_progress",
           summary: "命令执行后确认存在可利用入口。",
           command: "nmap -sV target.internal",
           tool_name: "nmap",
-          intent: "确认可利用入口",
+          request_summary: "确认可利用入口",
+          observation_summary: "识别到开放端口与服务版本。",
+          related_findings: [
+            {
+              title: "开放端口",
+              summary: "22/tcp 与 443/tcp 对外可达",
+            },
+          ],
+          related_hypotheses: [
+            {
+              summary: "SSH 可能存在弱口令入口",
+              status: "open",
+            },
+          ],
           source_message_id: "message-1",
           branch_id: "branch-1",
           generation_id: "generation-1",
@@ -146,7 +159,8 @@ describe("AttackGraphWorkbench", () => {
     await user.click(screen.getByRole("button", { name: "可操作节点" }));
 
     expect(screen.getByText("会话动作")).toBeInTheDocument();
-    expect(screen.getByText("高价值内容")).toBeInTheDocument();
+    expect(screen.getByText("Observation")).toBeInTheDocument();
+    expect(screen.getByText("Interpretation")).toBeInTheDocument();
     expect(screen.getByText("source_message_id")).not.toBeVisible();
     expect(screen.getByText("branch_id")).not.toBeVisible();
     expect(screen.getByText("generation_id")).not.toBeVisible();
@@ -158,22 +172,28 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.getByText("generation_id")).toBeVisible();
   });
 
-  it("prioritizes high-value content and removes default active-node noise", async () => {
+  it("renders execution-first detail sections in order", async () => {
     const user = userEvent.setup();
 
     render(<StatefulAttackGraphWorkbench />);
 
     await user.click(screen.getByRole("button", { name: "可操作节点" }));
 
-    expect(screen.getByText("高价值内容")).toBeInTheDocument();
+    expect(screen.getByText("Basic")).toBeInTheDocument();
+    expect(screen.getByText("Why")).toBeInTheDocument();
+    expect(screen.getByText("Action")).toBeInTheDocument();
+    expect(screen.getByText("Observation")).toBeInTheDocument();
+    expect(screen.getByText("Interpretation")).toBeInTheDocument();
     expect(screen.getByText("命令")).toBeInTheDocument();
-    expect(screen.getByText("工具")).toBeInTheDocument();
-    expect(screen.getByText("结果")).toBeInTheDocument();
+    expect(screen.getAllByText("工具").length).toBeGreaterThan(0);
+    expect(screen.getByText("观测摘要")).toBeInTheDocument();
+    expect(screen.getByText("发现 1")).toBeInTheDocument();
+    expect(screen.getByText("假设 1")).toBeInTheDocument();
     expect(screen.queryByText("活跃节点")).not.toBeInTheDocument();
     expect(screen.queryByText("当前节点没有额外的高价值展示内容。")).not.toBeInTheDocument();
 
-    const overviewHeading = screen.getByText("概览");
-    const highValueHeading = screen.getByText("高价值内容");
+    const overviewHeading = screen.getByText("Basic");
+    const highValueHeading = screen.getByText("Why");
     const actionsHeading = screen.getByText("会话动作");
 
     const overviewPosition = overviewHeading.compareDocumentPosition(highValueHeading);

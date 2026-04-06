@@ -15,18 +15,18 @@ function createGraph(): SessionGraph {
     current_stage: "safe_validation",
     nodes: [
       {
-        id: "surface-1",
+        id: "task-1",
         graph_type: "attack",
-        node_type: "surface",
-        label: "攻击面",
+        node_type: "task",
+        label: "攻击面确认",
         data: {
           status: "completed",
         },
       },
       {
-        id: "exploit-1",
+        id: "action-1",
         graph_type: "attack",
-        node_type: "exploit",
+        node_type: "action",
         label: "验证链路",
         data: {
           status: "in_progress",
@@ -41,11 +41,11 @@ function createGraph(): SessionGraph {
 
 describe("AttackGraphCanvas helpers", () => {
   it("prefers the active node over the latest node when choosing autofocus target", () => {
-    expect(getAttackGraphAutoFocusNodeId(createGraph(), "surface-1")).toBe("exploit-1");
+    expect(getAttackGraphAutoFocusNodeId(createGraph(), "task-1")).toBe("action-1");
   });
 
   it("stops auto focus once the user has interacted", () => {
-    const signature = buildAttackGraphAutoFocusSignature(createGraph(), "exploit-1");
+    const signature = buildAttackGraphAutoFocusSignature(createGraph(), "action-1");
 
     expect(
       shouldAutoFocusAttackGraph({
@@ -76,12 +76,13 @@ describe("AttackGraphCanvas helpers", () => {
           data: {},
         },
         {
-          id: "observation-1",
+          id: "action-2",
           graph_type: "attack",
-          node_type: "observation",
-          label: "原始观测",
+          node_type: "action",
+          label: "执行命令",
           data: {
-            summary: "发现了非常长的一段观测文本，用来验证默认节点不会展示整段摘要，而只保留一行短摘录。",
+            command: "python exploit.py --target demo.internal --token very-long-token-value",
+            observation_summary: "发现了非常长的一段观测文本，用来验证默认节点不会展示第二行摘录。",
           },
         },
       ],
@@ -90,7 +91,7 @@ describe("AttackGraphCanvas helpers", () => {
           id: "edge-1",
           graph_type: "attack",
           source: "goal-1",
-          target: "observation-1",
+          target: "action-2",
           relation: "discovers",
           data: {},
         },
@@ -98,11 +99,11 @@ describe("AttackGraphCanvas helpers", () => {
     };
 
     const layout = buildAutoLayout(graph, null, null);
-    const observationNode = layout.nodes.find((node) => node.id === "observation-1");
+    const actionNode = layout.nodes.find((node) => node.id === "action-2");
 
-    expect(observationNode?.data.label).toContain("发现了非常长的一段观测文本");
-    expect(observationNode?.data.label.length).toBeLessThan(60);
-    expect(observationNode?.data.excerpt ?? null).toBeNull();
+    expect(actionNode?.data.label).toContain("python exploit.py");
+    expect(actionNode?.data.label.length).toBeLessThan(60);
+    expect(actionNode?.data.excerpt ?? null).toBeNull();
     expect(layout.edges[0]?.label).toBeUndefined();
   });
 
@@ -112,14 +113,14 @@ describe("AttackGraphCanvas helpers", () => {
       {
         id: "edge-1",
         graph_type: "attack",
-        source: "surface-1",
-        target: "exploit-1",
+        source: "task-1",
+        target: "action-1",
         relation: "attempts",
         data: {},
       },
     ];
 
-    const layout = buildAutoLayout(graph, "exploit-1", "exploit-1");
+    const layout = buildAutoLayout(graph, "action-1", "action-1");
 
     expect(layout.edges[0]?.label).toBe("尝试");
   });
@@ -163,16 +164,16 @@ describe("AttackGraphCanvas helpers", () => {
       ...createGraph(),
       nodes: [
         {
-          id: "surface-quiet",
+          id: "task-quiet",
           graph_type: "attack",
-          node_type: "surface",
+          node_type: "task",
           label: "静态入口",
           data: { status: "completed" },
         },
         {
-          id: "observation-quiet",
+          id: "action-quiet",
           graph_type: "attack",
-          node_type: "observation",
+          node_type: "action",
           label: "发现响应特征",
           data: { status: "completed" },
         },
@@ -181,8 +182,8 @@ describe("AttackGraphCanvas helpers", () => {
         {
           id: "edge-hover",
           graph_type: "attack",
-          source: "surface-quiet",
-          target: "observation-quiet",
+          source: "task-quiet",
+          target: "action-quiet",
           relation: "discovers",
           data: {},
         },
@@ -208,16 +209,16 @@ describe("AttackGraphCanvas helpers", () => {
           data: {},
         },
         {
-          id: "surface-1",
+          id: "task-1",
           graph_type: "attack",
-          node_type: "surface",
+          node_type: "task",
           label: "攻击面",
           data: {},
         },
         {
-          id: "exploit-1",
+          id: "action-1",
           graph_type: "attack",
-          node_type: "exploit",
+          node_type: "action",
           label: "验证链路",
           data: {},
         },
@@ -231,7 +232,7 @@ describe("AttackGraphCanvas helpers", () => {
         {
           id: "side-1",
           graph_type: "attack",
-          node_type: "observation",
+          node_type: "action",
           label: "旁支",
           data: {},
         },
@@ -241,22 +242,22 @@ describe("AttackGraphCanvas helpers", () => {
           id: "edge-goal-surface",
           graph_type: "attack",
           source: "goal-1",
-          target: "surface-1",
+          target: "task-1",
           relation: "attempts",
           data: {},
         },
         {
-          id: "edge-surface-exploit",
+          id: "edge-task-action",
           graph_type: "attack",
-          source: "surface-1",
-          target: "exploit-1",
-          relation: "discovers",
+          source: "task-1",
+          target: "action-1",
+          relation: "enables",
           data: {},
         },
         {
-          id: "edge-exploit-outcome",
+          id: "edge-action-outcome",
           graph_type: "attack",
-          source: "exploit-1",
+          source: "action-1",
           target: "outcome-1",
           relation: "confirms",
           data: {},
@@ -272,18 +273,18 @@ describe("AttackGraphCanvas helpers", () => {
       ],
     };
 
-    const layout = buildAutoLayout(graph, "exploit-1", null);
+    const layout = buildAutoLayout(graph, "action-1", null);
     const nodeById = new Map(layout.nodes.map((node) => [node.id, node]));
     const edgeById = new Map(layout.edges.map((edge) => [edge.id, edge]));
 
     expect(nodeById.get("goal-1")?.data.isDimmed).toBe(false);
-    expect(nodeById.get("surface-1")?.data.isDimmed).toBe(false);
-    expect(nodeById.get("exploit-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("task-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("action-1")?.data.isDimmed).toBe(false);
     expect(nodeById.get("outcome-1")?.data.isDimmed).toBe(false);
     expect(nodeById.get("side-1")?.data.isDimmed).toBe(true);
     expect(edgeById.get("edge-goal-surface")?.label).toBe("尝试");
-    expect(edgeById.get("edge-surface-exploit")?.label).toBe("发现");
-    expect(edgeById.get("edge-exploit-outcome")?.label).toBe("确认");
+    expect(edgeById.get("edge-task-action")?.label).toBe("使能");
+    expect(edgeById.get("edge-action-outcome")?.label).toBe("确认");
     expect(edgeById.get("edge-side-outcome")?.style?.strokeOpacity).toBe(0.52);
   });
 
@@ -292,16 +293,16 @@ describe("AttackGraphCanvas helpers", () => {
       ...createGraph(),
       nodes: [
         {
-          id: "surface-1",
+          id: "task-1",
           graph_type: "attack",
-          node_type: "surface",
+          node_type: "task",
           label: "入口",
           data: {},
         },
         {
-          id: "exploit-1",
+          id: "action-1",
           graph_type: "attack",
-          node_type: "exploit",
+          node_type: "action",
           label: "利用",
           data: {},
         },
@@ -310,26 +311,26 @@ describe("AttackGraphCanvas helpers", () => {
         {
           id: "edge-forward",
           graph_type: "attack",
-          source: "surface-1",
-          target: "exploit-1",
-          relation: "discovers",
+          source: "task-1",
+          target: "action-1",
+          relation: "enables",
           data: {},
         },
         {
           id: "edge-cycle",
           graph_type: "attack",
-          source: "exploit-1",
-          target: "surface-1",
+          source: "action-1",
+          target: "task-1",
           relation: "branches_from",
           data: {},
         },
       ],
     };
 
-    const layout = buildAutoLayout(graph, "exploit-1", null);
+    const layout = buildAutoLayout(graph, "action-1", null);
 
     expect(layout.nodes).toHaveLength(2);
-    expect(layout.edges.find((edge) => edge.id === "edge-forward")?.label).toBe("发现");
+    expect(layout.edges.find((edge) => edge.id === "edge-forward")?.label).toBe("使能");
     expect(layout.edges.find((edge) => edge.id === "edge-cycle")?.label).toBe("分支自");
   });
 });
