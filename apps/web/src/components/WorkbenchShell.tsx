@@ -68,24 +68,6 @@ export function WorkbenchShell() {
     <div
       className={`workbench-shell${isDrawerCollapsed ? " workbench-shell-collapsed" : ""}${isMobileDrawerOpen ? " workbench-shell-mobile-open" : ""}`}
     >
-      <div className="workbench-shell-brand-anchor">
-        <button
-          className="workbench-shell-menu-button"
-          type="button"
-          aria-controls="workbench-shell-drawer"
-          aria-expanded={isMobileDrawerOpen}
-          aria-label={isMobileDrawerOpen ? "关闭导航" : "打开导航"}
-          onClick={() => setIsMobileDrawerOpen((currentValue) => !currentValue)}
-        >
-          <span className="workbench-shell-menu-icon" aria-hidden="true" />
-        </button>
-        <div className="workbench-shell-brand-wordmark">
-          <span className="workbench-shell-brand-user">aegissec@operator</span>
-          <span className="workbench-shell-brand-separator">:</span>
-          <span className="workbench-shell-brand-path">~/workspace</span>
-        </div>
-      </div>
-
       <button
         className="workbench-shell-backdrop"
         type="button"
@@ -103,6 +85,17 @@ export function WorkbenchShell() {
       </aside>
 
       <div className="workbench-shell-main">
+        <button
+          className="workbench-shell-menu-button"
+          type="button"
+          aria-controls="workbench-shell-drawer"
+          aria-expanded={isMobileDrawerOpen}
+          aria-label={isMobileDrawerOpen ? "关闭导航" : "打开导航"}
+          onClick={() => setIsMobileDrawerOpen((currentValue) => !currentValue)}
+        >
+          <span className="workbench-shell-menu-icon" aria-hidden="true" />
+        </button>
+
         <div className="workbench-shell-stage">
           <Outlet />
         </div>

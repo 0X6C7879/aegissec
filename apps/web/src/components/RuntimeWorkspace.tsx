@@ -526,6 +526,7 @@ export function RuntimeWorkspace() {
       <section className="management-unified-panel panel" aria-label="Runtime 工作台">
         <header className="management-unified-header">
           <div className="management-detail-copy">
+            <span className="panel-kicker">Execution Plane</span>
             <h2 className="panel-title">Runtime</h2>
             <p className="management-unified-description">查看容器状态、执行命令并核对会话策略。</p>
           </div>

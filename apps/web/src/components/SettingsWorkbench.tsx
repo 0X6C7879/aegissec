@@ -86,6 +86,7 @@ export function SettingsWorkbench() {
       <section className="panel settings-nav-panel">
         <div className="management-unified-header">
           <div>
+            <span className="panel-kicker">Workbench Profile</span>
             <h2 className="management-section-title">Settings</h2>
           </div>
         </div>

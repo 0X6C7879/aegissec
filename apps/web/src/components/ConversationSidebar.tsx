@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatRelativeTime, formatStatusLabel } from "../lib/format";
 import type { SessionSummary } from "../types/sessions";
 
 type ConversationSidebarProps = {
@@ -17,6 +18,14 @@ type ConversationSidebarProps = {
 
 function getSessionTitle(title: string): string {
   return title === "New Session" ? "新对话" : title;
+}
+
+function getSessionMeta(session: SessionSummary): string {
+  if (session.deleted_at) {
+    return "已归档";
+  }
+
+  return formatStatusLabel(session.status);
 }
 
 export function ConversationSidebar({
@@ -151,18 +160,21 @@ export function ConversationSidebar({
                         >
                           <div className="conversation-link-row">
                             <span
-                              className={`conversation-link-dot status-${session.status}`}
+                              className={`conversation-link-dot status-${session.deleted_at ? "paused" : session.status}`}
                               aria-hidden="true"
                             />
                             <span className="conversation-link-title">
                               {getSessionTitle(session.title)}
                             </span>
                           </div>
-                          {session.deleted_at ? (
-                            <div className="conversation-link-row conversation-link-meta-row">
-                              <span className="conversation-link-flag">已归档</span>
-                            </div>
-                          ) : null}
+                          <div className="conversation-link-row conversation-link-meta-row">
+                            <span className="conversation-link-flag">
+                              {getSessionMeta(session)}
+                            </span>
+                            <span className="conversation-link-flag">
+                              {formatRelativeTime(session.updated_at)}
+                            </span>
+                          </div>
                         </button>
 
                         <div className="conversation-item-actions">
@@ -177,7 +189,11 @@ export function ConversationSidebar({
                               );
                             }}
                           >
-                            ···
+                            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                              <circle cx="3" cy="8" r="1.2" fill="currentColor" />
+                              <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+                              <circle cx="13" cy="8" r="1.2" fill="currentColor" />
+                            </svg>
                           </button>
 
                           {isMenuOpen ? (

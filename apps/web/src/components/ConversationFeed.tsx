@@ -856,7 +856,11 @@ function AssistantShellBlock({
   const status = error ? "failed" : (result?.status ?? call?.status ?? null);
 
   return (
-    <details className="assistant-tool-block assistant-shell-block">
+    <details
+      className={`assistant-tool-block assistant-shell-block${error ? " assistant-shell-block-error" : ""}`}
+      data-status={status ?? undefined}
+      open={Boolean(error)}
+    >
       <summary className="assistant-tool-summary">
         <div className="assistant-tool-summary-copy">
           <span className="assistant-tool-eyebrow">Shell</span>
@@ -1286,6 +1290,7 @@ export function ConversationFeed(props: ConversationFeedProps) {
       <article
         key={message.id}
         className="chat-bubble chat-bubble-assistant chat-bubble-assistant-transcript"
+        data-status={generationStatus ?? undefined}
       >
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">{formatMessageRole(message.role)}</strong>
@@ -1332,6 +1337,7 @@ export function ConversationFeed(props: ConversationFeedProps) {
       <article
         key={generation.id}
         className="chat-bubble chat-bubble-assistant chat-bubble-assistant-transcript"
+        data-status={generation.status}
       >
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">助手</strong>
@@ -1365,7 +1371,11 @@ export function ConversationFeed(props: ConversationFeedProps) {
     const isEditing = editingMessageId === message.id;
 
     return (
-      <article key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
+      <article
+        key={message.id}
+        className={`chat-bubble chat-bubble-${message.role}`}
+        data-status={message.status ?? undefined}
+      >
         <div className="chat-bubble-meta">
           <strong className="chat-bubble-role">{formatMessageRole(message.role)}</strong>
           <div className="chat-bubble-meta-actions">

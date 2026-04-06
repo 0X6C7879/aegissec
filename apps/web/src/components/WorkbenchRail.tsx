@@ -142,7 +142,12 @@ export function WorkbenchRail({
             <span className="workspace-drawer-brand-dot workspace-drawer-brand-dot-warning" />
             <span className="workspace-drawer-brand-dot workspace-drawer-brand-dot-success" />
           </span>
+          <div className="workspace-drawer-brand-copy">
+            <span className="workspace-drawer-brand-name">aegissec</span>
+            <span className="workspace-drawer-brand-subtitle">operator</span>
+          </div>
         </div>
+
         <button
           className="workspace-drawer-collapse"
           type="button"
@@ -165,6 +170,7 @@ export function WorkbenchRail({
             </svg>
           </span>
         </button>
+
         <button
           className="workspace-drawer-mobile-close"
           type="button"

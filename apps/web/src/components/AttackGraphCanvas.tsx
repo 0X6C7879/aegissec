@@ -50,9 +50,9 @@ type AttackCanvasNodeData = {
   emphasis: "goal" | "critical" | "result" | "supporting";
 };
 
-const NODE_WIDTH = 196;
-const NODE_BASE_HEIGHT = 62;
-const NODE_EXCERPT_HEIGHT = 12;
+const NODE_WIDTH = 236;
+const NODE_BASE_HEIGHT = 112;
+const NODE_EXCERPT_HEIGHT = 30;
 const AUTO_FOCUS_DURATION_MS = 280;
 const AUTO_FOCUS_ZOOM = 0.88;
 
@@ -126,7 +126,9 @@ function getSelectedPathContext(
 }
 
 function isExecutionNodeType(nodeType: string): boolean {
-  return nodeType === "root" || nodeType === "task" || nodeType === "action" || nodeType === "outcome";
+  return (
+    nodeType === "root" || nodeType === "task" || nodeType === "action" || nodeType === "outcome"
+  );
 }
 
 function getExecutionPathContext(
@@ -199,18 +201,18 @@ function getExecutionPathContext(
 
 function getEdgeStroke(status: string | null, highlighted: boolean, dimmed: boolean): string {
   if (status === "failed" || status === "blocked") {
-    return dimmed ? "rgba(150, 93, 93, 0.28)" : "rgba(150, 93, 93, 0.72)";
+    return dimmed ? "rgba(255, 107, 107, 0.26)" : "rgba(255, 107, 107, 0.78)";
   }
 
   if (highlighted || status === "in_progress") {
-    return dimmed ? "rgba(36, 88, 69, 0.32)" : "rgba(36, 88, 69, 0.78)";
+    return dimmed ? "rgba(0, 217, 255, 0.24)" : "rgba(0, 217, 255, 0.86)";
   }
 
   if (status === "completed" || status === "done") {
-    return dimmed ? "rgba(74, 89, 79, 0.18)" : "rgba(74, 89, 79, 0.44)";
+    return dimmed ? "rgba(120, 138, 163, 0.18)" : "rgba(120, 138, 163, 0.42)";
   }
 
-  return dimmed ? "rgba(74, 89, 79, 0.12)" : "rgba(74, 89, 79, 0.24)";
+  return dimmed ? "rgba(91, 104, 125, 0.14)" : "rgba(91, 104, 125, 0.3)";
 }
 
 function AttackGraphFlowNode({ data }: NodeProps<AttackCanvasNodeData>) {
@@ -218,8 +220,8 @@ function AttackGraphFlowNode({ data }: NodeProps<AttackCanvasNodeData>) {
     <div
       className={`attack-graph-flow-node attack-graph-flow-node-${data.emphasis}${data.isActive ? " attack-graph-flow-node-active" : ""}${data.isLatest ? " attack-graph-flow-node-latest" : ""}${data.isSelected ? " attack-graph-flow-node-selected" : ""}${data.isDimmed ? " attack-graph-flow-node-dimmed" : ""}`}
     >
-        <Handle type="target" position={Position.Left} className="attack-graph-flow-handle" />
-        <div className="attack-graph-flow-node-header">
+      <Handle type="target" position={Position.Left} className="attack-graph-flow-handle" />
+      <div className="attack-graph-flow-node-header">
         <span className="attack-graph-flow-node-type">{formatAttackNodeType(data.nodeType)}</span>
         <span className={`attack-graph-flow-node-status ${getAttackNodeStatusTone(data.status)}`}>
           {formatAttackNodeStatus(data.status)}
@@ -251,7 +253,9 @@ export function buildAutoLayout(
     graph.nodes
       .filter(
         (node) =>
-          readBoolean(node.data.current) || readBoolean(node.data.active) || node.id === latestNodeId,
+          readBoolean(node.data.current) ||
+          readBoolean(node.data.active) ||
+          node.id === latestNodeId,
       )
       .map((node) => node.id),
   );
@@ -261,10 +265,10 @@ export function buildAutoLayout(
   layoutGraph.setDefaultEdgeLabel(() => ({}));
   layoutGraph.setGraph({
     rankdir: "LR",
-    ranksep: 56,
-    nodesep: 24,
-    marginx: 16,
-    marginy: 16,
+    ranksep: 88,
+    nodesep: 34,
+    marginx: 28,
+    marginy: 28,
   });
 
   for (const node of graph.nodes) {
@@ -321,12 +325,18 @@ export function buildAutoLayout(
     const isSelectedEdge = selectedPathContext.edgeIds.has(edge.id);
     const isActiveEdge = activeNodeIds.has(edge.source) || activeNodeIds.has(edge.target);
     const isHoveredEdge = hoveredEdgeId === edge.id;
-    const touchesOutcome = sourceNode?.node_type === "outcome" || targetNode?.node_type === "outcome";
+    const touchesOutcome =
+      sourceNode?.node_type === "outcome" || targetNode?.node_type === "outcome";
     const isPathStateEdge = edgeStatus === "failed" || edgeStatus === "blocked";
     const isSuccessEdge = touchesOutcome && (edgeStatus === "completed" || edgeStatus === "done");
-    const showLabel = isHoveredEdge || isSelectedEdge || isActiveEdge || isPathStateEdge || isSuccessEdge;
+    const showLabel =
+      isHoveredEdge || isSelectedEdge || isActiveEdge || isPathStateEdge || isSuccessEdge;
     const isDimmed = Boolean(selectedNodeId) && !isSelectedEdge;
-    const stroke = getEdgeStroke(edgeStatus, isSelectedEdge || isActiveEdge || isHoveredEdge, isDimmed);
+    const stroke = getEdgeStroke(
+      edgeStatus,
+      isSelectedEdge || isActiveEdge || isHoveredEdge,
+      isDimmed,
+    );
 
     return {
       id: edge.id,
@@ -345,7 +355,10 @@ export function buildAutoLayout(
         strokeWidth: isSelectedEdge || isActiveEdge || isHoveredEdge ? 1.9 : 1.1,
       },
       labelStyle: {
-        fill: isHoveredEdge || isSelectedEdge || isActiveEdge ? "var(--text-primary)" : "var(--text-secondary)",
+        fill:
+          isHoveredEdge || isSelectedEdge || isActiveEdge
+            ? "var(--text-primary)"
+            : "var(--text-secondary)",
         fontSize: 10,
         fontWeight: 600,
       },
@@ -362,12 +375,10 @@ export function buildAutoLayout(
 
 function AttackGraphViewportController({
   nodes,
-  focusNodeId,
   autoFocusSignature,
   hasUserInteracted,
 }: {
   nodes: Node<AttackCanvasNodeData>[];
-  focusNodeId: string | null;
   autoFocusSignature: string;
   hasUserInteracted: boolean;
 }) {
@@ -375,7 +386,7 @@ function AttackGraphViewportController({
   const lastAutoFocusSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!viewportInitialized) {
+    if (!viewportInitialized || nodes.length === 0) {
       return;
     }
 
@@ -390,22 +401,19 @@ function AttackGraphViewportController({
     }
 
     lastAutoFocusSignatureRef.current = autoFocusSignature;
-    const focusNode = focusNodeId ? (nodes.find((node) => node.id === focusNodeId) ?? null) : null;
-
-    fitView({
-      padding: 0.06,
-      minZoom: 0.68,
-      maxZoom: AUTO_FOCUS_ZOOM,
-      duration: AUTO_FOCUS_DURATION_MS,
+    const frameId = window.requestAnimationFrame(() => {
+      fitView({
+        padding: 0.11,
+        minZoom: 0.52,
+        maxZoom: AUTO_FOCUS_ZOOM,
+        duration: AUTO_FOCUS_DURATION_MS,
+      });
     });
-  }, [
-    autoFocusSignature,
-    fitView,
-    focusNodeId,
-    hasUserInteracted,
-    nodes,
-    viewportInitialized,
-  ]);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [autoFocusSignature, fitView, hasUserInteracted, nodes, viewportInitialized]);
 
   return null;
 }
@@ -469,7 +477,7 @@ export function AttackGraphCanvas({
         edges={flowGraph.edges}
         nodeTypes={attackGraphNodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.06, minZoom: 0.68, maxZoom: AUTO_FOCUS_ZOOM }}
+        fitViewOptions={{ padding: 0.11, minZoom: 0.52, maxZoom: AUTO_FOCUS_ZOOM }}
         minZoom={0.45}
         maxZoom={1.8}
         nodesConnectable={false}
@@ -484,15 +492,14 @@ export function AttackGraphCanvas({
       >
         <AttackGraphViewportController
           nodes={flowGraph.nodes}
-          focusNodeId={focusNodeId}
           autoFocusSignature={autoFocusSignature}
           hasUserInteracted={hasUserInteracted}
         />
         <Background
           variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1.2}
-          color="rgba(36, 88, 69, 0.12)"
+          gap={28}
+          size={1.1}
+          color="rgba(0, 217, 255, 0.09)"
         />
         <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>

@@ -117,18 +117,23 @@ export function WorkbenchComposer({
       </div>
 
       <form className="workbench-chat-form" onSubmit={handleSubmitMessage}>
-        <textarea
-          ref={textareaRef}
-          className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
-          rows={1}
-          value={draftContent}
-          onChange={(event) => {
-            setDraftContent(sessionId, event.target.value);
-          }}
-          onKeyDown={handleInputKeyDown}
-          placeholder="输入目标、上下文或要验证的问题"
-          disabled={disabled}
-        />
+        <div className="workbench-chat-input-shell">
+          <span className="workbench-chat-prompt" aria-hidden="true">
+            operator $
+          </span>
+          <textarea
+            ref={textareaRef}
+            className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
+            rows={1}
+            value={draftContent}
+            onChange={(event) => {
+              setDraftContent(sessionId, event.target.value);
+            }}
+            onKeyDown={handleInputKeyDown}
+            placeholder="输入目标、上下文或要验证的问题"
+            disabled={disabled}
+          />
+        </div>
 
         <div className="workbench-composer-footer">
           {(isGenerating || isInterrupting) && !disabled ? (

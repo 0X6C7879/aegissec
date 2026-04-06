@@ -106,7 +106,9 @@ function getLatestNodeId(nodes: SessionGraphNode[]): string | null {
       bestNode === null ||
       nodePriority(node) < nodePriority(bestNode) ||
       (nodePriority(node) === nodePriority(bestNode) && timestamp > bestTimestamp) ||
-      (nodePriority(node) === nodePriority(bestNode) && timestamp === bestTimestamp && sequence > bestSequence)
+      (nodePriority(node) === nodePriority(bestNode) &&
+        timestamp === bestTimestamp &&
+        sequence > bestSequence)
     ) {
       bestNode = node;
       bestTimestamp = timestamp;
@@ -239,8 +241,9 @@ export function AttackGraphWorkbench({
   const basicSection = detailSections.find((section) => section.title === "Basic") ?? null;
   const rawSection = detailSections.find((section) => section.title === "Raw") ?? null;
   const visibleSections = detailSections.filter((section) => section.title !== "Raw");
-  const basicSummary =
-    selectedNode ? readString(selectedNode.data.summary) ?? readString(selectedNode.data.goal) ?? null : null;
+  const basicSummary = selectedNode
+    ? (readString(selectedNode.data.summary) ?? readString(selectedNode.data.goal) ?? null)
+    : null;
   const hasFullSummary = Boolean(rawSummary && rawSummary !== basicSummary);
 
   useEffect(() => {
@@ -259,7 +262,10 @@ export function AttackGraphWorkbench({
   }, [onSelectNode, selectedNode]);
 
   return (
-    <div className="workspace-attack-graph-workbench" data-testid="attack-graph-workbench">
+    <div
+      className="workspace-attack-graph-workbench workspace-stage-panel"
+      data-testid="attack-graph-workbench"
+    >
       <AttackGraphCanvas
         graph={canvasGraph}
         selectedNodeId={selectedNodeId}
@@ -284,7 +290,7 @@ export function AttackGraphWorkbench({
             aria-label={`${selectedNode.label} 详情`}
           >
             <div className="management-modal-header">
-              <div>
+              <div className="workspace-node-detail-modal-copy">
                 <strong className="management-list-title">{selectedNode.label}</strong>
                 <p className="management-empty-copy">
                   {formatAttackNodeType(selectedNode.node_type)}
@@ -305,7 +311,9 @@ export function AttackGraphWorkbench({
                   <strong className="management-list-title">Basic</strong>
                 </div>
                 <div className="workspace-node-overview-header">
-                  <span className="management-token-chip">{formatAttackNodeType(selectedNode.node_type)}</span>
+                  <span className="management-token-chip">
+                    {formatAttackNodeType(selectedNode.node_type)}
+                  </span>
                   <span
                     className={`management-status-badge ${getAttackNodeStatusTone(getNodeStatus(selectedNode))}`}
                   >
@@ -327,22 +335,22 @@ export function AttackGraphWorkbench({
 
               {visibleSections.map((section) =>
                 section.title === "Basic" || section.items.length === 0 ? null : (
-                <div
-                  key={`${selectedNode.id}-${section.title}`}
-                  className="management-subcard workspace-node-detail-section"
-                >
-                  <div className="management-list-card-header">
-                    <strong className="management-list-title">{section.title}</strong>
+                  <div
+                    key={`${selectedNode.id}-${section.title}`}
+                    className="management-subcard workspace-node-detail-section"
+                  >
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">{section.title}</strong>
+                    </div>
+                    <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
+                      {section.items.map((item) => (
+                        <div key={`${selectedNode.id}-${section.title}-${item.label}`}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   </div>
-                  <dl className="session-graph-data-list attack-graph-detail-list attack-graph-detail-list-compact">
-                    {section.items.map((item) => (
-                      <div key={`${selectedNode.id}-${section.title}-${item.label}`}>
-                        <dt>{item.label}</dt>
-                        <dd>{item.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
                 ),
               )}
 
@@ -454,7 +462,9 @@ export function AttackGraphWorkbench({
                   <div className="workspace-node-detail-section">
                     <div className="management-list-card-header">
                       <strong className="management-list-title">节点时间线</strong>
-                      <span className="management-status-badge tone-neutral">{timeline.length}</span>
+                      <span className="management-status-badge tone-neutral">
+                        {timeline.length}
+                      </span>
                     </div>
                     {timeline.length === 0 ? (
                       <p className="management-empty-copy">当前节点没有可展示的时间线字段。</p>
@@ -473,18 +483,25 @@ export function AttackGraphWorkbench({
                   <div className="workspace-node-detail-section">
                     <div className="management-list-card-header">
                       <strong className="management-list-title">关联边</strong>
-                      <span className="management-status-badge tone-neutral">{selectedEdges.length}</span>
+                      <span className="management-status-badge tone-neutral">
+                        {selectedEdges.length}
+                      </span>
                     </div>
                     {selectedEdges.length === 0 ? (
                       <p className="management-empty-copy">这个节点当前没有可展示的关联边。</p>
                     ) : (
                       <ul className="management-list">
                         {selectedEdges.map((edge) => (
-                          <li key={edge.id} className="management-subcard workspace-graph-edge-card">
+                          <li
+                            key={edge.id}
+                            className="management-subcard workspace-graph-edge-card"
+                          >
                             <strong className="management-list-title">
                               {edge.source} → {edge.target}
                             </strong>
-                            <span className="management-token-chip">{getAttackRelationLabel(edge.relation)}</span>
+                            <span className="management-token-chip">
+                              {getAttackRelationLabel(edge.relation)}
+                            </span>
                           </li>
                         ))}
                       </ul>

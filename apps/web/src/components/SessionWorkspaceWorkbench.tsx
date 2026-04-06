@@ -1078,7 +1078,7 @@ export function SessionWorkspaceWorkbench() {
         }}
       />
 
-      <section className="conversation-main-shell workspace-session-shell">
+      <section className="conversation-main-shell workspace-session-shell workspace-session-shell-terminal">
         {sessionsQuery.isError ? (
           <section className="conversation-empty-state">
             <p className="conversation-empty-state-title">对话列表暂不可用</p>
@@ -1134,7 +1134,7 @@ export function SessionWorkspaceWorkbench() {
             ) : null}
 
             <section className="workspace-session-grid workspace-session-grid-attack-main">
-              <section className="workspace-graph-main-column">
+              <section className="workspace-graph-main-column workspace-stage-panel">
                 <AttackGraphWorkbench
                   graph={attackGraph}
                   selectedNodeId={selectedAttackNodeId}
@@ -1147,8 +1147,8 @@ export function SessionWorkspaceWorkbench() {
                 />
               </section>
 
-              <section className="workspace-session-side-column">
-                <section className="workspace-message-panel">
+              <section className="workspace-session-side-column workspace-session-side-column-transcript">
+                <section className="workspace-message-panel workspace-terminal-panel">
                   <ConversationFeed
                     messages={activeConversation.messages}
                     generations={activeConversation.generations}
