@@ -235,11 +235,12 @@ export function AttackGraphWorkbench({
     : null;
   const actionBusy = Boolean(sourceMessageId) && actionBusyId === sourceMessageId;
   const detailSections = selectedNode ? buildAttackNodeDetailSections(selectedNode) : [];
-  const rawSummary = selectedNode ? readString(selectedNode.data.summary) : null;
+  const rawSummary = selectedNode ? safeJsonSummary(selectedNode.data) : null;
   const basicSection = detailSections.find((section) => section.title === "Basic") ?? null;
   const rawSection = detailSections.find((section) => section.title === "Raw") ?? null;
   const visibleSections = detailSections.filter((section) => section.title !== "Raw");
-  const basicSummary = rawSummary ?? null;
+  const basicSummary =
+    selectedNode ? readString(selectedNode.data.summary) ?? readString(selectedNode.data.goal) ?? null : null;
   const hasFullSummary = Boolean(rawSummary && rawSummary !== basicSummary);
 
   useEffect(() => {
@@ -393,13 +394,10 @@ export function AttackGraphWorkbench({
                 ) : null}
               </div>
 
-              <details className="management-subcard workspace-node-advanced-disclosure">
-                <summary className="workspace-node-advanced-summary">高级信息</summary>
-                <div className="workspace-node-advanced-body">
-                  <div className="workspace-node-detail-section">
-                    <div className="management-list-card-header">
-                      <strong className="management-list-title">Raw</strong>
-                    </div>
+              {rawSection && rawSection.items.length > 0 ? (
+                <details className="management-subcard workspace-node-detail-section">
+                  <summary className="workspace-node-advanced-summary">Raw</summary>
+                  <div className="workspace-node-advanced-body">
                     <dl className="session-graph-data-list attack-graph-detail-list">
                       {hasFullSummary ? (
                         <div>
@@ -407,6 +405,25 @@ export function AttackGraphWorkbench({
                           <dd>{rawSummary}</dd>
                         </div>
                       ) : null}
+                      {rawSection.items.map((item) => (
+                        <div key={`${selectedNode.id}-raw-${item.label}`}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                </details>
+              ) : null}
+
+              <details className="management-subcard workspace-node-advanced-disclosure">
+                <summary className="workspace-node-advanced-summary">高级信息</summary>
+                <div className="workspace-node-advanced-body">
+                  <div className="workspace-node-detail-section">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">调试元数据</strong>
+                    </div>
+                    <dl className="session-graph-data-list attack-graph-detail-list">
                       <div>
                         <dt>source_message_id</dt>
                         <dd>{sourceMessageId ?? "—"}</dd>
@@ -431,12 +448,6 @@ export function AttackGraphWorkbench({
                         <dt>可编辑</dt>
                         <dd>{isEditable ? "是" : "否"}</dd>
                       </div>
-                      {rawSection?.items.map((item) => (
-                        <div key={`${selectedNode.id}-raw-${item.label}`}>
-                          <dt>{item.label}</dt>
-                          <dd>{item.value}</dd>
-                        </div>
-                      ))}
                     </dl>
                   </div>
 

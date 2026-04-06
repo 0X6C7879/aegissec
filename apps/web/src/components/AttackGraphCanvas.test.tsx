@@ -3,6 +3,10 @@ import type { SessionGraph } from "../types/graphs";
 import { buildAutoLayout } from "./AttackGraphCanvas";
 import {
   buildAttackGraphAutoFocusSignature,
+  displayExcerpt,
+  displayImportance,
+  displayTitle,
+  formatAttackNodeType,
   getAttackGraphAutoFocusNodeId,
   shouldAutoFocusAttackGraph,
 } from "./AttackGraphCanvas.utils";
@@ -103,8 +107,51 @@ describe("AttackGraphCanvas helpers", () => {
 
     expect(actionNode?.data.label).toContain("python exploit.py");
     expect(actionNode?.data.label.length).toBeLessThan(60);
-    expect(actionNode?.data.excerpt ?? null).toBeNull();
+    expect(actionNode?.data.excerpt).toContain("发现了非常长的一段观测文本");
+    expect((actionNode?.data.excerpt ?? "").length).toBeLessThan(80);
     expect(layout.edges[0]?.label).toBeUndefined();
+  });
+
+  it("renders root node type as target-oriented copy instead of raw root", () => {
+    expect(formatAttackNodeType("root")).toBe("目标");
+  });
+
+  it("prioritizes execution graph fields over legacy semantic fields", () => {
+    const actionNode = {
+      id: "action-x",
+      graph_type: "attack",
+      node_type: "action",
+      label: "旧标签",
+      data: {
+        command: "curl https://target.internal/health",
+        observation_summary: "HTTP 200 from /health",
+        surface: "legacy-surface",
+        hypothesis: "legacy-hypothesis",
+      },
+    } satisfies SessionGraph["nodes"][number];
+
+    expect(displayTitle(actionNode)).toContain("curl https://target.internal/health");
+    expect(displayExcerpt(actionNode)).toBe("HTTP 200 from /health");
+  });
+
+  it("execution graph emphasis no longer depends on legacy semantic node types", () => {
+    const semanticNode = {
+      id: "legacy-1",
+      graph_type: "attack",
+      node_type: "vulnerability",
+      label: "Legacy",
+      data: { status: "completed" },
+    } satisfies SessionGraph["nodes"][number];
+    const blockedAction = {
+      id: "action-blocked",
+      graph_type: "attack",
+      node_type: "action",
+      label: "Blocked action",
+      data: { status: "blocked" },
+    } satisfies SessionGraph["nodes"][number];
+
+    expect(displayImportance(semanticNode)).toBe("supporting");
+    expect(displayImportance(blockedAction)).toBe("critical");
   });
 
   it("shows relation labels for selected-path edges", () => {

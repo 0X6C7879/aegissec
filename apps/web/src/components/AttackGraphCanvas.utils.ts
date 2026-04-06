@@ -77,25 +77,13 @@ export function truncateText(value: string | null, maxLength: number): string | 
 export function formatAttackNodeType(nodeType: string): string {
   switch (nodeType) {
     case "root":
-      return "根节点";
+      return "目标";
     case "goal":
       return "目标";
     case "task":
       return "任务";
-    case "surface":
-      return "攻击面";
-    case "observation":
-      return "观测";
-    case "hypothesis":
-      return "假设";
     case "action":
-      return "动作";
-    case "vulnerability":
-      return "漏洞";
-    case "exploit":
-      return "验证";
-    case "pivot":
-      return "横向路径";
+      return "执行";
     case "outcome":
       return "结果";
     default:
@@ -189,20 +177,6 @@ function getCommandIntent(node: SessionGraphNode): string | null {
   );
 }
 
-function getObservationFinding(node: SessionGraphNode): string | null {
-  return (
-    readString(node.data.observation_summary) ??
-    readString(node.data.finding) ??
-    readString(node.data.response_excerpt) ??
-    readString(node.data.summary) ??
-    readString(node.data.observation) ??
-    readString(node.data.result) ??
-    readString(node.data.result_text) ??
-    readString(node.data.evidence) ??
-    readString(node.data.stdout)
-  );
-}
-
 function getOutcomeConclusion(node: SessionGraphNode): string | null {
   return (
     readString(node.data.conclusion) ??
@@ -218,72 +192,78 @@ export function displayTitle(node: SessionGraphNode): string {
   switch (getNodeType(node)) {
     case "goal":
     case "root":
-      return fallback;
+      return truncateText(readString(node.data.goal) ?? readString(node.data.title) ?? fallback, 52) ?? fallback;
     case "task":
-      return fallback;
+      return (
+        truncateText(readString(node.data.title) ?? readString(node.data.task_name) ?? fallback, 52) ?? fallback
+      );
     case "action":
-    case "exploit":
       return truncateText(getCommandIntent(node), 52) ?? fallback;
-    case "hypothesis":
-      return truncateText(readString(node.data.summary) ?? node.label, 52) ?? fallback;
     case "outcome":
-      return truncateText(getOutcomeConclusion(node), 52) ?? fallback;
+      return truncateText(readString(node.data.title) ?? getOutcomeConclusion(node) ?? fallback, 52) ?? fallback;
     default:
       return fallback;
   }
 }
 
 export function displayExcerpt(node: SessionGraphNode): string | null {
-  void node;
-  return null;
+  const excerpt =
+    readString(node.data.observation_summary) ??
+    readString(node.data.response_excerpt) ??
+    truncateText(readString(node.data.stdout), 72);
+
+  if (!excerpt) {
+    return null;
+  }
+
+  const title = displayTitle(node);
+  return excerpt === title ? null : truncateText(excerpt, 72);
 }
 
 export function displayImportance(node: SessionGraphNode): AttackNodeDisplayEmphasis {
-  switch (getNodeType(node)) {
-    case "root":
-    case "goal":
-      return "goal";
-    case "task":
-      return readBoolean(node.data.current) ? "critical" : "supporting";
-    case "exploit":
-    case "vulnerability":
-    case "surface":
-      return "critical";
-    case "action":
-      return readBoolean(node.data.current) || readString(node.data.status) === "in_progress"
-        ? "critical"
-        : "supporting";
-    case "outcome":
-      return "result";
-    default:
-      return "supporting";
+  const status = readString(node.data.status);
+  if (node.node_type === "root" || node.node_type === "goal") {
+    return "goal";
   }
+  if (node.node_type === "outcome") {
+    return "result";
+  }
+  if (
+    node.node_type === "action" &&
+    (readBoolean(node.data.current) ||
+      readBoolean(node.data.active) ||
+      status === "in_progress" ||
+      status === "blocked" ||
+      status === "failed")
+  ) {
+    return "critical";
+  }
+  return "supporting";
 }
 
 export function buildAttackNodeOverviewSummary(node: SessionGraphNode): string | null {
-  switch (getNodeType(node)) {
-    case "root":
-    case "goal":
-      return truncateText(readString(node.data.target) ?? readString(node.data.summary), 120);
-    case "task":
-    case "action":
-    case "exploit":
-      return truncateText(
-        readString(node.data.observation_summary) ??
-          readString(node.data.request_summary) ??
-          readString(node.data.intent) ??
-          readString(node.data.summary),
-        120,
-      );
-    case "observation":
-      return truncateText(getObservationFinding(node), 120);
-    case "hypothesis":
-      return truncateText(readString(node.data.summary), 120);
-    case "outcome":
-      return truncateText(getOutcomeConclusion(node), 120);
-    default:
-      return truncateText(readString(node.data.summary), 120);
+  if (node.node_type === "root" || node.node_type === "goal") {
+    return truncateText(readString(node.data.goal) ?? readString(node.data.summary), 120);
   }
+  if (node.node_type === "task") {
+    return truncateText(
+      readString(node.data.summary) ?? readString(node.data.description) ?? readString(node.data.thought),
+      120,
+    );
+  }
+  if (node.node_type === "action") {
+    return truncateText(
+      readString(node.data.observation_summary) ??
+        readString(node.data.response_excerpt) ??
+        readString(node.data.summary) ??
+        readString(node.data.stdout),
+      120,
+    );
+  }
+  if (node.node_type === "outcome") {
+    return truncateText(getOutcomeConclusion(node), 120);
+  }
+  return truncateText(readString(node.data.summary), 120);
 }
 
 export function buildAttackNodeHighValueDetails(node: SessionGraphNode): AttackNodeDetailItem[] {
@@ -292,12 +272,12 @@ export function buildAttackNodeHighValueDetails(node: SessionGraphNode): AttackN
   const intent = readString(node.data.intent);
   const summary = readString(node.data.summary);
   const result = readString(node.data.result_text) ?? readString(node.data.stdout);
-  const evidence = readString(node.data.evidence);
   const items: AttackNodeDetailItem[] = [];
 
-  switch (getNodeType(node)) {
+  switch (node.node_type) {
+    case "root":
     case "goal": {
-      const target = readString(node.data.target) ?? summary;
+      const target = readString(node.data.goal) ?? readString(node.data.target) ?? summary;
       if (target) {
         items.push({ label: "目标", value: truncateText(target, 180) ?? target });
       }
@@ -305,7 +285,6 @@ export function buildAttackNodeHighValueDetails(node: SessionGraphNode): AttackN
     }
     case "action":
     case "task":
-    case "exploit":
       if (tool) {
         items.push({ label: "工具", value: tool });
       }
@@ -317,21 +296,6 @@ export function buildAttackNodeHighValueDetails(node: SessionGraphNode): AttackN
       }
       if (summary && summary !== intent) {
         items.push({ label: "结果", value: truncateText(summary, 180) ?? summary });
-      }
-      break;
-    case "observation": {
-      const finding = readString(node.data.finding) ?? summary;
-      if (finding) {
-        items.push({ label: "发现", value: truncateText(finding, 180) ?? finding });
-      }
-      if (evidence && evidence !== finding) {
-        items.push({ label: "证据", value: truncateText(evidence, 220) ?? evidence });
-      }
-      break;
-    }
-    case "hypothesis":
-      if (summary) {
-        items.push({ label: "假设", value: truncateText(summary, 180) ?? summary });
       }
       break;
     case "outcome": {
@@ -395,8 +359,15 @@ function buildHypothesisValue(hypothesis: Record<string, unknown>): string | nul
 }
 
 export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNodeDetailSection[] {
+  const nodeId = readString(node.data.action_id) ?? readString(node.data.task_id) ?? node.id;
+  const runId = readString(node.data.run_id);
+  const sessionId = readString(node.data.session_id);
+  const currentStage = readString(node.data.current_stage) ?? readString(node.data.stage_key);
+  const updatedAt = readString(node.data.updated_at);
+  const completedAt = readString(node.data.completed_at) ?? readString(node.data.ended_at);
   const basic: AttackNodeDetailItem[] = [
     { label: "类型", value: formatAttackNodeType(node.node_type) },
+    { label: "ID", value: nodeId },
     { label: "状态", value: formatAttackNodeStatus(readString(node.data.status)) },
   ];
   const taskId = readString(node.data.task_id);
@@ -406,23 +377,39 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
   const toolName = readString(node.data.tool_name) ?? readString(node.data.tool);
   const exitCode = safeJsonSummary(node.data.exit_code);
 
-  if (taskId) {
+  if ((node.node_type === "root" || node.node_type === "outcome") && runId) {
+    basic.push({ label: "Run ID", value: runId });
+  }
+  if ((node.node_type === "root" || node.node_type === "outcome") && sessionId) {
+    basic.push({ label: "Session ID", value: sessionId });
+  }
+  if (currentStage) {
+    basic.push({ label: "阶段", value: currentStage });
+  }
+
+  if (taskId && node.node_type !== "root" && node.node_type !== "outcome") {
     basic.push({ label: "Task ID", value: taskId });
   }
-  if (taskName && taskName !== node.label) {
+  if (taskName && taskName !== node.label && node.node_type !== "root" && node.node_type !== "outcome") {
     basic.push({ label: "任务名", value: taskName });
   }
-  if (traceId) {
+  if (traceId && node.node_type === "action") {
     basic.push({ label: "Trace ID", value: traceId });
   }
-  if (sequence !== null) {
+  if (sequence !== null && node.node_type !== "root") {
     basic.push({ label: "顺序", value: String(sequence) });
   }
-  if (toolName) {
+  if (toolName && node.node_type === "action") {
     basic.push({ label: "工具", value: toolName });
   }
-  if (exitCode) {
+  if (exitCode && node.node_type === "action") {
     basic.push({ label: "退出码", value: exitCode });
+  }
+  if (updatedAt) {
+    basic.push({ label: "更新时间", value: updatedAt });
+  }
+  if (completedAt) {
+    basic.push({ label: "完成时间", value: completedAt });
   }
 
   const why: AttackNodeDetailItem[] = [];
@@ -430,16 +417,16 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
   const whyDescription = readString(node.data.description);
   const whyThought = readString(node.data.thought);
   const whyIntent = readString(node.data.intent);
-  if (whySummary) {
+  if (whySummary && node.node_type !== "outcome") {
     why.push({ label: "摘要", value: whySummary });
   }
-  if (whyDescription && whyDescription !== whySummary) {
+  if (whyDescription && whyDescription !== whySummary && node.node_type !== "root" && node.node_type !== "outcome") {
     why.push({ label: "说明", value: whyDescription });
   }
-  if (whyIntent && whyIntent !== whySummary) {
+  if (whyIntent && whyIntent !== whySummary && node.node_type === "action") {
     why.push({ label: "意图", value: whyIntent });
   }
-  if (whyThought) {
+  if (whyThought && node.node_type !== "root") {
     why.push({ label: "思路", value: whyThought });
   }
 
@@ -447,16 +434,16 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
   const command = readString(node.data.command);
   const requestSummary = readString(node.data.request_summary);
   const argumentsValue = buildRawTextItem("参数", node.data.arguments);
-  if (toolName) {
+  if (toolName && node.node_type === "action") {
     action.push({ label: "工具", value: toolName });
   }
-  if (command) {
+  if (command && node.node_type === "action") {
     action.push({ label: "命令", value: command });
   }
-  if (requestSummary && requestSummary !== command) {
+  if (requestSummary && requestSummary !== command && node.node_type === "action") {
     action.push({ label: "请求摘要", value: requestSummary });
   }
-  if (argumentsValue) {
+  if (argumentsValue && node.node_type === "action") {
     action.push(argumentsValue);
   }
 
@@ -467,24 +454,27 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
   const responseExcerpt = readString(node.data.response_excerpt);
   const stdout = readString(node.data.stdout);
   const stderr = readString(node.data.stderr);
-  if (observationSummary) {
+  const sourceGraphs = readStringArray(node.data.source_graphs);
+  if (observationSummary && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "观测摘要", value: observationSummary });
   }
-  if (observationValue && observationValue !== observationSummary) {
+  if (observationValue && observationValue !== observationSummary && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "观测", value: observationValue });
   }
-  if (responseExcerpt && responseExcerpt !== observationSummary) {
+  if (responseExcerpt && responseExcerpt !== observationSummary && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "响应摘录", value: responseExcerpt });
   }
-  if (result) {
+  if (result && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "结果", value: truncateText(result, 400) ?? result });
   }
-  if (stdout) {
+  if (stdout && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "stdout", value: stdout });
   }
-  if (stderr) {
+  if (stderr && node.node_type !== "root" && node.node_type !== "task") {
     observation.push({ label: "stderr", value: stderr });
   }
+
+  const blockedReason = readString(node.data.blocked_reason);
 
   const interpretation: AttackNodeDetailItem[] = [];
   for (const [index, finding] of readRecordArray(node.data.related_findings).entries()) {
@@ -499,17 +489,23 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
       interpretation.push({ label: `假设 ${index + 1}`, value });
     }
   }
+  if (blockedReason) {
+    interpretation.push({ label: "阻塞原因", value: blockedReason });
+  }
+  if (sourceGraphs.length > 0) {
+    interpretation.push({ label: "来源图层", value: sourceGraphs.join(" / ") });
+  }
 
   const raw: AttackNodeDetailItem[] = [];
   const sourceMessageId = readString(node.data.source_message_id);
   const branchId = readString(node.data.branch_id);
   const generationId = readString(node.data.generation_id);
-  const sourceGraphs = readStringArray(node.data.source_graphs);
   void sourceMessageId;
   void branchId;
   void generationId;
-  if (sourceGraphs.length > 0) {
-    raw.push({ label: "source_graphs", value: sourceGraphs.join(" / ") });
+  const payload = buildRawTextItem("payload", node.data);
+  if (payload) {
+    raw.push(payload);
   }
   const provenance = buildRawTextItem("provenance", node.data.provenance);
   if (provenance) {

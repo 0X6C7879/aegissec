@@ -31,6 +31,32 @@ function createGraph(): SessionGraph {
     current_stage: "safe_validation",
     nodes: [
       {
+        id: "root-node",
+        graph_type: "attack",
+        node_type: "root",
+        label: "授权验证目标",
+        data: {
+          goal: "确认授权范围内的最低风险执行路径",
+          status: "running",
+          run_id: "run-1",
+          session_id: "session-1",
+          current_stage: "safe_validation",
+        },
+      },
+      {
+        id: "task-node",
+        graph_type: "attack",
+        node_type: "task",
+        label: "验证主路径",
+        data: {
+          task_id: "task-1",
+          task_name: "safe_validation.validate_primary_path",
+          stage_key: "safe_validation",
+          status: "completed",
+          summary: "验证核心执行路径是否成立。",
+        },
+      },
+      {
         id: "node-without-anchor",
         graph_type: "attack",
         node_type: "action",
@@ -172,6 +198,36 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.getByText("generation_id")).toBeVisible();
   });
 
+  it("shows root detail metadata without noisy empty execution sections", async () => {
+    const user = userEvent.setup();
+
+    render(<StatefulAttackGraphWorkbench />);
+
+    await user.click(screen.getByRole("button", { name: "授权验证目标" }));
+
+    expect(screen.getByText("Basic")).toBeInTheDocument();
+    expect(screen.getByText("Run ID")).toBeInTheDocument();
+    expect(screen.getByText("Session ID")).toBeInTheDocument();
+    expect(screen.getByText("阶段")).toBeInTheDocument();
+    expect(screen.queryByText("Action")).not.toBeInTheDocument();
+    expect(screen.queryByText("Observation")).not.toBeInTheDocument();
+  });
+
+  it("shows task metadata and hides empty execution sections when absent", async () => {
+    const user = userEvent.setup();
+
+    render(<StatefulAttackGraphWorkbench />);
+
+    await user.click(screen.getByRole("button", { name: "验证主路径" }));
+
+    expect(screen.getByText("Basic")).toBeInTheDocument();
+    expect(screen.getByText("Task ID")).toBeInTheDocument();
+    expect(screen.getByText("任务名")).toBeInTheDocument();
+    expect(screen.getByText("Why")).toBeInTheDocument();
+    expect(screen.queryByText("Action")).not.toBeInTheDocument();
+    expect(screen.queryByText("Observation")).not.toBeInTheDocument();
+  });
+
   it("renders execution-first detail sections in order", async () => {
     const user = userEvent.setup();
 
@@ -184,6 +240,7 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.getByText("Action")).toBeInTheDocument();
     expect(screen.getByText("Observation")).toBeInTheDocument();
     expect(screen.getByText("Interpretation")).toBeInTheDocument();
+    expect(screen.getByText("Raw")).toBeInTheDocument();
     expect(screen.getByText("命令")).toBeInTheDocument();
     expect(screen.getAllByText("工具").length).toBeGreaterThan(0);
     expect(screen.getByText("观测摘要")).toBeInTheDocument();
@@ -201,5 +258,17 @@ describe("AttackGraphWorkbench", () => {
 
     expect(overviewPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(highValuePosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps raw section collapsed by default and expands on interaction", async () => {
+    const user = userEvent.setup();
+
+    render(<StatefulAttackGraphWorkbench />);
+
+    await user.click(screen.getByRole("button", { name: "可操作节点" }));
+
+    expect(screen.getByText("payload")).not.toBeVisible();
+    await user.click(screen.getByText("Raw"));
+    expect(screen.getByText("payload")).toBeVisible();
   });
 });
