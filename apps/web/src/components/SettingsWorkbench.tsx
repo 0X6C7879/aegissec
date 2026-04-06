@@ -97,18 +97,20 @@ export function SettingsWorkbench() {
           <div className="management-section-header">
             <h3 className="management-section-title">主题</h3>
           </div>
-          <div className="management-action-row">
+          <div className="segmented-control">
             <button
-              className={`button ${themePreference === "dark" ? "button-primary" : "button-secondary"}`}
+              className={`segmented-control-button ${themePreference === "dark" ? "segmented-control-button-active" : ""}`}
               type="button"
               onClick={() => setThemePreference("dark")}
+              aria-pressed={themePreference === "dark"}
             >
               深色
             </button>
             <button
-              className={`button ${themePreference === "light" ? "button-primary" : "button-secondary"}`}
+              className={`segmented-control-button ${themePreference === "light" ? "segmented-control-button-active" : ""}`}
               type="button"
               onClick={() => setThemePreference("light")}
+              aria-pressed={themePreference === "light"}
             >
               浅色
             </button>
@@ -119,18 +121,20 @@ export function SettingsWorkbench() {
           <div className="management-section-header">
             <h3 className="management-section-title">界面密度</h3>
           </div>
-          <div className="management-action-row">
+          <div className="segmented-control">
             <button
-              className={`button ${uiDensity === "compact" ? "button-primary" : "button-secondary"}`}
+              className={`segmented-control-button ${uiDensity === "compact" ? "segmented-control-button-active" : ""}`}
               type="button"
               onClick={() => setUiDensity("compact")}
+              aria-pressed={uiDensity === "compact"}
             >
               紧凑
             </button>
             <button
-              className={`button ${uiDensity === "comfortable" ? "button-primary" : "button-secondary"}`}
+              className={`segmented-control-button ${uiDensity === "comfortable" ? "segmented-control-button-active" : ""}`}
               type="button"
               onClick={() => setUiDensity("comfortable")}
+              aria-pressed={uiDensity === "comfortable"}
             >
               舒展
             </button>
