@@ -373,15 +373,35 @@ class ExecutionGraphBuilder:
                 task_name_to_id=task_name_to_id,
             )
             synthetic_action_index += 1
-            action_id = self._resolve_execution_action_id(
-                payload=payload,
-                task_anchor_id=task_anchor_id,
-                fallback=f"action:{run.id}:{synthetic_action_index}",
-                trace_to_node_id=action_node_ids_by_trace,
-                action_key_to_id=action_node_ids_by_merge_key,
-            )
             task_anchor = task_by_id.get(task_anchor_id) if task_anchor_id is not None else None
-            action_data = self._execution_payload(payload, source_graphs=source_graphs)
+            should_attach_to_latest_task_action = (
+                task_anchor_id is not None
+                and latest_action_by_task_id.get(task_anchor_id) is not None
+                and not isinstance(payload.get("trace_id") or payload.get("id"), str)
+                and self._pick_first_str(
+                    payload.get("command"),
+                    payload.get("command_or_action"),
+                    payload.get("request_summary"),
+                    payload.get("tool_name"),
+                    payload.get("tool"),
+                )
+                is None
+            )
+            action_id = (
+                latest_action_by_task_id[task_anchor_id]
+                if should_attach_to_latest_task_action and task_anchor_id is not None
+                else self._resolve_execution_action_id(
+                    payload=payload,
+                    task_anchor_id=task_anchor_id,
+                    fallback=f"action:{run.id}:{synthetic_action_index}",
+                    trace_to_node_id=action_node_ids_by_trace,
+                    action_key_to_id=action_node_ids_by_merge_key,
+                )
+            )
+            effective_source_graphs = self._merge_source_graphs(
+                ["task"] if task_anchor_id is not None else [], source_graphs
+            )
+            action_data = self._execution_payload(payload, source_graphs=effective_source_graphs)
             action_data["action_id"] = action_id
             action_data["task_id"] = task_anchor_id or action_data.get("task_id")
             action_data["task_name"] = (
@@ -416,7 +436,7 @@ class ExecutionGraphBuilder:
                     target=action_id,
                     relation=relation_hint
                     or self._execution_relation(str(action_data.get("status") or "")),
-                    data={"source_graphs": self._merge_source_graphs(["task"], source_graphs)},
+                    data={"source_graphs": effective_source_graphs},
                 )
                 previous_action_id = latest_action_by_task_id.get(task_anchor_id)
                 if previous_action_id is not None and previous_action_id != action_id:
@@ -425,7 +445,9 @@ class ExecutionGraphBuilder:
                         target=action_id,
                         relation="precedes",
                         data={
-                            "source_graphs": self._merge_source_graphs(["workflow"], source_graphs)
+                            "source_graphs": self._merge_source_graphs(
+                                ["workflow"], effective_source_graphs
+                            )
                         },
                     )
                 latest_action_by_task_id[task_anchor_id] = action_id
@@ -748,24 +770,8 @@ class ExecutionGraphBuilder:
         outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
         execution_node_count: int,
     ) -> bool:
-        if node.node_type not in {"task", "action"}:
-            return False
-        if execution_node_count <= 1 and self._node_has_runtime_provenance(node):
-            return False
-        if self._node_has_preserved_status(node):
-            return False
-        if node.data.get("current"):
-            return False
-        if isinstance(node.data.get("related_findings"), list) and node.data.get(
-            "related_findings"
-        ):
-            return False
-        if self._node_has_execution_signal(node):
-            return False
-        for edge in outgoing_edges_by_node.get(node.id, []):
-            if edge.target in normalized_nodes_by_id and not edge.target.startswith("outcome:"):
-                return False
-        return True
+        del node, normalized_nodes_by_id, outgoing_edges_by_node, execution_node_count
+        return False
 
     def _node_has_execution_signal(self, node: SessionGraphNodeRead) -> bool:
         execution_fields = (
@@ -1155,11 +1161,15 @@ class ExecutionGraphBuilder:
     @staticmethod
     def _execution_relation(status: str) -> str:
         status_value = status.lower()
+        if not status_value:
+            return "attempts"
         if status_value in {TaskNodeStatus.FAILED.value, TaskNodeStatus.BLOCKED.value}:
             return "blocks"
         if status_value in {TaskNodeStatus.IN_PROGRESS.value, TaskNodeStatus.READY.value}:
             return "attempts"
-        return "discovers"
+        if status_value in {TaskNodeStatus.COMPLETED.value, WorkflowRunStatus.DONE.value}:
+            return "confirms"
+        return "attempts"
 
     @staticmethod
     def _current_stage_task_id(
@@ -1378,8 +1388,12 @@ class ExecutionGraphBuilder:
             "completed_at": payload.get("completed_at") or payload.get("ended_at"),
             "blocked_reason": payload.get("blocked_reason") or payload.get("last_error"),
             "source_message_id": payload.get("source_message_id"),
-            "related_findings": [],
-            "related_hypotheses": [],
+            "related_findings": payload.get("related_findings")
+            if isinstance(payload.get("related_findings"), list)
+            else [],
+            "related_hypotheses": payload.get("related_hypotheses")
+            if isinstance(payload.get("related_hypotheses"), list)
+            else [],
             "source_graphs": source_graphs,
             "merged_from": list(source_graphs),
         }

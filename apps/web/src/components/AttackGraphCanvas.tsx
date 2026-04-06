@@ -126,7 +126,7 @@ function getSelectedPathContext(
 }
 
 function isExecutionNodeType(nodeType: string): boolean {
-  return nodeType === "goal" || nodeType === "task" || nodeType === "action" || nodeType === "outcome";
+  return nodeType === "root" || nodeType === "task" || nodeType === "action" || nodeType === "outcome";
 }
 
 function getExecutionPathContext(

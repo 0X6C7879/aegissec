@@ -69,9 +69,9 @@ describe("AttackGraphCanvas helpers", () => {
       ...createGraph(),
       nodes: [
         {
-          id: "goal-1",
+          id: "root-1",
           graph_type: "attack",
-          node_type: "goal",
+          node_type: "root",
           label: "拿到初始访问",
           data: {},
         },
@@ -90,7 +90,7 @@ describe("AttackGraphCanvas helpers", () => {
         {
           id: "edge-1",
           graph_type: "attack",
-          source: "goal-1",
+          source: "root-1",
           target: "action-2",
           relation: "discovers",
           data: {},
@@ -202,9 +202,9 @@ describe("AttackGraphCanvas helpers", () => {
       ...createGraph(),
       nodes: [
         {
-          id: "goal-1",
+          id: "root-1",
           graph_type: "attack",
-          node_type: "goal",
+          node_type: "root",
           label: "目标",
           data: {},
         },
@@ -241,7 +241,7 @@ describe("AttackGraphCanvas helpers", () => {
         {
           id: "edge-goal-surface",
           graph_type: "attack",
-          source: "goal-1",
+          source: "root-1",
           target: "task-1",
           relation: "attempts",
           data: {},
@@ -277,7 +277,7 @@ describe("AttackGraphCanvas helpers", () => {
     const nodeById = new Map(layout.nodes.map((node) => [node.id, node]));
     const edgeById = new Map(layout.edges.map((edge) => [edge.id, edge]));
 
-    expect(nodeById.get("goal-1")?.data.isDimmed).toBe(false);
+    expect(nodeById.get("root-1")?.data.isDimmed).toBe(false);
     expect(nodeById.get("task-1")?.data.isDimmed).toBe(false);
     expect(nodeById.get("action-1")?.data.isDimmed).toBe(false);
     expect(nodeById.get("outcome-1")?.data.isDimmed).toBe(false);

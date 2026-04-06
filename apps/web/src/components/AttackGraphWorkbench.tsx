@@ -71,6 +71,22 @@ function getLatestNodeId(nodes: SessionGraphNode[]): string | null {
     return null;
   }
 
+  const nodePriority = (node: SessionGraphNode): number => {
+    if (node.node_type === "action") {
+      return 0;
+    }
+    if (node.node_type === "task") {
+      return 1;
+    }
+    if (node.node_type === "outcome") {
+      return 2;
+    }
+    if (node.node_type === "root") {
+      return 3;
+    }
+    return 4;
+  };
+
   let bestNode: SessionGraphNode | null = null;
   let bestTimestamp = -1;
   let bestSequence = -1;
@@ -88,8 +104,9 @@ function getLatestNodeId(nodes: SessionGraphNode[]): string | null {
 
     if (
       bestNode === null ||
-      timestamp > bestTimestamp ||
-      (timestamp === bestTimestamp && sequence > bestSequence)
+      nodePriority(node) < nodePriority(bestNode) ||
+      (nodePriority(node) === nodePriority(bestNode) && timestamp > bestTimestamp) ||
+      (nodePriority(node) === nodePriority(bestNode) && timestamp === bestTimestamp && sequence > bestSequence)
     ) {
       bestNode = node;
       bestTimestamp = timestamp;

@@ -76,6 +76,8 @@ export function truncateText(value: string | null, maxLength: number): string | 
 
 export function formatAttackNodeType(nodeType: string): string {
   switch (nodeType) {
+    case "root":
+      return "根节点";
     case "goal":
       return "目标";
     case "task":
@@ -215,6 +217,7 @@ export function displayTitle(node: SessionGraphNode): string {
 
   switch (getNodeType(node)) {
     case "goal":
+    case "root":
       return fallback;
     case "task":
       return fallback;
@@ -237,6 +240,7 @@ export function displayExcerpt(node: SessionGraphNode): string | null {
 
 export function displayImportance(node: SessionGraphNode): AttackNodeDisplayEmphasis {
   switch (getNodeType(node)) {
+    case "root":
     case "goal":
       return "goal";
     case "task":
@@ -258,6 +262,7 @@ export function displayImportance(node: SessionGraphNode): AttackNodeDisplayEmph
 
 export function buildAttackNodeOverviewSummary(node: SessionGraphNode): string | null {
   switch (getNodeType(node)) {
+    case "root":
     case "goal":
       return truncateText(readString(node.data.target) ?? readString(node.data.summary), 120);
     case "task":
@@ -530,11 +535,45 @@ export function getAttackGraphAutoFocusNodeId(
   latestNodeId: string | null,
 ): string | null {
   const activeNode = graph.nodes.find(
-    (node) => readBoolean(node.data.current) || readBoolean(node.data.active),
+    (node) =>
+      node.node_type === "action" && (readBoolean(node.data.current) || readBoolean(node.data.active)),
   );
 
   if (activeNode) {
     return activeNode.id;
+  }
+
+  const latestActionNode = [...graph.nodes]
+    .filter((node) => node.node_type === "action")
+    .sort((left, right) => {
+      const leftTimestamp =
+        new Date(
+          readString(left.data.updated_at) ??
+            readString(left.data.completed_at) ??
+            readString(left.data.ended_at) ??
+            "1970-01-01T00:00:00.000Z",
+        ).getTime() || 0;
+      const rightTimestamp =
+        new Date(
+          readString(right.data.updated_at) ??
+            readString(right.data.completed_at) ??
+            readString(right.data.ended_at) ??
+            "1970-01-01T00:00:00.000Z",
+        ).getTime() || 0;
+
+      return rightTimestamp - leftTimestamp;
+    })[0];
+
+  if (latestActionNode) {
+    return latestActionNode.id;
+  }
+
+  const currentTaskNode = graph.nodes.find(
+    (node) => node.node_type === "task" && (readBoolean(node.data.current) || readBoolean(node.data.active)),
+  );
+
+  if (currentTaskNode) {
+    return currentTaskNode.id;
   }
 
   const latestExecutionNode = [...graph.nodes]
@@ -564,6 +603,16 @@ export function getAttackGraphAutoFocusNodeId(
 
   if (latestNodeId && graph.nodes.some((node) => node.id === latestNodeId)) {
     return latestNodeId;
+  }
+
+  const outcomeNode = graph.nodes.find((node) => node.node_type === "outcome");
+  if (outcomeNode) {
+    return outcomeNode.id;
+  }
+
+  const rootNode = graph.nodes.find((node) => node.node_type === "root");
+  if (rootNode) {
+    return rootNode.id;
   }
 
   return graph.nodes[0]?.id ?? null;
