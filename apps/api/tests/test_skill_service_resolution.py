@@ -285,9 +285,87 @@ Target ${target}
     prepared_selected = cast(list[dict[str, object]], prepared["prepared_selected_skills"])
     assert any(item["prepared_for_execution"] is True for item in prepared_selected)
     assert any(item["prepared_for_context"] is True for item in prepared_selected)
+    assert (
+        cast(dict[str, object], prepared["prepared_primary_skill"])["prepared_for_execution"]
+        is True
+    )
+    assert any(
+        item["directory_name"] == "triage-planner"
+        and item["prepared_for_context"] is True
+        and item["prepared_for_execution"] is False
+        for item in prepared_selected
+    )
     resolution_summary = cast(dict[str, object], prepared["resolution_summary"])
     supporting_count = cast(int, resolution_summary["supporting_count"])
     assert supporting_count >= 1
+
+
+def test_prepare_selected_skills_returns_full_service_payload(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    _write_skill(
+        skills_root / "solve-challenge" / "SKILL.md",
+        """---
+name: solve-challenge
+description: CTF dispatcher
+family: ctf
+task_mode: dispatcher
+tags: [ctf, dispatcher, challenge]
+when_to_use: Use for CTF challenge solving.
+---
+# solve-challenge
+""",
+    )
+    _write_skill(
+        skills_root / "ctf-web" / "SKILL.md",
+        """---
+name: ctf-web
+description: CTF web specialist
+family: ctf
+domain: web
+task_mode: specialized
+tags: [ctf-web, web]
+when_to_use: Use for web CTF exploitation.
+---
+# ctf-web
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-selected-set.db") as (
+        _,
+        skill_service,
+    ):
+        skill_service.rescan_skills()
+        prepared = skill_service.prepare_selected_skills(
+            workspace_path=str(project_root),
+            current_prompt="解答这道 ctf web 题目: http://target.local/challenge",
+            session_id="session-prepare-selected",
+            include_reference_only=True,
+        )
+
+    assert prepared["status"] == "selected"
+    assert (
+        cast(dict[str, object], prepared["prepared_primary_skill"])["directory_name"]
+        == "solve-challenge"
+    )
+    assert len(cast(list[dict[str, object]], prepared["prepared_selected_skills"])) >= 2
+    assert cast(list[dict[str, object]], prepared["prepared_supporting_skills"])
+    assert isinstance(prepared["prepared_context_prompt"], str)
 
 
 def test_build_skill_context_payload_exposes_supporting_selected_and_resolution_identity(
@@ -396,11 +474,13 @@ when_to_use: Use for API validation and endpoint review.
     assert isinstance(skill_runtime_usage, list) and skill_runtime_usage
     assert prepared_selected
     assert any(item["prepared_for_context"] is True for item in prepared_selected)
-    assert "Primary skill for current context" in prompt_fragment
+    assert "Task intent profile:" in prompt_fragment
+    assert "Primary skill:" in prompt_fragment
+    assert "Supporting skills prepared for context:" in prompt_fragment
+    assert "Guidance:" in prompt_fragment
     assert "Skill set plan for this stage" in prompt_fragment
-    assert "Supporting skills also loaded" in prompt_fragment
     assert "demo" in prompt_fragment
-    assert "Prepared skill set" in prompt_fragment
+    assert "prepared_for_context=True" in prompt_fragment
     assert snapshot[0]["selected"] is True
     assert snapshot[0]["role"] == "primary"
     loaded_names = [item.directory_name for item in loaded]
@@ -618,4 +698,77 @@ when_to_use: Trace Java request mappings and controller flows.
     assert any(
         skill["directory_name"] == "ctf-web" and skill["prepared_for_context"] is True
         for skill in prepared_selected
+    )
+    assert any(
+        skill["directory_name"] == "ctf-web" and skill["prepared_for_execution"] is False
+        for skill in prepared_selected
+    )
+    suppression_reasons = cast(dict[str, object], payload["suppression_reasons"])
+    assert suppression_reasons
+    prompt_fragment = cast(str, payload["prepared_context_prompt"])
+    assert "Suppressed skills:" in prompt_fragment
+    assert "java-route-tracer | reason=" in prompt_fragment
+
+
+def test_prepare_best_skill_honors_preferred_skill_identifier(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    _write_skill(
+        skills_root / "solve-challenge" / "SKILL.md",
+        """---
+name: solve-challenge
+description: CTF dispatcher
+family: ctf
+task_mode: dispatcher
+tags: [ctf, dispatcher, challenge]
+when_to_use: Use for CTF challenge solving.
+---
+# solve-challenge
+""",
+    )
+    _write_skill(
+        skills_root / "ctf-web" / "SKILL.md",
+        """---
+name: ctf-web
+description: CTF web specialist
+family: ctf
+domain: web
+task_mode: specialized
+tags: [ctf-web, web]
+when_to_use: Use for web CTF exploitation.
+---
+# ctf-web
+""",
+    )
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-preferred.db") as (
+        _,
+        skill_service,
+    ):
+        skill_service.rescan_skills()
+        prepared = skill_service.prepare_best_skill(
+            workspace_path=str(project_root),
+            current_prompt="这道 web ctf 题怎么打？",
+            session_id="session-preferred-skill",
+            preferred_skill_identifier="solve-challenge",
+            include_reference_only=True,
+        )
+
+    assert (
+        cast(dict[str, object], prepared["prepared_primary_skill"])["directory_name"]
+        == "solve-challenge"
     )

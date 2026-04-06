@@ -1040,6 +1040,29 @@ def _score_skill_for_autoroute(
     normalized_context: str,
     context_tokens: set[str],
 ) -> tuple[int, str]:
+    family = getattr(skill, "family", None)
+    domain = getattr(skill, "domain", None)
+    task_mode = getattr(skill, "task_mode", None)
+    is_ctf_context = any(
+        token in context_tokens
+        for token in {"ctf", "flag", "buuoj", "xss", "sqli", "sql", "ssrf", "web"}
+    )
+    is_http_context = (
+        any(
+            token in context_tokens
+            for token in {"http", "https", "web", "api", "xss", "sqli", "sql", "ssrf", "login"}
+        )
+        or "http://" in normalized_context
+        or "https://" in normalized_context
+    )
+
+    if family == "ctf" and task_mode == "dispatcher" and is_ctf_context:
+        dispatcher_score = 76 if is_http_context else 74
+        return dispatcher_score, "ctf dispatcher prior from challenge/web context"
+
+    if family == "ctf" and domain == "web" and is_http_context:
+        return 74, "ctf web prior from remote/http context"
+
     aliases = _skill_autoroute_aliases(skill)
     exact_alias_matches = [
         alias for alias in aliases if alias and f" {alias} " in f" {normalized_context} "
@@ -1223,7 +1246,12 @@ async def _build_autorouted_skill_context(
             ToolCallRequest(
                 tool_call_id=f"autoroute-skill-{uuid4()}",
                 tool_name="execute_skill",
-                arguments={"skill_name_or_id": skill_identifier},
+                arguments={
+                    "skill_name_or_id": skill_identifier,
+                    "current_prompt": latest_message_text,
+                    "user_goal": latest_message_text,
+                    "use_selected_skill_set": True,
+                },
             )
         )
     except ChatRuntimeError as exc:
@@ -1240,16 +1268,44 @@ async def _build_autorouted_skill_context(
         return None, [selected_entry, executing_entry, failed_entry], failed_entry
 
     skill_payload = tool_result.payload.get("skill")
+    prepared_primary_payload = tool_result.payload.get("prepared_primary_skill")
     execution_payload = tool_result.payload.get("execution")
+    resolved_skill_payload = (
+        prepared_primary_payload
+        if isinstance(prepared_primary_payload, dict)
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
+    )
+    if isinstance(resolved_skill_payload, dict):
+        resolved_skill_name = str(
+            resolved_skill_payload.get("directory_name")
+            or resolved_skill_payload.get("name")
+            or skill_display_name
+        )
+        selected_entry["summary"] = f"自动选择 {resolved_skill_name}"
+        selected_entry["skill"] = resolved_skill_name
+        executing_entry["skill"] = resolved_skill_name
     finished_entry = {
         "state": "skill.autoroute.finished",
-        "skill": skill_display_name,
+        "skill": selected_entry.get("skill", skill_display_name),
         "reason": route_reason,
         "confidence": route_confidence,
         "top_candidate": route_report.get("top_candidate"),
         "candidates": candidate_list,
         "execution": execution_payload if isinstance(execution_payload, dict) else {},
     }
+    prepared_context_prompt = tool_result.payload.get("prepared_context_prompt")
+    if isinstance(prepared_context_prompt, str) and prepared_context_prompt.strip():
+        return (
+            prepared_context_prompt.strip(),
+            [selected_entry, executing_entry, finished_entry],
+            {
+                **finished_entry,
+                "context_injected": True,
+            },
+        )
+
     if not isinstance(skill_payload, dict):
         return (
             f"## Auto-selected skill: {skill_display_name}",
@@ -1265,7 +1321,10 @@ async def _build_autorouted_skill_context(
         return (
             prepared_prompt.strip(),
             [selected_entry, executing_entry, finished_entry],
-            finished_entry,
+            {
+                **finished_entry,
+                "context_injected": True,
+            },
         )
 
     directory_name = skill_payload.get("directory_name")
@@ -1300,7 +1359,10 @@ async def _build_autorouted_skill_context(
     return (
         "\n".join(context_lines),
         [selected_entry, executing_entry, finished_entry],
-        finished_entry,
+        {
+            **finished_entry,
+            "context_injected": True,
+        },
     )
 
 
@@ -1706,15 +1768,35 @@ def _build_tool_executor(
 
         if tool_request.tool_name == "execute_skill":
             skill_name_or_id = tool_request.arguments.get("skill_name_or_id")
+            current_prompt = tool_request.arguments.get("current_prompt")
+            user_goal = tool_request.arguments.get("user_goal")
+            use_selected_skill_set = bool(tool_request.arguments.get("use_selected_skill_set"))
             if not isinstance(skill_name_or_id, str) or not skill_name_or_id.strip():
                 await publish_tool_failed("execute_skill requires a valid skill identifier.")
                 raise ChatRuntimeError("execute_skill requires a valid skill identifier.")
 
             try:
-                skill_result_payload = skill_service.execute_skill_by_name_or_directory_name(
-                    skill_name_or_id,
-                    session_id=session.id,
-                )
+                if (
+                    use_selected_skill_set
+                    and isinstance(current_prompt, str)
+                    and current_prompt.strip()
+                ):
+                    skill_result_payload = skill_service.prepare_best_skill(
+                        session_id=session.id,
+                        current_prompt=current_prompt,
+                        user_goal=(
+                            user_goal
+                            if isinstance(user_goal, str) and user_goal.strip()
+                            else current_prompt
+                        ),
+                        include_reference_only=True,
+                        preferred_skill_identifier=skill_name_or_id,
+                    )
+                else:
+                    skill_result_payload = skill_service.execute_skill_by_name_or_directory_name(
+                        skill_name_or_id,
+                        session_id=session.id,
+                    )
             except (SkillLookupError, SkillContentReadError) as exc:
                 await publish_tool_failed(str(exc))
                 raise ChatRuntimeError(str(exc)) from exc

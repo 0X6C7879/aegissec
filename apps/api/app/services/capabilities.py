@@ -128,7 +128,7 @@ class CapabilityFacade:
             workspace_path=workspace_path,
             session_id=session_id,
         )
-        skills = payload.get("skills")
+        skills = payload.get("prepared_selected_skills") or payload.get("skills")
         return skills if isinstance(skills, list) else []
 
     def build_mcp_snapshot(self) -> list[dict[str, object]]:
@@ -227,7 +227,7 @@ class CapabilityFacade:
             workspace_path=workspace_path,
             session_id=session_id,
         )
-        skills = skill_context.get("skills")
+        skills = skill_context.get("prepared_selected_skills") or skill_context.get("skills")
         selected_skill = skill_context.get("selected_skill")
         primary_skill = skill_context.get("primary_skill")
         snapshot: dict[str, object] = {
@@ -297,7 +297,7 @@ class CapabilityFacade:
             agent_role=agent_role,
             workflow_stage=workflow_stage,
         )
-        skills = payload.get("skills")
+        skills = payload.get("prepared_selected_skills") or payload.get("skills")
         self._log_capability_event(
             event_type="capability.skills.context",
             message="Built structured skill context payload.",
@@ -346,7 +346,7 @@ class CapabilityFacade:
             agent_role=agent_role,
             workflow_stage=workflow_stage,
         )
-        skills = payload.get("skills")
+        skills = payload.get("prepared_selected_skills") or payload.get("skills")
         mcp_servers = self.build_mcp_snapshot()
         if (not isinstance(skills, list) or not skills) and not mcp_servers:
             summary = "No loaded skills or enabled MCP servers are currently available."
@@ -372,6 +372,15 @@ class CapabilityFacade:
                     for note in notes:
                         if isinstance(note, str) and note.strip():
                             lines.append(f"- {note}")
+                intent_profile = payload.get("intent_profile")
+                if isinstance(intent_profile, dict):
+                    lines.append(
+                        "- intent: "
+                        f"domain={intent_profile.get('dominant_domain')} "
+                        f"ctf={intent_profile.get('is_ctf')} "
+                        f"remote_service={intent_profile.get('is_remote_service')} "
+                        f"http_target={intent_profile.get('is_http_target')}"
+                    )
                 lines.append("")
             if isinstance(skills, list):
                 for item in skills:
@@ -406,6 +415,26 @@ class CapabilityFacade:
                     )
                     if isinstance(reasons, list) and reasons:
                         lines.append(f"  why: {'; '.join(str(reason) for reason in reasons[:3])}")
+            suppressed_skills = payload.get("suppressed_skills")
+            suppression_reasons = payload.get("suppression_reasons")
+            if isinstance(suppressed_skills, list) and suppressed_skills:
+                lines.extend(["", "Suppressed skills:"])
+                for item in suppressed_skills:
+                    if not isinstance(item, dict):
+                        continue
+                    label = str(item.get("directory_name") or item.get("name") or "unknown")
+                    raw_reason = None
+                    if isinstance(suppression_reasons, dict):
+                        raw_reason = suppression_reasons.get(label) or suppression_reasons.get(
+                            item.get("id")
+                        )
+                    if isinstance(raw_reason, list):
+                        reason_text = "; ".join(str(reason) for reason in raw_reason)
+                    elif isinstance(raw_reason, str) and raw_reason.strip():
+                        reason_text = raw_reason
+                    else:
+                        reason_text = str(item.get("rejected_reason") or "suppressed_by_intent")
+                    lines.append(f"- {label}: {reason_text}")
             pruned_items: list[str] = []
             pruned_supporting_skills = payload.get("pruned_supporting_skills")
             if isinstance(pruned_supporting_skills, list):

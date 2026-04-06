@@ -222,11 +222,25 @@ class SkillService:
             invocation_arguments=invocation_arguments,
         )
         summaries: list[SkillAgentSummaryRead] = []
-        prepared_selected = payload.get(
-            "prepared_selected_skills", payload.get("selected_skills", [])
+        skill_items = (
+            payload.get("prepared_selected_skills") or payload.get("selected_skills") or []
         )
-        if isinstance(prepared_selected, list):
-            for item in prepared_selected:
+        if not skill_items:
+            skill_items = self.list_ranked_skill_candidates(
+                touched_paths=touched_paths,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                top_k=top_k,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                agent_role=agent_role,
+                workflow_stage=workflow_stage,
+                available_tools=available_tools,
+                invocation_arguments=invocation_arguments,
+            )
+        if isinstance(skill_items, list):
+            for item in skill_items:
                 if isinstance(item, dict):
                     summaries.append(SkillAgentSummaryRead.model_validate(item))
         return summaries
@@ -586,6 +600,40 @@ class SkillService:
         available_tools: list[str] | None = None,
         invocation_arguments: dict[str, object] | None = None,
         include_reference_only: bool = False,
+        preferred_skill_identifier: str | None = None,
+    ) -> dict[str, object]:
+        return self.prepare_selected_skills(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+            preferred_skill_identifier=preferred_skill_identifier,
+        )
+
+    def prepare_selected_skills(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = False,
+        preferred_skill_identifier: str | None = None,
     ) -> dict[str, object]:
         best_skill_result = self.resolve_best_skill(
             touched_paths=touched_paths,
@@ -604,7 +652,12 @@ class SkillService:
         if best_skill_result.get("status") != "selected":
             return best_skill_result
 
-        prepared_set = self.prepare_selected_skills(
+        best_skill_result = self._anchor_prepared_result_to_preferred_skill(
+            best_skill_result,
+            preferred_skill_identifier=preferred_skill_identifier,
+        )
+
+        prepared_set = self._prepare_selected_skill_set(
             selected_skills=cast(
                 list[dict[str, object]], best_skill_result.get("selected_skills", [])
             ),
@@ -613,11 +666,87 @@ class SkillService:
             touched_paths=touched_paths,
             session_id=session_id,
         )
+        prepared_context_prompt = self._build_prepared_skill_context_prompt(
+            prepared_primary_skill=cast(
+                dict[str, object] | None, prepared_set.get("prepared_primary_skill")
+            ),
+            prepared_supporting_skills=cast(
+                list[dict[str, object]], prepared_set.get("prepared_supporting_skills", [])
+            ),
+            intent_profile=cast(dict[str, object] | None, best_skill_result.get("intent_profile")),
+            suppressed_skills=cast(
+                list[dict[str, object]], best_skill_result.get("suppressed_skills", [])
+            ),
+            suppression_reasons=cast(
+                dict[str, object], best_skill_result.get("suppression_reasons", {})
+            ),
+        )
         prepared_result = dict(best_skill_result)
         prepared_result.update(prepared_set)
+        prepared_result["prepared_context_prompt"] = prepared_context_prompt
         return prepared_result
 
-    def prepare_selected_skills(
+    def _anchor_prepared_result_to_preferred_skill(
+        self,
+        best_skill_result: dict[str, object],
+        *,
+        preferred_skill_identifier: str | None,
+    ) -> dict[str, object]:
+        if (
+            not isinstance(preferred_skill_identifier, str)
+            or not preferred_skill_identifier.strip()
+        ):
+            return best_skill_result
+        preferred_normalized = preferred_skill_identifier.strip().casefold()
+        selected_skills = cast(
+            list[dict[str, object]], best_skill_result.get("selected_skills", [])
+        )
+        primary_skill = cast(dict[str, object] | None, best_skill_result.get("primary_skill"))
+        if not selected_skills or not isinstance(primary_skill, dict):
+            return best_skill_result
+
+        def _matches(item: dict[str, object]) -> bool:
+            return any(
+                isinstance(value, str) and value.strip().casefold() == preferred_normalized
+                for value in (item.get("id"), item.get("directory_name"), item.get("name"))
+            )
+
+        if _matches(primary_skill):
+            return best_skill_result
+
+        preferred_entry = next((item for item in selected_skills if _matches(item)), None)
+        if preferred_entry is None:
+            return best_skill_result
+
+        updated_primary = dict(primary_skill)
+        updated_primary["role"] = "supporting"
+        updated_preferred = dict(preferred_entry)
+        updated_preferred["role"] = "primary"
+
+        updated_selected_skills: list[dict[str, object]] = [updated_preferred]
+        updated_selected_skills.extend(
+            updated_primary if item is primary_skill else dict(item)
+            for item in selected_skills
+            if item is not preferred_entry and item is not primary_skill
+        )
+        updated_selected_skills.insert(1, updated_primary)
+
+        updated_supporting = [dict(item, role="supporting") for item in updated_selected_skills[1:]]
+        anchored_result = dict(best_skill_result)
+        anchored_result["primary_skill"] = updated_preferred
+        anchored_result["selected_skill"] = updated_preferred
+        anchored_result["selected_skill_id"] = updated_preferred.get("id")
+        anchored_result["selected_skill_rank"] = updated_preferred.get("rank")
+        anchored_result["supporting_skills"] = updated_supporting
+        anchored_result["selected_skills"] = [updated_preferred, *updated_supporting]
+        anchored_result["selected_skill_ids"] = [
+            str(item.get("id"))
+            for item in cast(list[dict[str, object]], anchored_result["selected_skills"])
+            if isinstance(item.get("id"), str)
+        ]
+        return anchored_result
+
+    def _prepare_selected_skill_set(
         self,
         *,
         selected_skills: list[dict[str, object]],
@@ -666,11 +795,112 @@ class SkillService:
         return {
             "execution": primary_execution,
             "skill": primary_skill_payload,
+            "prepared_primary_skill": primary_prepared,
             "primary_prepared": primary_prepared,
             "supporting_prepared": prepared_supporting_skills,
             "prepared_selected_skills": prepared_selected_skills,
             "prepared_supporting_skills": prepared_supporting_skills,
         }
+
+    def _build_prepared_skill_context_prompt(
+        self,
+        *,
+        prepared_primary_skill: dict[str, object] | None,
+        prepared_supporting_skills: list[dict[str, object]],
+        intent_profile: dict[str, object] | None,
+        suppressed_skills: list[dict[str, object]],
+        suppression_reasons: dict[str, object],
+    ) -> str:
+        lines: list[str] = []
+        execution_payload = (
+            prepared_primary_skill.get("execution")
+            if isinstance(prepared_primary_skill, dict)
+            else None
+        )
+        prepared_prompt = (
+            execution_payload.get("prepared_prompt")
+            if isinstance(execution_payload, dict)
+            else None
+        )
+        if isinstance(prepared_prompt, str) and prepared_prompt.strip():
+            lines.append(prepared_prompt.strip())
+
+        if isinstance(intent_profile, dict):
+            lines.extend(
+                [
+                    "Task intent profile:",
+                    f"- dominant_domain={intent_profile.get('dominant_domain')}",
+                    f"- is_ctf={intent_profile.get('is_ctf')}",
+                    f"- is_remote_service={intent_profile.get('is_remote_service')}",
+                    f"- is_http_target={intent_profile.get('is_http_target')}",
+                    f"- is_local_codebase_task={intent_profile.get('is_local_codebase_task')}",
+                ]
+            )
+
+        if isinstance(prepared_primary_skill, dict):
+            primary_name = str(
+                prepared_primary_skill.get("directory_name")
+                or prepared_primary_skill.get("name")
+                or "unknown"
+            )
+            lines.extend(
+                [
+                    "",
+                    "Primary skill:",
+                    f"- {primary_name} | "
+                    f"prepared_for_context={prepared_primary_skill.get('prepared_for_context')} | "
+                    f"prepared_for_execution={prepared_primary_skill.get('prepared_for_execution')}",
+                ]
+            )
+
+        if prepared_supporting_skills:
+            lines.extend(["", "Supporting skills prepared for context:"])
+            for item in prepared_supporting_skills:
+                supporting_name = str(item.get("directory_name") or item.get("name") or "unknown")
+                lines.append(
+                    f"- {supporting_name} | "
+                    f"prepared_for_context={item.get('prepared_for_context')} | "
+                    f"prepared_for_execution={item.get('prepared_for_execution')}"
+                )
+
+        if suppressed_skills:
+            lines.extend(["", "Suppressed skills:"])
+            for item in suppressed_skills:
+                suppressed_name = str(item.get("directory_name") or item.get("name") or "unknown")
+                suppressed_id = item.get("id")
+                raw_reason = suppression_reasons.get(suppressed_name)
+                if raw_reason is None and isinstance(suppressed_id, str):
+                    raw_reason = suppression_reasons.get(suppressed_id)
+                if isinstance(raw_reason, list):
+                    reason_text = "; ".join(str(reason) for reason in raw_reason)
+                elif isinstance(raw_reason, str) and raw_reason.strip():
+                    reason_text = raw_reason
+                else:
+                    reason_text = str(item.get("rejected_reason") or "suppressed_by_intent")
+                lines.append(f"- {suppressed_name} | reason={reason_text}")
+
+        guidance_lines = ["", "Guidance:"]
+        is_ctf = bool(intent_profile.get("is_ctf")) if isinstance(intent_profile, dict) else False
+        is_http_target = (
+            bool(intent_profile.get("is_http_target"))
+            if isinstance(intent_profile, dict)
+            else False
+        )
+        if is_ctf or is_http_target:
+            guidance_lines.extend(
+                [
+                    "- Use solve-challenge for challenge triage/dispatch when the task is a "
+                    "remote or vague CTF service.",
+                    "- Use ctf-web as the specialized execution reference for HTTP targets.",
+                ]
+            )
+        if suppressed_skills:
+            guidance_lines.append(
+                "- Do not promote Java audit skills without Java project evidence."
+            )
+        if len(guidance_lines) > 2:
+            lines.extend(guidance_lines)
+        return "\n".join(lines)
 
     def build_ranked_skill_context_prompt_fragment(
         self,
@@ -811,7 +1041,7 @@ class SkillService:
         available_tools: list[str] | None = None,
         invocation_arguments: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        resolution_result = self.resolve_skill_candidates(
+        prepared_result = self.prepare_selected_skills(
             touched_paths=touched_paths,
             workspace_path=workspace_path,
             session_id=session_id,
@@ -825,30 +1055,15 @@ class SkillService:
             invocation_arguments=invocation_arguments,
             include_reference_only=True,
         )
-        best_skill_result = self._best_skill_payload_from_resolution(
-            resolution_result,
-            touched_paths=touched_paths,
-            include_reference_only=True,
-        )
-        prepared_set = self.prepare_selected_skills(
-            selected_skills=cast(
-                list[dict[str, object]], best_skill_result.get("selected_skills", [])
-            ),
-            arguments=invocation_arguments,
-            workspace_path=workspace_path,
-            touched_paths=touched_paths,
-            session_id=session_id,
-        )
-        primary_skill = best_skill_result.get("primary_skill")
-        supporting_skills = best_skill_result.get("supporting_skills", [])
-        reference_skills = best_skill_result.get("reference_skills", [])
-        rejected_skills = best_skill_result.get("rejected_skills", [])
-        selected_skills = cast(
-            list[dict[str, object]], best_skill_result.get("selected_skills", [])
-        )
+        resolution_payload = prepared_result.get("resolution")
+        primary_skill = prepared_result.get("primary_skill")
+        supporting_skills = prepared_result.get("supporting_skills", [])
+        reference_skills = prepared_result.get("reference_skills", [])
+        rejected_skills = prepared_result.get("rejected_skills", [])
+        selected_skills = cast(list[dict[str, object]], prepared_result.get("selected_skills", []))
         selected_skill_ids = cast(
             list[str],
-            best_skill_result.get("selected_skill_ids", []),
+            prepared_result.get("selected_skill_ids", []),
         )
         return {
             "skills": selected_skills,
@@ -856,34 +1071,26 @@ class SkillService:
             "supporting_skills": supporting_skills,
             "reference_skills": reference_skills,
             "rejected_skills": rejected_skills,
-            "pruned_supporting_skills": best_skill_result.get("pruned_supporting_skills", []),
-            "pruned_reference_skills": best_skill_result.get("pruned_reference_skills", []),
+            "pruned_supporting_skills": prepared_result.get("pruned_supporting_skills", []),
+            "pruned_reference_skills": prepared_result.get("pruned_reference_skills", []),
             "selected_skills": selected_skills,
             "selected_skill_ids": selected_skill_ids,
-            "selected_skill": best_skill_result.get("selected_skill"),
-            "selected_skill_id": best_skill_result.get("selected_skill_id"),
-            "selected_skill_rank": best_skill_result.get("selected_skill_rank"),
-            "skill_budget": best_skill_result.get("skill_budget", {}),
-            "skill_set_plan": best_skill_result.get("skill_set_plan", {}),
-            "skill_runtime_usage": best_skill_result.get("skill_runtime_usage", []),
-            "intent_profile": best_skill_result.get("intent_profile"),
-            "prepared_selected_skills": prepared_set.get("prepared_selected_skills", []),
-            "prepared_supporting_skills": prepared_set.get("prepared_supporting_skills", []),
-            "primary_prepared": prepared_set.get("primary_prepared"),
-            "supporting_prepared": prepared_set.get("supporting_prepared", []),
-            "suppressed_skills": best_skill_result.get("suppressed_skills", []),
-            "suppression_reasons": best_skill_result.get("suppression_reasons", {}),
-            "resolution": resolution_result.to_payload(
-                payload_builder=lambda candidate: self._compiled_skill_payload(
-                    candidate.compiled_skill,
-                    active_due_to_touched_paths=bool(touched_paths)
-                    and candidate.compiled_skill.is_conditional,
-                    selected=candidate.selected,
-                    role=None if candidate.role is None else candidate.role.value,
-                    prepared_for_context=False,
-                    prepared_for_execution=False,
-                )
-            ),
+            "selected_skill": prepared_result.get("selected_skill"),
+            "selected_skill_id": prepared_result.get("selected_skill_id"),
+            "selected_skill_rank": prepared_result.get("selected_skill_rank"),
+            "skill_budget": prepared_result.get("skill_budget", {}),
+            "skill_set_plan": prepared_result.get("skill_set_plan", {}),
+            "skill_runtime_usage": prepared_result.get("skill_runtime_usage", []),
+            "intent_profile": prepared_result.get("intent_profile"),
+            "prepared_selected_skills": prepared_result.get("prepared_selected_skills", []),
+            "prepared_supporting_skills": prepared_result.get("prepared_supporting_skills", []),
+            "prepared_primary_skill": prepared_result.get("prepared_primary_skill"),
+            "primary_prepared": prepared_result.get("primary_prepared"),
+            "supporting_prepared": prepared_result.get("supporting_prepared", []),
+            "prepared_context_prompt": prepared_result.get("prepared_context_prompt"),
+            "suppressed_skills": prepared_result.get("suppressed_skills", []),
+            "suppression_reasons": prepared_result.get("suppression_reasons", {}),
+            "resolution": resolution_payload,
         }
 
     def build_skill_context_prompt_fragment(
@@ -949,18 +1156,9 @@ class SkillService:
                 for note in notes:
                     if isinstance(note, str) and note.strip():
                         lines.append(f"- {note}")
-        intent_profile = payload.get("intent_profile")
-        if isinstance(intent_profile, dict):
-            lines.extend(
-                [
-                    "- intent: "
-                    f"domain={intent_profile.get('dominant_domain')} "
-                    f"ctf={intent_profile.get('is_ctf')} "
-                    f"remote_http={intent_profile.get('is_http_target')} "
-                    f"dispatcher={intent_profile.get('prefers_dispatcher')}",
-                ]
-            )
-        lines.append("")
+        prepared_context_prompt = payload.get("prepared_context_prompt")
+        if isinstance(prepared_context_prompt, str) and prepared_context_prompt.strip():
+            lines.extend(["", prepared_context_prompt.strip(), ""])
         prompting_module = import_module("app.agent.prompting")
         plan_available_skills: list[SkillAgentSummaryRead] = []
         for item in [*selected_skills, *reference_skills]:
