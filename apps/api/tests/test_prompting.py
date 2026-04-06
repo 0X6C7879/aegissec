@@ -397,6 +397,29 @@ def test_capability_facade_build_skill_context_preserves_selected_skill_payload(
                     }
                 ],
                 "selected_skill_ids": ["skill-1"],
+                "skill_budget": {"max_primary": 1, "max_supporting": 1, "max_reference": 1},
+                "skill_set_plan": {
+                    "primary_skill": {"id": "skill-1", "directory_name": "agent-browser"},
+                    "supporting_skills": [],
+                    "selected_skills": [{"id": "skill-1", "directory_name": "agent-browser"}],
+                    "reference_skills": [],
+                    "pruned_supporting_skills": [],
+                    "pruned_reference_skills": [],
+                    "selected_skill_ids": ["skill-1"],
+                    "pruning_applied": False,
+                    "notes": ["Stage budget: primary=1, supporting=1, reference=1."],
+                },
+                "skill_runtime_usage": [
+                    {
+                        "skill_id": "skill-1",
+                        "role": "primary",
+                        "loaded": True,
+                        "surfaced_in_prompt": True,
+                        "explicitly_prepared": True,
+                        "explicitly_executed": False,
+                        "used_by_agent": False,
+                    }
+                ],
                 "reference_skills": [],
                 "rejected_skills": [],
                 "selected_skill": {
@@ -423,6 +446,8 @@ def test_capability_facade_build_skill_context_preserves_selected_skill_payload(
     assert cast(dict[str, object], payload["selected_skill"])["id"] == "skill-1"
     assert cast(dict[str, object], payload["primary_skill"])["id"] == "skill-1"
     assert cast(list[str], payload["selected_skill_ids"]) == ["skill-1"]
+    assert cast(dict[str, object], payload["skill_set_plan"])["pruning_applied"] is False
+    assert cast(dict[str, object], payload["skill_budget"])["max_supporting"] == 1
     assert payload["selected_skill_id"] == "skill-1"
     assert payload["selected_skill_rank"] == 1
 
@@ -458,6 +483,19 @@ def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing(
                     }
                 ],
                 "selected_skill_ids": ["skill-1"],
+                "skill_budget": {"max_primary": 1, "max_supporting": 1, "max_reference": 1},
+                "skill_set_plan": {
+                    "primary_skill": {"id": "skill-1", "directory_name": "agent-browser"},
+                    "supporting_skills": [],
+                    "selected_skills": [{"id": "skill-1", "directory_name": "agent-browser"}],
+                    "reference_skills": [],
+                    "pruned_supporting_skills": [],
+                    "pruned_reference_skills": [],
+                    "selected_skill_ids": ["skill-1"],
+                    "pruning_applied": False,
+                    "notes": [],
+                },
+                "skill_runtime_usage": [],
                 "reference_skills": [],
                 "rejected_skills": [],
                 "selected_skill": {
@@ -484,6 +522,8 @@ def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing(
     assert cast(dict[str, object], snapshot["selected_skill"])["id"] == "skill-1"
     assert cast(dict[str, object], snapshot["primary_skill"])["id"] == "skill-1"
     assert cast(list[str], snapshot["selected_skill_ids"]) == ["skill-1"]
+    assert cast(dict[str, object], snapshot["skill_set_plan"])["pruning_applied"] is False
+    assert cast(dict[str, object], snapshot["skill_budget"])["max_reference"] == 1
     assert snapshot["selected_skill_id"] == "skill-1"
 
 

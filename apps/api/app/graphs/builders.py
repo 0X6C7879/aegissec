@@ -17,6 +17,7 @@ from app.db.models import (
     TaskNode,
     TaskNodeStatus,
     WorkflowRun,
+    WorkflowRunStatus,
     resolve_message_assistant_transcript,
 )
 
@@ -116,23 +117,45 @@ class SnapshotGraphBuilder:
                 )
             )
 
+        normalized_edges = [
+            SessionGraphEdgeRead(
+                id=edge.id,
+                graph_type=edge.graph_type,
+                source=node_id_map.get(edge.source_node_id, edge.source_node_id),
+                target=node_id_map.get(edge.target_node_id, edge.target_node_id),
+                relation=edge.relation,
+                data=dict(edge.payload_json),
+            )
+            for edge in edges
+        ]
+        if graph_type is GraphType.ATTACK:
+            attack_graph_builder = AttackGraphBuilder()
+            pruned_nodes_by_id, pruned_edges_by_id = (
+                attack_graph_builder._prune_attack_graph_for_default_view(
+                    nodes_by_id={node.id: node for node in normalized_nodes},
+                    edges_by_id={edge.id: edge for edge in normalized_edges},
+                )
+            )
+            normalized_nodes = sorted(
+                pruned_nodes_by_id.values(),
+                key=lambda node: (
+                    attack_graph_builder._NODE_TYPE_SORT_ORDER.get(node.node_type, 99),
+                    node.label,
+                    node.id,
+                ),
+            )
+            normalized_edges = sorted(
+                pruned_edges_by_id.values(),
+                key=lambda edge: (edge.source, edge.relation, edge.target, edge.id),
+            )
+
         return SessionGraphRead(
             session_id=session_id,
             workflow_run_id=workflow_run_id,
             graph_type=graph_type,
             current_stage=current_stage,
             nodes=normalized_nodes,
-            edges=[
-                SessionGraphEdgeRead(
-                    id=edge.id,
-                    graph_type=edge.graph_type,
-                    source=node_id_map.get(edge.source_node_id, edge.source_node_id),
-                    target=node_id_map.get(edge.target_node_id, edge.target_node_id),
-                    relation=edge.relation,
-                    data=dict(edge.payload_json),
-                )
-                for edge in edges
-            ],
+            edges=normalized_edges,
         )
 
 
@@ -194,6 +217,12 @@ class CausalGraphBuilder:
 
 class AttackGraphBuilder:
     _THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
+    _SEMANTIC_ATTACK_CORE_NODE_TYPES = frozenset(
+        {"goal", "surface", "vulnerability", "exploit", "pivot", "outcome"}
+    )
+    _PRESERVED_ATTACK_STATUS_VALUES = frozenset({"in_progress", "blocked", "failed"})
+    _OBSERVATION_KEEP_NEIGHBOR_TYPES = frozenset({"vulnerability", "exploit", "pivot", "outcome"})
+    _HYPOTHESIS_KEEP_NEIGHBOR_TYPES = frozenset({"vulnerability", "exploit", "pivot", "outcome"})
     _TASK_NODE_TYPE_MAP: dict[str, str] = {
         "context_collect.attack_surface": "surface",
         "context_collect.existing_evidence": "observation",
@@ -597,7 +626,7 @@ class AttackGraphBuilder:
                             )
 
         outcome_node_id = f"outcome:{run.id}"
-        outcome_relation = "confirms" if run.status.value == "done" else "blocks"
+        outcome_relation = self._workflow_outcome_relation(run.status)
         add_node(
             node_id=outcome_node_id,
             node_type="outcome",
@@ -669,21 +698,24 @@ class AttackGraphBuilder:
         nodes_by_id: dict[str, SessionGraphNodeRead],
         edges_by_id: dict[str, SessionGraphEdgeRead],
     ) -> tuple[dict[str, SessionGraphNodeRead], dict[str, SessionGraphEdgeRead]]:
+        all_edges = tuple(edges_by_id.values())
+        incoming_edges_by_node, outgoing_edges_by_node = self._index_attack_edges(all_edges)
+        keep_node_ids = self._collect_attack_graph_keep_node_ids(
+            nodes_by_id=nodes_by_id,
+            incoming_edges_by_node=incoming_edges_by_node,
+            outgoing_edges_by_node=outgoing_edges_by_node,
+        )
         removable_node_ids = {
             node.id
             for node in nodes_by_id.values()
-            if node.node_type == "action"
-            and not self._node_is_active(node)
-            and not self._node_is_required_terminal(node, edges_by_id.values())
+            if not self._should_keep_attack_node(
+                node=node,
+                keep_node_ids=keep_node_ids,
+                edges=all_edges,
+            )
         }
         if not removable_node_ids:
             return nodes_by_id, edges_by_id
-
-        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
-        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
-        for edge in edges_by_id.values():
-            incoming_edges_by_node.setdefault(edge.target, []).append(edge)
-            outgoing_edges_by_node.setdefault(edge.source, []).append(edge)
 
         pruned_edges_by_id = {
             edge_id: edge
@@ -731,9 +763,222 @@ class AttackGraphBuilder:
         }
         return pruned_nodes_by_id, pruned_edges_by_id
 
+    def _collect_attack_graph_keep_node_ids(
+        self,
+        *,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> set[str]:
+        path_node_ids = self._collect_attack_path_node_ids(
+            nodes_by_id=nodes_by_id,
+            incoming_edges_by_node=incoming_edges_by_node,
+            outgoing_edges_by_node=outgoing_edges_by_node,
+        )
+        keep_node_ids = {
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type in self._SEMANTIC_ATTACK_CORE_NODE_TYPES
+            or self._node_has_preserved_status(node)
+            or (node.id in path_node_ids and node.node_type != "action")
+        }
+        kept_hypothesis_ids = {
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type == "hypothesis"
+            and self._hypothesis_node_should_be_kept(
+                node=node,
+                nodes_by_id=nodes_by_id,
+                incoming_edges_by_node=incoming_edges_by_node,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+                path_node_ids=path_node_ids,
+            )
+        }
+        keep_node_ids.update(kept_hypothesis_ids)
+        keep_node_ids.update(
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type == "observation"
+            and self._observation_node_should_be_kept(
+                node=node,
+                nodes_by_id=nodes_by_id,
+                incoming_edges_by_node=incoming_edges_by_node,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+                path_node_ids=path_node_ids,
+                kept_hypothesis_ids=kept_hypothesis_ids,
+            )
+        )
+        return keep_node_ids
+
+    def _collect_attack_path_node_ids(
+        self,
+        *,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> set[str]:
+        goal_node_ids = [node.id for node in nodes_by_id.values() if node.node_type == "goal"]
+        target_node_ids = [
+            node.id
+            for node in nodes_by_id.values()
+            if node.node_type in {"vulnerability", "exploit", "pivot", "outcome"}
+        ]
+        if not goal_node_ids or not target_node_ids:
+            return set()
+        reachable_from_goal_ids = self._walk_attack_graph(
+            start_ids=goal_node_ids,
+            edges_by_node=outgoing_edges_by_node,
+            reverse=False,
+        )
+        reaches_target_ids = self._walk_attack_graph(
+            start_ids=target_node_ids,
+            edges_by_node=incoming_edges_by_node,
+            reverse=True,
+        )
+        return reachable_from_goal_ids & reaches_target_ids
+
+    def _walk_attack_graph(
+        self,
+        *,
+        start_ids: Iterable[str],
+        edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        reverse: bool,
+    ) -> set[str]:
+        visited: set[str] = set()
+        pending = [node_id for node_id in start_ids if node_id]
+        while pending:
+            node_id = pending.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            for edge in edges_by_node.get(node_id, []):
+                neighbor_id = edge.source if reverse else edge.target
+                if neighbor_id not in visited:
+                    pending.append(neighbor_id)
+        return visited
+
+    def _index_attack_edges(
+        self,
+        edges: Iterable[SessionGraphEdgeRead],
+    ) -> tuple[dict[str, list[SessionGraphEdgeRead]], dict[str, list[SessionGraphEdgeRead]]]:
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]] = {}
+        for edge in edges:
+            incoming_edges_by_node.setdefault(edge.target, []).append(edge)
+            outgoing_edges_by_node.setdefault(edge.source, []).append(edge)
+        return incoming_edges_by_node, outgoing_edges_by_node
+
+    def _should_keep_attack_node(
+        self,
+        *,
+        node: SessionGraphNodeRead,
+        keep_node_ids: set[str],
+        edges: Iterable[SessionGraphEdgeRead],
+    ) -> bool:
+        if node.node_type == "action":
+            return self._node_has_preserved_status(node) or self._node_is_required_terminal(
+                node, edges
+            )
+        if node.node_type in {"observation", "hypothesis"}:
+            return node.id in keep_node_ids
+        return True
+
+    def _observation_node_should_be_kept(
+        self,
+        *,
+        node: SessionGraphNodeRead,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        path_node_ids: set[str],
+        kept_hypothesis_ids: set[str],
+    ) -> bool:
+        if self._node_has_preserved_status(node) or node.id in path_node_ids:
+            return True
+        if self._node_has_attack_neighbor_types(
+            node_id=node.id,
+            nodes_by_id=nodes_by_id,
+            incoming_edges_by_node=incoming_edges_by_node,
+            outgoing_edges_by_node=outgoing_edges_by_node,
+            neighbor_types=self._OBSERVATION_KEEP_NEIGHBOR_TYPES,
+        ):
+            return True
+        return self._node_has_attack_neighbor_ids(
+            node_id=node.id,
+            incoming_edges_by_node=incoming_edges_by_node,
+            outgoing_edges_by_node=outgoing_edges_by_node,
+            neighbor_ids=kept_hypothesis_ids,
+        )
+
+    def _hypothesis_node_should_be_kept(
+        self,
+        *,
+        node: SessionGraphNodeRead,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        path_node_ids: set[str],
+    ) -> bool:
+        if self._node_has_preserved_status(node) or node.id in path_node_ids:
+            return True
+        if self._node_has_attack_neighbor_types(
+            node_id=node.id,
+            nodes_by_id=nodes_by_id,
+            incoming_edges_by_node=incoming_edges_by_node,
+            outgoing_edges_by_node=outgoing_edges_by_node,
+            neighbor_types=self._HYPOTHESIS_KEEP_NEIGHBOR_TYPES,
+        ):
+            return True
+        for edge in incoming_edges_by_node.get(node.id, []):
+            if edge.relation not in {"validates", "blocks"}:
+                continue
+            source_node = nodes_by_id.get(edge.source)
+            if source_node is not None and source_node.node_type == "observation":
+                return True
+        return False
+
+    def _node_has_attack_neighbor_types(
+        self,
+        *,
+        node_id: str,
+        nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        neighbor_types: frozenset[str],
+    ) -> bool:
+        for edge in incoming_edges_by_node.get(node_id, []):
+            source_node = nodes_by_id.get(edge.source)
+            if source_node is not None and source_node.node_type in neighbor_types:
+                return True
+        for edge in outgoing_edges_by_node.get(node_id, []):
+            target_node = nodes_by_id.get(edge.target)
+            if target_node is not None and target_node.node_type in neighbor_types:
+                return True
+        return False
+
+    def _node_has_attack_neighbor_ids(
+        self,
+        *,
+        node_id: str,
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+        neighbor_ids: set[str],
+    ) -> bool:
+        for edge in incoming_edges_by_node.get(node_id, []):
+            if edge.source in neighbor_ids:
+                return True
+        for edge in outgoing_edges_by_node.get(node_id, []):
+            if edge.target in neighbor_ids:
+                return True
+        return False
+
     def _node_is_active(self, node: SessionGraphNodeRead) -> bool:
         status = node.data.get("status")
         return bool(node.data.get("current") or node.data.get("active") or status == "in_progress")
+
+    def _node_has_preserved_status(self, node: SessionGraphNodeRead) -> bool:
+        status = node.data.get("status")
+        return self._node_is_active(node) or status in self._PRESERVED_ATTACK_STATUS_VALUES
 
     def _node_is_required_terminal(
         self,
@@ -778,6 +1023,13 @@ class AttackGraphBuilder:
         if source_graphs:
             merged["source_graphs"] = source_graphs
         return merged
+
+    def _workflow_outcome_relation(self, status: WorkflowRunStatus) -> str:
+        if status is WorkflowRunStatus.DONE:
+            return "confirms"
+        if status in {WorkflowRunStatus.BLOCKED, WorkflowRunStatus.ERROR}:
+            return "blocks"
+        return "attempts"
 
     def build_from_conversation(
         self,

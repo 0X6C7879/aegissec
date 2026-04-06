@@ -272,7 +272,7 @@ def test_attack_graph_builder_unifies_goal_tasks_observations_and_findings() -> 
         assert ("finding-auth", "supports", "finding-impact") in relations
 
 
-def test_attack_graph_builder_prunes_redundant_action_tasks_and_preserves_path_edges() -> None:
+def test_attack_graph_builder_prunes_redundant_action_only_branch_from_default_view() -> None:
     with _db_session() as db_session:
         session = _create_session(db_session)
         workflow_repository = WorkflowRepository(db_session)
@@ -330,9 +330,382 @@ def test_attack_graph_builder_prunes_redundant_action_tasks_and_preserves_path_e
 
         node_ids = {node.id for node in graph.nodes}
         assert action_task.id not in node_ids
-        assert "trace-action-prune" in node_ids
+        assert "trace-action-prune" not in node_ids
+        assert node_ids == {f"goal:{run.id}", f"outcome:{run.id}"}
+        assert all(edge.source in node_ids and edge.target in node_ids for edge in graph.edges)
+
+
+def test_attack_graph_builder_prunes_noise_branch_without_dangling_edges() -> None:
+    with _db_session() as db_session:
+        session = _create_session(db_session)
+        workflow_repository = WorkflowRepository(db_session)
+        graph_repository = GraphRepository(db_session)
+        run = workflow_repository.create_run(
+            session_id=session.id,
+            template_name="authorized-assessment",
+            status=WorkflowRunStatus.DONE,
+            current_stage="safe_validation",
+            started_at=datetime(2026, 4, 6, 10, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 4, 6, 10, 30, tzinfo=UTC),
+            state={
+                "goal": "Keep the semantic attack path readable.",
+                "current_stage": "safe_validation",
+                "seed_message_id": "message-seed-1",
+                "execution_records": [],
+                "hypothesis_updates": [],
+            },
+            last_error=None,
+        )
+        collect = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="context_collect.attack_surface",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=1,
+            parent_id=None,
+            metadata={
+                "title": "攻击面清点",
+                "stage_key": "context_collect",
+                "summary": "Collected ingress points.",
+            },
+        )
+        validate = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="safe_validation.validate_primary_hypothesis",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=2,
+            parent_id=None,
+            metadata={
+                "title": "低风险验证执行",
+                "stage_key": "safe_validation",
+                "summary": "Validated reachable path.",
+                "depends_on_task_ids": [collect.id],
+            },
+        )
+        noise_action = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="custom_stage.collect_runtime_context",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=3,
+            parent_id=None,
+            metadata={
+                "title": "收集运行时上下文",
+                "stage_key": "custom_stage",
+                "summary": "Generic action node that should collapse.",
+            },
+        )
+        run = workflow_repository.update_run(
+            run,
+            state={
+                "goal": "Keep the semantic attack path readable.",
+                "current_stage": "safe_validation",
+                "seed_message_id": "message-seed-1",
+                "execution_records": [
+                    {
+                        "id": "trace-keep",
+                        "task_node_id": collect.id,
+                        "status": "completed",
+                        "summary": "Observed exposed admin surface.",
+                    },
+                    {
+                        "id": "trace-drop",
+                        "task_node_id": noise_action.id,
+                        "status": "completed",
+                        "summary": "Observed unrelated banner text.",
+                    },
+                ],
+                "hypothesis_updates": [
+                    {
+                        "task": noise_action.name,
+                        "summary": "Unfocused hypothesis branch.",
+                    }
+                ],
+            },
+        )
+        finding_node = graph_repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+            node_type="finding",
+            label="Weak auth boundary",
+            payload={
+                "id": "finding-auth",
+                "title": "Weak auth boundary",
+                "kind": "finding",
+                "trace_id": "trace-keep",
+                "task": validate.name,
+            },
+            stable_key="causal-node:finding-auth",
+        )
+        impact_node = graph_repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+            node_type="impact",
+            label="Privilege exposure",
+            payload={
+                "id": "finding-impact",
+                "title": "Privilege exposure",
+                "kind": "impact",
+            },
+            stable_key="causal-node:finding-impact",
+        )
+        graph_repository.create_edge(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+            source_node_id=finding_node.id,
+            target_node_id=impact_node.id,
+            relation="supports",
+            payload={},
+            stable_key="causal-edge:finding-auth:supports:finding-impact",
+        )
+
+        graph = AttackGraphBuilder().build(
+            run=run,
+            tasks=[collect, validate, noise_action],
+            evidence_nodes=[],
+            evidence_edges=[],
+            causal_nodes=[finding_node, impact_node],
+            causal_edges=graph_repository.list_edges(
+                session.id,
+                workflow_run_id=run.id,
+                graph_type=GraphType.CAUSAL,
+            ),
+        )
+
+        node_ids = {node.id for node in graph.nodes}
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
-        assert (f"goal:{run.id}", "discovers", "trace-action-prune") in relations
+
+        assert noise_action.id not in node_ids
+        assert "trace-drop" not in node_ids
+        assert f"hypothesis:{noise_action.name}" not in node_ids
+        assert "trace-keep" in node_ids
+        assert "finding-auth" in node_ids
+        assert f"outcome:{run.id}" in node_ids
+        assert (collect.id, "enables", validate.id) in relations
+        assert ("trace-keep", "confirms", "finding-auth") in relations
+        assert ("finding-auth", "confirms", f"outcome:{run.id}") in relations
+        for edge in graph.edges:
+            assert edge.source in node_ids
+            assert edge.target in node_ids
+
+
+def test_attack_graph_builder_keeps_preserved_status_noise_nodes() -> None:
+    with _db_session() as db_session:
+        session = _create_session(db_session)
+        workflow_repository = WorkflowRepository(db_session)
+        graph_repository = GraphRepository(db_session)
+        run = workflow_repository.create_run(
+            session_id=session.id,
+            template_name="authorized-assessment",
+            status=WorkflowRunStatus.RUNNING,
+            current_stage="safe_validation",
+            started_at=datetime(2026, 4, 6, 11, 0, tzinfo=UTC),
+            ended_at=None,
+            state={
+                "goal": "Keep blocked and failed nodes visible.",
+                "current_stage": "safe_validation",
+                "seed_message_id": "message-seed-1",
+                "execution_records": [],
+                "hypothesis_updates": [],
+            },
+            last_error=None,
+        )
+        collect = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="context_collect.attack_surface",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.COMPLETED,
+            sequence=1,
+            parent_id=None,
+            metadata={
+                "title": "攻击面清点",
+                "stage_key": "context_collect",
+                "summary": "Collected ingress points.",
+            },
+        )
+        validate = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="safe_validation.validate_primary_hypothesis",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.IN_PROGRESS,
+            sequence=2,
+            parent_id=None,
+            metadata={
+                "title": "低风险验证执行",
+                "stage_key": "safe_validation",
+                "summary": "Validated reachable path.",
+                "depends_on_task_ids": [collect.id],
+            },
+        )
+        blocked_action = workflow_repository.create_task_node(
+            workflow_run_id=run.id,
+            name="custom_stage.collect_runtime_context",
+            node_type=TaskNodeType.TASK,
+            status=TaskNodeStatus.BLOCKED,
+            sequence=3,
+            parent_id=None,
+            metadata={
+                "title": "收集运行时上下文",
+                "stage_key": "custom_stage",
+                "summary": "Blocked branch that should remain visible.",
+            },
+        )
+        run = workflow_repository.update_run(
+            run,
+            state={
+                "goal": "Keep blocked and failed nodes visible.",
+                "current_stage": "safe_validation",
+                "seed_message_id": "message-seed-1",
+                "execution_records": [
+                    {
+                        "id": "trace-keep",
+                        "task_node_id": collect.id,
+                        "status": "completed",
+                        "summary": "Observed exposed admin surface.",
+                    },
+                    {
+                        "id": "trace-blocked",
+                        "task_node_id": blocked_action.id,
+                        "status": "failed",
+                        "summary": "Blocked by runtime restriction.",
+                    },
+                ],
+                "hypothesis_updates": [
+                    {
+                        "task": blocked_action.name,
+                        "kind": "Preserved branch",
+                        "status": "blocked",
+                        "summary": "Need follow-up after approval.",
+                    }
+                ],
+            },
+        )
+        finding_node = graph_repository.create_node(
+            session_id=session.id,
+            workflow_run_id=run.id,
+            graph_type=GraphType.CAUSAL,
+            node_type="finding",
+            label="Weak auth boundary",
+            payload={
+                "id": "finding-auth",
+                "title": "Weak auth boundary",
+                "kind": "finding",
+                "trace_id": "trace-keep",
+                "task": validate.name,
+            },
+            stable_key="causal-node:finding-auth",
+        )
+
+        graph = AttackGraphBuilder().build(
+            run=run,
+            tasks=[collect, validate, blocked_action],
+            evidence_nodes=[],
+            evidence_edges=[],
+            causal_nodes=[finding_node],
+            causal_edges=[],
+        )
+
+        node_ids = {node.id for node in graph.nodes}
+        relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+
+        assert blocked_action.id in node_ids
+        assert "trace-blocked" in node_ids
+        assert f"hypothesis:{blocked_action.name}" in node_ids
+        assert (blocked_action.id, "blocks", "trace-blocked") in relations
+        assert (blocked_action.id, "attempts", f"hypothesis:{blocked_action.name}") in relations
+        assert ("trace-keep", "confirms", "finding-auth") in relations
+
+
+def test_attack_graph_builder_uses_status_specific_outcome_relations() -> None:
+    expectations = {
+        WorkflowRunStatus.RUNNING: "attempts",
+        WorkflowRunStatus.BLOCKED: "blocks",
+        WorkflowRunStatus.DONE: "confirms",
+    }
+
+    for status, expected_relation in expectations.items():
+        with _db_session() as db_session:
+            session = _create_session(db_session)
+            workflow_repository = WorkflowRepository(db_session)
+            graph_repository = GraphRepository(db_session)
+            ended_at = (
+                datetime(2026, 4, 6, 12, 30, tzinfo=UTC)
+                if status is WorkflowRunStatus.DONE
+                else None
+            )
+            run = workflow_repository.create_run(
+                session_id=session.id,
+                template_name="authorized-assessment",
+                status=status,
+                current_stage="safe_validation",
+                started_at=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+                ended_at=ended_at,
+                state={
+                    "goal": f"Check outcome semantics for {status.value}.",
+                    "current_stage": "safe_validation",
+                    "seed_message_id": "message-seed-1",
+                },
+                last_error=None,
+            )
+            collect = workflow_repository.create_task_node(
+                workflow_run_id=run.id,
+                name="context_collect.attack_surface",
+                node_type=TaskNodeType.TASK,
+                status=TaskNodeStatus.COMPLETED,
+                sequence=1,
+                parent_id=None,
+                metadata={
+                    "title": "攻击面清点",
+                    "stage_key": "context_collect",
+                },
+            )
+            validate = workflow_repository.create_task_node(
+                workflow_run_id=run.id,
+                name="safe_validation.validate_primary_hypothesis",
+                node_type=TaskNodeType.TASK,
+                status=(
+                    TaskNodeStatus.COMPLETED
+                    if status is WorkflowRunStatus.DONE
+                    else TaskNodeStatus.IN_PROGRESS
+                ),
+                sequence=2,
+                parent_id=None,
+                metadata={
+                    "title": "低风险验证执行",
+                    "stage_key": "safe_validation",
+                    "depends_on_task_ids": [collect.id],
+                },
+            )
+            finding_node = graph_repository.create_node(
+                session_id=session.id,
+                workflow_run_id=run.id,
+                graph_type=GraphType.CAUSAL,
+                node_type="finding",
+                label="Weak auth boundary",
+                payload={
+                    "id": "finding-auth",
+                    "title": "Weak auth boundary",
+                    "kind": "finding",
+                    "task": validate.name,
+                },
+                stable_key="causal-node:finding-auth",
+            )
+
+            graph = AttackGraphBuilder().build(
+                run=run,
+                tasks=[collect, validate],
+                evidence_nodes=[],
+                evidence_edges=[],
+                causal_nodes=[finding_node],
+                causal_edges=[],
+            )
+
+            relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+            assert ("finding-auth", expected_relation, f"outcome:{run.id}") in relations
 
 
 def test_attack_graph_builder_builds_conversation_fallback_for_pure_chat_and_reasoning() -> None:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from fastapi import Depends
 from sqlmodel import Session as DBSession
@@ -38,6 +39,110 @@ class SkillLookupError(SkillServiceError):
 
 class SkillContentReadError(SkillServiceError):
     pass
+
+
+@dataclass(slots=True)
+class SkillBudget:
+    workflow_stage: str | None
+    agent_role: str | None
+    max_primary: int = 1
+    max_supporting: int = 1
+    max_reference: int = 1
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "workflow_stage": self.workflow_stage,
+            "agent_role": self.agent_role,
+            "max_primary": self.max_primary,
+            "max_supporting": self.max_supporting,
+            "max_reference": self.max_reference,
+        }
+
+
+@dataclass(slots=True)
+class SkillRuntimeUsageRecord:
+    skill_id: str
+    role: Literal[
+        "primary", "supporting", "reference", "rejected", "pruned_supporting", "pruned_reference"
+    ]
+    loaded: bool
+    surfaced_in_prompt: bool
+    explicitly_prepared: bool
+    explicitly_executed: bool
+    used_by_agent: bool
+    reason: str | None = None
+    note: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "skill_id": self.skill_id,
+            "role": self.role,
+            "loaded": self.loaded,
+            "surfaced_in_prompt": self.surfaced_in_prompt,
+            "explicitly_prepared": self.explicitly_prepared,
+            "explicitly_executed": self.explicitly_executed,
+            "used_by_agent": self.used_by_agent,
+            "reason": self.reason,
+            "note": self.note,
+        }
+
+
+@dataclass(slots=True)
+class SkillSetPlan:
+    primary_candidate: skill_models.ResolvedSkillCandidate | None
+    supporting_candidates: list[skill_models.ResolvedSkillCandidate] = field(default_factory=list)
+    selected_candidates: list[skill_models.ResolvedSkillCandidate] = field(default_factory=list)
+    reference_candidates: list[skill_models.ResolvedSkillCandidate] = field(default_factory=list)
+    pruned_supporting_candidates: list[skill_models.ResolvedSkillCandidate] = field(
+        default_factory=list
+    )
+    pruned_reference_candidates: list[skill_models.ResolvedSkillCandidate] = field(
+        default_factory=list
+    )
+    workflow_stage: str | None = None
+    agent_role: str | None = None
+    selected_skill_ids: list[str] = field(default_factory=list)
+    max_supporting: int = 1
+    pruning_applied: bool = False
+    notes: list[str] = field(default_factory=list)
+
+    def to_payload(
+        self,
+        *,
+        payload_builder: Any,
+        touched_paths: list[str] | None,
+    ) -> dict[str, object]:
+        return {
+            "primary_skill": None
+            if self.primary_candidate is None
+            else payload_builder(self.primary_candidate, touched_paths=touched_paths),
+            "supporting_skills": [
+                payload_builder(candidate, touched_paths=touched_paths)
+                for candidate in self.supporting_candidates
+            ],
+            "selected_skills": [
+                payload_builder(candidate, touched_paths=touched_paths)
+                for candidate in self.selected_candidates
+            ],
+            "reference_skills": [
+                payload_builder(candidate, touched_paths=touched_paths)
+                for candidate in self.reference_candidates
+            ],
+            "pruned_supporting_skills": [
+                payload_builder(candidate, touched_paths=touched_paths)
+                for candidate in self.pruned_supporting_candidates
+            ],
+            "pruned_reference_skills": [
+                payload_builder(candidate, touched_paths=touched_paths)
+                for candidate in self.pruned_reference_candidates
+            ],
+            "workflow_stage": self.workflow_stage,
+            "agent_role": self.agent_role,
+            "selected_skill_ids": list(self.selected_skill_ids),
+            "max_supporting": self.max_supporting,
+            "pruning_applied": self.pruning_applied,
+            "notes": list(self.notes),
+        }
 
 
 class _CompiledSkillRegistryProtocol(Protocol):
@@ -107,9 +212,14 @@ class SkillService:
             available_tools=available_tools,
             invocation_arguments=invocation_arguments,
         )
+        skill_set_plan = self.build_skill_set_plan(
+            resolution_result,
+            workflow_stage=workflow_stage,
+            agent_role=agent_role,
+        )
         summaries: list[SkillAgentSummaryRead] = []
         active_due_to_touched_paths = bool(touched_paths)
-        for candidate in resolution_result.all_selected_candidates:
+        for candidate in skill_set_plan.selected_candidates:
             compiled_skill = candidate.compiled_skill
             prepared_invocation = self._summarize_prepared_invocation(
                 compiled_skill.prepared_invocation
@@ -156,6 +266,207 @@ class SkillService:
                 )
             )
         return summaries
+
+    def determine_skill_budget(
+        self,
+        *,
+        workflow_stage: str | None,
+        agent_role: str | None,
+    ) -> SkillBudget:
+        normalized_stage = (workflow_stage or "").strip().casefold()
+        normalized_role = (agent_role or "").strip().casefold()
+        combined = " ".join(part for part in (normalized_stage, normalized_role) if part)
+
+        if any(keyword in combined for keyword in ("deep", "analysis", "research", "audit")):
+            return SkillBudget(
+                workflow_stage=workflow_stage,
+                agent_role=agent_role,
+                max_supporting=3,
+                max_reference=2,
+            )
+        if any(
+            keyword in combined for keyword in ("execution", "validate", "validation", "execute")
+        ):
+            return SkillBudget(
+                workflow_stage=workflow_stage,
+                agent_role=agent_role,
+                max_supporting=2,
+                max_reference=2,
+            )
+        if any(keyword in combined for keyword in ("reflect", "summary", "summarize", "replan")):
+            return SkillBudget(
+                workflow_stage=workflow_stage,
+                agent_role=agent_role,
+                max_supporting=1,
+                max_reference=1,
+            )
+        if any(
+            keyword in combined for keyword in ("triage", "planning", "plan", "bootstrap", "scope")
+        ):
+            return SkillBudget(
+                workflow_stage=workflow_stage,
+                agent_role=agent_role,
+                max_supporting=1,
+                max_reference=1,
+            )
+        return SkillBudget(
+            workflow_stage=workflow_stage,
+            agent_role=agent_role,
+            max_supporting=2,
+            max_reference=1,
+        )
+
+    def build_skill_set_plan(
+        self,
+        resolution_result: skill_models.SkillResolutionResult,
+        *,
+        workflow_stage: str | None,
+        agent_role: str | None,
+    ) -> SkillSetPlan:
+        skill_budget = self.determine_skill_budget(
+            workflow_stage=workflow_stage,
+            agent_role=agent_role,
+        )
+        supporting_candidates = list(
+            resolution_result.supporting_candidates[: skill_budget.max_supporting]
+        )
+        pruned_supporting_candidates = list(
+            resolution_result.supporting_candidates[skill_budget.max_supporting :]
+        )
+        reference_candidates = list(
+            resolution_result.reference_candidates[: skill_budget.max_reference]
+        )
+        pruned_reference_candidates = list(
+            resolution_result.reference_candidates[skill_budget.max_reference :]
+        )
+        selected_candidates = [
+            candidate
+            for candidate in [resolution_result.primary_candidate, *supporting_candidates]
+            if candidate is not None
+        ]
+        selected_skill_ids = [
+            candidate.compiled_skill.skill_id for candidate in selected_candidates
+        ]
+        pruning_applied = bool(pruned_supporting_candidates or pruned_reference_candidates)
+        notes = [
+            (
+                "Stage budget: "
+                f"primary={skill_budget.max_primary}, "
+                f"supporting={skill_budget.max_supporting}, "
+                f"reference={skill_budget.max_reference}."
+            )
+        ]
+        if pruning_applied:
+            notes.append(
+                "Context budget pruning applied after selection packing so runtime only loads the "
+                "stage-appropriate supporting/reference subset."
+            )
+        return SkillSetPlan(
+            primary_candidate=resolution_result.primary_candidate,
+            supporting_candidates=supporting_candidates,
+            selected_candidates=selected_candidates,
+            reference_candidates=reference_candidates,
+            pruned_supporting_candidates=pruned_supporting_candidates,
+            pruned_reference_candidates=pruned_reference_candidates,
+            workflow_stage=workflow_stage,
+            agent_role=agent_role,
+            selected_skill_ids=selected_skill_ids,
+            max_supporting=skill_budget.max_supporting,
+            pruning_applied=pruning_applied,
+            notes=notes,
+        )
+
+    def build_skill_runtime_usage_records(
+        self,
+        skill_set_plan: SkillSetPlan,
+        *,
+        resolution_result: skill_models.SkillResolutionResult,
+    ) -> list[dict[str, object]]:
+        usage_records: list[SkillRuntimeUsageRecord] = []
+
+        def append_records(
+            candidates: list[skill_models.ResolvedSkillCandidate],
+            *,
+            role: Literal[
+                "primary",
+                "supporting",
+                "reference",
+                "rejected",
+                "pruned_supporting",
+                "pruned_reference",
+            ],
+            loaded: bool,
+            surfaced_in_prompt: bool,
+            explicitly_prepared: bool,
+            note: str,
+        ) -> None:
+            for candidate in candidates:
+                usage_records.append(
+                    SkillRuntimeUsageRecord(
+                        skill_id=candidate.compiled_skill.skill_id,
+                        role=role,
+                        loaded=loaded,
+                        surfaced_in_prompt=surfaced_in_prompt,
+                        explicitly_prepared=explicitly_prepared,
+                        explicitly_executed=False,
+                        used_by_agent=False,
+                        reason=candidate.rejected_reason
+                        or "; ".join(candidate.reasons[:2])
+                        or None,
+                        note=note,
+                    )
+                )
+
+        if skill_set_plan.primary_candidate is not None:
+            append_records(
+                [skill_set_plan.primary_candidate],
+                role="primary",
+                loaded=True,
+                surfaced_in_prompt=True,
+                explicitly_prepared=True,
+                note="Primary skill retained after stage-aware pruning.",
+            )
+        append_records(
+            skill_set_plan.supporting_candidates,
+            role="supporting",
+            loaded=True,
+            surfaced_in_prompt=True,
+            explicitly_prepared=False,
+            note="Supporting skill retained inside the stage budget.",
+        )
+        append_records(
+            skill_set_plan.reference_candidates,
+            role="reference",
+            loaded=False,
+            surfaced_in_prompt=True,
+            explicitly_prepared=False,
+            note="Reference-only skill kept visible for context.",
+        )
+        append_records(
+            skill_set_plan.pruned_supporting_candidates,
+            role="pruned_supporting",
+            loaded=False,
+            surfaced_in_prompt=False,
+            explicitly_prepared=False,
+            note="Supporting skill pruned by stage-aware budget.",
+        )
+        append_records(
+            skill_set_plan.pruned_reference_candidates,
+            role="pruned_reference",
+            loaded=False,
+            surfaced_in_prompt=False,
+            explicitly_prepared=False,
+            note="Reference skill pruned by stage-aware budget.",
+        )
+        append_records(
+            resolution_result.rejected_candidates,
+            role="rejected",
+            loaded=False,
+            surfaced_in_prompt=False,
+            explicitly_prepared=False,
+            note="Rejected during skill resolution before runtime planning.",
+        )
+        return [record.to_payload() for record in usage_records]
 
     def resolve_skill_candidates(
         self,
@@ -229,9 +540,14 @@ class SkillService:
             invocation_arguments=invocation_arguments,
             include_reference_only=include_reference_only,
         )
+        skill_set_plan = self.build_skill_set_plan(
+            resolution_result,
+            workflow_stage=workflow_stage,
+            agent_role=agent_role,
+        )
         return [
             self._resolved_skill_candidate_payload(candidate)
-            for candidate in resolution_result.all_selected_candidates
+            for candidate in skill_set_plan.selected_candidates
         ]
 
     def resolve_best_skill(
@@ -490,25 +806,30 @@ class SkillService:
         primary_skill = best_skill_result.get("primary_skill")
         supporting_skills = best_skill_result.get("supporting_skills", [])
         reference_skills = best_skill_result.get("reference_skills", [])
+        rejected_skills = best_skill_result.get("rejected_skills", [])
         selected_skills = cast(
             list[dict[str, object]], best_skill_result.get("selected_skills", [])
         )
-        selected_skill_ids = [
-            item.get("id")
-            for item in selected_skills
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ]
+        selected_skill_ids = cast(
+            list[str],
+            best_skill_result.get("selected_skill_ids", []),
+        )
         return {
             "skills": selected_skills,
             "primary_skill": primary_skill,
             "supporting_skills": supporting_skills,
             "reference_skills": reference_skills,
-            "rejected_skills": best_skill_result.get("rejected_skills", []),
+            "rejected_skills": rejected_skills,
+            "pruned_supporting_skills": best_skill_result.get("pruned_supporting_skills", []),
+            "pruned_reference_skills": best_skill_result.get("pruned_reference_skills", []),
             "selected_skills": selected_skills,
             "selected_skill_ids": selected_skill_ids,
             "selected_skill": best_skill_result.get("selected_skill"),
             "selected_skill_id": best_skill_result.get("selected_skill_id"),
             "selected_skill_rank": best_skill_result.get("selected_skill_rank"),
+            "skill_budget": best_skill_result.get("skill_budget", {}),
+            "skill_set_plan": best_skill_result.get("skill_set_plan", {}),
+            "skill_runtime_usage": best_skill_result.get("skill_runtime_usage", []),
             "resolution": resolution_result.to_payload(
                 payload_builder=lambda candidate: self._compiled_skill_payload(
                     candidate.compiled_skill,
@@ -547,28 +868,77 @@ class SkillService:
             available_tools=available_tools,
             invocation_arguments=invocation_arguments,
         )
-        selected_skills = payload.get("selected_skills", [])
-        reference_skills = payload.get("reference_skills", [])
-        if (not isinstance(selected_skills, list) or not selected_skills) and (
-            not isinstance(reference_skills, list) or not reference_skills
-        ):
+        selected_skills_payload = payload.get("selected_skills", [])
+        selected_skills = (
+            cast(list[dict[str, object]], selected_skills_payload)
+            if isinstance(selected_skills_payload, list)
+            else []
+        )
+        reference_skills_payload = payload.get("reference_skills", [])
+        reference_skills = (
+            cast(list[dict[str, object]], reference_skills_payload)
+            if isinstance(reference_skills_payload, list)
+            else []
+        )
+        if not selected_skills and not reference_skills:
             return "No loaded skills are currently available."
-        lines = [
-            self.build_ranked_skill_context_prompt_fragment(
-                touched_paths=touched_paths,
-                workspace_path=workspace_path,
-                session_id=session_id,
-                top_k=top_k,
-                user_goal=user_goal,
-                current_prompt=current_prompt,
-                scenario_type=scenario_type,
-                agent_role=agent_role,
-                workflow_stage=workflow_stage,
-                available_tools=available_tools,
-                invocation_arguments=invocation_arguments,
-                include_reference_only=True,
+        lines: list[str] = []
+        skill_budget = payload.get("skill_budget", {})
+        skill_set_plan = payload.get("skill_set_plan", {})
+        if isinstance(skill_budget, dict):
+            lines.extend(
+                [
+                    "Skill set plan for this stage:",
+                    (
+                        "- budget: "
+                        f"primary={skill_budget.get('max_primary', 1)} "
+                        f"supporting={skill_budget.get('max_supporting', 0)} "
+                        f"reference={skill_budget.get('max_reference', 0)}"
+                    ),
+                ]
             )
-        ]
+        if isinstance(skill_set_plan, dict):
+            notes = skill_set_plan.get("notes", [])
+            if isinstance(notes, list):
+                for note in notes:
+                    if isinstance(note, str) and note.strip():
+                        lines.append(f"- {note}")
+        lines.append("")
+        prompting_module = import_module("app.agent.prompting")
+        plan_available_skills: list[SkillAgentSummaryRead] = []
+        for item in [*selected_skills, *reference_skills]:
+            if not isinstance(item, dict):
+                continue
+            plan_available_skills.append(SkillAgentSummaryRead.model_validate(item))
+        lines.append(
+            cast(
+                str,
+                prompting_module.render_skill_catalog_context(plan_available_skills),
+            )
+        )
+        pruned_supporting = payload.get("pruned_supporting_skills", [])
+        pruned_reference = payload.get("pruned_reference_skills", [])
+        pruned_lines: list[str] = []
+        if isinstance(pruned_supporting, list) and pruned_supporting:
+            pruned_lines.extend(
+                str(item.get("directory_name") or item.get("name") or "unknown")
+                for item in pruned_supporting
+                if isinstance(item, dict)
+            )
+        if isinstance(pruned_reference, list) and pruned_reference:
+            pruned_lines.extend(
+                str(item.get("directory_name") or item.get("name") or "unknown")
+                for item in pruned_reference
+                if isinstance(item, dict)
+            )
+        if pruned_lines:
+            lines.extend(
+                [
+                    "",
+                    "Related skills pruned for context budget:",
+                    f"- {', '.join(pruned_lines)}",
+                ]
+            )
         lines.append("")
         lines.append(
             "Never call a skill slug or skill name directly as a tool alias unless the runtime "
@@ -1133,6 +1503,11 @@ class SkillService:
         touched_paths: list[str] | None,
         include_reference_only: bool,
     ) -> dict[str, object]:
+        skill_set_plan = self.build_skill_set_plan(
+            resolution_result,
+            workflow_stage=resolution_result.request.workflow_stage,
+            agent_role=resolution_result.request.agent_role,
+        )
         selected_candidate = self._selected_candidate_from_resolution(resolution_result)
         if selected_candidate is None:
             reference_only_rejected = any(
@@ -1159,32 +1534,45 @@ class SkillService:
 
         primary_skill = (
             None
-            if resolution_result.primary_candidate is None
+            if skill_set_plan.primary_candidate is None
             else self._resolved_skill_candidate_payload(
-                resolution_result.primary_candidate,
+                skill_set_plan.primary_candidate,
                 touched_paths=touched_paths,
             )
         )
         supporting_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
-            for candidate in resolution_result.supporting_candidates
+            for candidate in skill_set_plan.supporting_candidates
         ]
         reference_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
-            for candidate in resolution_result.reference_candidates
+            for candidate in skill_set_plan.reference_candidates
         ]
         rejected_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
             for candidate in resolution_result.rejected_candidates
         ]
+        pruned_supporting_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in skill_set_plan.pruned_supporting_candidates
+        ]
+        pruned_reference_skills = [
+            self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
+            for candidate in skill_set_plan.pruned_reference_candidates
+        ]
         selected_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
-            for candidate in resolution_result.all_selected_candidates
+            for candidate in skill_set_plan.selected_candidates
         ]
-        selected_skill_ids = [
-            candidate.compiled_skill.skill_id
-            for candidate in resolution_result.all_selected_candidates
-        ]
+        selected_skill_ids = list(skill_set_plan.selected_skill_ids)
+        skill_runtime_usage = self.build_skill_runtime_usage_records(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+        skill_budget = self.determine_skill_budget(
+            workflow_stage=resolution_result.request.workflow_stage,
+            agent_role=resolution_result.request.agent_role,
+        )
 
         resolution_payload = resolution_result.to_payload(
             payload_builder=lambda candidate: self._compiled_skill_payload(
@@ -1203,18 +1591,27 @@ class SkillService:
             "supporting_skills": supporting_skills,
             "reference_skills": reference_skills,
             "rejected_skills": rejected_skills,
+            "pruned_supporting_skills": pruned_supporting_skills,
+            "pruned_reference_skills": pruned_reference_skills,
             "selected_skills": selected_skills,
             "selected_skill_ids": selected_skill_ids,
+            "skill_budget": skill_budget.to_payload(),
+            "skill_set_plan": skill_set_plan.to_payload(
+                payload_builder=self._resolved_skill_candidate_payload,
+                touched_paths=touched_paths,
+            ),
+            "skill_runtime_usage": skill_runtime_usage,
             "resolution_request": resolution_result.request.to_payload(),
             "resolution_summary": {
                 "active_candidate_count": resolution_result.active_candidate_count,
                 "shortlisted_count": len(resolution_result.shortlisted_candidates),
-                "selected_count": len(resolution_result.all_selected_candidates),
+                "selected_count": len(skill_set_plan.selected_candidates),
                 "primary_skill_id": selected_skill_id,
-                "supporting_count": len(resolution_result.supporting_candidates),
-                "reference_count": len(resolution_result.reference_candidates),
+                "supporting_count": len(skill_set_plan.supporting_candidates),
+                "reference_count": len(skill_set_plan.reference_candidates),
                 "rejected_count": len(resolution_result.rejected_candidates),
                 "selected_skill_id": selected_skill_id,
+                "pruning_applied": skill_set_plan.pruning_applied,
             },
             "resolution": resolution_payload,
         }

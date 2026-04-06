@@ -319,7 +319,9 @@ def test_evidence_graph_includes_summary_and_confidence_after_execution(client: 
     assert "confidence" in cast(dict[str, object], nodes[0]["data"])
 
 
-def test_attack_graph_for_run_includes_observations_after_execution(client: TestClient) -> None:
+def test_attack_graph_for_run_prunes_noise_only_snapshot_from_default_view(
+    client: TestClient,
+) -> None:
     session_id = _create_session(client)
     workflow = _start_workflow(client, session_id)
     run_id = cast(str, workflow["id"])
@@ -332,9 +334,14 @@ def test_attack_graph_for_run_includes_observations_after_execution(client: Test
     assert response.status_code == 200
     payload = api_data(response)
     assert payload["graph_type"] == "attack"
+    assert payload["workflow_run_id"] == run_id
+    node_ids = {node["id"] for node in cast(list[dict[str, object]], payload["nodes"])}
     observation_nodes = [
         node
         for node in cast(list[dict[str, object]], payload["nodes"])
         if node["node_type"] == "observation"
     ]
-    assert observation_nodes
+    assert not observation_nodes
+    for edge in cast(list[dict[str, object]], payload["edges"]):
+        assert edge["source"] in node_ids
+        assert edge["target"] in node_ids

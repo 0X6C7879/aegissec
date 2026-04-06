@@ -238,6 +238,18 @@ class CapabilityFacade:
             "supporting_skills": skill_context.get("supporting_skills", []),
             "selected_skills": skill_context.get("selected_skills", []),
             "selected_skill_ids": skill_context.get("selected_skill_ids", []),
+            "skill_budget": skill_context.get("skill_budget", {}),
+            "skill_set_plan": skill_context.get("skill_set_plan", {}),
+            "pruning_applied": bool(
+                cast(dict[str, object], skill_context.get("skill_set_plan", {})).get(
+                    "pruning_applied", False
+                )
+            )
+            if isinstance(skill_context.get("skill_set_plan"), dict)
+            else False,
+            "pruned_supporting_skills": skill_context.get("pruned_supporting_skills", []),
+            "pruned_reference_skills": skill_context.get("pruned_reference_skills", []),
+            "skill_runtime_usage": skill_context.get("skill_runtime_usage", []),
             "reference_skills": skill_context.get("reference_skills", []),
             "rejected_skills": skill_context.get("rejected_skills", []),
             "mcp_servers": self.build_mcp_snapshot(),
@@ -250,6 +262,7 @@ class CapabilityFacade:
             payload={
                 "skill_count": len(cast(list[dict[str, object]], snapshot["skills"])),
                 "selected_skill_id": snapshot.get("selected_skill_id"),
+                "pruning_applied": snapshot.get("pruning_applied", False),
                 "mcp_server_count": len(cast(list[dict[str, object]], snapshot["mcp_servers"])),
             },
             session_id=session_id,
@@ -337,6 +350,23 @@ class CapabilityFacade:
                 lines.append("Loaded skills inventory:")
             else:
                 lines.append("Loaded skills inventory: none")
+            skill_set_plan = payload.get("skill_set_plan")
+            skill_budget = payload.get("skill_budget")
+            if isinstance(skill_set_plan, dict):
+                lines.extend(["Skill set plan for this stage:"])
+                if isinstance(skill_budget, dict):
+                    lines.append(
+                        "- budget: "
+                        f"primary={skill_budget.get('max_primary', 1)} "
+                        f"supporting={skill_budget.get('max_supporting', 0)} "
+                        f"reference={skill_budget.get('max_reference', 0)}"
+                    )
+                notes = skill_set_plan.get("notes", [])
+                if isinstance(notes, list):
+                    for note in notes:
+                        if isinstance(note, str) and note.strip():
+                            lines.append(f"- {note}")
+                lines.append("")
             if isinstance(skills, list):
                 for item in skills:
                     if not isinstance(item, dict):
@@ -370,6 +400,24 @@ class CapabilityFacade:
                     )
                     if isinstance(reasons, list) and reasons:
                         lines.append(f"  why: {'; '.join(str(reason) for reason in reasons[:3])}")
+            pruned_items: list[str] = []
+            pruned_supporting_skills = payload.get("pruned_supporting_skills")
+            if isinstance(pruned_supporting_skills, list):
+                pruned_items.extend(
+                    str(item.get("directory_name") or item.get("name") or "unknown")
+                    for item in pruned_supporting_skills
+                    if isinstance(item, dict)
+                )
+            pruned_reference_skills = payload.get("pruned_reference_skills")
+            if isinstance(pruned_reference_skills, list):
+                pruned_items.extend(
+                    str(item.get("directory_name") or item.get("name") or "unknown")
+                    for item in pruned_reference_skills
+                    if isinstance(item, dict)
+                )
+            if pruned_items:
+                lines.extend(["", "Related skills pruned for context budget:"])
+                lines.append(f"- {', '.join(pruned_items)}")
             reference_skills = payload.get("reference_skills")
             if isinstance(reference_skills, list) and reference_skills:
                 lines.extend(["", "Reference-only ranked skills:"])

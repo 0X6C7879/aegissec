@@ -916,7 +916,15 @@ parameter_schema:
     assert payload["payload"]["selected_skill_rank"] == payload["payload"]["selected_skill"]["rank"]
     assert payload["payload"]["selected_skill_id"] in payload["payload"]["selected_skill_ids"]
     assert payload["payload"]["rejected_skills"] == []
+    assert payload["payload"]["skill_budget"]["max_primary"] == 1
+    assert (
+        payload["payload"]["skill_set_plan"]["primary_skill"]["id"]
+        == payload["payload"]["primary_skill"]["id"]
+    )
+    assert payload["payload"]["skill_set_plan"]["pruning_applied"] is False
+    assert payload["payload"]["skill_runtime_usage"][0]["role"] == "primary"
     assert "Primary skill for current context" in payload["prompt_fragment"]
+    assert "Skill set plan for this stage" in payload["prompt_fragment"]
     assert "Supporting skills also loaded" in payload["prompt_fragment"]
     assert "execute_skill" in payload["prompt_fragment"]
     assert "Use the primary skill by default" in payload["prompt_fragment"]

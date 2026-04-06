@@ -337,24 +337,28 @@ when_to_use: Use for API validation and endpoint review.
             touched_paths=[str(touched_file)],
             workspace_path=str(project_root),
             current_prompt="Need triage planning and API validation",
+            workflow_stage="triage",
         )
         prompt_fragment = skill_service.build_skill_context_prompt_fragment(
             session_id="session-context",
             touched_paths=[str(touched_file)],
             workspace_path=str(project_root),
             current_prompt="Need triage planning and API validation",
+            workflow_stage="triage",
         )
         snapshot = skill_service.build_active_skill_snapshot(
             session_id="session-context",
             touched_paths=[str(touched_file)],
             workspace_path=str(project_root),
             current_prompt="Need triage planning and API validation",
+            workflow_stage="triage",
         )
         loaded = skill_service.list_loaded_skills_for_agent(
             session_id="session-context",
             touched_paths=[str(touched_file)],
             workspace_path=str(project_root),
             current_prompt="Need triage planning and API validation",
+            workflow_stage="triage",
         )
 
     selected_skill = cast(dict[str, object], payload["selected_skill"])
@@ -377,7 +381,16 @@ when_to_use: Use for API validation and endpoint review.
     assert isinstance(rejected_skills, list)
     assert all(item["role"] == "rejected" for item in rejected_skills)
     assert all(item["rejected_reason"] for item in rejected_skills)
+    skill_budget = cast(dict[str, object], payload["skill_budget"])
+    skill_set_plan = cast(dict[str, object], payload["skill_set_plan"])
+    skill_runtime_usage = cast(list[dict[str, object]], payload["skill_runtime_usage"])
+    assert skill_budget["max_supporting"] == 1
+    assert isinstance(skill_set_plan["pruning_applied"], bool)
+    if skill_set_plan["pruning_applied"]:
+        assert cast(list[dict[str, object]], payload["pruned_supporting_skills"])
+    assert isinstance(skill_runtime_usage, list) and skill_runtime_usage
     assert "Primary skill for current context" in prompt_fragment
+    assert "Skill set plan for this stage" in prompt_fragment
     assert "Supporting skills also loaded" in prompt_fragment
     assert "demo" in prompt_fragment
     assert snapshot[0]["selected"] is True
@@ -388,3 +401,127 @@ when_to_use: Use for API validation and endpoint review.
     assert "triage-planner" in loaded_names
     assert loaded_roles[0] == "primary"
     assert "supporting" in loaded_roles
+
+
+def test_stage_budget_prunes_supporting_skills_and_changes_loaded_runtime_set(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    touched_file = project_root / "apps" / "api" / "app" / "main.py"
+    touched_file.parent.mkdir(parents=True, exist_ok=True)
+    touched_file.write_text("print('ok')\n", encoding="utf-8")
+
+    _write_skill(
+        skills_root / "demo" / "SKILL.md",
+        """---
+name: demo
+description: Primary API skill
+paths:
+  - apps/api/**
+when_to_use: Use for API validation and endpoint review.
+---
+# demo
+""",
+    )
+    _write_skill(
+        skills_root / "triage-planner" / "SKILL.md",
+        """---
+name: triage-planner
+description: Triage planner
+when_to_use: Use for triage planning and validation.
+---
+# triage-planner
+""",
+    )
+    _write_skill(
+        skills_root / "find-docs" / "SKILL.md",
+        """---
+name: find-docs
+description: Documentation helper
+when_to_use: Use for documentation lookup and API validation.
+---
+# find-docs
+""",
+    )
+    _write_skill(
+        skills_root / "oracle" / "SKILL.md",
+        """---
+name: oracle
+description: Deep research reference
+when_to_use: Use for architecture and audit review.
+---
+# oracle
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-stage.db") as (
+        _,
+        skill_service,
+    ):
+        skill_service.rescan_skills()
+        triage_payload = skill_service.build_skill_context_payload(
+            session_id="session-stage",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation with docs",
+            workflow_stage="triage",
+        )
+        deep_payload = skill_service.build_skill_context_payload(
+            session_id="session-stage",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need deep analysis and API validation with docs",
+            workflow_stage="deep-analysis",
+        )
+        triage_loaded = skill_service.list_loaded_skills_for_agent(
+            session_id="session-stage",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation with docs",
+            workflow_stage="triage",
+        )
+        deep_loaded = skill_service.list_loaded_skills_for_agent(
+            session_id="session-stage",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need deep analysis and API validation with docs",
+            workflow_stage="deep-analysis",
+        )
+        triage_fragment = skill_service.build_skill_context_prompt_fragment(
+            session_id="session-stage",
+            touched_paths=[str(touched_file)],
+            workspace_path=str(project_root),
+            current_prompt="Need triage planning and API validation with docs",
+            workflow_stage="triage",
+        )
+
+    triage_supporting = cast(list[dict[str, object]], triage_payload["supporting_skills"])
+    deep_supporting = cast(list[dict[str, object]], deep_payload["supporting_skills"])
+    triage_pruned = cast(list[dict[str, object]], triage_payload["pruned_supporting_skills"])
+    triage_plan = cast(dict[str, object], triage_payload["skill_set_plan"])
+    deep_plan = cast(dict[str, object], deep_payload["skill_set_plan"])
+    triage_usage = cast(list[dict[str, object]], triage_payload["skill_runtime_usage"])
+
+    assert len(triage_supporting) == 1
+    assert len(deep_supporting) >= 2
+    assert triage_pruned
+    assert triage_plan["pruning_applied"] is True
+    assert deep_plan["pruning_applied"] is False or len(deep_supporting) > len(triage_supporting)
+    assert any(item["role"] == "pruned_supporting" for item in triage_usage)
+    assert len(triage_loaded) == 2
+    assert len(deep_loaded) >= 3
+    assert "Related skills pruned for context budget" in triage_fragment
