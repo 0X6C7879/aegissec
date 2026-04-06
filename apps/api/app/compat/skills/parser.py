@@ -38,6 +38,11 @@ KNOWN_FRONTMATTER_FIELDS = {
     "context",
     "agent",
     "effort",
+    "family",
+    "domain",
+    "task_mode",
+    "task-mode",
+    "tags",
 }
 SIMPLE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$", re.IGNORECASE)
 
@@ -104,6 +109,10 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         context_hint=parsed_frontmatter.context_hint,
         agent=parsed_frontmatter.agent,
         effort=parsed_frontmatter.effort,
+        semantic_family=parsed_frontmatter.semantic_family,
+        semantic_domain=parsed_frontmatter.semantic_domain,
+        semantic_task_mode=parsed_frontmatter.semantic_task_mode,
+        semantic_tags=parsed_frontmatter.semantic_tags,
         status=status,
         enabled=True,
         error_message=parsed_frontmatter.validation_error,
@@ -147,6 +156,10 @@ def parse_skill_frontmatter(text: str, *, directory_name: str) -> ParsedSkillFro
         context_hint=_extract_optional_string(frontmatter, ("context",)),
         agent=_extract_optional_string(frontmatter, ("agent",)),
         effort=_extract_optional_string(frontmatter, ("effort",)),
+        semantic_family=_extract_optional_string(frontmatter, ("family",)),
+        semantic_domain=_extract_optional_string(frontmatter, ("domain",)),
+        semantic_task_mode=_extract_optional_string(frontmatter, ("task_mode", "task-mode")),
+        semantic_tags=_extract_string_list(frontmatter, ("tags",)),
         validation_error=_build_validation_error(
             frontmatter=frontmatter,
             directory_name=directory_name,

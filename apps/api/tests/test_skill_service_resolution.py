@@ -206,6 +206,7 @@ Target ${target}
     assert cast(dict[str, object], prepared_invocation["request"])["arguments"] == {
         "target": "srv-01"
     }
+    assert cast(dict[str, object], prepared["primary_prepared"])["prepared_for_execution"] is True
 
 
 def test_prepare_best_skill_includes_primary_supporting_and_summary(
@@ -281,6 +282,9 @@ Target ${target}
     selected_skill_ids = cast(list[str], prepared["selected_skill_ids"])
     assert "triage-planner" in supporting_names
     assert cast(dict[str, object], prepared["primary_skill"])["id"] in selected_skill_ids
+    prepared_selected = cast(list[dict[str, object]], prepared["prepared_selected_skills"])
+    assert any(item["prepared_for_execution"] is True for item in prepared_selected)
+    assert any(item["prepared_for_context"] is True for item in prepared_selected)
     resolution_summary = cast(dict[str, object], prepared["resolution_summary"])
     supporting_count = cast(int, resolution_summary["supporting_count"])
     assert supporting_count >= 1
@@ -384,15 +388,19 @@ when_to_use: Use for API validation and endpoint review.
     skill_budget = cast(dict[str, object], payload["skill_budget"])
     skill_set_plan = cast(dict[str, object], payload["skill_set_plan"])
     skill_runtime_usage = cast(list[dict[str, object]], payload["skill_runtime_usage"])
+    prepared_selected = cast(list[dict[str, object]], payload["prepared_selected_skills"])
     assert skill_budget["max_supporting"] == 1
     assert isinstance(skill_set_plan["pruning_applied"], bool)
     if skill_set_plan["pruning_applied"]:
         assert cast(list[dict[str, object]], payload["pruned_supporting_skills"])
     assert isinstance(skill_runtime_usage, list) and skill_runtime_usage
+    assert prepared_selected
+    assert any(item["prepared_for_context"] is True for item in prepared_selected)
     assert "Primary skill for current context" in prompt_fragment
     assert "Skill set plan for this stage" in prompt_fragment
     assert "Supporting skills also loaded" in prompt_fragment
     assert "demo" in prompt_fragment
+    assert "Prepared skill set" in prompt_fragment
     assert snapshot[0]["selected"] is True
     assert snapshot[0]["role"] == "primary"
     loaded_names = [item.directory_name for item in loaded]
@@ -522,6 +530,92 @@ when_to_use: Use for architecture and audit review.
     assert triage_plan["pruning_applied"] is True
     assert deep_plan["pruning_applied"] is False or len(deep_supporting) > len(triage_supporting)
     assert any(item["role"] == "pruned_supporting" for item in triage_usage)
+    assert any("prepared_for_context" in item for item in triage_usage)
     assert len(triage_loaded) == 2
     assert len(deep_loaded) >= 3
     assert "Related skills pruned for context budget" in triage_fragment
+
+
+def test_remote_ctf_web_payload_prepares_dispatcher_and_supporting_skill(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    _write_skill(
+        skills_root / "solve-challenge" / "SKILL.md",
+        """---
+name: solve-challenge
+description: CTF dispatcher
+family: ctf
+task_mode: dispatcher
+tags: [ctf, dispatcher, challenge]
+when_to_use: Use for CTF challenges and flag-oriented solving.
+---
+# solve-challenge
+""",
+    )
+    _write_skill(
+        skills_root / "ctf-web" / "SKILL.md",
+        """---
+name: ctf-web
+description: CTF web specialist
+family: ctf
+domain: web
+task_mode: specialized
+tags: [ctf-web, web]
+when_to_use: Use for CTF web exploitation against HTTP services.
+---
+# ctf-web
+""",
+    )
+    _write_skill(
+        skills_root / "java-route-tracer" / "SKILL.md",
+        """---
+name: java-route-tracer
+description: Java route tracer
+family: java-audit
+domain: java
+task_mode: audit
+tags: [java-audit, route-trace]
+when_to_use: Trace Java request mappings and controller flows.
+---
+# java-route-tracer
+""",
+    )
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-ctf.db") as (_, skill_service):
+        skill_service.rescan_skills()
+        payload = skill_service.build_skill_context_payload(
+            workspace_path=str(project_root),
+            current_prompt="解答这道 ctf web 题目: http://target.local/challenge",
+            session_id="session-ctf-web",
+        )
+
+    assert cast(dict[str, object], payload["primary_skill"])["directory_name"] == "solve-challenge"
+    supporting_names = [
+        skill["directory_name"]
+        for skill in cast(list[dict[str, object]], payload["supporting_skills"])
+    ]
+    assert "ctf-web" in supporting_names
+    suppressed_names = [
+        skill["directory_name"]
+        for skill in cast(list[dict[str, object]], payload["suppressed_skills"])
+    ]
+    assert "java-route-tracer" in suppressed_names
+    prepared_selected = cast(list[dict[str, object]], payload["prepared_selected_skills"])
+    assert any(
+        skill["directory_name"] == "ctf-web" and skill["prepared_for_context"] is True
+        for skill in prepared_selected
+    )

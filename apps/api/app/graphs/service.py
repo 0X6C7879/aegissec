@@ -10,6 +10,7 @@ from app.db.session import get_db_session
 from app.graphs.builders import (
     AttackGraphBuilder,
     CausalGraphBuilder,
+    ExecutionGraphBuilder,
     SnapshotGraphBuilder,
     TaskGraphBuilder,
 )
@@ -31,7 +32,7 @@ class GraphService:
         settings: Settings,
         task_graph_builder: TaskGraphBuilder | None = None,
         causal_graph_builder: CausalGraphBuilder | None = None,
-        attack_graph_builder: AttackGraphBuilder | None = None,
+        attack_graph_builder: ExecutionGraphBuilder | None = None,
         snapshot_graph_builder: SnapshotGraphBuilder | None = None,
     ) -> None:
         del settings
@@ -40,7 +41,7 @@ class GraphService:
         self._graph_repository = GraphRepository(db_session)
         self._task_graph_builder = task_graph_builder or TaskGraphBuilder()
         self._causal_graph_builder = causal_graph_builder or CausalGraphBuilder()
-        self._attack_graph_builder = attack_graph_builder or AttackGraphBuilder()
+        self._attack_graph_builder = attack_graph_builder or ExecutionGraphBuilder()
         self._snapshot_graph_builder = snapshot_graph_builder or SnapshotGraphBuilder()
 
     def get_graph(self, *, session_id: str, graph_type: GraphType) -> SessionGraphRead:

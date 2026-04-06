@@ -88,12 +88,10 @@ class CompiledSkillRegistry:
     ) -> skill_models.CompiledSkill:
         left_score = (
             int(bool(left.aliases)),
-            int(left.user_invocable is True),
             len(left.content),
         )
         right_score = (
             int(bool(right.aliases)),
-            int(right.user_invocable is True),
             len(right.content),
         )
         return left if left_score >= right_score else right

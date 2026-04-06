@@ -33,6 +33,39 @@ class SkillCandidateRole(str, Enum):
 
 
 @dataclass(slots=True)
+class SkillIntentProfile:
+    dominant_domain: str
+    is_ctf: bool = False
+    is_remote_service: bool = False
+    is_http_target: bool = False
+    is_local_codebase_task: bool = False
+    prefers_dispatcher: bool = False
+    preferred_skill_tags: list[str] = field(default_factory=list)
+    suppressed_skill_tags: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "dominant_domain": self.dominant_domain,
+            "is_ctf": self.is_ctf,
+            "is_remote_service": self.is_remote_service,
+            "is_http_target": self.is_http_target,
+            "is_local_codebase_task": self.is_local_codebase_task,
+            "prefers_dispatcher": self.prefers_dispatcher,
+            "preferred_skill_tags": list(self.preferred_skill_tags),
+            "suppressed_skill_tags": list(self.suppressed_skill_tags),
+            "notes": list(self.notes),
+        }
+
+
+@dataclass(slots=True)
+class SkillIntentAdjustment:
+    prior_score: int = 0
+    suppressed: bool = False
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class SkillScanRoot:
     source: CompatibilitySource
     scope: CompatibilityScope
@@ -93,6 +126,10 @@ class ParsedSkillFrontmatter:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    semantic_family: str | None = None
+    semantic_domain: str | None = None
+    semantic_task_mode: str | None = None
+    semantic_tags: list[str] = field(default_factory=list)
     validation_error: str | None = None
 
 
@@ -124,6 +161,10 @@ class ParsedSkillRecordData:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    semantic_family: str | None = None
+    semantic_domain: str | None = None
+    semantic_task_mode: str | None = None
+    semantic_tags: list[str] = field(default_factory=list)
     source_identity: SkillSourceIdentity | None = None
 
 
@@ -149,6 +190,10 @@ class CompiledSkill:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    semantic_family: str | None = None
+    semantic_domain: str | None = None
+    semantic_task_mode: str | None = None
+    semantic_tags: list[str] = field(default_factory=list)
     loaded_from: str | None = None
     shell_enabled: bool = True
     execution_mode: CompiledSkillExecutionMode = CompiledSkillExecutionMode.REFERENCE_ONLY
@@ -256,6 +301,7 @@ class SkillCandidateScoreBreakdown:
     argument_readiness_score: int = 0
     effort_score: int = 0
     source_kind_score: int = 0
+    intent_prior_score: int = 0
     matched_activation_paths: list[str] = field(default_factory=list)
     matched_agent_terms: list[str] = field(default_factory=list)
     matched_when_to_use_terms: list[str] = field(default_factory=list)
@@ -278,6 +324,7 @@ class SkillCandidateScoreBreakdown:
             + self.argument_readiness_score
             + self.effort_score
             + self.source_kind_score
+            + self.intent_prior_score
         )
 
     @property
@@ -294,6 +341,7 @@ class SkillCandidateScoreBreakdown:
             "argument_readiness_score": self.argument_readiness_score,
             "effort_score": self.effort_score,
             "source_kind_score": self.source_kind_score,
+            "intent_prior_score": self.intent_prior_score,
             "total_score": self.total_score,
             "matched_activation_paths": list(self.matched_activation_paths),
             "matched_agent_terms": list(self.matched_agent_terms),
@@ -321,6 +369,7 @@ class SkillResolutionRequest:
     invocation_arguments: dict[str, object] = field(default_factory=dict)
     top_k: int = 5
     include_reference_only: bool = False
+    intent_profile: SkillIntentProfile | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -335,6 +384,9 @@ class SkillResolutionRequest:
             "invocation_arguments": dict(self.invocation_arguments),
             "top_k": self.top_k,
             "include_reference_only": self.include_reference_only,
+            "intent_profile": None
+            if self.intent_profile is None
+            else self.intent_profile.to_payload(),
         }
 
 
@@ -377,6 +429,7 @@ class SkillResolutionResult:
     supporting_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
     reference_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
     rejected_candidates: list[ResolvedSkillCandidate] = field(default_factory=list)
+    intent_profile: SkillIntentProfile | None = None
 
     @property
     def selected_candidate(self) -> ResolvedSkillCandidate | None:
@@ -417,6 +470,9 @@ class SkillResolutionResult:
 
         return {
             "request": self.request.to_payload(),
+            "intent_profile": (
+                None if self.intent_profile is None else self.intent_profile.to_payload()
+            ),
             "active_candidate_count": self.active_candidate_count,
             "selected_skill_id": (
                 None

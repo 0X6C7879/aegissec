@@ -5,11 +5,16 @@ import re
 from pathlib import PurePosixPath
 
 from app.compat.skills import models as skill_models
+from app.compat.skills.intent_routing import (
+    build_skill_intent_adjustment,
+    infer_task_intent,
+    skill_should_be_selected_for_intent,
+)
 
 _WORD_RE = re.compile(r"[a-z0-9_\-/\.]+")
 _ARG_HINT_RE = re.compile(r"--([a-zA-Z0-9_-]+)|<([a-zA-Z0-9_-]+)>")
 _DEFAULT_TOP_K = 5
-_DEFAULT_SUPPORTING_LIMIT = 2
+_DEFAULT_SUPPORTING_LIMIT = 3
 _SUPPORTING_SCORE_GAP_THRESHOLD = 8
 _MIN_SUPPORTING_SCORE = 8
 _FIXED_RUNTIME_TOOLS = {
@@ -96,7 +101,16 @@ def rank_skill_candidates(
     compiled_skills: list[skill_models.CompiledSkill],
     request: skill_models.SkillResolutionRequest,
 ) -> list[skill_models.ResolvedSkillCandidate]:
-    candidates = [_build_resolved_skill_candidate(skill, request) for skill in compiled_skills]
+    intent_profile = request.intent_profile or infer_task_intent(request)
+    request.intent_profile = intent_profile
+    candidates = [
+        _build_resolved_skill_candidate(
+            skill,
+            request,
+            adjustment=build_skill_intent_adjustment(skill, request, intent_profile),
+        )
+        for skill in compiled_skills
+    ]
     ranked_candidates = sorted(candidates, key=_ranking_sort_key)
     for index, candidate in enumerate(ranked_candidates, start=1):
         candidate.rank = index
@@ -107,6 +121,8 @@ def resolve_skill_candidates(
     compiled_skills: list[skill_models.CompiledSkill],
     request: skill_models.SkillResolutionRequest,
 ) -> skill_models.SkillResolutionResult:
+    if request.intent_profile is None:
+        request.intent_profile = infer_task_intent(request)
     ranked_candidates = rank_skill_candidates(compiled_skills, request)
 
     return select_skill_set(ranked_candidates, request)
@@ -125,6 +141,11 @@ def select_skill_set(
     for candidate in ranked_candidates:
         candidate.selected = False
         candidate.role = None
+
+        if candidate.rejected_reason == "suppressed_by_intent":
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            rejected_candidates.append(candidate)
+            continue
 
         if candidate.compiled_skill.invocable:
             executable_candidates.append(candidate)
@@ -170,6 +191,7 @@ def select_skill_set(
         supporting_candidates=supporting_candidates,
         reference_candidates=reference_candidates,
         rejected_candidates=rejected_candidates,
+        intent_profile=request.intent_profile,
     )
 
 
@@ -187,11 +209,34 @@ def pack_skill_candidates(
     primary_candidate = executable_candidates[0]
     supporting_candidates: list[skill_models.ResolvedSkillCandidate] = []
     rejected_candidates: list[skill_models.ResolvedSkillCandidate] = []
+    intent_profile = request.intent_profile
     supporting_limit = min(
         max(1, request.top_k or _DEFAULT_SUPPORTING_LIMIT), _DEFAULT_SUPPORTING_LIMIT
     )
 
-    for candidate in executable_candidates[1:]:
+    if intent_profile is not None and intent_profile.is_ctf and intent_profile.prefers_dispatcher:
+        dispatcher_candidate = next(
+            (
+                candidate
+                for candidate in executable_candidates
+                if _is_dispatcher_candidate(candidate)
+            ),
+            None,
+        )
+        if dispatcher_candidate is not None:
+            primary_candidate = dispatcher_candidate
+
+    mandatory_supporting_ids: set[str] = set()
+    if intent_profile is not None:
+        for candidate in executable_candidates:
+            if candidate is primary_candidate:
+                continue
+            if skill_should_be_selected_for_intent(candidate.compiled_skill, intent_profile):
+                mandatory_supporting_ids.add(candidate.compiled_skill.skill_id)
+
+    for candidate in executable_candidates:
+        if candidate is primary_candidate:
+            continue
         if candidate.total_score <= 0:
             candidate.role = skill_models.SkillCandidateRole.REJECTED
             candidate.rejected_reason = "score_too_low"
@@ -219,10 +264,11 @@ def pack_skill_candidates(
             continue
 
         if len(supporting_candidates) >= supporting_limit:
-            candidate.role = skill_models.SkillCandidateRole.REJECTED
-            candidate.rejected_reason = "score_too_low"
-            rejected_candidates.append(candidate)
-            continue
+            if candidate.compiled_skill.skill_id not in mandatory_supporting_ids:
+                candidate.role = skill_models.SkillCandidateRole.REJECTED
+                candidate.rejected_reason = "score_too_low"
+                rejected_candidates.append(candidate)
+                continue
 
         if any(
             compute_skill_redundancy(existing, candidate) >= 7
@@ -235,6 +281,9 @@ def pack_skill_candidates(
             continue
 
         score_gap = max(0, primary_candidate.total_score - candidate.total_score)
+        if candidate.compiled_skill.skill_id in mandatory_supporting_ids:
+            supporting_candidates.append(candidate)
+            continue
         if _should_select_as_supporting(
             primary_candidate,
             candidate,
@@ -505,6 +554,8 @@ def _has_different_source_complement(
 
 
 def _is_general_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
+    if (compiled_skill.semantic_task_mode or "").casefold() == "dispatcher":
+        return False
     tokens = _normalized_token_set(
         " ".join(
             part
@@ -522,6 +573,8 @@ def _is_general_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
 
 
 def _is_orchestration_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
+    if (compiled_skill.semantic_task_mode or "").casefold() == "dispatcher":
+        return True
     tokens = _normalized_token_set(
         " ".join(
             part
@@ -553,12 +606,21 @@ def _normalized_token_set(text: str | None) -> set[str]:
 def _build_resolved_skill_candidate(
     compiled_skill: skill_models.CompiledSkill,
     request: skill_models.SkillResolutionRequest,
+    adjustment: skill_models.SkillIntentAdjustment | None = None,
 ) -> skill_models.ResolvedSkillCandidate:
     breakdown = score_skill_candidate(compiled_skill, request)
+    reasons = [*breakdown.reasons, *breakdown.penalties]
+    rejected_reason: str | None = None
+    if adjustment is not None:
+        breakdown.intent_prior_score = adjustment.prior_score
+        reasons.extend(adjustment.reasons)
+        if adjustment.suppressed:
+            rejected_reason = "suppressed_by_intent"
     return skill_models.ResolvedSkillCandidate(
         compiled_skill=compiled_skill,
         score_breakdown=breakdown,
-        reasons=[*breakdown.reasons, *breakdown.penalties],
+        reasons=reasons,
+        rejected_reason=rejected_reason,
     )
 
 
@@ -570,10 +632,9 @@ def _ranking_sort_key(candidate: skill_models.ResolvedSkillCandidate) -> tuple[o
         -breakdown.path_score,
         -breakdown.agent_score,
         -breakdown.when_to_use_score,
+        -breakdown.intent_prior_score,
         0 if skill.invocable else 1,
-        0 if skill.user_invocable is True else 1,
         -int(bool(skill.aliases)),
-        -int(skill.user_invocable is True),
         -len(skill.content),
         skill.identity.source_kind.value,
         skill.identity.source.value,
@@ -865,3 +926,7 @@ def _normalize_path(path_value: str) -> str:
 
 def _normalize_tool_name(name: str) -> str:
     return name.strip().replace("-", "_").casefold()
+
+
+def _is_dispatcher_candidate(candidate: skill_models.ResolvedSkillCandidate) -> bool:
+    return (candidate.compiled_skill.semantic_task_mode or "").casefold() == "dispatcher"

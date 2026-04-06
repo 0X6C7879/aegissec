@@ -216,10 +216,10 @@ class CausalGraphBuilder:
         )
 
 
-class AttackGraphBuilder:
+class ExecutionGraphBuilder:
     _THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
     _NODE_TYPE_SORT_ORDER: dict[str, int] = {
-        "goal": 0,
+        "root": 0,
         "task": 1,
         "action": 2,
         "outcome": 3,
@@ -245,8 +245,12 @@ class AttackGraphBuilder:
         edges_by_id: dict[str, SessionGraphEdgeRead] = {}
         task_ids = {task.id for task in ordered_tasks}
         task_name_to_id = {task.name: task.id for task in ordered_tasks}
+        task_by_id = {task.id: task for task in ordered_tasks}
         action_node_ids_by_trace: dict[str, str] = {}
+        action_node_ids_by_merge_key: dict[str, str] = {}
+        latest_action_by_task_id: dict[str, str] = {}
         task_stage_to_id: dict[str, str] = {}
+        synthetic_action_index = 0
         for task in ordered_tasks:
             stage_key = task.metadata_json.get("stage_key")
             if isinstance(stage_key, str) and task.node_type is TaskNodeType.STAGE:
@@ -310,15 +314,16 @@ class AttackGraphBuilder:
             )
 
         goal = run.state_json.get("goal")
-        goal_node_id: str | None = None
+        root_node_id: str | None = None
         if isinstance(goal, str) and goal.strip():
-            goal_node_id = f"goal:{run.id}"
+            root_node_id = f"root:{run.id}"
             add_node(
-                node_id=goal_node_id,
-                node_type="goal",
+                node_id=root_node_id,
+                node_type="root",
                 label=goal.strip(),
                 data={
                     "goal": goal.strip(),
+                    "status": run.status.value,
                     "run_id": run.id,
                     "session_id": run.session_id,
                     "current_stage": run.current_stage,
@@ -330,7 +335,7 @@ class AttackGraphBuilder:
             depends_on = self._task_dependencies(task)
             add_node(
                 node_id=task.id,
-                node_type=self._task_node_type(task),
+                node_type="task",
                 label=str(task.metadata_json.get("title") or task.name),
                 data={
                     "task_id": task.id,
@@ -353,11 +358,84 @@ class AttackGraphBuilder:
                 },
             )
 
-        if goal_node_id is not None:
+        def add_execution_action(
+            *,
+            payload: dict[str, object],
+            fallback_label: str,
+            source_graphs: list[str],
+            relation_hint: str | None = None,
+        ) -> str:
+            nonlocal synthetic_action_index
+            task_anchor_id = self._resolve_task_anchor_id(
+                task_id=payload.get("task_id") or payload.get("task_node_id"),
+                task_name=payload.get("task_name") or payload.get("task"),
+                task_ids=task_ids,
+                task_name_to_id=task_name_to_id,
+            )
+            synthetic_action_index += 1
+            action_id = self._resolve_execution_action_id(
+                payload=payload,
+                task_anchor_id=task_anchor_id,
+                fallback=f"action:{run.id}:{synthetic_action_index}",
+                trace_to_node_id=action_node_ids_by_trace,
+                action_key_to_id=action_node_ids_by_merge_key,
+            )
+            task_anchor = task_by_id.get(task_anchor_id) if task_anchor_id is not None else None
+            action_data = self._execution_payload(payload, source_graphs=source_graphs)
+            action_data["action_id"] = action_id
+            action_data["task_id"] = task_anchor_id or action_data.get("task_id")
+            action_data["task_name"] = (
+                task_anchor.name if task_anchor is not None else action_data.get("task_name")
+            )
+            action_data["stage_key"] = (
+                task_anchor.metadata_json.get("stage_key")
+                if task_anchor is not None
+                else payload.get("stage_key")
+            )
+            action_data["blocked_reason"] = payload.get("blocked_reason") or payload.get(
+                "last_error"
+            )
+            action_data["merged_from"] = self._merge_source_graphs(
+                action_data.get("merged_from"), source_graphs
+            )
+            add_node(
+                node_id=action_id,
+                node_type="action",
+                label=self._execution_node_label(fallback_label, payload, task_anchor),
+                data=action_data,
+            )
+            trace_id = payload.get("trace_id") or payload.get("id")
+            if isinstance(trace_id, str) and trace_id:
+                action_node_ids_by_trace[trace_id] = action_id
+            merge_key = self._execution_merge_key(payload=payload, task_anchor_id=task_anchor_id)
+            if merge_key is not None:
+                action_node_ids_by_merge_key[merge_key] = action_id
+            if task_anchor_id is not None:
+                add_edge(
+                    source=task_anchor_id,
+                    target=action_id,
+                    relation=relation_hint
+                    or self._execution_relation(str(action_data.get("status") or "")),
+                    data={"source_graphs": self._merge_source_graphs(["task"], source_graphs)},
+                )
+                previous_action_id = latest_action_by_task_id.get(task_anchor_id)
+                if previous_action_id is not None and previous_action_id != action_id:
+                    add_edge(
+                        source=previous_action_id,
+                        target=action_id,
+                        relation="precedes",
+                        data={
+                            "source_graphs": self._merge_source_graphs(["workflow"], source_graphs)
+                        },
+                    )
+                latest_action_by_task_id[task_anchor_id] = action_id
+            return action_id
+
+        if root_node_id is not None:
             root_tasks = [task for task in ordered_tasks if not self._task_dependencies(task)]
             for task in root_tasks:
                 add_edge(
-                    source=goal_node_id,
+                    source=root_node_id,
                     target=task.id,
                     relation="attempts",
                     data={"source_graphs": ["workflow", "task"]},
@@ -381,57 +459,26 @@ class AttackGraphBuilder:
                 evidence_nodes, key=lambda item: (item.stable_key, item.created_at, item.id)
             ):
                 payload = dict(node.payload_json)
-                trace_id = payload.get("trace_id")
-                task_id = payload.get("task_id")
-                task_name = payload.get("task_name")
-                node_id = self._resolve_execution_node_id(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    task_name=task_name,
-                    task_ids=task_ids,
-                    task_name_to_id=task_name_to_id,
-                    fallback=f"action:{node.stable_key or node.id}",
+                add_execution_action(
+                    payload=payload,
+                    fallback_label=node.label,
+                    source_graphs=["evidence"],
                 )
-                add_node(
-                    node_id=node_id,
-                    node_type=self._execution_node_type_for_id(node_id, nodes_by_id.get(node_id)),
-                    label=self._execution_node_label(node.label, payload),
-                    data=self._execution_payload(payload, source_graphs=["evidence"]),
-                )
-                if isinstance(trace_id, str) and trace_id:
-                    action_node_ids_by_trace[trace_id] = node_id
         execution_records = run.state_json.get("execution_records", [])
         if isinstance(execution_records, list):
             for index, record in enumerate(execution_records):
                 if not isinstance(record, dict):
                     continue
-                trace_id = record.get("id")
-                task_id = record.get("task_node_id")
-                task_name = record.get("task_name")
-                node_id = self._resolve_execution_node_id(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    task_name=task_name,
-                    task_ids=task_ids,
-                    task_name_to_id=task_name_to_id,
-                    fallback=f"action:{run.id}:{index + 1}",
-                    trace_to_node_id=action_node_ids_by_trace,
-                )
-                add_node(
-                    node_id=node_id,
-                    node_type=self._execution_node_type_for_id(node_id, nodes_by_id.get(node_id)),
-                    label=self._execution_node_label(
-                        str(
-                            record.get("task_name")
-                            or record.get("command_or_action")
-                            or f"Action {index + 1}"
-                        ),
-                        record,
+                add_execution_action(
+                    payload=dict(record),
+                    fallback_label=str(
+                        record.get("command_or_action")
+                        or record.get("request_summary")
+                        or record.get("task_name")
+                        or f"Action {index + 1}"
                     ),
-                    data=self._execution_payload(dict(record), source_graphs=["workflow"]),
+                    source_graphs=["workflow"],
                 )
-                if isinstance(trace_id, str) and trace_id:
-                    action_node_ids_by_trace[trace_id] = node_id
 
         hypothesis_updates = run.state_json.get("hypothesis_updates", [])
         if isinstance(hypothesis_updates, list):
@@ -439,33 +486,10 @@ class AttackGraphBuilder:
                 if not isinstance(update, dict):
                     continue
                 result = str(update.get("result") or "unknown")
-                trace_id = update.get("trace_id")
-                task_name = update.get("task")
-                target_node_id = (
-                    task_name_to_id[task_name]
-                    if isinstance(task_name, str) and task_name in task_name_to_id
-                    else self._resolve_execution_node_id(
-                        trace_id=trace_id,
-                        task_id=None,
-                        task_name=task_name,
-                        task_ids=task_ids,
-                        task_name_to_id=task_name_to_id,
-                        fallback=f"action:hypothesis:{run.id}:{index + 1}",
-                        trace_to_node_id=action_node_ids_by_trace,
-                    )
-                )
-                add_node(
-                    node_id=target_node_id,
-                    node_type=self._execution_node_type_for_id(
-                        target_node_id, nodes_by_id.get(target_node_id)
-                    ),
-                    label=self._execution_node_label(
-                        str(
-                            update.get("kind") or update.get("summary") or f"Hypothesis {index + 1}"
-                        ),
-                        update,
-                    ),
-                    data={
+                add_execution_action(
+                    payload={
+                        **update,
+                        "task_name": update.get("task"),
                         "status": update.get("status")
                         or ("blocked" if result == "blocked" else None),
                         "thought": update.get("summary") or update.get("kind"),
@@ -475,81 +499,42 @@ class AttackGraphBuilder:
                                 "summary": update.get("summary"),
                                 "result": update.get("result"),
                                 "status": update.get("status"),
-                                "trace_id": trace_id,
-                                "task": task_name,
+                                "trace_id": update.get("trace_id"),
+                                "task": update.get("task"),
                             }
                         ],
-                        "source_graphs": ["workflow"],
                     },
+                    fallback_label=str(
+                        update.get("kind") or update.get("summary") or f"Hypothesis {index + 1}"
+                    ),
+                    source_graphs=["workflow"],
+                    relation_hint="attempts",
                 )
-                if isinstance(trace_id, str) and trace_id:
-                    action_node_ids_by_trace[trace_id] = target_node_id
 
         if causal_nodes:
             for node in sorted(
                 causal_nodes, key=lambda item: (item.stable_key, item.created_at, item.id)
             ):
                 payload = dict(node.payload_json)
-                trace_id = payload.get("trace_id")
-                task_name = payload.get("task")
-                target_node_id = (
-                    task_name_to_id[task_name]
-                    if isinstance(task_name, str) and task_name in task_name_to_id
-                    else self._resolve_execution_node_id(
-                        trace_id=trace_id,
-                        task_id=None,
-                        task_name=task_name,
-                        task_ids=task_ids,
-                        task_name_to_id=task_name_to_id,
-                        fallback=f"action:finding:{node.id}",
-                        trace_to_node_id=action_node_ids_by_trace,
-                    )
-                )
-                add_node(
-                    node_id=target_node_id,
-                    node_type=self._execution_node_type_for_id(
-                        target_node_id, nodes_by_id.get(target_node_id)
-                    ),
-                    label=self._execution_node_label(node.label, payload),
-                    data={
+                add_execution_action(
+                    payload={
+                        **payload,
+                        "task_name": payload.get("task"),
                         "related_findings": [self._finding_summary(payload, node.label)],
-                        "source_graphs": ["causal"],
                     },
+                    fallback_label=node.label,
+                    source_graphs=["causal"],
+                    relation_hint="confirms",
                 )
-                if isinstance(trace_id, str) and trace_id:
-                    action_node_ids_by_trace[trace_id] = target_node_id
         else:
             findings = run.state_json.get("findings", [])
             if isinstance(findings, list):
                 normalized_findings = [finding for finding in findings if isinstance(finding, dict)]
                 for index, finding in enumerate(normalized_findings):
-                    trace_id = finding.get("trace_id")
-                    task_name = finding.get("task")
-                    target_node_id = (
-                        task_name_to_id[task_name]
-                        if isinstance(task_name, str) and task_name in task_name_to_id
-                        else self._resolve_execution_node_id(
-                            trace_id=trace_id,
-                            task_id=None,
-                            task_name=task_name,
-                            task_ids=task_ids,
-                            task_name_to_id=task_name_to_id,
-                            fallback=f"action:finding:{run.id}:{index + 1}",
-                            trace_to_node_id=action_node_ids_by_trace,
-                        )
-                    )
-                    add_node(
-                        node_id=target_node_id,
-                        node_type=self._execution_node_type_for_id(
-                            target_node_id, nodes_by_id.get(target_node_id)
-                        ),
-                        label=self._execution_node_label(
-                            str(
-                                finding.get("title") or finding.get("id") or f"Finding {index + 1}"
-                            ),
-                            finding,
-                        ),
-                        data={
+                    add_execution_action(
+                        payload={
+                            **finding,
+                            "task_name": finding.get("task"),
                             "related_findings": [
                                 self._finding_summary(
                                     finding,
@@ -560,11 +545,13 @@ class AttackGraphBuilder:
                                     ),
                                 )
                             ],
-                            "source_graphs": ["workflow"],
                         },
+                        fallback_label=str(
+                            finding.get("title") or finding.get("id") or f"Finding {index + 1}"
+                        ),
+                        source_graphs=["workflow"],
+                        relation_hint="confirms",
                     )
-                    if isinstance(trace_id, str) and trace_id:
-                        action_node_ids_by_trace[trace_id] = target_node_id
 
         outcome_node_id = f"outcome:{run.id}"
         outcome_relation = self._workflow_outcome_relation(run.status)
@@ -593,8 +580,8 @@ class AttackGraphBuilder:
             )
             if anchor_task_id is not None:
                 leaf_node_ids = {anchor_task_id}
-        if goal_node_id is not None and not leaf_node_ids:
-            leaf_node_ids = {goal_node_id}
+        if root_node_id is not None and not leaf_node_ids:
+            leaf_node_ids = {root_node_id}
         for node_id in sorted(leaf_node_ids):
             if node_id == outcome_node_id:
                 continue
@@ -913,11 +900,11 @@ class AttackGraphBuilder:
                 data=dict(data),
             )
 
-        goal_node_id = "goal:conversation"
+        goal_node_id = "root:conversation"
         if goal_text:
             add_node(
                 node_id=goal_node_id,
-                node_type="goal",
+                node_type="root",
                 label=self._truncate_label(goal_text, fallback="Conversation goal"),
                 data={
                     "goal": goal_text,
@@ -1327,22 +1314,28 @@ class AttackGraphBuilder:
     ) -> str:
         if existing is not None:
             return existing.node_type
-        if node_id.startswith("goal:"):
-            return "goal"
+        if node_id.startswith("root:"):
+            return "root"
         if node_id.startswith("outcome:"):
             return "outcome"
         return "action"
 
-    def _execution_node_label(self, fallback_label: str, payload: dict[str, object]) -> str:
+    def _execution_node_label(
+        self,
+        fallback_label: str,
+        payload: dict[str, object],
+        task_anchor: TaskNode | None = None,
+    ) -> str:
         return self._truncate_label(
             self._pick_first_str(
-                payload.get("task_name"),
                 payload.get("command"),
                 payload.get("command_or_action"),
                 payload.get("request_summary"),
+                payload.get("tool_name"),
                 payload.get("summary"),
                 payload.get("observation_summary"),
                 payload.get("stdout"),
+                task_anchor.metadata_json.get("title") if task_anchor is not None else None,
                 fallback_label,
             )
             or fallback_label,
@@ -1383,10 +1376,82 @@ class AttackGraphBuilder:
             "trace_id": payload.get("trace_id") or payload.get("id"),
             "updated_at": payload.get("updated_at"),
             "completed_at": payload.get("completed_at") or payload.get("ended_at"),
+            "blocked_reason": payload.get("blocked_reason") or payload.get("last_error"),
+            "source_message_id": payload.get("source_message_id"),
             "related_findings": [],
             "related_hypotheses": [],
             "source_graphs": source_graphs,
+            "merged_from": list(source_graphs),
         }
+
+    def _resolve_task_anchor_id(
+        self,
+        *,
+        task_id: object,
+        task_name: object,
+        task_ids: set[str],
+        task_name_to_id: dict[str, str],
+    ) -> str | None:
+        if isinstance(task_id, str) and task_id in task_ids:
+            return task_id
+        if isinstance(task_name, str) and task_name in task_name_to_id:
+            return task_name_to_id[task_name]
+        return None
+
+    def _execution_merge_key(
+        self,
+        *,
+        payload: dict[str, object],
+        task_anchor_id: str | None,
+    ) -> str | None:
+        trace_id = payload.get("trace_id") or payload.get("id")
+        if isinstance(trace_id, str) and trace_id:
+            return f"trace:{trace_id}"
+        if task_anchor_id is None:
+            return None
+        tool_name = self._pick_first_str(payload.get("tool_name"), payload.get("tool"))
+        command_summary = self._pick_first_str(
+            payload.get("command"),
+            payload.get("command_or_action"),
+            payload.get("request_summary"),
+        )
+        if tool_name and command_summary:
+            return f"task-tool:{task_anchor_id}:{tool_name.casefold()}:{self._normalize_merge_label(command_summary)}"
+        label = self._pick_first_str(
+            payload.get("request_summary"),
+            payload.get("summary"),
+            payload.get("observation_summary"),
+            payload.get("stdout"),
+        )
+        if label:
+            return f"task-label:{task_anchor_id}:{self._normalize_merge_label(label)}"
+        return f"task:{task_anchor_id}"
+
+    def _resolve_execution_action_id(
+        self,
+        *,
+        payload: dict[str, object],
+        task_anchor_id: str | None,
+        fallback: str,
+        trace_to_node_id: dict[str, str],
+        action_key_to_id: dict[str, str],
+    ) -> str:
+        trace_id = payload.get("trace_id") or payload.get("id")
+        if isinstance(trace_id, str) and trace_id in trace_to_node_id:
+            return trace_to_node_id[trace_id]
+        merge_key = self._execution_merge_key(payload=payload, task_anchor_id=task_anchor_id)
+        if merge_key is not None and merge_key in action_key_to_id:
+            return action_key_to_id[merge_key]
+        if isinstance(trace_id, str) and trace_id:
+            return f"action:{trace_id}"
+        if merge_key is not None:
+            return f"action:{self._normalize_merge_label(merge_key)}"
+        return fallback
+
+    @staticmethod
+    def _normalize_merge_label(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+        return normalized or "step"
 
     def _finding_summary(self, finding: dict[str, object], label: str) -> dict[str, object]:
         return {
@@ -1425,8 +1490,10 @@ class AttackGraphBuilder:
         self, node: SessionGraphNodeRead
     ) -> SessionGraphNodeRead | None:
         normalized_type: str | None
-        if node.node_type in {"goal", "task", "action", "outcome"}:
+        if node.node_type in {"root", "task", "action", "outcome"}:
             normalized_type = node.node_type
+        elif node.node_type == "goal":
+            normalized_type = "root"
         elif node.node_type in {"observation", "hypothesis"}:
             normalized_type = None
         else:
@@ -1590,3 +1657,7 @@ class AttackGraphBuilder:
             existing.add(text.casefold())
             fragments.append(text)
         return fragments
+
+
+class AttackGraphBuilder(ExecutionGraphBuilder):
+    pass

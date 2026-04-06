@@ -298,6 +298,101 @@ def test_prompt_fragment_shows_ranked_shortlist_with_selection_guidance() -> Non
     assert "Reference-only related skills" in fragment
 
 
+def test_remote_ctf_web_url_prefers_dispatcher_and_ctf_web_over_java_route_tracer() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="解答这道 ctf web 题目: http://target.local/challenge",
+        top_k=5,
+    )
+    solve_challenge = _compiled_skill(
+        "solve-challenge",
+        when_to_use="Use for CTF challenges and flag-oriented solving.",
+        semantic_family="ctf",
+        semantic_task_mode="dispatcher",
+        semantic_tags=["ctf", "dispatcher", "challenge"],
+    )
+    ctf_web = _compiled_skill(
+        "ctf-web",
+        when_to_use="Use for CTF web exploitation against HTTP services.",
+        semantic_family="ctf",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["ctf-web", "web"],
+    )
+    java_route_tracer = _compiled_skill(
+        "java-route-tracer",
+        when_to_use="Trace Java request mappings and controller flows.",
+        semantic_family="java-audit",
+        semantic_domain="java",
+        semantic_task_mode="audit",
+        semantic_tags=["java-audit", "route-trace"],
+    )
+
+    result = resolve_skill_candidates([java_route_tracer, ctf_web, solve_challenge], request)
+
+    assert result.intent_profile is not None
+    assert result.intent_profile.dominant_domain == "ctf_web"
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "solve-challenge"
+    assert [
+        candidate.compiled_skill.directory_name for candidate in result.supporting_candidates
+    ] == ["ctf-web"]
+    rejected = {
+        candidate.compiled_skill.directory_name: candidate
+        for candidate in result.rejected_candidates
+    }
+    assert rejected["java-route-tracer"].rejected_reason == "suppressed_by_intent"
+
+
+def test_java_audit_family_is_suppressed_without_java_code_evidence() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Inspect remote HTTP challenge at http://demo"
+    )
+    java_route_tracer = _compiled_skill(
+        "java-route-tracer",
+        semantic_family="java-audit",
+        semantic_domain="java",
+        semantic_task_mode="audit",
+    )
+    generic = _compiled_skill(
+        "generic-recon", when_to_use="Use for generic recon and service review"
+    )
+
+    result = resolve_skill_candidates([java_route_tracer, generic], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "generic-recon"
+    assert any(
+        candidate.compiled_skill.directory_name == "java-route-tracer"
+        and candidate.rejected_reason == "suppressed_by_intent"
+        for candidate in result.rejected_candidates
+    )
+
+
+def test_local_java_audit_with_code_evidence_allows_java_route_tracer() -> None:
+    request = skill_models.SkillResolutionRequest(
+        touched_paths=["apps/api/src/main/java/com/demo/UserController.java", "pom.xml"],
+        current_prompt="Trace Java controller route mappings in this local project",
+    )
+    java_route_tracer = _compiled_skill(
+        "java-route-tracer",
+        semantic_family="java-audit",
+        semantic_domain="java",
+        semantic_task_mode="audit",
+    )
+    solve_challenge = _compiled_skill(
+        "solve-challenge",
+        semantic_family="ctf",
+        semantic_task_mode="dispatcher",
+    )
+
+    result = resolve_skill_candidates([solve_challenge, java_route_tracer], request)
+
+    assert result.intent_profile is not None
+    assert result.intent_profile.dominant_domain in {"java_code_audit", "java_route_trace"}
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "java-route-tracer"
+
+
 def _compiled_skill(
     directory_name: str,
     *,
@@ -310,6 +405,10 @@ def _compiled_skill(
     source_kind: skill_models.SkillSourceKind = skill_models.SkillSourceKind.FILESYSTEM,
     fingerprint: str | None = None,
     context_hint: str | None = None,
+    semantic_family: str | None = None,
+    semantic_domain: str | None = None,
+    semantic_task_mode: str | None = None,
+    semantic_tags: list[str] | None = None,
 ) -> skill_models.CompiledSkill:
     return skill_models.CompiledSkill(
         identity=skill_models.SkillSourceIdentity(
@@ -338,5 +437,9 @@ def _compiled_skill(
         context_hint=context_hint,
         agent=agent,
         effort="medium",
+        semantic_family=semantic_family,
+        semantic_domain=semantic_domain,
+        semantic_task_mode=semantic_task_mode,
+        semantic_tags=list(semantic_tags or []),
         loaded_from=f"skills/{directory_name}/SKILL.md",
     )

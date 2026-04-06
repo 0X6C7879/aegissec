@@ -2297,9 +2297,24 @@ def test_chat_autoroutes_ctf_web_skill_context_from_contextual_match(
         monkeypatch,
         tmp_path,
         {
+            "solve-challenge": """---
+name: solve-challenge
+description: CTF dispatcher
+family: ctf
+task_mode: dispatcher
+tags: [ctf, dispatcher, challenge]
+---
+# solve-challenge
+
+Coordinate challenge-solving workflows.
+""",
             "ctf-web": """---
 name: ctf-web
 description: Web CTF exploitation playbook
+family: ctf
+domain: web
+task_mode: specialized
+tags: [ctf-web, web]
 ---
 # ctf-web
 
@@ -2336,10 +2351,11 @@ Create and edit Word documents.
                 callbacks,
             )
             assert skill_context_prompt is not None
-            assert "Prepared primary skill: ctf-web" in skill_context_prompt
-            assert "## Prepared skill context: primary=ctf-web" in skill_context_prompt
-            assert "# ctf-web" in skill_context_prompt
-            return "已收到 ctf-web 自动技能上下文"
+            assert "Prepared primary skill: solve-challenge" in skill_context_prompt
+            assert "## Prepared skill context: primary=solve-challenge" in skill_context_prompt
+            assert "# solve-challenge" in skill_context_prompt
+            assert "ctf-web: context=True execution=False" in skill_context_prompt
+            return "已收到 solve-challenge + ctf-web 自动技能上下文"
 
     original_override = app.dependency_overrides[get_chat_runtime]
     app.dependency_overrides[get_chat_runtime] = lambda: ContextualCtfWebAutoRouteRuntime()
@@ -2376,26 +2392,32 @@ Create and edit Word documents.
             for segment in transcript
             if segment["kind"] in {"tool_call", "tool_result", "output"}
         ]
-        assert any(segment["text"] == "自动选择 ctf-web" for segment in status_segments)
+        assert any(segment["text"] == "自动选择 solve-challenge" for segment in status_segments)
         assert relevant_segments[0]["tool_name"] == "execute_skill"
-        assert relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"] == "ctf-web"
+        assert (
+            relevant_segments[1]["metadata"]["result"]["skill"]["directory_name"]
+            == "solve-challenge"
+        )
         assert relevant_segments[1]["metadata"]["result"]["execution"]["status"] == "prepared"
         assert chat_payload["generation"]["metadata"]["prompt_provenance"]["autorouted_skill"] == {
             "state": "skill.autoroute.finished",
-            "skill": "ctf-web",
+            "skill": "solve-challenge",
             "confidence": 72,
             "reason": "matched alias tokens 'ctf web'",
-            "top_candidate": "ctf-web",
+            "top_candidate": "solve-challenge",
             "candidates": [
                 {
-                    "skill": "ctf-web",
+                    "skill": "solve-challenge",
                     "confidence": 72,
                     "reason": "matched alias tokens 'ctf web'",
                 }
             ],
             "context_injected": True,
         }
-        assert chat_payload["assistant_message"]["content"] == "已收到 ctf-web 自动技能上下文"
+        assert (
+            chat_payload["assistant_message"]["content"]
+            == "已收到 solve-challenge + ctf-web 自动技能上下文"
+        )
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

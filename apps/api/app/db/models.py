@@ -939,11 +939,17 @@ class SkillAgentSummaryRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    family: str | None = None
+    domain: str | None = None
+    task_mode: str | None = None
+    tags: list[str] = Field(default_factory=list)
     argument_hint: str | None = None
     shell_enabled: bool = True
     execution_mode: str | None = None
     resolved_identity: dict[str, object] = Field(default_factory=dict)
     prepared_invocation: dict[str, object] | None = None
+    prepared_for_context: bool = False
+    prepared_for_execution: bool = False
     active_due_to_touched_paths: bool = False
     rank: int = 0
     total_score: int = 0

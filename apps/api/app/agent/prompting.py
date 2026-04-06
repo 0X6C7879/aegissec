@@ -151,6 +151,10 @@ def render_skill_catalog_context(available_skills: list[SkillAgentSummaryRead]) 
         "planning, execution, validation, or broader general-plus-specific overlap."
     )
     lines.append(
+        "If a dispatcher is primary and a specialized skill is supporting, keep both in play: "
+        "the dispatcher frames the solve loop while the supporting skill supplies domain detail."
+    )
+    lines.append(
         "For the real SKILL.md body, call read_skill_content before guessing implementation "
         "details."
     )
@@ -184,10 +188,25 @@ def _render_skill_catalog_entry(
         metadata_bits.append(f"agent={skill.agent}")
     if skill.effort:
         metadata_bits.append(f"effort={skill.effort}")
+    family = getattr(skill, "family", None)
+    domain = getattr(skill, "domain", None)
+    task_mode = getattr(skill, "task_mode", None)
+    prepared_for_context = bool(getattr(skill, "prepared_for_context", False))
+    prepared_for_execution = bool(getattr(skill, "prepared_for_execution", False))
+    if family:
+        metadata_bits.append(f"family={family}")
+    if domain:
+        metadata_bits.append(f"domain={domain}")
+    if task_mode:
+        metadata_bits.append(f"task_mode={task_mode}")
     if skill.when_to_use:
         metadata_bits.append(f"when_to_use={skill.when_to_use}")
     if skill.paths:
         metadata_bits.append(f"paths={skill.paths}")
+    if prepared_for_context:
+        metadata_bits.append("prepared_for_context=true")
+    if prepared_for_execution:
+        metadata_bits.append("prepared_for_execution=true")
     lines = [f"{prefix} {label}: {description} | {' | '.join(metadata_bits)}"]
     if skill.reasons:
         lines.append(f"  why: {'; '.join(skill.reasons[:3])}")

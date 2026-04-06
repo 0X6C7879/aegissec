@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from app.compat.skills import models as skill_models
+from app.compat.skills.intent_routing import infer_skill_semantics
 from app.compat.skills.parser import parse_skill_frontmatter
 from app.db.models import SkillRecord
 
@@ -32,6 +33,16 @@ def compile_skill_record(
         relative_path=_relative_skill_path(record),
         fingerprint=record.content_hash or hashlib.sha256(content.encode("utf-8")).hexdigest(),
     )
+    semantic_family, semantic_domain, semantic_task_mode, semantic_tags = infer_skill_semantics(
+        directory_name=record.directory_name,
+        name=record.name,
+        when_to_use=parsed_frontmatter.when_to_use,
+        description=record.description,
+        explicit_family=parsed_frontmatter.semantic_family,
+        explicit_domain=parsed_frontmatter.semantic_domain,
+        explicit_task_mode=parsed_frontmatter.semantic_task_mode,
+        explicit_tags=parsed_frontmatter.semantic_tags,
+    )
 
     compiled_skill = skill_models.CompiledSkill(
         identity=identity,
@@ -54,6 +65,10 @@ def compile_skill_record(
         context_hint=parsed_frontmatter.context_hint,
         agent=parsed_frontmatter.agent,
         effort=parsed_frontmatter.effort,
+        semantic_family=semantic_family,
+        semantic_domain=semantic_domain,
+        semantic_task_mode=semantic_task_mode,
+        semantic_tags=semantic_tags,
         loaded_from=_string_compat_value(compat_metadata, "loaded_from") or record.entry_file,
         shell_enabled=_bool_compat_value(
             compat_metadata,

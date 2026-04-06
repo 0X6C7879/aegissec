@@ -240,6 +240,12 @@ class CapabilityFacade:
             "selected_skill_ids": skill_context.get("selected_skill_ids", []),
             "skill_budget": skill_context.get("skill_budget", {}),
             "skill_set_plan": skill_context.get("skill_set_plan", {}),
+            "intent_profile": skill_context.get("intent_profile"),
+            "prepared_selected_skills": skill_context.get("prepared_selected_skills", []),
+            "prepared_supporting_skills": skill_context.get("prepared_supporting_skills", []),
+            "primary_prepared": skill_context.get("primary_prepared"),
+            "suppressed_skills": skill_context.get("suppressed_skills", []),
+            "suppression_reasons": skill_context.get("suppression_reasons", {}),
             "pruning_applied": bool(
                 cast(dict[str, object], skill_context.get("skill_set_plan", {})).get(
                     "pruning_applied", False

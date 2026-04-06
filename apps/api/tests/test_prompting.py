@@ -415,13 +415,33 @@ def test_capability_facade_build_skill_context_preserves_selected_skill_payload(
                         "role": "primary",
                         "loaded": True,
                         "surfaced_in_prompt": True,
-                        "explicitly_prepared": True,
-                        "explicitly_executed": False,
+                        "prepared_for_context": True,
+                        "prepared_for_execution": True,
                         "used_by_agent": False,
                     }
                 ],
                 "reference_skills": [],
                 "rejected_skills": [],
+                "intent_profile": {"dominant_domain": "ctf_web"},
+                "prepared_selected_skills": [
+                    {
+                        "id": "skill-1",
+                        "directory_name": "agent-browser",
+                        "name": "agent-browser",
+                        "prepared_for_context": True,
+                        "prepared_for_execution": True,
+                        "role": "primary",
+                    }
+                ],
+                "prepared_supporting_skills": [],
+                "primary_prepared": {
+                    "id": "skill-1",
+                    "directory_name": "agent-browser",
+                    "prepared_for_context": True,
+                    "prepared_for_execution": True,
+                },
+                "suppressed_skills": [],
+                "suppression_reasons": {},
                 "selected_skill": {
                     "id": "skill-1",
                     "directory_name": "agent-browser",
@@ -496,6 +516,12 @@ def test_capability_snapshot_includes_selected_skill_without_shortlist_guessing(
                     "notes": [],
                 },
                 "skill_runtime_usage": [],
+                "intent_profile": {"dominant_domain": "ctf_web"},
+                "prepared_selected_skills": [],
+                "prepared_supporting_skills": [],
+                "primary_prepared": None,
+                "suppressed_skills": [],
+                "suppression_reasons": {},
                 "reference_skills": [],
                 "rejected_skills": [],
                 "selected_skill": {
