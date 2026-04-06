@@ -705,11 +705,25 @@ class SkillService:
         if not selected_skills or not isinstance(primary_skill, dict):
             return best_skill_result
 
+        def _entry_identity(item: dict[str, object]) -> str | None:
+            for value in (item.get("id"), item.get("directory_name"), item.get("name")):
+                if isinstance(value, str) and value.strip():
+                    return value.strip().casefold()
+            return None
+
         def _matches(item: dict[str, object]) -> bool:
-            return any(
-                isinstance(value, str) and value.strip().casefold() == preferred_normalized
-                for value in (item.get("id"), item.get("directory_name"), item.get("name"))
-            )
+            return _entry_identity(item) == preferred_normalized
+
+        def _with_role(item: dict[str, object], role: str) -> dict[str, object]:
+            updated = dict(item)
+            updated["role"] = role
+            selection_explanation = updated.get("selection_explanation")
+            if isinstance(selection_explanation, dict):
+                updated["selection_explanation"] = {
+                    **selection_explanation,
+                    "selection_role": role,
+                }
+            return updated
 
         if _matches(primary_skill):
             return best_skill_result
@@ -718,20 +732,20 @@ class SkillService:
         if preferred_entry is None:
             return best_skill_result
 
-        updated_primary = dict(primary_skill)
-        updated_primary["role"] = "supporting"
-        updated_preferred = dict(preferred_entry)
-        updated_preferred["role"] = "primary"
+        primary_identity = _entry_identity(primary_skill)
+        selected_entries = [dict(item) for item in selected_skills if isinstance(item, dict)]
+        updated_preferred = _with_role(preferred_entry, "primary")
+        updated_supporting: list[dict[str, object]] = []
+        for item in selected_entries:
+            item_identity = _entry_identity(item)
+            if item_identity == _entry_identity(preferred_entry):
+                continue
+            if item_identity == primary_identity:
+                updated_supporting.append(_with_role(item, "supporting"))
+                continue
+            updated_supporting.append(_with_role(item, str(item.get("role") or "supporting")))
+        updated_selected_skills = [updated_preferred, *updated_supporting]
 
-        updated_selected_skills: list[dict[str, object]] = [updated_preferred]
-        updated_selected_skills.extend(
-            updated_primary if item is primary_skill else dict(item)
-            for item in selected_skills
-            if item is not preferred_entry and item is not primary_skill
-        )
-        updated_selected_skills.insert(1, updated_primary)
-
-        updated_supporting = [dict(item, role="supporting") for item in updated_selected_skills[1:]]
         anchored_result = dict(best_skill_result)
         anchored_result["primary_skill"] = updated_preferred
         anchored_result["selected_skill"] = updated_preferred
@@ -744,6 +758,31 @@ class SkillService:
             for item in cast(list[dict[str, object]], anchored_result["selected_skills"])
             if isinstance(item.get("id"), str)
         ]
+
+        resolution_payload = anchored_result.get("resolution")
+        if isinstance(resolution_payload, dict):
+            updated_resolution = dict(resolution_payload)
+            updated_resolution["primary_candidate"] = updated_preferred
+            updated_resolution["selected_skill_id"] = updated_preferred.get("id")
+            updated_resolution["selected_candidates"] = list(updated_selected_skills)
+            updated_resolution["supporting_candidates"] = list(updated_supporting)
+            anchored_result["resolution"] = updated_resolution
+
+        resolution_summary = anchored_result.get("resolution_summary")
+        if isinstance(resolution_summary, dict):
+            updated_summary = dict(resolution_summary)
+            updated_summary["primary_skill_id"] = updated_preferred.get("id")
+            updated_summary["selected_skill_id"] = updated_preferred.get("id")
+            anchored_result["resolution_summary"] = updated_summary
+
+        skill_set_plan = anchored_result.get("skill_set_plan")
+        if isinstance(skill_set_plan, dict):
+            updated_plan = dict(skill_set_plan)
+            updated_plan["primary_skill"] = updated_preferred
+            updated_plan["supporting_skills"] = list(updated_supporting)
+            updated_plan["selected_skills"] = list(updated_selected_skills)
+            updated_plan["selected_skill_ids"] = list(anchored_result["selected_skill_ids"])
+            anchored_result["skill_set_plan"] = updated_plan
         return anchored_result
 
     def _prepare_selected_skill_set(
@@ -852,6 +891,12 @@ class SkillService:
                     f"prepared_for_execution={prepared_primary_skill.get('prepared_for_execution')}",
                 ]
             )
+            selection_explanation = prepared_primary_skill.get("selection_explanation")
+            if isinstance(selection_explanation, dict):
+                primary_why = selection_explanation.get(
+                    "why_high_relevance", "high blended relevance"
+                )
+                lines.append(f"  why={primary_why}")
 
         if prepared_supporting_skills:
             lines.extend(["", "Supporting skills prepared for context:"])
@@ -862,6 +907,31 @@ class SkillService:
                     f"prepared_for_context={item.get('prepared_for_context')} | "
                     f"prepared_for_execution={item.get('prepared_for_execution')}"
                 )
+                packing_explanation = item.get("packing_explanation")
+                if isinstance(packing_explanation, dict):
+                    supporting_why = packing_explanation.get(
+                        "why_selected", "selected for complement"
+                    )
+                    lines.append(f"  why={supporting_why}")
+
+        selected_explanations: list[str] = []
+        if isinstance(prepared_primary_skill, dict):
+            primary_label = (
+                prepared_primary_skill.get("directory_name")
+                or prepared_primary_skill.get("name")
+                or "unknown"
+            )
+            selected_explanations.append(
+                f"- {primary_label}: "
+                f"{self._explanation_text(prepared_primary_skill.get('selection_explanation'))}"
+            )
+        for item in prepared_supporting_skills:
+            supporting_name = str(item.get("directory_name") or item.get("name") or "unknown")
+            selected_explanations.append(
+                f"- {supporting_name}: {self._explanation_text(item.get('packing_explanation'))}"
+            )
+        if selected_explanations:
+            lines.extend(["", "Why these skills were selected together:", *selected_explanations])
 
         if suppressed_skills:
             lines.extend(["", "Suppressed skills:"])
@@ -901,6 +971,16 @@ class SkillService:
         if len(guidance_lines) > 2:
             lines.extend(guidance_lines)
         return "\n".join(lines)
+
+    def _explanation_text(self, value: object) -> str:
+        if isinstance(value, dict):
+            why_selected = value.get("why_selected")
+            if isinstance(why_selected, str) and why_selected.strip():
+                return why_selected
+            why_high_relevance = value.get("why_high_relevance")
+            if isinstance(why_high_relevance, str) and why_high_relevance.strip():
+                return why_high_relevance
+        return "selected for overall relevance and complement"
 
     def build_ranked_skill_context_prompt_fragment(
         self,
@@ -1780,6 +1860,8 @@ class SkillService:
                 "total_score": candidate.total_score,
                 "score_breakdown": candidate.score_breakdown.to_payload(),
                 "reasons": list(candidate.reasons),
+                "selection_explanation": dict(candidate.selection_explanation),
+                "packing_explanation": dict(candidate.packing_explanation),
                 "rejected_reason": candidate.rejected_reason,
             }
         )

@@ -8,7 +8,6 @@ from app.compat.skills import models as skill_models
 from app.compat.skills.intent_routing import (
     build_skill_intent_adjustment,
     infer_task_intent,
-    skill_should_be_selected_for_intent,
 )
 
 _WORD_RE = re.compile(r"[a-z0-9_\-/\.]+")
@@ -37,6 +36,8 @@ def score_skill_candidate(
     request: skill_models.SkillResolutionRequest,
 ) -> skill_models.SkillCandidateScoreBreakdown:
     breakdown = skill_models.SkillCandidateScoreBreakdown()
+    intent_profile = request.intent_profile or infer_task_intent(request)
+    request.intent_profile = intent_profile
 
     breakdown.path_score = _score_path_match(
         compiled_skill=compiled_skill,
@@ -84,6 +85,24 @@ def score_skill_candidate(
     breakdown.source_kind_score = _SOURCE_KIND_SCORES.get(compiled_skill.identity.source_kind, 0)
     breakdown.reasons.append(
         f"source_kind={compiled_skill.identity.source_kind.value} (+{breakdown.source_kind_score})"
+    )
+    breakdown.family_fit_score = _score_semantic_family_fit(
+        compiled_skill=compiled_skill,
+        request=request,
+        intent_profile=intent_profile,
+        reasons=breakdown.reasons,
+    )
+    breakdown.domain_fit_score = _score_semantic_domain_fit(
+        compiled_skill=compiled_skill,
+        request=request,
+        intent_profile=intent_profile,
+        reasons=breakdown.reasons,
+    )
+    breakdown.task_mode_fit_score = _score_task_mode_fit(
+        compiled_skill=compiled_skill,
+        request=request,
+        intent_profile=intent_profile,
+        reasons=breakdown.reasons,
     )
 
     if compiled_skill.user_invocable is False:
@@ -209,30 +228,15 @@ def pack_skill_candidates(
     primary_candidate = executable_candidates[0]
     supporting_candidates: list[skill_models.ResolvedSkillCandidate] = []
     rejected_candidates: list[skill_models.ResolvedSkillCandidate] = []
-    intent_profile = request.intent_profile
     supporting_limit = min(
         max(1, request.top_k or _DEFAULT_SUPPORTING_LIMIT), _DEFAULT_SUPPORTING_LIMIT
     )
-
-    if intent_profile is not None and intent_profile.is_ctf and intent_profile.prefers_dispatcher:
-        dispatcher_candidate = next(
-            (
-                candidate
-                for candidate in executable_candidates
-                if _is_dispatcher_candidate(candidate)
-            ),
-            None,
-        )
-        if dispatcher_candidate is not None:
-            primary_candidate = dispatcher_candidate
-
-    mandatory_supporting_ids: set[str] = set()
-    if intent_profile is not None:
-        for candidate in executable_candidates:
-            if candidate is primary_candidate:
-                continue
-            if skill_should_be_selected_for_intent(candidate.compiled_skill, intent_profile):
-                mandatory_supporting_ids.add(candidate.compiled_skill.skill_id)
+    primary_candidate.selection_explanation = _build_selection_explanation(
+        candidate=primary_candidate,
+        request=request,
+        role="primary",
+        rationale="highest blended evidence score after soft priors and semantic fit",
+    )
 
     for candidate in executable_candidates:
         if candidate is primary_candidate:
@@ -264,11 +268,10 @@ def pack_skill_candidates(
             continue
 
         if len(supporting_candidates) >= supporting_limit:
-            if candidate.compiled_skill.skill_id not in mandatory_supporting_ids:
-                candidate.role = skill_models.SkillCandidateRole.REJECTED
-                candidate.rejected_reason = "score_too_low"
-                rejected_candidates.append(candidate)
-                continue
+            candidate.role = skill_models.SkillCandidateRole.REJECTED
+            candidate.rejected_reason = "score_too_low"
+            rejected_candidates.append(candidate)
+            continue
 
         if any(
             compute_skill_redundancy(existing, candidate) >= 7
@@ -281,15 +284,26 @@ def pack_skill_candidates(
             continue
 
         score_gap = max(0, primary_candidate.total_score - candidate.total_score)
-        if candidate.compiled_skill.skill_id in mandatory_supporting_ids:
-            supporting_candidates.append(candidate)
-            continue
         if _should_select_as_supporting(
             primary_candidate,
             candidate,
             score_gap=score_gap,
             request=request,
         ):
+            candidate.selection_explanation = _build_selection_explanation(
+                candidate=candidate,
+                request=request,
+                role="supporting",
+                rationale=(
+                    "high relevance retained after soft scoring; complements the primary skill"
+                ),
+            )
+            candidate.packing_explanation = _build_packing_explanation(
+                primary_candidate=primary_candidate,
+                candidate=candidate,
+                score_gap=score_gap,
+                complementarity=complementarity_with_primary,
+            )
             supporting_candidates.append(candidate)
             continue
 
@@ -306,9 +320,7 @@ def build_skill_candidate_prompt_fragment(
     if not resolution_result.all_selected_candidates and not resolution_result.reference_candidates:
         return "No ranked skill candidates are currently available."
 
-    lines = [
-        "Primary skill for current context:",
-    ]
+    lines = ["Selected skill set:"]
     primary_candidate = resolution_result.primary_candidate
     if primary_candidate is None:
         lines.append("- None")
@@ -318,7 +330,7 @@ def build_skill_candidate_prompt_fragment(
         )
 
     lines.append("")
-    lines.append("Supporting skills also loaded:")
+    lines.append("Supporting skills selected for complement:")
     if not resolution_result.supporting_candidates:
         lines.append("- None")
     else:
@@ -337,9 +349,8 @@ def build_skill_candidate_prompt_fragment(
 
     lines.append("")
     lines.append(
-        "Use the primary skill by default. Combine supporting skills when the task spans "
-        "planning plus execution, validation plus specialization, or broader triage plus a "
-        "path-specific subtask."
+        "Use the selected skill set jointly. Prefer the primary skill by default, and bring in "
+        "supporting skills when their specialization or complement matches the current subtask."
     )
     return "\n".join(lines)
 
@@ -364,6 +375,12 @@ def _format_candidate_block(
     if skill.activation_paths:
         lines.append(f"   paths: {list(skill.activation_paths)}")
     lines.append(f"   why: {'; '.join(candidate.reasons[:4])}")
+    if candidate.selection_explanation:
+        lines.append(
+            f"   selection: {candidate.selection_explanation.get('why_high_relevance', 'n/a')}"
+        )
+    if candidate.packing_explanation:
+        lines.append(f"   complement: {candidate.packing_explanation.get('why_selected', 'n/a')}")
     return lines
 
 
@@ -381,6 +398,10 @@ def _should_select_as_supporting(
 
     complementarity = compute_skill_complementarity(primary_candidate, candidate)
     if complementarity >= 3:
+        return True
+    if _has_semantic_mode_complement(primary_candidate, candidate):
+        return True
+    if _has_semantic_family_domain_overlap(primary_candidate, candidate):
         return True
     if _has_strong_when_to_use_overlap(primary_candidate, candidate):
         return True
@@ -409,6 +430,10 @@ def compute_skill_complementarity(
     if _has_strong_when_to_use_overlap(primary_candidate, candidate):
         score += 1
     if _has_different_source_complement(primary_candidate, candidate):
+        score += 1
+    if _has_semantic_mode_complement(primary_candidate, candidate):
+        score += 2
+    if _has_semantic_family_domain_overlap(primary_candidate, candidate):
         score += 1
     return score
 
@@ -442,6 +467,18 @@ def compute_skill_redundancy(
         score += 1
     if first_skill.identity.source_kind == second_skill.identity.source_kind:
         score += 1
+    if _normalized_optional(first_skill.semantic_family) and _normalized_optional(
+        first_skill.semantic_family
+    ) == _normalized_optional(second_skill.semantic_family):
+        score += 2
+    if _normalized_optional(first_skill.semantic_domain) and _normalized_optional(
+        first_skill.semantic_domain
+    ) == _normalized_optional(second_skill.semantic_domain):
+        score += 1
+    if _normalized_optional(first_skill.semantic_task_mode) and _normalized_optional(
+        first_skill.semantic_task_mode
+    ) == _normalized_optional(second_skill.semantic_task_mode):
+        score += 2
     return score
 
 
@@ -553,6 +590,44 @@ def _has_different_source_complement(
     )
 
 
+def _has_semantic_mode_complement(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_skill = primary_candidate.compiled_skill
+    candidate_skill = candidate.compiled_skill
+    primary_mode = _normalized_optional(primary_skill.semantic_task_mode)
+    candidate_mode = _normalized_optional(candidate_skill.semantic_task_mode)
+    if not primary_mode or not candidate_mode or primary_mode == candidate_mode:
+        return False
+    shared_family = _normalized_optional(primary_skill.semantic_family) == _normalized_optional(
+        candidate_skill.semantic_family
+    )
+    shared_domain = _normalized_optional(primary_skill.semantic_domain) == _normalized_optional(
+        candidate_skill.semantic_domain
+    )
+    dispatcher_pair = {primary_mode, candidate_mode} == {"dispatcher", "specialized"}
+    return dispatcher_pair or shared_family or shared_domain
+
+
+def _has_semantic_family_domain_overlap(
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+) -> bool:
+    primary_skill = primary_candidate.compiled_skill
+    candidate_skill = candidate.compiled_skill
+    shared_family = _normalized_optional(primary_skill.semantic_family) and _normalized_optional(
+        primary_skill.semantic_family
+    ) == _normalized_optional(candidate_skill.semantic_family)
+    shared_domain = _normalized_optional(primary_skill.semantic_domain) and _normalized_optional(
+        primary_skill.semantic_domain
+    ) == _normalized_optional(candidate_skill.semantic_domain)
+    different_mode = _normalized_optional(primary_skill.semantic_task_mode) != _normalized_optional(
+        candidate_skill.semantic_task_mode
+    )
+    return bool((shared_family or shared_domain) and different_mode)
+
+
 def _is_general_skill(compiled_skill: skill_models.CompiledSkill) -> bool:
     if (compiled_skill.semantic_task_mode or "").casefold() == "dispatcher":
         return False
@@ -603,6 +678,173 @@ def _normalized_token_set(text: str | None) -> set[str]:
     return _tokenize(text or "")
 
 
+def _normalized_optional(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold()
+    return normalized or None
+
+
+def _request_tokens(request: skill_models.SkillResolutionRequest) -> set[str]:
+    return _tokenize(_request_context_text(request))
+
+
+def _score_semantic_family_fit(
+    *,
+    compiled_skill: skill_models.CompiledSkill,
+    request: skill_models.SkillResolutionRequest,
+    intent_profile: skill_models.SkillIntentProfile,
+    reasons: list[str],
+) -> int:
+    family = _normalized_optional(compiled_skill.semantic_family)
+    if family is None:
+        return 0
+    score = 0
+    if intent_profile.is_ctf and family == "ctf":
+        score += 8
+    if (
+        intent_profile.dominant_domain in {"java_code_audit", "java_route_trace"}
+        and family == "java-audit"
+    ):
+        score += 8
+    if intent_profile.dominant_domain == "remote_http_service" and family in {
+        "ctf",
+        "generic-recon",
+    }:
+        score += 4
+    if score:
+        reasons.append(f"semantic family fit {family} (+{score})")
+    return score
+
+
+def _score_semantic_domain_fit(
+    *,
+    compiled_skill: skill_models.CompiledSkill,
+    request: skill_models.SkillResolutionRequest,
+    intent_profile: skill_models.SkillIntentProfile,
+    reasons: list[str],
+) -> int:
+    domain = _normalized_optional(compiled_skill.semantic_domain)
+    if domain is None:
+        return 0
+    score = 0
+    if intent_profile.is_http_target and domain == "web":
+        score += 8
+    if (
+        intent_profile.dominant_domain in {"java_code_audit", "java_route_trace"}
+        and domain == "java"
+    ):
+        score += 8
+    if intent_profile.is_local_codebase_task and domain in {"java", "code", "audit"}:
+        score += 2
+    if score:
+        reasons.append(f"semantic domain fit {domain} (+{score})")
+    return score
+
+
+def _score_task_mode_fit(
+    *,
+    compiled_skill: skill_models.CompiledSkill,
+    request: skill_models.SkillResolutionRequest,
+    intent_profile: skill_models.SkillIntentProfile,
+    reasons: list[str],
+) -> int:
+    task_mode = _normalized_optional(compiled_skill.semantic_task_mode)
+    if task_mode is None:
+        return 0
+    tokens = _request_tokens(request)
+    specialized_focus = any(
+        token in tokens
+        for token in {
+            "focus",
+            "specific",
+            "specialized",
+            "analysis",
+            "analyze",
+            "audit",
+            "exploit",
+            "漏洞",
+            "分析",
+            "专注",
+        }
+    )
+    score = 0
+    if task_mode == "dispatcher" and intent_profile.prefers_dispatcher:
+        score += 5
+    if task_mode == "specialized" and (specialized_focus or intent_profile.is_http_target):
+        score += 7 if specialized_focus else 4
+    if task_mode == "audit" and intent_profile.dominant_domain in {
+        "java_code_audit",
+        "java_route_trace",
+    }:
+        score += 6
+    if score:
+        reasons.append(f"task_mode fit {task_mode} (+{score})")
+    return score
+
+
+def _build_selection_explanation(
+    *,
+    candidate: skill_models.ResolvedSkillCandidate | None,
+    request: skill_models.SkillResolutionRequest,
+    role: str | None,
+    rationale: str,
+    compiled_skill: skill_models.CompiledSkill | None = None,
+    breakdown: skill_models.SkillCandidateScoreBreakdown | None = None,
+) -> dict[str, object]:
+    skill = compiled_skill or (candidate.compiled_skill if candidate is not None else None)
+    score_breakdown = breakdown or (candidate.score_breakdown if candidate is not None else None)
+    if skill is None or score_breakdown is None:
+        return {}
+    evidence = [
+        reason
+        for reason in [
+            *score_breakdown.reasons,
+            *score_breakdown.penalties,
+        ]
+        if reason
+    ][:4]
+    semantic_fit = [
+        item
+        for item in [skill.semantic_family, skill.semantic_domain, skill.semantic_task_mode]
+        if isinstance(item, str) and item.strip()
+    ]
+    return {
+        "selection_role": role,
+        "why_high_relevance": rationale,
+        "matched_evidence": evidence,
+        "semantic_fit": semantic_fit,
+    }
+
+
+def _build_packing_explanation(
+    *,
+    primary_candidate: skill_models.ResolvedSkillCandidate,
+    candidate: skill_models.ResolvedSkillCandidate,
+    score_gap: int,
+    complementarity: int,
+) -> dict[str, object]:
+    complement_reasons: list[str] = []
+    if score_gap <= _SUPPORTING_SCORE_GAP_THRESHOLD:
+        complement_reasons.append("score stayed close to the primary")
+    if _has_semantic_mode_complement(primary_candidate, candidate):
+        complement_reasons.append("task mode complements the primary")
+    if _has_semantic_family_domain_overlap(primary_candidate, candidate):
+        complement_reasons.append("shared family/domain with a different specialization")
+    if _is_general_specialized_pair(primary_candidate, candidate):
+        complement_reasons.append("general + specialized pairing")
+    if _has_distinct_path_coverage(primary_candidate, candidate):
+        complement_reasons.append("covers different activation paths")
+    if not complement_reasons:
+        complement_reasons.append("selected for overall relevance and diversity balance")
+    return {
+        "score_gap": score_gap,
+        "complementarity": complementarity,
+        "why_selected": complement_reasons[0],
+        "complements": complement_reasons,
+    }
+
+
 def _build_resolved_skill_candidate(
     compiled_skill: skill_models.CompiledSkill,
     request: skill_models.SkillResolutionRequest,
@@ -620,6 +862,14 @@ def _build_resolved_skill_candidate(
         compiled_skill=compiled_skill,
         score_breakdown=breakdown,
         reasons=reasons,
+        selection_explanation=_build_selection_explanation(
+            candidate=None,
+            request=request,
+            role=None,
+            rationale="candidate ranked from path, text, semantic, and intent evidence",
+            compiled_skill=compiled_skill,
+            breakdown=breakdown,
+        ),
         rejected_reason=rejected_reason,
     )
 
@@ -632,6 +882,9 @@ def _ranking_sort_key(candidate: skill_models.ResolvedSkillCandidate) -> tuple[o
         -breakdown.path_score,
         -breakdown.agent_score,
         -breakdown.when_to_use_score,
+        -breakdown.domain_fit_score,
+        -breakdown.family_fit_score,
+        -breakdown.task_mode_fit_score,
         -breakdown.intent_prior_score,
         0 if skill.invocable else 1,
         -int(bool(skill.aliases)),

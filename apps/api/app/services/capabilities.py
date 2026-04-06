@@ -547,7 +547,7 @@ class CapabilityFacade:
             agent_role=agent_role,
             workflow_stage=workflow_stage,
         )
-        skills = payload.get("skills")
+        skills = payload.get("prepared_selected_skills") or payload.get("skills")
         mcp_tool_inventory = self.build_mcp_tool_inventory()
         if (not isinstance(skills, list) or not skills) and not mcp_tool_inventory:
             summary = "No loaded skill or MCP tool parameter schemas are currently available."

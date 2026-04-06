@@ -301,6 +301,9 @@ class SkillCandidateScoreBreakdown:
     argument_readiness_score: int = 0
     effort_score: int = 0
     source_kind_score: int = 0
+    family_fit_score: int = 0
+    domain_fit_score: int = 0
+    task_mode_fit_score: int = 0
     intent_prior_score: int = 0
     matched_activation_paths: list[str] = field(default_factory=list)
     matched_agent_terms: list[str] = field(default_factory=list)
@@ -324,6 +327,9 @@ class SkillCandidateScoreBreakdown:
             + self.argument_readiness_score
             + self.effort_score
             + self.source_kind_score
+            + self.family_fit_score
+            + self.domain_fit_score
+            + self.task_mode_fit_score
             + self.intent_prior_score
         )
 
@@ -341,6 +347,9 @@ class SkillCandidateScoreBreakdown:
             "argument_readiness_score": self.argument_readiness_score,
             "effort_score": self.effort_score,
             "source_kind_score": self.source_kind_score,
+            "family_fit_score": self.family_fit_score,
+            "domain_fit_score": self.domain_fit_score,
+            "task_mode_fit_score": self.task_mode_fit_score,
             "intent_prior_score": self.intent_prior_score,
             "total_score": self.total_score,
             "matched_activation_paths": list(self.matched_activation_paths),
@@ -396,6 +405,8 @@ class ResolvedSkillCandidate:
     score_breakdown: SkillCandidateScoreBreakdown
     rank: int = 0
     reasons: list[str] = field(default_factory=list)
+    selection_explanation: dict[str, object] = field(default_factory=dict)
+    packing_explanation: dict[str, object] = field(default_factory=dict)
     selected: bool = False
     role: SkillCandidateRole | None = None
     rejected_reason: str | None = None
@@ -412,6 +423,8 @@ class ResolvedSkillCandidate:
                 "rank": self.rank,
                 "score_breakdown": self.score_breakdown.to_payload(),
                 "reasons": list(self.reasons),
+                "selection_explanation": dict(self.selection_explanation),
+                "packing_explanation": dict(self.packing_explanation),
                 "selected": self.selected,
                 "role": None if self.role is None else self.role.value,
                 "rejected_reason": self.rejected_reason,

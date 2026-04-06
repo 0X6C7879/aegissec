@@ -1055,13 +1055,28 @@ def _score_skill_for_autoroute(
         or "http://" in normalized_context
         or "https://" in normalized_context
     )
-
-    if family == "ctf" and task_mode == "dispatcher" and is_ctf_context:
-        dispatcher_score = 76 if is_http_context else 74
-        return dispatcher_score, "ctf dispatcher prior from challenge/web context"
+    specialized_focus = any(
+        token in context_tokens
+        for token in {
+            "focus",
+            "specific",
+            "specialized",
+            "analysis",
+            "analyze",
+            "audit",
+            "漏洞",
+            "分析",
+            "专注",
+        }
+    )
 
     if family == "ctf" and domain == "web" and is_http_context:
-        return 74, "ctf web prior from remote/http context"
+        web_score = 78 if specialized_focus else 74
+        return web_score, "ctf web prior from remote/http context"
+
+    if family == "ctf" and task_mode == "dispatcher" and is_ctf_context:
+        dispatcher_score = 72 if specialized_focus else (76 if is_http_context else 74)
+        return dispatcher_score, "ctf dispatcher prior from challenge/web context"
 
     aliases = _skill_autoroute_aliases(skill)
     exact_alias_matches = [

@@ -114,16 +114,36 @@ def infer_task_intent(
         or java_evidence
         or any(token in tokens for token in {"repo", "codebase", "local", "source", "project"})
     )
-    prefers_dispatcher = False
+    specialized_web_focus = has_http_target and any(
+        token in tokens
+        for token in {
+            "focus",
+            "specialized",
+            "specific",
+            "analysis",
+            "analyze",
+            "audit",
+            "exploit",
+            "exploitation",
+            "分析",
+            "专注",
+            "漏洞",
+            "漏洞点",
+        }
+    )
+    prefers_dispatcher = ctf_signal and not specialized_web_focus
 
     if ctf_signal:
         dominant_domain = "ctf_challenge"
-        prefers_dispatcher = True
-        preferred_tags.extend(["ctf", "dispatcher", "challenge"])
+        preferred_tags.extend(["ctf", "challenge"])
+        if prefers_dispatcher:
+            preferred_tags.append("dispatcher")
         notes.append("challenge signals detected before scoring")
     if web_ctf_signal:
         dominant_domain = "ctf_web"
         preferred_tags.extend(["ctf-web", "web"])
+        if specialized_web_focus:
+            preferred_tags.extend(["specialized", "web-focus"])
         notes.append("remote HTTP challenge matched ctf-web specialization")
     elif has_http_target and not is_local_codebase_task:
         dominant_domain = "remote_http_service"
@@ -173,46 +193,42 @@ def build_skill_intent_adjustment(
         adjustment.reasons.append("suppressed: java audit family requires local Java evidence")
         return adjustment
 
-    if intent_profile.is_ctf and "dispatcher" in tags and _CTF_FAMILY in tags:
-        adjustment.prior_score += 60
-        adjustment.reasons.append("intent prior: challenge dispatcher favored for CTF solving")
-    if intent_profile.is_ctf and "ctf-web" in tags:
-        adjustment.prior_score += 45
-        adjustment.reasons.append("intent prior: web challenge specialization favored")
+    if intent_profile.is_ctf and _CTF_FAMILY in tags:
+        adjustment.prior_score += 10
+        adjustment.reasons.append("intent prior: ctf family matched challenge context")
+    if intent_profile.is_ctf and intent_profile.prefers_dispatcher and "dispatcher" in tags:
+        adjustment.prior_score += 6
+        adjustment.reasons.append("intent prior: vague challenge benefits from dispatcher triage")
+    if intent_profile.is_ctf and intent_profile.is_http_target and "ctf-web" in tags:
+        adjustment.prior_score += 8
+        adjustment.reasons.append(
+            "intent prior: web challenge specialization matched HTTP evidence"
+        )
     if (
         intent_profile.is_http_target
         and not intent_profile.is_local_codebase_task
         and "web" in tags
     ):
-        adjustment.prior_score += 18
-        adjustment.reasons.append("intent prior: remote HTTP target matched web specialization")
+        adjustment.prior_score += 5
+        adjustment.reasons.append("intent prior: remote HTTP target matched web domain")
     if intent_profile.is_local_codebase_task and _JAVA_AUDIT_FAMILY in tags:
-        adjustment.prior_score += 22
+        adjustment.prior_score += 12
         adjustment.reasons.append("intent prior: local code audit matched java audit family")
+    if intent_profile.dominant_domain == "java_route_trace" and "route-trace" in tags:
+        adjustment.prior_score += 6
+        adjustment.reasons.append("intent prior: route trace evidence matched Java tracing")
     if (
         compiled_skill.directory_name.casefold() == "java-route-tracer"
         and intent_profile.dominant_domain != "java_route_trace"
     ):
-        adjustment.prior_score -= 10
+        adjustment.prior_score -= 4
         adjustment.reasons.append(
             "intent prior: route tracer downranked without explicit route-tracing intent"
         )
     if any(tag in tags for tag in intent_profile.suppressed_skill_tags):
-        adjustment.prior_score -= 8
+        adjustment.prior_score -= 6
         adjustment.reasons.append("intent prior: matched suppressed semantic tag")
     return adjustment
-
-
-def skill_should_be_selected_for_intent(
-    compiled_skill: skill_models.CompiledSkill,
-    intent_profile: skill_models.SkillIntentProfile,
-) -> bool:
-    tags = _skill_tag_set(compiled_skill)
-    if intent_profile.is_ctf and intent_profile.prefers_dispatcher and "dispatcher" in tags:
-        return True
-    if intent_profile.is_ctf and intent_profile.is_http_target and "ctf-web" in tags:
-        return True
-    return False
 
 
 def _has_java_code_evidence(request_text: str, touched_text: str) -> bool:
