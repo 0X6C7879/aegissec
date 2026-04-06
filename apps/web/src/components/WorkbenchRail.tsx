@@ -136,6 +136,18 @@ export function WorkbenchRail({
   return (
     <div className={drawerClassName}>
       <div className="workspace-drawer-header">
+        <div className="workspace-drawer-brand-row">
+          <span className="workspace-drawer-brand-mark" aria-hidden="true">
+            <span className="workspace-drawer-brand-dot workspace-drawer-brand-dot-danger" />
+            <span className="workspace-drawer-brand-dot workspace-drawer-brand-dot-warning" />
+            <span className="workspace-drawer-brand-dot workspace-drawer-brand-dot-success" />
+          </span>
+          <div className="workspace-drawer-brand-copy">
+            <span className="workspace-drawer-eyebrow">~/workspace</span>
+            <span className="workspace-drawer-brand-name">agent console</span>
+            <span className="workspace-drawer-brand-subtitle">terminal-first security workbench</span>
+          </div>
+        </div>
         <button
           className="workspace-drawer-collapse"
           type="button"
@@ -178,6 +190,7 @@ export function WorkbenchRail({
               }
               title={collapsed ? item.label : undefined}
               data-label={item.label}
+              data-short-label={item.shortLabel}
               onClick={onDismissMobile}
             >
               <span
@@ -187,11 +200,18 @@ export function WorkbenchRail({
                 {renderNavIcon(item.id)}
               </span>
               <span className="workspace-drawer-item-copy">
+                <span className="workspace-drawer-item-short">{item.shortLabel}</span>
                 <span className="workspace-drawer-item-label">{item.label}</span>
+                <span className="workspace-drawer-item-description">{item.description}</span>
               </span>
             </NavLink>
           ))}
         </nav>
+      </div>
+
+      <div className="workspace-drawer-footer">
+        <span className="workspace-drawer-footer-title">$ status</span>
+        <span className="workspace-drawer-footer-copy">routes locked · logic preserved · ui terminalized</span>
       </div>
     </div>
   );

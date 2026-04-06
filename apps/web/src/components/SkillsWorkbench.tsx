@@ -17,7 +17,7 @@ import type { SkillContextSkill, SkillRecord, SkillRecordStatus } from "../types
 
 const SKILLS_QUERY_KEY = ["skills"] as const;
 const SKILL_CONTEXT_QUERY_KEY = ["skills", "context"] as const;
-const UI_FONT_FAMILY = '"Segoe UI Variable", "Segoe UI", "Helvetica Neue", sans-serif';
+const UI_FONT_FAMILY = '"JetBrains Mono", "IBM Plex Mono", "Fira Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace';
 const SKILL_TITLE_FONT = `600 15.36px ${UI_FONT_FAMILY}`;
 const SKILL_DESCRIPTION_FONT = `400 14.08px ${UI_FONT_FAMILY}`;
 const SKILL_TITLE_LINE_HEIGHT = 22;

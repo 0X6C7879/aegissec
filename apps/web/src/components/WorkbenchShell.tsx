@@ -79,7 +79,11 @@ export function WorkbenchShell() {
         >
           <span className="workbench-shell-menu-icon" aria-hidden="true" />
         </button>
-        <span className="workbench-shell-brand-wordmark">AegisSec</span>
+        <div className="workbench-shell-brand-wordmark">
+          <span className="workbench-shell-brand-user">aegissec@operator</span>
+          <span className="workbench-shell-brand-separator">:</span>
+          <span className="workbench-shell-brand-path">~/workspace</span>
+        </div>
       </div>
 
       <button
