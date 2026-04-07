@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import threading
 import time
 from collections.abc import Coroutine
@@ -2434,6 +2435,264 @@ def test_chat_can_spawn_swarm_subagent_via_tool(client: TestClient) -> None:
         )
         assert tool_result_segment["metadata"]["result"]["agent"]["profile_name"] == "planner_agent"
         assert tool_result_segment["metadata"]["result"]["task"]["status"] == "in_progress"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_pauses_and_resumes_approval_required_tool(client: TestClient) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-1",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            stop_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-1",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return f"stopped:{stop_result.payload['agent_id']}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Approval Pause Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 409
+        detail = chat_response.json()["detail"]
+        assert detail["action"] == "require_approval"
+        continuation_token = detail["continuation_token"]
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert resolve_response.status_code == 200
+        assert api_data(resolve_response)["session"]["status"] == "running"
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            assistant_message = next(
+                (
+                    message
+                    for message in reversed(conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ),
+                None,
+            )
+            if assistant_message and assistant_message["status"] == "completed":
+                assert assistant_message["content"].startswith("stopped:")
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("assistant message did not complete after continuation resolution")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_pauses_and_resumes_scope_confirmation_tool(
+    client: TestClient, monkeypatch: MonkeyPatch
+) -> None:
+    checker_module = importlib.import_module("app.harness.governance.checker")
+    original_evaluate = checker_module.DefaultHarnessToolDecisionChecker.evaluate
+
+    def patched_evaluate(self: object, request: object) -> object:
+        tool_request = getattr(request, "tool_request")
+        if getattr(tool_request, "tool_name", None) == "list_available_skills":
+            return checker_module.HarnessToolDecision(
+                action="require_scope_confirmation",
+                reason="Scope confirmation required.",
+                metadata={"scope_miss": True},
+            )
+        return original_evaluate(self, request)
+
+    monkeypatch.setattr(
+        checker_module.DefaultHarnessToolDecisionChecker,
+        "evaluate",
+        patched_evaluate,
+    )
+
+    class ScopeConfirmationRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            listed_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="scope-call-1",
+                    tool_name="list_available_skills",
+                    arguments={},
+                )
+            )
+            return f"listed:{len(cast(list[object], listed_result.payload['skills']))}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ScopeConfirmationRuntime()
+
+    try:
+        session_response = client.post(
+            "/api/sessions", json={"title": "Scope Confirmation Session"}
+        )
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "list skills", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 409
+        detail = chat_response.json()["detail"]
+        assert detail["action"] == "require_scope_confirmation"
+        continuation_token = detail["continuation_token"]
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approve": True, "resolution_payload": {"scope_confirmed": True}},
+        )
+        assert resolve_response.status_code == 200
+        assert api_data(resolve_response)["session"]["status"] == "running"
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            assistant_message = next(
+                (
+                    message
+                    for message in reversed(conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ),
+                None,
+            )
+            if assistant_message and assistant_message["status"] == "completed":
+                assert assistant_message["content"].startswith("listed:")
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("assistant message did not complete after scope confirmation")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_cannot_resolve_cancelled_continuation(client: TestClient) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-cancel",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-cancel",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return "unreachable"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post(
+            "/api/sessions", json={"title": "Cancelled Continuation Session"}
+        )
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+        assert chat_response.status_code == 409
+        continuation_token = chat_response.json()["detail"]["continuation_token"]
+
+        cancel_response = client.post(f"/api/sessions/{session_id}/cancel")
+        assert cancel_response.status_code == 200
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert resolve_response.status_code == 404
+        assert resolve_response.json()["detail"] == "Continuation not found"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

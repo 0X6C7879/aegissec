@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.db.models import MessageKind, MessageRole
-from app.harness.compact import HarnessCompactService
-from app.harness.memory import HarnessMemoryService
-from app.harness.prompts import HarnessPromptAssembler
-from app.harness.state import HarnessSessionState
+
+HarnessCompactService = importlib.import_module("app.harness.compact").HarnessCompactService
+HarnessMemoryService = importlib.import_module("app.harness.memory").HarnessMemoryService
+HarnessPromptAssembler = importlib.import_module("app.harness.prompts").HarnessPromptAssembler
+HarnessSessionState = importlib.import_module("app.harness.state").HarnessSessionState
 
 
 class _FakeSkillService:
