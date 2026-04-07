@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
 
 from .messages import ChatRuntimeError, GenerationCallbacks, ToolCallResult
 
@@ -28,9 +28,16 @@ class QueryLoop:
                 if execute_tool is None:
                     raise ChatRuntimeError("LLM requested tools but no executor is available.")
                 engine.pending_continuation = True
-                tool_results: list[ToolCallResult] = []
-                for tool_call in turn_result.tool_calls:
-                    tool_results.append(cast(ToolCallResult, await execute_tool(tool_call)))
+                batch_execute = cast(
+                    Callable[[list[Any]], Awaitable[list[ToolCallResult]]] | None,
+                    getattr(execute_tool, "__batch_execute__", None),
+                )
+                if callable(batch_execute):
+                    tool_results = await batch_execute(turn_result.tool_calls)
+                else:
+                    tool_results = []
+                    for tool_call in turn_result.tool_calls:
+                        tool_results.append(cast(ToolCallResult, await execute_tool(tool_call)))
                 engine.usage.tool_rounds += 1
                 engine.usage.tool_calls += len(tool_results)
                 engine.append_tool_results(
