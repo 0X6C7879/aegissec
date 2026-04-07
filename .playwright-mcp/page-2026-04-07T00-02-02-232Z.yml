@@ -1,0 +1,261 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e12]:
+          - generic [ref=e13]: aegissec
+          - generic [ref=e14]: operator
+        - button "切换全局导航" [expanded] [ref=e15] [cursor=pointer]:
+          - img [ref=e17]
+      - navigation "工作台导航" [ref=e20]:
+        - link "WS Workspace" [ref=e21] [cursor=pointer]:
+          - /url: /sessions
+          - img [ref=e23]
+          - generic [ref=e25]:
+            - generic [ref=e26]: WS
+            - generic [ref=e27]: Workspace
+        - link "RT Runtime" [ref=e28] [cursor=pointer]:
+          - /url: /runtime
+          - img [ref=e30]
+          - generic [ref=e33]:
+            - generic [ref=e34]: RT
+            - generic [ref=e35]: Runtime
+        - link "SK Skills" [ref=e36] [cursor=pointer]:
+          - /url: /skills
+          - img [ref=e38]
+          - generic [ref=e40]:
+            - generic [ref=e41]: SK
+            - generic [ref=e42]: Skills
+        - link "MC MCP" [ref=e43] [cursor=pointer]:
+          - /url: /mcp
+          - img [ref=e45]
+          - generic [ref=e47]:
+            - generic [ref=e48]: MC
+            - generic [ref=e49]: MCP
+        - link "ST 设置" [ref=e50] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e52]
+          - generic [ref=e55]:
+            - generic [ref=e56]: ST
+            - generic [ref=e57]: 设置
+  - main [ref=e60]:
+    - complementary [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - button "收起近期对话面板" [ref=e64] [cursor=pointer]:
+            - img [ref=e66]
+          - button "新建对话" [ref=e68] [cursor=pointer]:
+            - generic [ref=e69]: +
+            - generic [ref=e70]: 新对话
+        - generic [ref=e71]:
+          - searchbox "搜索" [ref=e73]
+          - list [ref=e75]:
+            - listitem [ref=e76]:
+              - generic [ref=e77]:
+                - button "新对话 完成 15小时前" [ref=e78] [cursor=pointer]:
+                  - generic [ref=e81]: 新对话
+                  - generic [ref=e82]:
+                    - generic [ref=e83]: 完成
+                    - generic [ref=e84]: 15小时前
+                - button "打开对话操作" [ref=e86] [cursor=pointer]:
+                  - img [ref=e87]
+            - listitem [ref=e91]:
+              - generic [ref=e92]:
+                - button "新对话 完成 25小时前" [ref=e93] [cursor=pointer]:
+                  - generic [ref=e96]: 新对话
+                  - generic [ref=e97]:
+                    - generic [ref=e98]: 完成
+                    - generic [ref=e99]: 25小时前
+                - button "打开对话操作" [ref=e101] [cursor=pointer]:
+                  - img [ref=e102]
+            - listitem [ref=e106]:
+              - generic [ref=e107]:
+                - button "新对话 完成 26小时前" [ref=e108] [cursor=pointer]:
+                  - generic [ref=e111]: 新对话
+                  - generic [ref=e112]:
+                    - generic [ref=e113]: 完成
+                    - generic [ref=e114]: 26小时前
+                - button "打开对话操作" [ref=e116] [cursor=pointer]:
+                  - img [ref=e117]
+    - generic [ref=e125]:
+      - generic [ref=e128]:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - img:
+                  - generic:
+                    - button "Edge from action:call_function_b5zbmtjxz5qt_1 to outcome:conversation" [ref=e129] [cursor=pointer]:
+                      - generic [ref=e132]:
+                        - generic: 确认
+                    - button "Edge from root:conversation to action:call_function_b5zbmtjxz5qt_1" [ref=e134] [cursor=pointer]:
+                      - generic [ref=e137]:
+                        - generic: 尝试
+                - generic:
+                  - button "目标 未标记 解答ctf web题目：http://b61fab44-c1c8-45d5-8dc6-231ed8... curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.bu..." [ref=e139]:
+                    - generic [ref=e140]:
+                      - generic [ref=e142]:
+                        - generic [ref=e143]: 目标
+                        - generic [ref=e144]: 未标记
+                      - strong [ref=e145]: 解答ctf web题目：http://b61fab44-c1c8-45d5-8dc6-231ed8...
+                      - paragraph [ref=e146]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.bu...
+                  - button "动作 已完成 curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-2... <!DOCTYPE html> <html lang=\"en\"> <head> <meta charset=\"UTF-8\">..." [ref=e148]:
+                    - generic [ref=e149]:
+                      - generic [ref=e151]:
+                        - generic [ref=e152]: 动作
+                        - generic [ref=e153]: 已完成
+                      - strong [ref=e154]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-2...
+                      - paragraph [ref=e155]: <!DOCTYPE html> <html lang="en"> <head> <meta charset="UTF-8">...
+                  - 'button "结果 已完成 ## 解题结果 发现这是一个经典的 **命令注入漏洞** 题目： 1. **发现过程**：... ## 解题结果 发现这是一个经典的 **命令注入漏洞** 题目： 1. **发现过程**： - 页面是一个 Ping 功能表单，..." [ref=e157]':
+                    - generic [ref=e158]:
+                      - generic [ref=e160]:
+                        - generic [ref=e161]: 结果
+                        - generic [ref=e162]: 已完成
+                      - strong [ref=e163]: "## 解题结果 发现这是一个经典的 **命令注入漏洞** 题目： 1. **发现过程**：..."
+                      - paragraph [ref=e164]: "## 解题结果 发现这是一个经典的 **命令注入漏洞** 题目： 1. **发现过程**： - 页面是一个 Ping 功能表单，..."
+          - img
+          - generic [ref=e166]:
+            - button "zoom in" [ref=e167] [cursor=pointer]:
+              - img [ref=e168]
+            - button "zoom out" [ref=e170] [cursor=pointer]:
+              - img [ref=e171]
+            - button "fit view" [ref=e173] [cursor=pointer]:
+              - img [ref=e174]
+      - generic [ref=e178]:
+        - article [ref=e180]:
+          - article [ref=e181]:
+            - generic [ref=e182]:
+              - strong [ref=e183]: 你
+              - button "返回并编辑消息" [ref=e186] [cursor=pointer]:
+                - generic [ref=e187]: ↩
+            - generic [ref=e188]: 解答ctf web题目：http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuoj.cn:81/
+          - article [ref=e189]:
+            - strong [ref=e191]: 助手
+            - generic [ref=e192]:
+              - paragraph [ref=e193]: 开始生成回复
+              - paragraph [ref=e194]: 正在评估可预载技能
+              - strong [ref=e195]: Execute Skill
+              - paragraph [ref=e196]: 自动选择 ctf-web
+              - paragraph [ref=e199]: 我来帮你解答这道CTF web题目。首先进行初步侦察，了解目标情况。
+              - group [ref=e200]:
+                - generic "Shell curl -s -I \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuoj.cn:… 成功" [ref=e201] [cursor=pointer]:
+                  - generic [ref=e202]:
+                    - generic [ref=e203]: Shell
+                    - strong [ref=e204]: curl -s -I "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuoj.cn:…
+                  - generic [ref=e208]: 成功
+              - group [ref=e209]:
+                - generic "Shell curl -s \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuoj.cn:81/\" 成功" [ref=e210] [cursor=pointer]:
+                  - generic [ref=e211]:
+                    - generic [ref=e212]: Shell
+                    - strong [ref=e213]: curl -s "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuoj.cn:81/"
+                  - generic [ref=e217]: 成功
+              - group [ref=e218]:
+                - generic "Shell curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo… 成功" [ref=e219] [cursor=pointer]:
+                  - generic [ref=e220]:
+                    - generic [ref=e221]: Shell
+                    - strong [ref=e222]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo…
+                  - generic [ref=e226]: 成功
+              - group [ref=e227]:
+                - generic "Shell curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo… 成功" [ref=e228] [cursor=pointer]:
+                  - generic [ref=e229]:
+                    - generic [ref=e230]: Shell
+                    - strong [ref=e231]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo…
+                  - generic [ref=e235]: 成功
+              - group [ref=e236]:
+                - generic "Shell curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo… 成功" [ref=e237] [cursor=pointer]:
+                  - generic [ref=e238]:
+                    - generic [ref=e239]: Shell
+                    - strong [ref=e240]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo…
+                  - generic [ref=e244]: 成功
+              - group [ref=e245]:
+                - generic "Shell curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo… 成功" [ref=e246] [cursor=pointer]:
+                  - generic [ref=e247]:
+                    - generic [ref=e248]: Shell
+                    - strong [ref=e249]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo…
+                  - generic [ref=e253]: 成功
+              - group [ref=e254]:
+                - generic "Shell curl -s -X POST \"http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo… 成功" [ref=e255] [cursor=pointer]:
+                  - generic [ref=e256]:
+                    - generic [ref=e257]: Shell
+                    - strong [ref=e258]: curl -s -X POST "http://b61fab44-c1c8-45d5-8dc6-231ed8e6baa9.node5.buuo…
+                  - generic [ref=e262]: 成功
+              - generic [ref=e264]:
+                - heading "解题结果" [level=2] [ref=e265]
+                - paragraph [ref=e266]:
+                  - text: 发现这是一个经典的
+                  - strong [ref=e267]: 命令注入漏洞
+                  - text: 题目：
+                - list [ref=e268]:
+                  - listitem [ref=e269]:
+                    - paragraph [ref=e270]:
+                      - strong [ref=e271]: 发现过程
+                      - text: ：
+                    - list [ref=e272]:
+                      - listitem [ref=e273]:
+                        - text: 页面是一个 Ping 功能表单，POST 方式提交
+                        - code [ref=e274]: target
+                        - text: 参数
+                      - listitem [ref=e275]:
+                        - text: 后端使用
+                        - code [ref=e276]: system("ping -c 3 ".$_POST['target'])
+                        - text: 直接执行用户输入，存在命令注入
+                  - listitem [ref=e277]:
+                    - paragraph [ref=e278]:
+                      - strong [ref=e279]: 利用
+                      - text: ：
+                    - list [ref=e280]:
+                      - listitem [ref=e281]:
+                        - text: 使用
+                        - code [ref=e282]: ;
+                        - text: 分号分隔注入命令，如
+                        - code [ref=e283]: 127.0.0.1;cat /flag
+                  - listitem [ref=e284]:
+                    - paragraph [ref=e285]:
+                      - strong [ref=e286]: Flag
+                      - text: ：
+                    - code [ref=e288]: "flag{6be5110e-d90d-4848-b8c9-fb5f81e674ea}"
+              - generic [ref=e290]:
+                - heading "解题结果" [level=2] [ref=e291]
+                - paragraph [ref=e292]:
+                  - text: 发现这是一个经典的
+                  - strong [ref=e293]: 命令注入漏洞
+                  - text: 题目：
+                - list [ref=e294]:
+                  - listitem [ref=e295]:
+                    - paragraph [ref=e296]:
+                      - strong [ref=e297]: 发现过程
+                      - text: ：
+                    - list [ref=e298]:
+                      - listitem [ref=e299]:
+                        - text: 页面是一个 Ping 功能表单，POST 方式提交
+                        - code [ref=e300]: target
+                        - text: 参数
+                      - listitem [ref=e301]:
+                        - text: 后端使用
+                        - code [ref=e302]: system("ping -c 3 ".$_POST['target'])
+                        - text: 直接执行用户输入，存在命令注入
+                  - listitem [ref=e303]:
+                    - paragraph [ref=e304]:
+                      - strong [ref=e305]: 利用
+                      - text: ：
+                    - list [ref=e306]:
+                      - listitem [ref=e307]:
+                        - text: 使用
+                        - code [ref=e308]: ;
+                        - text: 分号分隔注入命令，如
+                        - code [ref=e309]: 127.0.0.1;cat /flag
+                  - listitem [ref=e310]:
+                    - paragraph [ref=e311]:
+                      - strong [ref=e312]: Flag
+                      - text: ：
+                    - code [ref=e314]: "flag{6be5110e-d90d-4848-b8c9-fb5f81e674ea}"
+              - paragraph [ref=e315]: 本轮生成已完成
+        - generic [ref=e316]:
+          - generic [ref=e318]:
+            - text: ">"
+            - paragraph [ref=e319]: 可直接发送，Shift + Enter 换行。
+          - generic [ref=e320]:
+            - generic [ref=e321]:
+              - generic [ref=e322]: operator $
+              - textbox "输入目标、上下文或要验证的问题" [ref=e323]
+            - button "发送" [disabled] [ref=e325]

@@ -469,65 +469,67 @@ export function SkillsWorkbench() {
           </div>
         </header>
 
-        <div className="management-toolbar-row">
-          <input
-            className="management-search-input"
-            type="search"
-            value={searchValue}
-            onChange={(event) => setSearchValue(event.target.value)}
-            placeholder="搜索名称、描述、目录或状态"
-          />
+        <div className="management-unified-body management-unified-stack">
+          <div className="management-toolbar-row">
+            <input
+              className="management-search-input"
+              type="search"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder="搜索名称、描述、目录或状态"
+            />
 
-          <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+            <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+          </div>
+
+          {mutationErrorMessage ? (
+            <div className="management-error-banner">{mutationErrorMessage}</div>
+          ) : null}
+
+          {skillsQuery.isLoading && !activeSkill ? (
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">准备 Skills 工作台</p>
+              <p className="management-empty-copy">正在获取目录与详情。</p>
+            </div>
+          ) : skillsQuery.isError ? (
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">当前无法展示详情</p>
+              <p className="management-empty-copy">{skillsQuery.error.message}</p>
+            </div>
+          ) : (
+            <section className="management-section-card management-section-card-compact">
+              <div className="management-section-header">
+                <h3 className="management-section-title">技能列表</h3>
+                <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
+              </div>
+
+              <div className="management-list-shell">
+                {filteredSkills.length === 0 ? (
+                  <div className="management-empty-state">
+                    <p className="management-empty-title">没有匹配的 Skills</p>
+                    <p className="management-empty-copy">试试更短的关键词，或重新扫描一次。</p>
+                  </div>
+                ) : (
+                  <ul className="management-card-grid skills-card-grid">
+                    {filteredSkills.map((skill) => {
+                      const isActive = skill.id === selectedSkillId;
+
+                      return (
+                        <li key={skill.id}>
+                          <SkillListCard
+                            isActive={isActive}
+                            onOpen={() => navigate(`/skills/${skill.id}`)}
+                            skill={skill}
+                          />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </section>
+          )}
         </div>
-
-        {mutationErrorMessage ? (
-          <div className="management-error-banner">{mutationErrorMessage}</div>
-        ) : null}
-
-        {skillsQuery.isLoading && !activeSkill ? (
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">准备 Skills 工作台</p>
-            <p className="management-empty-copy">正在获取目录与详情。</p>
-          </div>
-        ) : skillsQuery.isError ? (
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">当前无法展示详情</p>
-            <p className="management-empty-copy">{skillsQuery.error.message}</p>
-          </div>
-        ) : (
-          <section className="management-section-card management-section-card-compact">
-            <div className="management-section-header">
-              <h3 className="management-section-title">技能列表</h3>
-              <span className="management-status-badge tone-neutral">{filteredCount} 项</span>
-            </div>
-
-            <div className="management-list-shell">
-              {filteredSkills.length === 0 ? (
-                <div className="management-empty-state">
-                  <p className="management-empty-title">没有匹配的 Skills</p>
-                  <p className="management-empty-copy">试试更短的关键词，或重新扫描一次。</p>
-                </div>
-              ) : (
-                <ul className="management-card-grid skills-card-grid">
-                  {filteredSkills.map((skill) => {
-                    const isActive = skill.id === selectedSkillId;
-
-                    return (
-                      <li key={skill.id}>
-                        <SkillListCard
-                          isActive={isActive}
-                          onOpen={() => navigate(`/skills/${skill.id}`)}
-                          skill={skill}
-                        />
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </section>
-        )}
       </section>
       {detailContent}
     </main>

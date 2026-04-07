@@ -882,39 +882,40 @@ export function McpWorkbench() {
           </button>
         </header>
 
-        <div className="management-toolbar-row">
-          <input
-            className="management-search-input"
-            type="search"
-            value={searchValue}
-            onChange={(event) => setSearchValue(event.target.value)}
-            placeholder="搜索服务器、工具、标题、描述、传输方式或配置路径"
-          />
+        <div className="management-unified-body management-unified-stack">
+          <div className="management-toolbar-row">
+            <input
+              className="management-search-input"
+              type="search"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder="搜索服务器、工具、标题、描述、传输方式或配置路径"
+            />
 
-          <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
-        </div>
-
-        {mutationErrorMessage ? (
-          <div className="management-error-banner">{mutationErrorMessage}</div>
-        ) : null}
-
-        {serversQuery.isLoading ? (
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">准备 MCP 管理台</p>
-            <p className="management-empty-copy">正在获取服务器目录。</p>
+            <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
           </div>
-        ) : serversQuery.isError ? (
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">当前无法展示 MCP</p>
-            <p className="management-empty-copy">{serversQuery.error.message}</p>
-          </div>
-        ) : (
-          <div className="management-unified-body management-unified-stack">
-            <section className="management-section-card management-section-card-compact">
-               <div className="management-section-header">
-                 <h3 className="management-section-title">视图</h3>
-                 <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
-               </div>
+
+          {mutationErrorMessage ? (
+            <div className="management-error-banner">{mutationErrorMessage}</div>
+          ) : null}
+
+          {serversQuery.isLoading ? (
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">准备 MCP 管理台</p>
+              <p className="management-empty-copy">正在获取服务器目录。</p>
+            </div>
+          ) : serversQuery.isError ? (
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">当前无法展示 MCP</p>
+              <p className="management-empty-copy">{serversQuery.error.message}</p>
+            </div>
+          ) : (
+            <>
+              <section className="management-section-card management-section-card-compact">
+                <div className="management-section-header">
+                  <h3 className="management-section-title">视图</h3>
+                  <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
+                </div>
 
               <div className="mcp-view-tabs" role="tablist" aria-label="MCP 视图切换">
                 {MCP_VIEW_OPTIONS.map((view) => {
@@ -942,9 +943,9 @@ export function McpWorkbench() {
                   );
                 })}
               </div>
-            </section>
+              </section>
 
-            <section className="management-section-card management-section-card-compact">
+              <section className="management-section-card management-section-card-compact">
                   <div className="management-section-header">
                     <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
                     <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
@@ -999,52 +1000,31 @@ export function McpWorkbench() {
                                 </label>
                               </div>
 
-                              <p className="management-list-copy mcp-server-meta-copy">
-                                配置路径：{server.config_path}
-                              </p>
-
                               <div className="mcp-server-count-row">
                                 <span className="management-status-badge tone-success">
-                                  工具 {counts.tool}
+                                  {counts.tool > 0 ? `工具 ${counts.tool}` : `能力 ${server.capabilities.length}`}
                                 </span>
-                                <span className="management-status-badge tone-neutral">
-                                  资源 {counts.resource}
-                                </span>
-                                <span className="management-status-badge tone-neutral">
-                                  模板 {counts.resource_template}
-                                </span>
-                                <span className="management-status-badge tone-warning">
-                                  Prompts {counts.prompt}
-                                </span>
-                              </div>
-
-                              <div className="action-row">
                                 {isStale ? (
                                   <span className="management-status-badge tone-warning">
                                     导入缺失
                                   </span>
                                 ) : null}
-                                <span
-                                  className={`management-status-badge ${server.enabled ? "tone-success" : "tone-neutral"}`}
-                                >
-                                  {server.enabled ? "已启用" : "已禁用"}
+                                <span className="management-status-badge tone-neutral">
+                                  {server.transport}
                                 </span>
                                 <span
                                   className={`management-status-badge ${getServerTone(server.status)}`}
                                 >
                                   {server.status}
                                 </span>
-                                <span className="management-status-badge tone-neutral">
-                                  {server.transport}
-                                </span>
                                 <span
                                   className={`management-status-badge ${getHealthTone(server.health_status)}`}
                                 >
                                   健康 {server.health_status ?? "未检测"}
                                 </span>
-                                <span className="management-status-badge tone-neutral">
-                                  {server.source}/{server.scope}
-                                </span>
+                              </div>
+
+                              <div className="action-row mcp-card-actions">
                                 <button
                                   className="text-button"
                                   type="button"
@@ -1110,9 +1090,9 @@ export function McpWorkbench() {
                   </ul>
                 )}
                   </div>
-            </section>
+              </section>
 
-            <section className="management-section-card">
+              <section className="management-section-card">
                   <div className="management-section-header">
                     <h3 className="management-section-title">手动注册</h3>
                   </div>
@@ -1237,9 +1217,10 @@ export function McpWorkbench() {
                       </button>
                     </div>
                   </form>
-            </section>
-          </div>
-        )}
+              </section>
+            </>
+          )}
+        </div>
       </section>
       {detailContent}
     </main>

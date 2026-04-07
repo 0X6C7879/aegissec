@@ -489,6 +489,7 @@ function buildTranscriptBlocks(
 ): TranscriptRenderableBlock[] {
   const ordered = [...segments].sort(compareTranscriptSegments);
   const blocks: TranscriptRenderableBlock[] = [];
+  const seenPrimaryOutputTexts = new Set<string>();
   for (let index = 0; index < ordered.length; index += 1) {
     const segment = ordered[index]!;
 
@@ -574,7 +575,8 @@ function buildTranscriptBlocks(
 
     if (segment.kind === "output") {
       const normalizedText = normalizeMarkdownSpacing(segment.text);
-      if (normalizedText) {
+      if (normalizedText && !seenPrimaryOutputTexts.has(normalizedText)) {
+        seenPrimaryOutputTexts.add(normalizedText);
         blocks.push({
           type: "output",
           key: segment.id,
@@ -679,8 +681,12 @@ function buildTranscriptFromGeneration(
   }
 
   const assistantContent = assistantMessage?.content.trim() ?? "";
+  const hasPrimaryAssistantSegment = segments.some(
+    (segment) => segment.kind === "output" || segment.kind === "error",
+  );
   if (
     assistantContent &&
+    !hasPrimaryAssistantSegment &&
     !segments.some(
       (segment) =>
         (segment.kind === "output" || segment.kind === "error") &&
@@ -744,8 +750,13 @@ function buildAssistantTranscript(
   const transcript = [...message.assistant_transcript].sort(compareTranscriptSegments);
   const content = message.content.trim();
 
+  const hasPrimaryAssistantSegment = transcript.some(
+    (segment) => segment.kind === "output" || segment.kind === "error",
+  );
+
   if (
     content &&
+    !hasPrimaryAssistantSegment &&
     !transcript.some(
       (segment) =>
         (segment.kind === "output" || segment.kind === "error") &&

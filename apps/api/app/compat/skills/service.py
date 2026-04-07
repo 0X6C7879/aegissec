@@ -781,7 +781,10 @@ class SkillService:
             updated_plan["primary_skill"] = updated_preferred
             updated_plan["supporting_skills"] = list(updated_supporting)
             updated_plan["selected_skills"] = list(updated_selected_skills)
-            updated_plan["selected_skill_ids"] = list(anchored_result["selected_skill_ids"])
+            selected_skill_ids = anchored_result.get("selected_skill_ids")
+            updated_plan["selected_skill_ids"] = (
+                list(selected_skill_ids) if isinstance(selected_skill_ids, list) else []
+            )
             anchored_result["skill_set_plan"] = updated_plan
         return anchored_result
 

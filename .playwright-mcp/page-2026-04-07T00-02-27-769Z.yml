@@ -1,0 +1,326 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e12]:
+          - generic [ref=e13]: aegissec
+          - generic [ref=e14]: operator
+        - button "切换全局导航" [expanded] [ref=e15] [cursor=pointer]:
+          - img [ref=e17]
+      - navigation "工作台导航" [ref=e20]:
+        - link "WS Workspace" [ref=e21] [cursor=pointer]:
+          - /url: /sessions
+          - img [ref=e23]
+          - generic [ref=e25]:
+            - generic [ref=e26]: WS
+            - generic [ref=e27]: Workspace
+        - link "RT Runtime" [ref=e28] [cursor=pointer]:
+          - /url: /runtime
+          - img [ref=e30]
+          - generic [ref=e33]:
+            - generic [ref=e34]: RT
+            - generic [ref=e35]: Runtime
+        - link "SK Skills" [ref=e36] [cursor=pointer]:
+          - /url: /skills
+          - img [ref=e38]
+          - generic [ref=e40]:
+            - generic [ref=e41]: SK
+            - generic [ref=e42]: Skills
+        - link "MC MCP" [ref=e43] [cursor=pointer]:
+          - /url: /mcp
+          - img [ref=e45]
+          - generic [ref=e47]:
+            - generic [ref=e48]: MC
+            - generic [ref=e49]: MCP
+        - link "ST 设置" [ref=e50] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e52]
+          - generic [ref=e55]:
+            - generic [ref=e56]: ST
+            - generic [ref=e57]: 设置
+  - main [ref=e326]:
+    - region "MCP 管理" [ref=e327]:
+      - generic [ref=e328]:
+        - generic [ref=e329]:
+          - heading "MCP" [level=2] [ref=e330]
+          - paragraph [ref=e331]: 同时保留服务器视角与能力平铺视角，便于快速查找工具、资源与 Prompts。
+        - button "导入服务器" [ref=e332] [cursor=pointer]
+      - generic [ref=e333]:
+        - searchbox "搜索服务器、工具、标题、描述、传输方式或配置路径" [ref=e334]
+        - generic [ref=e335]: 10 项
+      - generic [ref=e336]:
+        - generic [ref=e337]:
+          - generic [ref=e338]:
+            - heading "视图" [level=3] [ref=e339]
+            - generic [ref=e340]: 10 项
+          - tablist "MCP 视图切换" [ref=e341]:
+            - tab "服务器 10" [selected] [ref=e342] [cursor=pointer]:
+              - generic [ref=e343]: 服务器
+              - generic [ref=e344]: "10"
+            - tab "工具 44" [ref=e345] [cursor=pointer]:
+              - generic [ref=e346]: 工具
+              - generic [ref=e347]: "44"
+            - tab "资源 0" [ref=e348] [cursor=pointer]:
+              - generic [ref=e349]: 资源
+              - generic [ref=e350]: "0"
+            - tab "Prompts 2" [ref=e351] [cursor=pointer]:
+              - generic [ref=e352]: Prompts
+              - generic [ref=e353]: "2"
+        - generic [ref=e354]:
+          - generic [ref=e355]:
+            - heading "服务器总览" [level=3] [ref=e356]
+            - generic [ref=e357]: 10 项
+          - list [ref=e359]:
+            - listitem [ref=e360]:
+              - article [ref=e361]:
+                - generic [ref=e362]:
+                  - generic [ref=e363]:
+                    - strong [ref=e364]: playwright
+                    - paragraph [ref=e365]: npx
+                  - generic "playwright 连接开关" [ref=e366]:
+                    - checkbox "playwright 连接开关" [ref=e367] [cursor=pointer]
+                - paragraph [ref=e369]: 配置路径：D:/AI/aegissec/.mcp.json
+                - generic [ref=e370]:
+                  - generic [ref=e371]: 工具 0
+                  - generic [ref=e372]: 资源 0
+                  - generic [ref=e373]: 模板 0
+                  - generic [ref=e374]: Prompts 0
+                - generic [ref=e375]:
+                  - generic [ref=e376]: 已禁用
+                  - generic [ref=e377]: inactive
+                  - generic [ref=e378]: stdio
+                  - generic [ref=e379]: 健康 error
+                  - generic [ref=e380]: claude/project
+                  - button "查看详情" [ref=e381] [cursor=pointer]
+                  - button "删除" [ref=e382] [cursor=pointer]
+            - listitem [ref=e383]:
+              - article [ref=e384]:
+                - generic [ref=e385]:
+                  - generic [ref=e386]:
+                    - strong [ref=e387]: Notion
+                    - paragraph [ref=e388]: npx
+                  - generic "Notion 连接开关" [ref=e389]:
+                    - checkbox "Notion 连接开关" [ref=e390] [cursor=pointer]
+                - paragraph [ref=e392]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e393]:
+                  - generic [ref=e394]: 工具 22
+                  - generic [ref=e395]: 资源 0
+                  - generic [ref=e396]: 模板 0
+                  - generic [ref=e397]: Prompts 0
+                - generic [ref=e398]:
+                  - generic [ref=e399]: 已禁用
+                  - generic [ref=e400]: inactive
+                  - generic [ref=e401]: stdio
+                  - generic [ref=e402]: 健康 ok
+                  - generic [ref=e403]: opencode/user
+                  - button "查看详情" [ref=e404] [cursor=pointer]
+                  - button "删除" [ref=e405] [cursor=pointer]
+            - listitem [ref=e406]:
+              - article [ref=e407]:
+                - generic [ref=e408]:
+                  - generic [ref=e409]:
+                    - strong [ref=e410]: context-mode
+                    - paragraph [ref=e411]: context-mode
+                  - generic "context-mode 连接开关" [ref=e412]:
+                    - checkbox "context-mode 连接开关" [ref=e413] [cursor=pointer]
+                - paragraph [ref=e415]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e416]:
+                  - generic [ref=e417]: 工具 9
+                  - generic [ref=e418]: 资源 0
+                  - generic [ref=e419]: 模板 0
+                  - generic [ref=e420]: Prompts 0
+                - generic [ref=e421]:
+                  - generic [ref=e422]: 已禁用
+                  - generic [ref=e423]: inactive
+                  - generic [ref=e424]: stdio
+                  - generic [ref=e425]: 健康 ok
+                  - generic [ref=e426]: opencode/user
+                  - button "查看详情" [ref=e427] [cursor=pointer]
+                  - button "删除" [ref=e428] [cursor=pointer]
+            - listitem [ref=e429]:
+              - article [ref=e430]:
+                - generic [ref=e431]:
+                  - generic [ref=e432]:
+                    - strong [ref=e433]: context7
+                    - paragraph [ref=e434]: https://mcp.context7.com/mcp
+                  - generic "context7 连接开关" [ref=e435]:
+                    - checkbox "context7 连接开关" [ref=e436] [cursor=pointer]
+                - paragraph [ref=e438]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e439]:
+                  - generic [ref=e440]: 工具 2
+                  - generic [ref=e441]: 资源 0
+                  - generic [ref=e442]: 模板 0
+                  - generic [ref=e443]: Prompts 0
+                - generic [ref=e444]:
+                  - generic [ref=e445]: 已禁用
+                  - generic [ref=e446]: inactive
+                  - generic [ref=e447]: http
+                  - generic [ref=e448]: 健康 ok
+                  - generic [ref=e449]: opencode/user
+                  - button "查看详情" [ref=e450] [cursor=pointer]
+                  - button "删除" [ref=e451] [cursor=pointer]
+            - listitem [ref=e452]:
+              - article [ref=e453]:
+                - generic [ref=e454]:
+                  - generic [ref=e455]:
+                    - strong [ref=e456]: fetch
+                    - paragraph [ref=e457]: uvx
+                  - generic "fetch 连接开关" [ref=e458]:
+                    - checkbox "fetch 连接开关" [ref=e459] [cursor=pointer]
+                - paragraph [ref=e461]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e462]:
+                  - generic [ref=e463]: 工具 1
+                  - generic [ref=e464]: 资源 0
+                  - generic [ref=e465]: 模板 0
+                  - generic [ref=e466]: Prompts 1
+                - generic [ref=e467]:
+                  - generic [ref=e468]: 已禁用
+                  - generic [ref=e469]: inactive
+                  - generic [ref=e470]: stdio
+                  - generic [ref=e471]: 健康 ok
+                  - generic [ref=e472]: opencode/user
+                  - button "查看详情" [ref=e473] [cursor=pointer]
+                  - button "删除" [ref=e474] [cursor=pointer]
+            - listitem [ref=e475]:
+              - article [ref=e476]:
+                - generic [ref=e477]:
+                  - generic [ref=e478]:
+                    - strong [ref=e479]: filesystem
+                    - paragraph [ref=e480]: npx
+                  - generic "filesystem 连接开关" [ref=e481]:
+                    - checkbox "filesystem 连接开关" [ref=e482] [cursor=pointer]
+                - paragraph [ref=e484]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e485]:
+                  - generic [ref=e486]: 工具 0
+                  - generic [ref=e487]: 资源 0
+                  - generic [ref=e488]: 模板 0
+                  - generic [ref=e489]: Prompts 0
+                - generic [ref=e490]:
+                  - generic [ref=e491]: 已禁用
+                  - generic [ref=e492]: inactive
+                  - generic [ref=e493]: stdio
+                  - generic [ref=e494]: 健康 未检测
+                  - generic [ref=e495]: opencode/user
+                  - button "查看详情" [ref=e496] [cursor=pointer]
+                  - button "删除" [ref=e497] [cursor=pointer]
+            - listitem [ref=e498]:
+              - article [ref=e499]:
+                - generic [ref=e500]:
+                  - generic [ref=e501]:
+                    - strong [ref=e502]: firecrawl-mcp
+                    - paragraph [ref=e503]: npx
+                  - generic "firecrawl-mcp 连接开关" [ref=e504]:
+                    - checkbox "firecrawl-mcp 连接开关" [ref=e505] [cursor=pointer]
+                - paragraph [ref=e507]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e508]:
+                  - generic [ref=e509]: 工具 0
+                  - generic [ref=e510]: 资源 0
+                  - generic [ref=e511]: 模板 0
+                  - generic [ref=e512]: Prompts 0
+                - generic [ref=e513]:
+                  - generic [ref=e514]: 已禁用
+                  - generic [ref=e515]: inactive
+                  - generic [ref=e516]: stdio
+                  - generic [ref=e517]: 健康 未检测
+                  - generic [ref=e518]: opencode/user
+                  - button "查看详情" [ref=e519] [cursor=pointer]
+                  - button "删除" [ref=e520] [cursor=pointer]
+            - listitem [ref=e521]:
+              - article [ref=e522]:
+                - generic [ref=e523]:
+                  - generic [ref=e524]:
+                    - strong [ref=e525]: java-decompiler
+                    - paragraph [ref=e526]: uvx
+                  - generic "java-decompiler 连接开关" [ref=e527]:
+                    - checkbox "java-decompiler 连接开关" [ref=e528] [cursor=pointer]
+                - paragraph [ref=e530]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e531]:
+                  - generic [ref=e532]: 工具 0
+                  - generic [ref=e533]: 资源 0
+                  - generic [ref=e534]: 模板 0
+                  - generic [ref=e535]: Prompts 0
+                - generic [ref=e536]:
+                  - generic [ref=e537]: 已禁用
+                  - generic [ref=e538]: inactive
+                  - generic [ref=e539]: stdio
+                  - generic [ref=e540]: 健康 未检测
+                  - generic [ref=e541]: opencode/user
+                  - button "查看详情" [ref=e542] [cursor=pointer]
+                  - button "删除" [ref=e543] [cursor=pointer]
+            - listitem [ref=e544]:
+              - article [ref=e545]:
+                - generic [ref=e546]:
+                  - generic [ref=e547]:
+                    - strong [ref=e548]: mem0
+                    - paragraph [ref=e549]: C:\Users\ASUS\AppData\Roaming\uv\tools\mem0-mcp-server\Scripts\mem0-mcp-server.exe
+                  - generic "mem0 连接开关" [ref=e550]:
+                    - checkbox "mem0 连接开关" [ref=e551] [cursor=pointer]
+                - paragraph [ref=e553]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e554]:
+                  - generic [ref=e555]: 工具 9
+                  - generic [ref=e556]: 资源 0
+                  - generic [ref=e557]: 模板 0
+                  - generic [ref=e558]: Prompts 1
+                - generic [ref=e559]:
+                  - generic [ref=e560]: 已禁用
+                  - generic [ref=e561]: inactive
+                  - generic [ref=e562]: stdio
+                  - generic [ref=e563]: 健康 ok
+                  - generic [ref=e564]: opencode/user
+                  - button "查看详情" [ref=e565] [cursor=pointer]
+                  - button "删除" [ref=e566] [cursor=pointer]
+            - listitem [ref=e567]:
+              - article [ref=e568]:
+                - generic [ref=e569]:
+                  - generic [ref=e570]:
+                    - strong [ref=e571]: sequential-thinking
+                    - paragraph [ref=e572]: npx
+                  - generic "sequential-thinking 连接开关" [ref=e573]:
+                    - checkbox "sequential-thinking 连接开关" [ref=e574] [cursor=pointer]
+                - paragraph [ref=e576]: 配置路径：C:/Users/ASUS/.config/opencode/opencode.json
+                - generic [ref=e577]:
+                  - generic [ref=e578]: 工具 1
+                  - generic [ref=e579]: 资源 0
+                  - generic [ref=e580]: 模板 0
+                  - generic [ref=e581]: Prompts 0
+                - generic [ref=e582]:
+                  - generic [ref=e583]: 已禁用
+                  - generic [ref=e584]: inactive
+                  - generic [ref=e585]: stdio
+                  - generic [ref=e586]: 健康 ok
+                  - generic [ref=e587]: opencode/user
+                  - button "查看详情" [ref=e588] [cursor=pointer]
+                  - button "删除" [ref=e589] [cursor=pointer]
+        - generic [ref=e590]:
+          - heading "手动注册" [level=3] [ref=e592]
+          - generic [ref=e593]:
+            - generic [ref=e594]:
+              - generic [ref=e595]:
+                - text: 名称
+                - textbox "名称" [ref=e596]:
+                  - /placeholder: 例如：local-browser
+              - generic [ref=e597]:
+                - text: 传输方式
+                - combobox "传输方式" [ref=e598]:
+                  - option "stdio" [selected]
+                  - option "http"
+              - generic [ref=e599]:
+                - text: 超时毫秒
+                - spinbutton "超时毫秒" [ref=e600]: "5000"
+            - generic [ref=e601]:
+              - checkbox "注册后立即启用" [checked] [ref=e602]
+              - text: 注册后立即启用
+            - generic [ref=e603]:
+              - text: 命令
+              - textbox "命令" [ref=e604]:
+                - /placeholder: 例如：npx @modelcontextprotocol/server-filesystem
+            - generic [ref=e605]:
+              - text: 参数（每行一个）
+              - textbox "参数（每行一个）" [ref=e606]:
+                - /placeholder: "--root\nD:/AI/aegissec"
+            - generic [ref=e607]:
+              - text: 环境变量 JSON
+              - textbox "环境变量 JSON" [ref=e608]:
+                - /placeholder: "{\"NODE_ENV\": \"production\"}"
+                - text: "{}"
+            - button "注册服务器" [ref=e610] [cursor=pointer]

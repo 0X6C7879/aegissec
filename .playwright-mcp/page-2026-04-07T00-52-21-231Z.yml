@@ -1,0 +1,43 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - button "切换全局导航" [ref=e12] [cursor=pointer]:
+        - img [ref=e14]
+      - navigation "工作台导航" [ref=e17]:
+        - link "WS" [ref=e18] [cursor=pointer]:
+          - /url: /sessions
+          - img [ref=e20]
+          - generic [ref=e23]: WS
+        - link "RT" [ref=e24] [cursor=pointer]:
+          - /url: /runtime
+          - img [ref=e26]
+          - generic [ref=e30]: RT
+        - link "SK" [ref=e31] [cursor=pointer]:
+          - /url: /skills
+          - img [ref=e33]
+          - generic [ref=e36]: SK
+        - link "MC" [ref=e37] [cursor=pointer]:
+          - /url: /mcp
+          - img [ref=e39]
+          - generic [ref=e42]: MC
+        - link "ST" [ref=e43] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e45]
+          - generic [ref=e49]: ST
+  - main [ref=e52]:
+    - region "Skills 管理" [ref=e53]:
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - heading "Skills" [level=2] [ref=e56]
+          - paragraph [ref=e57]: 扫描、筛选并维护当前可用的 Skill。
+        - generic [ref=e58]:
+          - button "扫描目录" [ref=e59] [cursor=pointer]
+          - button "重新扫描" [ref=e60] [cursor=pointer]
+          - button "刷新列表" [ref=e61] [cursor=pointer]
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - searchbox "搜索名称、描述、目录或状态" [ref=e64]
+          - generic [ref=e65]: 0 项
+        - generic [ref=e66]:
+          - paragraph [ref=e67]: 准备 Skills 工作台
+          - paragraph [ref=e68]: 正在获取目录与详情。

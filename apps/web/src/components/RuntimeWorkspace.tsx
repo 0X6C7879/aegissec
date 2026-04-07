@@ -198,9 +198,11 @@ export function RuntimeWorkspace() {
     return (
       <main className="management-workbench management-workbench-single">
         <section className="management-unified-panel panel" aria-label="Runtime 工作台">
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">正在准备 Runtime</p>
-            <p className="management-empty-copy">容器状态与最近执行记录马上可用。</p>
+          <div className="management-unified-body">
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">正在准备 Runtime</p>
+              <p className="management-empty-copy">容器状态与最近执行记录马上可用。</p>
+            </div>
           </div>
         </section>
       </main>
@@ -211,9 +213,11 @@ export function RuntimeWorkspace() {
     return (
       <main className="management-workbench management-workbench-single">
         <section className="management-unified-panel panel" aria-label="Runtime 工作台">
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">当前无法读取 Runtime</p>
-            <p className="management-empty-copy">{runtimeStatusQuery.error.message}</p>
+          <div className="management-unified-body">
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">当前无法读取 Runtime</p>
+              <p className="management-empty-copy">{runtimeStatusQuery.error.message}</p>
+            </div>
           </div>
         </section>
       </main>
@@ -224,9 +228,11 @@ export function RuntimeWorkspace() {
     return (
       <main className="management-workbench management-workbench-single">
         <section className="management-unified-panel panel" aria-label="Runtime 工作台">
-          <div className="management-empty-state management-empty-state-full">
-            <p className="management-empty-title">Runtime 数据为空</p>
-            <p className="management-empty-copy">后端没有返回状态数据，请稍后重试。</p>
+          <div className="management-unified-body">
+            <div className="management-empty-state management-empty-state-full">
+              <p className="management-empty-title">Runtime 数据为空</p>
+              <p className="management-empty-copy">后端没有返回状态数据，请稍后重试。</p>
+            </div>
           </div>
         </section>
       </main>
@@ -279,144 +285,146 @@ export function RuntimeWorkspace() {
           </div>
         </header>
 
-        <div className="management-info-grid">
-          <div className="management-info-card">
-            <span className="management-info-label">运行状态</span>
-            <StatusBadge status={runtime.status} />
-          </div>
-          <div className="management-info-card">
-            <span className="management-info-label">健康检查</span>
-            <strong className={`management-status-badge ${runtimeHealth?.status === "ok" ? "tone-success" : runtimeHealth?.status === "degraded" ? "tone-warning" : "tone-neutral"}`}>
-              {runtimeHealth?.status ?? "未检测"}
-            </strong>
-          </div>
-          <div className="management-info-card">
-            <span className="management-info-label">启动时间</span>
-            <strong className="management-info-value">{formatOptionalDateTime(runtime.started_at)}</strong>
-          </div>
-        </div>
-
-        {lifecycleError ? <div className="management-error-banner">{lifecycleError}</div> : null}
-        {runtimeHealthQuery.isError ? (
-          <div className="management-error-banner">{runtimeHealthQuery.error.message}</div>
-        ) : null}
-        {mutationErrorMessage ? <div className="management-error-banner">{mutationErrorMessage}</div> : null}
-        {clearRuntimeRunsMutation.isSuccess ? (
-          <div className="management-inline-notice">
-            已清除 {clearRuntimeRunsMutation.data.deleted_runs} 条执行记录，连带移除 {clearRuntimeRunsMutation.data.deleted_artifacts} 条工件登记。
-          </div>
-        ) : null}
-
-        <section className="management-section-card">
-          <div className="management-section-header">
-            <h3 className="management-section-title">执行命令</h3>
-            <span className="management-status-badge tone-neutral">
-              {runtime.status === "running" ? "可执行" : "请先启动 Runtime"}
-            </span>
-          </div>
-
-          <form className="settings-form" onSubmit={(event) => void handleExecuteSubmit(event)}>
-            <label className="field-label" htmlFor="runtime-command">
-              命令
-              <textarea
-                id="runtime-command"
-                className="field-textarea"
-                value={command}
-                onChange={(event) => setCommand(event.target.value)}
-                placeholder="例如：python --version"
-              />
-            </label>
-
-            <label className="field-label" htmlFor="runtime-timeout">
-              超时秒数（可选）
-              <input
-                id="runtime-timeout"
-                className="field-inline-input"
-                type="number"
-                min="1"
-                inputMode="numeric"
-                value={timeoutSeconds}
-                onChange={(event) => setTimeoutSeconds(event.target.value)}
-                placeholder="30"
-              />
-            </label>
-
-            <div className="management-action-row">
-              <button className="button button-primary" type="submit" disabled={isExecuteDisabled}>
-                {executeRuntimeMutation.isPending ? "执行中" : "执行命令"}
-              </button>
+        <div className="management-unified-body">
+          <div className="management-info-grid">
+            <div className="management-info-card">
+              <span className="management-info-label">运行状态</span>
+              <StatusBadge status={runtime.status} />
             </div>
-          </form>
-        </section>
-
-        <section className="management-section-card">
-          <div className="management-section-header">
-            <h3 className="management-section-title">最近执行</h3>
-            <div className="management-action-row">
-              <span className="management-status-badge tone-neutral">{recentRuns.length} 项</span>
-              <button
-                className="button button-secondary"
-                type="button"
-                disabled={recentRuns.length === 0 || clearRuntimeRunsMutation.isPending}
-                onClick={() => {
-                  void handleClearRecentRuns();
-                }}
-              >
-                {clearRuntimeRunsMutation.isPending ? "清除中" : "清除"}
-              </button>
+            <div className="management-info-card">
+              <span className="management-info-label">健康检查</span>
+              <strong className={`management-status-badge ${runtimeHealth?.status === "ok" ? "tone-success" : runtimeHealth?.status === "degraded" ? "tone-warning" : "tone-neutral"}`}>
+                {runtimeHealth?.status ?? "未检测"}
+              </strong>
+            </div>
+            <div className="management-info-card">
+              <span className="management-info-label">启动时间</span>
+              <strong className="management-info-value">{formatOptionalDateTime(runtime.started_at)}</strong>
             </div>
           </div>
 
-          {runtimeRunsQuery.isError ? (
-            <div className="management-error-banner">{runtimeRunsQuery.error.message}</div>
+          {lifecycleError ? <div className="management-error-banner">{lifecycleError}</div> : null}
+          {runtimeHealthQuery.isError ? (
+            <div className="management-error-banner">{runtimeHealthQuery.error.message}</div>
+          ) : null}
+          {mutationErrorMessage ? <div className="management-error-banner">{mutationErrorMessage}</div> : null}
+          {clearRuntimeRunsMutation.isSuccess ? (
+            <div className="management-inline-notice">
+              已清除 {clearRuntimeRunsMutation.data.deleted_runs} 条执行记录，连带移除 {clearRuntimeRunsMutation.data.deleted_artifacts} 条工件登记。
+            </div>
           ) : null}
 
-          {recentRuns.length === 0 ? (
-            <div className="management-empty-state">
-              <p className="management-empty-title">还没有执行记录</p>
-              <p className="management-empty-copy">提交一次命令后，这里会保留最近的执行结果。</p>
+          <section className="management-section-card">
+            <div className="management-section-header">
+              <h3 className="management-section-title">执行命令</h3>
+              <span className="management-status-badge tone-neutral">
+                {runtime.status === "running" ? "可执行" : "请先启动 Runtime"}
+              </span>
             </div>
-          ) : (
-            <ul className="management-list">
-              {recentRuns.map((run) => (
-                <li key={run.id} className="management-section-card management-section-card-compact">
-                  <div className="management-list-card-header">
-                    <strong className="management-list-title">{formatDateTime(run.started_at)}</strong>
-                    <StatusBadge status={run.status} />
-                  </div>
 
-                  <div className="action-row">
-                    <span className="management-status-badge tone-neutral">
-                      退出码 {run.exit_code ?? "n/a"}
-                    </span>
-                    <span className="management-status-badge tone-neutral">
-                      超时 {run.requested_timeout_seconds}s
-                    </span>
-                    <span className="management-status-badge tone-neutral">
-                      结束 {formatDateTime(run.ended_at)}
-                    </span>
-                  </div>
+            <form className="settings-form" onSubmit={(event) => void handleExecuteSubmit(event)}>
+              <label className="field-label" htmlFor="runtime-command">
+                命令
+                <textarea
+                  id="runtime-command"
+                  className="field-textarea"
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  placeholder="例如：python --version"
+                />
+              </label>
 
-                  <div className="management-info-card management-info-card-full">
-                    <span className="management-info-label">命令</span>
-                    <pre className="management-code-block">{run.command}</pre>
-                  </div>
+              <label className="field-label" htmlFor="runtime-timeout">
+                超时秒数（可选）
+                <input
+                  id="runtime-timeout"
+                  className="field-inline-input"
+                  type="number"
+                  min="1"
+                  inputMode="numeric"
+                  value={timeoutSeconds}
+                  onChange={(event) => setTimeoutSeconds(event.target.value)}
+                  placeholder="30"
+                />
+              </label>
 
-                  <div className="management-dual-column">
-                    <div className="management-subcard">
-                      <span className="management-info-label">stdout</span>
-                      <pre className="management-code-block">{run.stdout || "(empty)"}</pre>
+              <div className="management-action-row">
+                <button className="button button-primary" type="submit" disabled={isExecuteDisabled}>
+                  {executeRuntimeMutation.isPending ? "执行中" : "执行命令"}
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="management-section-card">
+            <div className="management-section-header">
+              <h3 className="management-section-title">最近执行</h3>
+              <div className="management-action-row">
+                <span className="management-status-badge tone-neutral">{recentRuns.length} 项</span>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  disabled={recentRuns.length === 0 || clearRuntimeRunsMutation.isPending}
+                  onClick={() => {
+                    void handleClearRecentRuns();
+                  }}
+                >
+                  {clearRuntimeRunsMutation.isPending ? "清除中" : "清除"}
+                </button>
+              </div>
+            </div>
+
+            {runtimeRunsQuery.isError ? (
+              <div className="management-error-banner">{runtimeRunsQuery.error.message}</div>
+            ) : null}
+
+            {recentRuns.length === 0 ? (
+              <div className="management-empty-state">
+                <p className="management-empty-title">还没有执行记录</p>
+                <p className="management-empty-copy">提交一次命令后，这里会保留最近的执行结果。</p>
+              </div>
+            ) : (
+              <ul className="management-list">
+                {recentRuns.map((run) => (
+                  <li key={run.id} className="management-section-card management-section-card-compact">
+                    <div className="management-list-card-header">
+                      <strong className="management-list-title">{formatDateTime(run.started_at)}</strong>
+                      <StatusBadge status={run.status} />
                     </div>
-                    <div className="management-subcard">
-                      <span className="management-info-label">stderr</span>
-                      <pre className="management-code-block">{run.stderr || "(empty)"}</pre>
+
+                    <div className="action-row">
+                      <span className="management-status-badge tone-neutral">
+                        退出码 {run.exit_code ?? "n/a"}
+                      </span>
+                      <span className="management-status-badge tone-neutral">
+                        超时 {run.requested_timeout_seconds}s
+                      </span>
+                      <span className="management-status-badge tone-neutral">
+                        结束 {formatDateTime(run.ended_at)}
+                      </span>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+
+                    <div className="management-info-card management-info-card-full">
+                      <span className="management-info-label">命令</span>
+                      <pre className="management-code-block">{run.command}</pre>
+                    </div>
+
+                    <div className="management-dual-column">
+                      <div className="management-subcard">
+                        <span className="management-info-label">stdout</span>
+                        <pre className="management-code-block">{run.stdout || "(empty)"}</pre>
+                      </div>
+                      <div className="management-subcard">
+                        <span className="management-info-label">stderr</span>
+                        <pre className="management-code-block">{run.stderr || "(empty)"}</pre>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
       </section>
     </main>
   );
