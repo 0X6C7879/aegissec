@@ -8,7 +8,6 @@ from app.db.models import GraphType, SessionGraphRead, TaskNode, WorkflowRun
 from app.db.repositories import GraphRepository, SessionRepository, WorkflowRepository
 from app.db.session import get_db_session
 from app.graphs.builders import (
-    AttackGraphBuilder,
     CausalGraphBuilder,
     ExecutionGraphBuilder,
     SnapshotGraphBuilder,

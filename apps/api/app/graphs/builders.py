@@ -609,16 +609,6 @@ class ExecutionGraphBuilder:
             outgoing_edges_by_node=outgoing_edges_by_node,
             incoming_edges_by_node=incoming_edges_by_node,
         )
-        leaf_milestone_ids = {
-            node.id
-            for node in normalized_nodes_by_id.values()
-            if node.node_type == "action"
-            and not any(
-                edge
-                for edge in outgoing_edges_by_node.get(node.id, [])
-                if edge.target != node.id and not edge.target.startswith("outcome:")
-            )
-        }
 
         removable_node_ids = {
             node_id
@@ -627,7 +617,6 @@ class ExecutionGraphBuilder:
                 node=node,
                 execution_node_count=action_node_count,
                 preserved_path_node_ids=preserved_path_node_ids,
-                leaf_milestone_ids=leaf_milestone_ids,
             )
         }
         if removable_node_ids:
@@ -723,22 +712,23 @@ class ExecutionGraphBuilder:
         node: SessionGraphNodeRead,
         execution_node_count: int,
         preserved_path_node_ids: set[str],
-        leaf_milestone_ids: set[str],
     ) -> bool:
         if node.node_type != "action":
             return False
         if execution_node_count < self._PRUNE_EXECUTION_THRESHOLD:
             return False
-        if node.id in preserved_path_node_ids or node.id in leaf_milestone_ids:
+        if node.id in preserved_path_node_ids:
             return False
         if self._node_has_preserved_status(node):
             return False
         if bool(node.data.get("related_findings")) or bool(node.data.get("related_hypotheses")):
             return False
+        if self._coerce_int(node.data.get("collaboration_value")) >= 70:
+            return False
         if self._has_meaningful_execution_observation_data(node.data):
-            return False
+            return self._coerce_int(node.data.get("attempts_count")) <= 1
         if self._has_action_summary_signal(node.data):
-            return False
+            return self._coerce_int(node.data.get("attempts_count")) <= 1
         return True
 
     def _node_has_execution_signal(self, node: SessionGraphNodeRead) -> bool:
@@ -782,57 +772,240 @@ class ExecutionGraphBuilder:
         outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
         incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
     ) -> set[str]:
-        actions = [
-            node for node in normalized_nodes_by_id.values() if node.node_type == "action"
-        ]
+        actions = [node for node in normalized_nodes_by_id.values() if node.node_type == "action"]
         if not actions:
             return set()
 
-        def node_sort_key(node: SessionGraphNodeRead) -> tuple[int, int, int]:
-            status = str(node.data.get("status") or "")
-            priority = 0
-            if self._node_is_active(node):
-                priority = 5
-            elif status in {"blocked", "failed"}:
-                priority = 4
-            elif bool(node.data.get("related_findings")):
-                priority = 3
-            elif bool(node.data.get("related_hypotheses")):
-                priority = 2
-            elif self._has_meaningful_execution_observation_data(node.data):
-                priority = 1
-            sequence = self._coerce_int(node.data.get("sequence"))
-            collaboration = self._coerce_int(node.data.get("collaboration_value"))
-            return (priority, collaboration, sequence)
-
-        anchor = max(actions, key=node_sort_key)
+        anchor = max(actions, key=self._best_path_anchor_sort_key)
         preserved_node_ids: set[str] = {anchor.id}
-        pending = [anchor.id]
-        visited = {anchor.id}
-        while pending:
-            node_id = pending.pop()
-            for edge in incoming_edges_by_node.get(node_id, []):
-                if edge.source not in normalized_nodes_by_id:
-                    continue
-                if edge.source in visited:
-                    continue
-                visited.add(edge.source)
-                preserved_node_ids.add(edge.source)
-                pending.append(edge.source)
-            for edge in outgoing_edges_by_node.get(node_id, []):
-                if edge.target not in normalized_nodes_by_id:
-                    continue
-                if edge.target.startswith("outcome:") or (
-                    normalized_nodes_by_id[edge.target].node_type == "outcome"
-                ):
-                    preserved_node_ids.add(edge.target)
-                    continue
-                if edge.target in visited:
-                    continue
-                visited.add(edge.target)
-                preserved_node_ids.add(edge.target)
-                pending.append(edge.target)
+        anchor_task_id = self._pick_first_str(anchor.data.get("task_id"))
+
+        if anchor_task_id is not None and anchor_task_id in normalized_nodes_by_id:
+            preserved_node_ids.update(
+                self._task_context_chain_ids(
+                    task_id=anchor_task_id,
+                    normalized_nodes_by_id=normalized_nodes_by_id,
+                    incoming_edges_by_node=incoming_edges_by_node,
+                )
+            )
+        else:
+            root_node = next(
+                (node for node in normalized_nodes_by_id.values() if node.node_type == "root"),
+                None,
+            )
+            if root_node is not None:
+                preserved_node_ids.add(root_node.id)
+
+        action_ancestry = self._action_chain_to_anchor_ids(
+            action_id=anchor.id,
+            task_id=anchor_task_id,
+            normalized_nodes_by_id=normalized_nodes_by_id,
+            incoming_edges_by_node=incoming_edges_by_node,
+        )
+        preserved_node_ids.update(action_ancestry)
+        preserved_node_ids.update(
+            self._action_tail_to_outcome_ids(
+                action_id=anchor.id,
+                task_id=anchor_task_id,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+            )
+        )
         return preserved_node_ids
+
+    def _best_path_anchor_sort_key(self, node: SessionGraphNodeRead) -> tuple[int, int, int, int]:
+        status = str(node.data.get("status") or "")
+        reasons = {
+            item
+            for item in self._coerce_list(node.data.get("milestone_reasons"))
+            if isinstance(item, str)
+        }
+        priority = 0
+        if self._node_is_active(node):
+            priority = 6
+        elif status in {"blocked", "failed"}:
+            priority = 5
+        elif "outcome" in reasons:
+            priority = 4
+        elif bool(node.data.get("related_findings")):
+            priority = 3
+        elif bool(node.data.get("related_hypotheses")):
+            priority = 2
+        elif self._has_meaningful_execution_observation_data(node.data):
+            priority = 1
+        collaboration = self._coerce_int(node.data.get("collaboration_value"))
+        attempts = self._coerce_int(node.data.get("attempts_count"))
+        sequence = self._coerce_int(node.data.get("sequence"))
+        return (priority, collaboration, attempts, sequence)
+
+    def _task_context_chain_ids(
+        self,
+        *,
+        task_id: str,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> list[str]:
+        chain: list[str] = []
+        current_task_id: str | None = task_id
+        visited: set[str] = set()
+        while current_task_id is not None and current_task_id not in visited:
+            node = normalized_nodes_by_id.get(current_task_id)
+            if node is None or node.node_type not in {"task", "root"}:
+                break
+            visited.add(current_task_id)
+            chain.append(current_task_id)
+            incoming_edge = self._choose_best_task_context_edge(
+                task_id=current_task_id,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                incoming_edges_by_node=incoming_edges_by_node,
+            )
+            if incoming_edge is None:
+                break
+            current_task_id = incoming_edge.source
+        chain.reverse()
+        return chain
+
+    def _choose_best_task_context_edge(
+        self,
+        *,
+        task_id: str,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> SessionGraphEdgeRead | None:
+        candidates = [
+            edge
+            for edge in incoming_edges_by_node.get(task_id, [])
+            if normalized_nodes_by_id.get(edge.source) is not None
+            and normalized_nodes_by_id[edge.source].node_type in {"task", "root"}
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda edge: (
+                2 if normalized_nodes_by_id[edge.source].node_type == "root" else 1,
+                self._coerce_int(normalized_nodes_by_id[edge.source].data.get("sequence")),
+                edge.source,
+            ),
+        )
+
+    def _action_chain_to_anchor_ids(
+        self,
+        *,
+        action_id: str,
+        task_id: str | None,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> list[str]:
+        chain = [action_id]
+        current_action_id = action_id
+        visited = {action_id}
+        while True:
+            previous_edge = self._choose_best_preceding_action_edge(
+                action_id=current_action_id,
+                task_id=task_id,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                incoming_edges_by_node=incoming_edges_by_node,
+            )
+            if previous_edge is None or previous_edge.source in visited:
+                break
+            visited.add(previous_edge.source)
+            chain.insert(0, previous_edge.source)
+            current_action_id = previous_edge.source
+        return chain
+
+    def _choose_best_preceding_action_edge(
+        self,
+        *,
+        action_id: str,
+        task_id: str | None,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        incoming_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> SessionGraphEdgeRead | None:
+        candidates = []
+        for edge in incoming_edges_by_node.get(action_id, []):
+            if edge.relation != "precedes":
+                continue
+            source_node = normalized_nodes_by_id.get(edge.source)
+            if source_node is None or source_node.node_type != "action":
+                continue
+            if (
+                task_id is not None
+                and self._pick_first_str(source_node.data.get("task_id")) != task_id
+            ):
+                continue
+            candidates.append(edge)
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda edge: self._best_path_anchor_sort_key(normalized_nodes_by_id[edge.source]),
+        )
+
+    def _action_tail_to_outcome_ids(
+        self,
+        *,
+        action_id: str,
+        task_id: str | None,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> list[str]:
+        tail: list[str] = []
+        current_action_id = action_id
+        visited = {action_id}
+        while True:
+            direct_outcome = next(
+                (
+                    edge.target
+                    for edge in outgoing_edges_by_node.get(current_action_id, [])
+                    if normalized_nodes_by_id.get(edge.target) is not None
+                    and normalized_nodes_by_id[edge.target].node_type == "outcome"
+                ),
+                None,
+            )
+            if direct_outcome is not None:
+                tail.append(direct_outcome)
+                return tail
+
+            next_edge = self._choose_best_following_action_edge(
+                action_id=current_action_id,
+                task_id=task_id,
+                normalized_nodes_by_id=normalized_nodes_by_id,
+                outgoing_edges_by_node=outgoing_edges_by_node,
+            )
+            if next_edge is None or next_edge.target in visited:
+                return tail
+            visited.add(next_edge.target)
+            tail.append(next_edge.target)
+            current_action_id = next_edge.target
+
+    def _choose_best_following_action_edge(
+        self,
+        *,
+        action_id: str,
+        task_id: str | None,
+        normalized_nodes_by_id: dict[str, SessionGraphNodeRead],
+        outgoing_edges_by_node: dict[str, list[SessionGraphEdgeRead]],
+    ) -> SessionGraphEdgeRead | None:
+        candidates = []
+        for edge in outgoing_edges_by_node.get(action_id, []):
+            if edge.relation != "precedes":
+                continue
+            target_node = normalized_nodes_by_id.get(edge.target)
+            if target_node is None or target_node.node_type != "action":
+                continue
+            if (
+                task_id is not None
+                and self._pick_first_str(target_node.data.get("task_id")) != task_id
+            ):
+                continue
+            candidates.append(edge)
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda edge: self._best_path_anchor_sort_key(normalized_nodes_by_id[edge.target]),
+        )
 
     def _bridge_attack_edge_relation(
         self, *, incoming_relation: str, outgoing_relation: str
@@ -884,22 +1057,37 @@ class ExecutionGraphBuilder:
             source_graphs: list[str],
             relation_hint: str | None = None,
             candidate_id: str,
+            prefer_sidecar: bool = False,
         ) -> None:
             nonlocal order
             order += 1
-            candidates.append(
-                self._make_execution_candidate(
-                    payload=payload,
-                    fallback_label=fallback_label,
-                    source_graphs=source_graphs,
-                    relation_hint=relation_hint,
-                    candidate_id=candidate_id,
-                    order=order,
-                    task_ids=task_ids,
-                    task_name_to_id=task_name_to_id,
-                    task_by_id=task_by_id,
-                )
+            candidate = self._make_execution_candidate(
+                payload=payload,
+                fallback_label=fallback_label,
+                source_graphs=source_graphs,
+                relation_hint=relation_hint,
+                candidate_id=candidate_id,
+                order=order,
+                task_ids=task_ids,
+                task_name_to_id=task_name_to_id,
+                task_by_id=task_by_id,
             )
+            if prefer_sidecar and not self._has_primary_execution_evidence(candidate.payload):
+                if not self._has_collaboration_sidecar_signal(candidate.payload):
+                    return
+                candidate.payload["prefer_sidecar"] = True
+            elif (
+                prefer_sidecar
+                and self._pick_first_str(
+                    candidate.payload.get("command"),
+                    candidate.payload.get("primary_command"),
+                    candidate.payload.get("request_summary"),
+                    candidate.payload.get("tool_name"),
+                )
+                is None
+            ):
+                candidate.payload["prefer_sidecar"] = True
+            candidates.append(candidate)
 
         for node in sorted(
             evidence_nodes, key=lambda item: (item.stable_key, item.created_at, item.id)
@@ -909,6 +1097,7 @@ class ExecutionGraphBuilder:
                 fallback_label=node.label,
                 source_graphs=["evidence"],
                 candidate_id=f"evidence:{node.id}",
+                prefer_sidecar=True,
             )
 
         execution_records = run.state_json.get("execution_records", [])
@@ -958,6 +1147,7 @@ class ExecutionGraphBuilder:
                     source_graphs=["workflow"],
                     relation_hint="attempts",
                     candidate_id=f"hypothesis:{index}",
+                    prefer_sidecar=True,
                 )
 
         if causal_nodes:
@@ -975,6 +1165,7 @@ class ExecutionGraphBuilder:
                     source_graphs=["causal"],
                     relation_hint="confirms",
                     candidate_id=f"finding:{node.id}",
+                    prefer_sidecar=True,
                 )
         else:
             findings = run.state_json.get("findings", [])
@@ -993,6 +1184,7 @@ class ExecutionGraphBuilder:
                         source_graphs=["workflow"],
                         relation_hint="confirms",
                         candidate_id=f"finding:{index}",
+                        prefer_sidecar=True,
                     )
 
         return self._collapse_context_sidecars(candidates)
@@ -1040,9 +1232,7 @@ class ExecutionGraphBuilder:
                 payload.get("task_name"),
             )
         )
-        action_data["blocked_reason"] = payload.get("blocked_reason") or payload.get(
-            "last_error"
-        )
+        action_data["blocked_reason"] = payload.get("blocked_reason") or payload.get("last_error")
         action_data["relation_hint"] = relation_hint
         action_data["sequence"] = order
         family_key = self._build_execution_family_key(action_data)
@@ -1059,20 +1249,21 @@ class ExecutionGraphBuilder:
         )
 
     def _build_execution_family_key(self, payload: dict[str, object]) -> str:
-        trace_id = self._pick_first_str(payload.get("trace_id"), payload.get("tool_call_id"))
-        if trace_id:
-            return f"trace:{trace_id}"
-
         task_scope = (
-            self._pick_first_str(payload.get("task_id"), payload.get("task_name")) or "global"
+            self._pick_first_str(
+                payload.get("task_id"),
+                payload.get("task_name"),
+                payload.get("source_message_id"),
+                payload.get("message_id"),
+            )
+            or "global"
         )
         tool_name = self._pick_first_str(payload.get("tool_name"), payload.get("tool"))
+        normalized_tool_name = tool_name.casefold() if tool_name else None
         normalized_target = self._normalized_command_target(
             self._pick_first_str(payload.get("command")),
             self._pick_first_str(payload.get("request_summary")),
         )
-        if tool_name and normalized_target:
-            return f"task-target:{task_scope}:{tool_name.casefold()}:{normalized_target}"
 
         normalized_intent = self._normalized_execution_intent(
             self._pick_first_str(
@@ -1082,8 +1273,25 @@ class ExecutionGraphBuilder:
                 payload.get("summary"),
             )
         )
+        if normalized_target:
+            if normalized_tool_name and normalized_intent:
+                return (
+                    f"scope-target:{task_scope}:{normalized_tool_name}:"
+                    f"{normalized_target}:{normalized_intent}"
+                )
+            if normalized_tool_name:
+                return f"scope-target:{task_scope}:{normalized_tool_name}:{normalized_target}"
+            if normalized_intent:
+                return f"scope-target:{task_scope}:{normalized_target}:{normalized_intent}"
+            return f"scope-target:{task_scope}:{normalized_target}"
         if normalized_intent:
-            return f"task-intent:{task_scope}:{normalized_intent}"
+            if normalized_tool_name:
+                return f"scope-intent:{task_scope}:{normalized_tool_name}:{normalized_intent}"
+            return f"scope-intent:{task_scope}:{normalized_intent}"
+
+        trace_id = self._pick_first_str(payload.get("trace_id"), payload.get("tool_call_id"))
+        if trace_id:
+            return f"trace:{trace_id}"
 
         fallback = self._normalized_execution_intent(
             self._pick_first_str(
@@ -1093,7 +1301,7 @@ class ExecutionGraphBuilder:
                 payload.get("tool_name"),
             )
         )
-        return f"task-fallback:{task_scope}:{fallback or 'step'}"
+        return f"scope-fallback:{task_scope}:{fallback or 'step'}"
 
     def _collapse_context_sidecars(
         self, candidates: Sequence[ExecutionCandidate]
@@ -1102,17 +1310,33 @@ class ExecutionGraphBuilder:
             return []
 
         merged_candidates: list[ExecutionCandidate] = []
+        pending_sidecars: list[ExecutionCandidate] = []
         for candidate in sorted(candidates, key=lambda item: (item.order, item.candidate_id)):
             if not self._is_context_sidecar_candidate(candidate):
                 merged_candidates.append(candidate)
                 continue
 
+            pending_sidecars.append(candidate)
+
+        for candidate in pending_sidecars:
             target = self._find_context_sidecar_target(candidate, merged_candidates)
             if target is None:
                 merged_candidates.append(candidate)
                 continue
 
             target.payload = self._merge_attack_node_data(target.payload, candidate.payload)
+            target.payload["_merged_sidecar_count"] = (
+                self._coerce_int(target.payload.get("_merged_sidecar_count")) + 1
+            )
+            existing_sidecar_candidates = target.payload.get("_merged_sidecar_candidates")
+            merged_sidecar_candidates = (
+                list(existing_sidecar_candidates)
+                if isinstance(existing_sidecar_candidates, list)
+                else []
+            )
+            if candidate.candidate_id not in merged_sidecar_candidates:
+                merged_sidecar_candidates.append(candidate.candidate_id)
+            target.payload["_merged_sidecar_candidates"] = merged_sidecar_candidates
             target.payload["source_graphs"] = self._merge_source_graphs(
                 target.payload.get("source_graphs"),
                 candidate.payload.get("source_graphs"),
@@ -1128,9 +1352,11 @@ class ExecutionGraphBuilder:
                 candidate.relation_hint,
             )
 
-        return merged_candidates
+        return sorted(merged_candidates, key=lambda item: (item.order, item.candidate_id))
 
     def _is_context_sidecar_candidate(self, candidate: ExecutionCandidate) -> bool:
+        if bool(candidate.payload.get("prefer_sidecar")):
+            return True
         if bool(candidate.payload.get("command")):
             return False
         if self._pick_first_str(
@@ -1155,8 +1381,7 @@ class ExecutionGraphBuilder:
         eligible = [
             existing
             for existing in merged_candidates
-            if existing.task_id == task_id
-            and not self._is_context_sidecar_candidate(existing)
+            if existing.task_id == task_id and not self._is_context_sidecar_candidate(existing)
         ]
         if not eligible:
             return None
@@ -1202,7 +1427,10 @@ class ExecutionGraphBuilder:
                 merged_data = self._merge_attack_node_data(merged_data, candidate.payload)
                 relation_hint = self._prefer_relation_hint(relation_hint, candidate.relation_hint)
 
-            attempts_count = len(ordered_family)
+            attempts_count = len(ordered_family) + sum(
+                self._coerce_int(candidate.payload.get("_merged_sidecar_count"))
+                for candidate in ordered_family
+            )
             primary_command = self._pick_first_str(
                 *(candidate.payload.get("command") for candidate in ordered_family)
             )
@@ -1214,9 +1442,17 @@ class ExecutionGraphBuilder:
 
             merged_data["family_key"] = family_key
             merged_data["attempts_count"] = attempts_count
-            merged_data["merged_from"] = [
-                candidate.candidate_id for candidate in ordered_family
-            ]
+            merged_from: list[str] = [candidate.candidate_id for candidate in ordered_family]
+            for candidate in ordered_family:
+                for sidecar_candidate_id in self._coerce_list(
+                    candidate.payload.get("_merged_sidecar_candidates")
+                ):
+                    if (
+                        isinstance(sidecar_candidate_id, str)
+                        and sidecar_candidate_id not in merged_from
+                    ):
+                        merged_from.append(sidecar_candidate_id)
+            merged_data["merged_from"] = merged_from
             merged_data["primary_command"] = primary_command
             merged_data["best_observation_summary"] = best_observation_summary
             merged_data["latest_status"] = ordered_family[-1].payload.get("status")
@@ -1231,9 +1467,7 @@ class ExecutionGraphBuilder:
                     ordered_family[0].payload.get("task_name"),
                 )
             )
-            merged_data["aggregation_kind"] = (
-                "family" if attempts_count > 1 else "single"
-            )
+            merged_data["aggregation_kind"] = "family" if attempts_count > 1 else "single"
 
             node_id = self._execution_milestone_id(merged_data, family_key)
             label = self._execution_milestone_label(ordered_family, merged_data)
@@ -1297,6 +1531,15 @@ class ExecutionGraphBuilder:
         seen_findings: set[tuple[object, ...]] = set()
         seen_hypotheses: set[tuple[object, ...]] = set()
         highest_stage_rank = -1
+        current_task_id = self._current_stage_task_id(
+            ordered_tasks,
+            current_stage=current_stage,
+            task_stage_to_id={
+                str(task.metadata_json.get("stage_key")): task.id
+                for task in ordered_tasks
+                if isinstance(task.metadata_json.get("stage_key"), str)
+            },
+        )
         outcome_candidate_id = self._outcome_supporting_milestone_id(
             milestones=milestones,
             run_status=run_status,
@@ -1310,15 +1553,13 @@ class ExecutionGraphBuilder:
             is_first_in_task = (
                 bool(task_milestones) and task_milestones[0].node_id == milestone.node_id
             )
-            stage_rank = self._stage_rank(
-                str(milestone.data.get("stage_category") or "unknown")
-            )
+            stage_rank = self._stage_rank(str(milestone.data.get("stage_category") or "unknown"))
 
             if self._milestone_is_active(milestone):
-                score += 100
+                score += 120
                 reasons.append("active")
             if status in {"blocked", "failed"}:
-                score += 90
+                score += 110
                 reasons.append("blocked")
 
             finding_keys = self._collect_related_item_keys(
@@ -1326,7 +1567,7 @@ class ExecutionGraphBuilder:
                 ("id", "title", "label"),
             )
             if any(key not in seen_findings for key in finding_keys):
-                score += 80
+                score += 85
                 reasons.append("finding")
 
             hypothesis_keys = self._collect_related_item_keys(
@@ -1338,7 +1579,7 @@ class ExecutionGraphBuilder:
                 reasons.append("hypothesis")
 
             if is_first_in_task and stage_rank > highest_stage_rank and stage_rank >= 1:
-                score += 55
+                score += 40
                 reasons.append("stage_transition")
                 highest_stage_rank = stage_rank
 
@@ -1346,11 +1587,11 @@ class ExecutionGraphBuilder:
                 milestone.task_id is not None
                 and last_substantive_by_task.get(milestone.task_id) == milestone.node_id
             ):
-                score += 45
+                score += 20
                 reasons.append("task_leaf")
 
             if milestone.node_id == outcome_candidate_id:
-                score += 60
+                score += 95
                 reasons.append("outcome")
 
             attempts_count = self._coerce_int(milestone.data.get("attempts_count"))
@@ -1377,19 +1618,6 @@ class ExecutionGraphBuilder:
             seen_findings.update(finding_keys)
             seen_hypotheses.update(hypothesis_keys)
 
-        latest_milestone = milestones[-1]
-        selected_ids.add(latest_milestone.node_id)
-        scored.setdefault(latest_milestone.node_id, (0, []))[1].append("latest")
-
-        current_task_id = self._current_stage_task_id(
-            ordered_tasks,
-            current_stage=current_stage,
-            task_stage_to_id={
-                str(task.metadata_json.get("stage_key")): task.id
-                for task in ordered_tasks
-                if isinstance(task.metadata_json.get("stage_key"), str)
-            },
-        )
         if current_task_id is not None and current_task_id in milestones_by_task:
             if not any(
                 milestone.node_id in selected_ids
@@ -1403,16 +1631,16 @@ class ExecutionGraphBuilder:
                         item.node_id,
                     ),
                 )
-                selected_ids.add(representative.node_id)
-                scored.setdefault(representative.node_id, (0, []))[1].append(
-                    "current_task"
+                representative_score, representative_reasons = scored.get(
+                    representative.node_id, (0, [])
                 )
+                if representative_score >= 55:
+                    selected_ids.add(representative.node_id)
+                    representative_reasons.append("current_task")
 
-        for task_id, task_milestones in milestones_by_task.items():
-            if task_id is None or any(item.node_id in selected_ids for item in task_milestones):
-                continue
+        if not selected_ids:
             representative = max(
-                task_milestones,
+                milestones,
                 key=lambda item: (
                     scored.get(item.node_id, (0, []))[0],
                     item.last_order,
@@ -1420,9 +1648,9 @@ class ExecutionGraphBuilder:
                 ),
             )
             score, reasons = scored.get(representative.node_id, (0, []))
-            if score >= 40:
+            if score >= 35:
                 selected_ids.add(representative.node_id)
-                reasons.append("task_representative")
+                reasons.append("representative")
 
         selected: list[ExecutionMilestone] = []
         for milestone in milestones:
@@ -1462,17 +1690,22 @@ class ExecutionGraphBuilder:
                 "active",
                 "blocked",
                 "finding",
-                "hypothesis",
-                "stage_transition",
                 "outcome",
-                "task_leaf",
             }
             for reason in reasons
         ):
             return True
-        if score >= 60:
+        if "hypothesis" in reasons and score >= 70:
             return True
-        if self._coerce_int(milestone.data.get("attempts_count")) > 1 and score >= 40:
+        if self._coerce_int(milestone.data.get("attempts_count")) > 1 and score >= 50:
+            return True
+        if (
+            self._has_action_summary_signal(milestone.data)
+            and self._has_meaningful_execution_observation_data(milestone.data)
+            and score >= 35
+        ):
+            return True
+        if score >= 85:
             return True
         return False
 
@@ -1484,39 +1717,12 @@ class ExecutionGraphBuilder:
         current_stage_task_id: str | None,
         root_node_id: str | None,
     ) -> str | None:
-        ordered_milestones = sorted(
-            milestones, key=lambda item: (item.first_order, item.last_order, item.node_id)
+        supporting_id = self._outcome_supporting_milestone_id(
+            milestones=milestones,
+            run_status=run_status,
         )
-        if ordered_milestones:
-            if run_status in {
-                WorkflowRunStatus.RUNNING,
-                WorkflowRunStatus.PAUSED,
-                WorkflowRunStatus.NEEDS_APPROVAL,
-            }:
-                active = [
-                    milestone
-                    for milestone in ordered_milestones
-                    if self._milestone_is_active(milestone)
-                ]
-                if active:
-                    return active[-1].node_id
-            if run_status in {WorkflowRunStatus.BLOCKED, WorkflowRunStatus.ERROR}:
-                blocked = [
-                    milestone
-                    for milestone in reversed(ordered_milestones)
-                    if str(milestone.data.get("status") or "") in {"blocked", "failed"}
-                ]
-                if blocked:
-                    return blocked[0].node_id
-            if run_status is WorkflowRunStatus.DONE:
-                completed = [
-                    milestone
-                    for milestone in reversed(ordered_milestones)
-                    if str(milestone.data.get("status") or "") in {"completed", "done"}
-                ]
-                if completed:
-                    return completed[0].node_id
-            return ordered_milestones[-1].node_id
+        if supporting_id is not None:
+            return supporting_id
         if current_stage_task_id is not None:
             return current_stage_task_id
         return root_node_id
@@ -1626,9 +1832,15 @@ class ExecutionGraphBuilder:
         best = max(
             candidates,
             key=lambda item: (
-                self._coerce_int(item.data.get("attempts_count")),
+                1 if self._milestone_is_active(item) else 0,
+                1 if str(item.data.get("status") or "") in {"blocked", "failed"} else 0,
+                1 if str(item.data.get("status") or "") in {"completed", "done"} else 0,
                 len(self._coerce_list(item.data.get("related_findings"))),
                 len(self._coerce_list(item.data.get("related_hypotheses"))),
+                1 if self._has_meaningful_execution_observation_data(item.data) else 0,
+                1 if self._has_action_summary_signal(item.data) else 0,
+                self._coerce_int(item.data.get("collaboration_value")),
+                self._coerce_int(item.data.get("attempts_count")),
                 item.last_order,
             ),
         )
@@ -1650,8 +1862,7 @@ class ExecutionGraphBuilder:
         if any(token in normalized for token in ("pivot", "lateral", "post", "movement")):
             return "pivot"
         if any(
-            token in normalized
-            for token in ("valid", "verify", "safe_validation", "auth", "check")
+            token in normalized for token in ("valid", "verify", "safe_validation", "auth", "check")
         ):
             return "validation"
         if any(token in normalized for token in ("report", "outcome", "summary", "impact")):
@@ -1686,25 +1897,128 @@ class ExecutionGraphBuilder:
         return list(value) if isinstance(value, list) else []
 
     def _has_action_summary_signal(self, data: dict[str, object]) -> bool:
-        return any(
-            self._pick_first_str(data.get(field)) is not None
-            for field in ("command", "primary_command", "request_summary", "tool_name", "summary")
+        summary = self._pick_first_str(
+            data.get("primary_command"),
+            data.get("command"),
+            data.get("request_summary"),
+            data.get("summary"),
         )
+        if summary is None or not self._is_meaningful_text(summary):
+            return False
+        if self._is_weak_validation_probe(data, summary=summary):
+            return bool(self._coerce_int(data.get("attempts_count")) > 1)
+        return True
 
     def _has_meaningful_execution_observation_data(self, data: dict[str, object]) -> bool:
-        for field in (
-            "best_observation_summary",
-            "observation_summary",
-            "response_excerpt",
-            "stdout",
-            "stderr",
-            "observation",
+        if self._has_distinct_execution_observation_signal(data):
+            return True
+        observation_summary = self._pick_first_str(
+            data.get("best_observation_summary"),
+            data.get("observation_summary"),
+        )
+        if observation_summary is None or not self._is_meaningful_text(observation_summary):
+            return False
+        if self._is_weak_validation_probe(data, summary=observation_summary):
+            return False
+        action_summary = self._pick_first_str(
+            data.get("summary"),
+            data.get("request_summary"),
+            data.get("command"),
+            data.get("primary_command"),
+            data.get("thought"),
+        )
+        if action_summary is not None and observation_summary.strip() == action_summary.strip():
+            return False
+        return True
+
+    def _has_primary_execution_evidence(self, data: dict[str, object]) -> bool:
+        if self._pick_first_str(data.get("command"), data.get("primary_command")) is not None:
+            return True
+        if (
+            self._pick_first_str(data.get("request_summary")) is not None
+            and self._pick_first_str(data.get("tool_name")) is not None
         ):
-            value = data.get(field)
+            return True
+        if self._has_distinct_execution_observation_signal(data):
+            return True
+        status = str(data.get("status") or "")
+        if status in self._PRESERVED_ATTACK_STATUS_VALUES:
+            return True
+        trace_id = self._pick_first_str(data.get("trace_id"), data.get("tool_call_id"))
+        task_anchor = self._pick_first_str(data.get("task_id"), data.get("task_name"))
+        return trace_id is not None and task_anchor is not None
+
+    def _has_collaboration_sidecar_signal(self, data: dict[str, object]) -> bool:
+        if self._coerce_list(data.get("related_findings")):
+            return True
+        if self._coerce_list(data.get("related_hypotheses")):
+            return True
+        blocked_reason = self._pick_first_str(data.get("blocked_reason"))
+        if blocked_reason is not None and self._is_meaningful_text(blocked_reason):
+            return True
+        return str(data.get("status") or "") in {"blocked", "failed"}
+
+    def _has_structured_result_signal(self, result: object) -> bool:
+        if not isinstance(result, dict) or not result:
+            return False
+        for key, value in result.items():
+            if key in {"ok", "success", "status", "exit_code", "code"} and value in {
+                True,
+                False,
+                0,
+                1,
+                "ok",
+                "success",
+                "completed",
+                "done",
+            }:
+                continue
             if isinstance(value, str) and self._is_meaningful_text(value):
                 return True
-        result = data.get("result")
-        return isinstance(result, dict) and bool(result)
+            if isinstance(value, list | dict) and bool(value):
+                return True
+            if isinstance(value, int | float) and value not in {0, 1}:
+                return True
+        return False
+
+    def _is_weak_validation_probe(self, data: dict[str, object], *, summary: str) -> bool:
+        if self._has_collaboration_sidecar_signal(data):
+            return False
+        normalized = summary.casefold()
+        command = self._pick_first_str(data.get("primary_command"), data.get("command")) or ""
+        tool_name = self._pick_first_str(data.get("tool_name")) or ""
+        stage_category = str(data.get("stage_category") or "")
+        target = self._normalized_command_target(
+            command, self._pick_first_str(data.get("request_summary"))
+        )
+        if (
+            command.casefold().startswith("curl ")
+            and target is not None
+            and any(token in target for token in ("health", "status", "ready", "live", "version"))
+        ):
+            return True
+        if tool_name.casefold() in {
+            "execute",
+            "bash",
+            "shell",
+            "mcp_execute",
+            "mcp.execute",
+        } and any(
+            token in normalized for token in ("pwd", "whoami", "ls", "echo ", "status", "health")
+        ):
+            return True
+        return stage_category == "validation" and any(
+            token in normalized
+            for token in (
+                "health",
+                "status",
+                "verify",
+                "check",
+                "validate",
+                "test connection",
+                "ping",
+            )
+        )
 
     def _has_distinct_execution_observation_signal(self, data: dict[str, object]) -> bool:
         for field in ("response_excerpt", "stdout", "stderr", "observation"):
@@ -1712,7 +2026,7 @@ class ExecutionGraphBuilder:
             if isinstance(value, str) and self._is_meaningful_text(value):
                 return True
         result = data.get("result")
-        if isinstance(result, dict) and bool(result):
+        if self._has_structured_result_signal(result):
             return True
         observation_summary = self._pick_first_str(
             data.get("best_observation_summary"),
@@ -1756,8 +2070,7 @@ class ExecutionGraphBuilder:
         if not command:
             return None
         tokens = [
-            token.strip("\"'")
-            for token in re.findall(r"[^\s\"']+|\"[^\"]*\"|'[^']*'", command)
+            token.strip("\"'") for token in re.findall(r"[^\s\"']+|\"[^\"]*\"|'[^']*'", command)
         ]
         for token in tokens[1:]:
             if not token or token.startswith("-"):
@@ -1896,14 +2209,65 @@ class ExecutionGraphBuilder:
             current_stage=None,
             ordered_tasks=(),
         )
+        outcome_anchor_id = self._pick_outcome_anchor_id(
+            milestones=milestone_actions,
+            run_status=conversation_status,
+            current_stage_task_id=None,
+            root_node_id=goal_node_id,
+        )
+        best_path_milestone = next(
+            (
+                milestone
+                for milestone in milestone_actions
+                if milestone.node_id == outcome_anchor_id
+            ),
+            milestone_actions[-1] if milestone_actions else None,
+        )
 
-        if goal_node_id is not None and milestone_actions:
+        if goal_node_id is not None and best_path_milestone is not None:
+            root_summary: dict[str, object] = {
+                "best_path_summary": best_path_milestone.label,
+                "current_action_summary": self._pick_first_str(
+                    best_path_milestone.data.get("summary"),
+                    best_path_milestone.data.get("request_summary"),
+                    best_path_milestone.data.get("primary_command"),
+                    best_path_milestone.data.get("command"),
+                    best_path_milestone.label,
+                ),
+            }
+            key_observation = self._pick_first_str(
+                best_path_milestone.data.get("best_observation_summary"),
+                best_path_milestone.data.get("observation_summary"),
+            )
+            if key_observation is not None:
+                root_summary["key_observation_summary"] = key_observation
+            blocker = self._pick_first_str(best_path_milestone.data.get("blocked_reason"))
+            if blocker is not None:
+                root_summary["blocker"] = blocker
             add_node(
                 node_id=goal_node_id,
                 node_type="root",
                 label=nodes_by_id[goal_node_id].label,
-                data={"best_path_summary": milestone_actions[-1].label},
+                data=root_summary,
             )
+
+        supporting_milestones: list[ExecutionMilestone] = []
+        seen_supporting_labels: set[str] = set()
+        for milestone in sorted(
+            milestone_actions,
+            key=lambda item: (
+                item.node_id == outcome_anchor_id,
+                self._coerce_int(item.data.get("collaboration_value")),
+                item.last_order,
+            ),
+            reverse=True,
+        ):
+            if milestone.label in seen_supporting_labels:
+                continue
+            seen_supporting_labels.add(milestone.label)
+            supporting_milestones.append(milestone)
+            if len(supporting_milestones) >= 3:
+                break
 
         previous_node_id = goal_node_id if goal_node_id is not None else None
         for index, milestone in enumerate(milestone_actions):
@@ -1939,15 +2303,9 @@ class ExecutionGraphBuilder:
                 "generation_id": latest_generation.id if latest_generation is not None else None,
                 "status": outcome_status,
                 "content": latest_outcome_text,
-                "supporting_actions": [milestone.label for milestone in milestone_actions[:3]],
+                "supporting_actions": [milestone.label for milestone in supporting_milestones],
                 "source_graphs": ["conversation", "generation"],
             },
-        )
-        outcome_anchor_id = self._pick_outcome_anchor_id(
-            milestones=milestone_actions,
-            run_status=conversation_status,
-            current_stage_task_id=None,
-            root_node_id=goal_node_id,
         )
         if outcome_anchor_id is not None and outcome_anchor_id in nodes_by_id:
             add_edge(
@@ -2003,6 +2361,8 @@ class ExecutionGraphBuilder:
             payload_source_graphs: dict[str, list[str]] = {}
             reasoning_payloads: list[dict[str, object]] = []
             latest_payload_key: str | None = None
+            tool_call_to_payload_key: dict[str, str] = {}
+            message_scope = self._normalize_merge_label(message.id)
 
             def ensure_payload(key: str, source_graphs: list[str]) -> dict[str, object]:
                 payload = payloads.get(key)
@@ -2020,6 +2380,45 @@ class ExecutionGraphBuilder:
                 )
                 return payload
 
+            def conversation_family_key(
+                *,
+                trace_id: str | None = None,
+                tool_name: str | None = None,
+                command: str | None = None,
+                request_summary: str | None = None,
+                observation_text: str | None = None,
+            ) -> str:
+                normalized_target = self._normalized_command_target(command, request_summary)
+                intent_source = self._pick_first_str(
+                    request_summary,
+                    command,
+                    observation_text,
+                    tool_name,
+                )
+                normalized_intent = self._normalized_execution_intent(intent_source)
+                if normalized_target is not None:
+                    return f"message:{message_scope}:target:{normalized_target}"
+                if normalized_intent is not None:
+                    return f"message:{message_scope}:intent:{normalized_intent}"
+                if trace_id is not None:
+                    return f"message:{message_scope}:trace:{self._normalize_merge_label(trace_id)}"
+                return f"message:{message_scope}:summary"
+
+            def choose_attach_key() -> str | None:
+                if latest_payload_key is not None and latest_payload_key in payloads:
+                    return latest_payload_key
+                if not payloads:
+                    return None
+                return max(
+                    payloads,
+                    key=lambda key: (
+                        1 if self._has_primary_execution_evidence(payloads[key]) else 0,
+                        1 if self._has_meaningful_execution_observation_data(payloads[key]) else 0,
+                        1 if self._has_action_summary_signal(payloads[key]) else 0,
+                        key,
+                    ),
+                )
+
             for segment in transcript:
                 if segment.kind == "reasoning":
                     reasoning_text = self._extract_reasoning_text(segment.text)
@@ -2036,17 +2435,26 @@ class ExecutionGraphBuilder:
                     continue
 
                 if segment.kind == "tool_call":
-                    payload_key = str(segment.tool_call_id or segment.id)
+                    trace_id = str(segment.tool_call_id or segment.id)
+                    command = self._read_segment_command(segment)
+                    request_summary = self._pick_first_str(segment.title, segment.text)
+                    payload_key = conversation_family_key(
+                        trace_id=trace_id,
+                        tool_name=segment.tool_name,
+                        command=command,
+                        request_summary=request_summary,
+                    )
+                    tool_call_to_payload_key[trace_id] = payload_key
                     payload = ensure_payload(payload_key, ["conversation", "transcript"])
                     payload.update(
                         {
-                            "trace_id": segment.tool_call_id or segment.id,
+                            "trace_id": payload.get("trace_id") or trace_id,
                             "tool_call_id": segment.tool_call_id,
                             "tool_name": segment.tool_name,
                             "arguments": dict(segment.metadata_payload),
-                            "command": self._read_segment_command(segment),
-                            "request_summary": segment.title or segment.text,
-                            "status": segment.status,
+                            "command": command,
+                            "request_summary": request_summary,
+                            "status": segment.status or payload.get("status"),
                             "updated_at": segment.updated_at.isoformat(),
                         }
                     )
@@ -2060,20 +2468,38 @@ class ExecutionGraphBuilder:
                     message=message,
                     segment=segment,
                 )
-                payload_key = str(
-                    segment.tool_call_id or latest_payload_key or f"message:{message.id}"
+                observation_trace_id: str | None = self._pick_first_str(
+                    observation_data.get("trace_id"),
+                    observation_data.get("tool_call_id"),
                 )
-                payload = ensure_payload(payload_key, ["conversation", "transcript"])
+                observation_payload_key: str | None = (
+                    tool_call_to_payload_key.get(observation_trace_id or "")
+                    if observation_trace_id is not None
+                    else None
+                )
+                if observation_payload_key is None:
+                    observation_payload_key = latest_payload_key or conversation_family_key(
+                        trace_id=observation_trace_id,
+                        tool_name=self._pick_first_str(observation_data.get("tool_name")),
+                        command=self._pick_first_str(observation_data.get("command")),
+                        request_summary=self._pick_first_str(
+                            observation_data.get("request_summary")
+                        ),
+                        observation_text=self._pick_first_str(
+                            observation_data.get("observation_summary"),
+                            observation_data.get("response_excerpt"),
+                            observation_data.get("stdout"),
+                            observation_data.get("stderr"),
+                            observation_data.get("text"),
+                        ),
+                    )
+                payload = ensure_payload(observation_payload_key, ["conversation", "transcript"])
                 payload.update(observation_data)
-                payload["trace_id"] = (
-                    payload.get("trace_id")
-                    or segment.tool_call_id
-                    or segment.id
-                )
+                payload["trace_id"] = payload.get("trace_id") or observation_trace_id or segment.id
                 payload["updated_at"] = segment.updated_at.isoformat()
                 if segment.kind == "error":
                     payload["status"] = "failed"
-                latest_payload_key = payload_key
+                latest_payload_key = observation_payload_key
 
             reasoning_fragments = self._conversation_reasoning_fragments(
                 message=message,
@@ -2103,14 +2529,22 @@ class ExecutionGraphBuilder:
 
             message_text = self._extract_reasoning_text(message.content) or message.content.strip()
             if not payloads:
-                payload_key = f"message:{message.id}"
+                if not self._is_meaningful_text(message_text) and not merged_reasoning:
+                    continue
+                payload_key = f"message:{message_scope}:summary"
                 payload = ensure_payload(payload_key, ["conversation", "generation"])
                 payload.update(
                     {
                         "trace_id": message.id,
-                        "response_excerpt": message_text,
-                        "summary": message_text,
-                        "observation_summary": message_text,
+                        "response_excerpt": message_text or payload.get("response_excerpt"),
+                        "summary": message_text
+                        or self._pick_first_str(
+                            *(item.get("summary") for item in merged_reasoning)
+                        ),
+                        "observation_summary": message_text
+                        or self._pick_first_str(
+                            *(item.get("summary") for item in merged_reasoning)
+                        ),
                         "status": (
                             generation.status.value
                             if generation is not None
@@ -2121,38 +2555,86 @@ class ExecutionGraphBuilder:
                     }
                 )
                 latest_payload_key = payload_key
-            elif latest_payload_key is not None and self._is_meaningful_text(message_text):
-                payload = payloads[latest_payload_key]
-                payload.setdefault("response_excerpt", message_text)
-                if not (
-                    payload.get("command")
-                    or self._pick_first_str(
-                        payload.get("request_summary"),
-                        payload.get("tool_name"),
-                    )
-                    or self._has_meaningful_execution_observation_data(payload)
-                ):
-                    payload.setdefault("summary", message_text)
-                    payload.setdefault("observation_summary", message_text)
+            else:
+                attach_key = choose_attach_key()
+                if attach_key is not None and self._is_meaningful_text(message_text):
+                    payload = payloads[attach_key]
+                    payload.setdefault("response_excerpt", message_text)
+                    if not self._has_action_summary_signal(payload):
+                        payload.setdefault("summary", message_text)
+                    if not self._has_meaningful_execution_observation_data(payload):
+                        payload.setdefault("observation_summary", message_text)
+                    latest_payload_key = attach_key
 
-            attach_key = latest_payload_key or next(iter(payloads), None)
+            attach_key = choose_attach_key()
             if attach_key is not None and merged_reasoning:
                 payload = payloads[attach_key]
-                payload["related_hypotheses"] = merged_reasoning
+                existing_hypotheses = self._coerce_list(payload.get("related_hypotheses"))
+                payload["related_hypotheses"] = self._merge_related_items(
+                    existing_hypotheses,
+                    merged_reasoning,
+                    ("trace_id", "summary", "kind", "index"),
+                )
                 payload.setdefault(
                     "thought",
                     self._pick_first_str(*(item.get("summary") for item in merged_reasoning)),
                 )
 
             for payload_key, payload in payloads.items():
+                if not self._has_primary_execution_evidence(
+                    payload
+                ) and not self._has_collaboration_sidecar_signal(payload):
+                    continue
+                if (
+                    self._is_weak_validation_probe(
+                        payload,
+                        summary=self._pick_first_str(
+                            payload.get("primary_command"),
+                            payload.get("command"),
+                            payload.get("request_summary"),
+                            payload.get("summary"),
+                        )
+                        or "",
+                    )
+                    and self._coerce_int(payload.get("attempts_count")) <= 1
+                ):
+                    if not self._has_meaningful_execution_observation_data(payload):
+                        continue
                 order += 1
-                fallback_label = self._pick_first_str(
-                    payload.get("command"),
-                    payload.get("request_summary"),
-                    payload.get("summary"),
-                    message_text,
-                    self._conversation_action_label(message=message, generation=generation),
-                ) or "Conversation action"
+                payload_status = str(payload.get("status") or "")
+                payload["status"] = payload_status or (
+                    generation.status.value
+                    if generation is not None
+                    else (message.status.value if message.status is not None else "completed")
+                )
+                payload["trace_id"] = payload.get("trace_id") or f"{message.id}:{payload_key}"
+                payload.setdefault(
+                    "summary",
+                    self._pick_first_str(
+                        payload.get("request_summary"),
+                        payload.get("command"),
+                        payload.get("thought"),
+                    ),
+                )
+                if not self._has_meaningful_execution_observation_data(payload):
+                    observation_fallback = self._pick_first_str(
+                        payload.get("response_excerpt"),
+                        payload.get("summary"),
+                    )
+                    if observation_fallback is not None and self._is_meaningful_text(
+                        observation_fallback
+                    ):
+                        payload.setdefault("observation_summary", observation_fallback)
+                fallback_label = (
+                    self._pick_first_str(
+                        payload.get("command"),
+                        payload.get("request_summary"),
+                        payload.get("summary"),
+                        message_text,
+                        self._conversation_action_label(message=message, generation=generation),
+                    )
+                    or "Conversation action"
+                )
                 candidates.append(
                     self._make_execution_candidate(
                         payload=payload,
@@ -2395,10 +2877,12 @@ class ExecutionGraphBuilder:
     ) -> dict[str, object]:
         summary = self._pick_first_str(
             payload.get("observation_summary"),
-            payload.get("summary"),
             payload.get("result_summary"),
             payload.get("observation"),
             payload.get("stdout"),
+            payload.get("stderr"),
+            payload.get("response_excerpt"),
+            payload.get("summary"),
             payload.get("text"),
         )
         return {

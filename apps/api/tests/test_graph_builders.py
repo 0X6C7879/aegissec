@@ -431,8 +431,9 @@ def test_attack_graph_builder_merges_evidence_nodes_and_execution_records() -> N
         assert sorted(source_graphs) == ["evidence", "task", "workflow"]
 
 
-def test_attack_graph_builder_aggregates_repetitive_low_value_actions_into_single_milestone(
-) -> None:
+def test_attack_graph_builder_aggregates_repetitive_low_value_actions_into_single_milestone() -> (
+    None
+):
     with _db_session() as db_session:
         session = _create_session(db_session)
         workflow_repository = WorkflowRepository(db_session)
@@ -529,7 +530,9 @@ def test_attack_graph_builder_aggregates_repetitive_low_value_actions_into_singl
         merged_from = aggregated_probe.data["merged_from"]
         assert isinstance(merged_from, list)
         assert len(merged_from) == 9
-        assert aggregated_probe.data["primary_command"] == "curl -s -I https://target.internal/health"
+        assert (
+            aggregated_probe.data["primary_command"] == "curl -s -I https://target.internal/health"
+        )
         assert "curl -s -I https://target.internal/health" in aggregated_probe.label
         assert f"outcome:{run.id}" in node_ids
         assert all(node.node_type != "observation" for node in graph.nodes)
@@ -954,6 +957,147 @@ def test_attack_graph_builder_builds_conversation_fallback_for_shell_tool_result
         assert any(node.node_type == "outcome" for node in graph.nodes)
         relations = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
         assert any(relation == "attempts" for _, relation, _ in relations)
+
+
+def test_attack_graph_builder_conversation_fallback_prefers_blocked_collaboration_family() -> None:
+    with _db_session() as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.create_session(
+            title="Conversation Milestone Session",
+            goal="保留协作价值最高的工作链。",
+        )
+        branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="优先展示当前最关键的协作动作。",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=1,
+            turn_index=1,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="重复健康检查后，admin surface 的验证因为审批被阻断。",
+            attachments=[],
+            branch_id=branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=2,
+            turn_index=1,
+            assistant_transcript_json=assistant_transcript_to_storage(
+                [
+                    AssistantTranscriptSegment(
+                        id="health-call-1",
+                        sequence=1,
+                        kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                        status="completed",
+                        title="execute_kali_command",
+                        text="curl -s -I https://target.internal/health",
+                        tool_name="execute_kali_command",
+                        tool_call_id="health-call-1",
+                        recorded_at=datetime(2026, 4, 5, 12, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 0, tzinfo=UTC),
+                        metadata={
+                            "arguments": {"command": "curl -s -I https://target.internal/health"}
+                        },
+                    ),
+                    AssistantTranscriptSegment(
+                        id="health-result-1",
+                        sequence=2,
+                        kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                        status="completed",
+                        title="execute_kali_command",
+                        text=None,
+                        tool_name="execute_kali_command",
+                        tool_call_id="health-call-1",
+                        recorded_at=datetime(2026, 4, 5, 12, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 0, tzinfo=UTC),
+                        metadata={"result": {"stdout": "200 OK", "status": "success"}},
+                    ),
+                    AssistantTranscriptSegment(
+                        id="health-call-2",
+                        sequence=3,
+                        kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                        status="completed",
+                        title="execute_kali_command",
+                        text="curl -s -I https://target.internal/health",
+                        tool_name="execute_kali_command",
+                        tool_call_id="health-call-2",
+                        recorded_at=datetime(2026, 4, 5, 12, 1, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 1, tzinfo=UTC),
+                        metadata={
+                            "arguments": {"command": "curl -s -I https://target.internal/health"}
+                        },
+                    ),
+                    AssistantTranscriptSegment(
+                        id="health-result-2",
+                        sequence=4,
+                        kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                        status="completed",
+                        title="execute_kali_command",
+                        text=None,
+                        tool_name="execute_kali_command",
+                        tool_call_id="health-call-2",
+                        recorded_at=datetime(2026, 4, 5, 12, 1, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 1, tzinfo=UTC),
+                        metadata={"result": {"stdout": "200 OK", "status": "success"}},
+                    ),
+                    AssistantTranscriptSegment(
+                        id="blocked-call-1",
+                        sequence=5,
+                        kind=AssistantTranscriptSegmentKind.TOOL_CALL,
+                        status="failed",
+                        title="execute_kali_command",
+                        text="nmap -sV target.internal/admin",
+                        tool_name="execute_kali_command",
+                        tool_call_id="blocked-call-1",
+                        recorded_at=datetime(2026, 4, 5, 12, 2, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 2, tzinfo=UTC),
+                        metadata={"arguments": {"command": "nmap -sV target.internal/admin"}},
+                    ),
+                    AssistantTranscriptSegment(
+                        id="blocked-result-1",
+                        sequence=6,
+                        kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                        status="failed",
+                        title="execute_kali_command",
+                        text=None,
+                        tool_name="execute_kali_command",
+                        tool_call_id="blocked-call-1",
+                        recorded_at=datetime(2026, 4, 5, 12, 2, tzinfo=UTC),
+                        updated_at=datetime(2026, 4, 5, 12, 2, tzinfo=UTC),
+                        metadata={
+                            "result": {
+                                "command": "nmap -sV target.internal/admin",
+                                "stderr": "approval required before probing admin surface",
+                                "status": "failed",
+                            }
+                        },
+                    ),
+                ]
+            ),
+        )
+
+        graph = AttackGraphBuilder().build_from_conversation(
+            session=session,
+            messages=[user_message, assistant_message],
+            generations=[],
+        )
+
+        action_nodes = [node for node in graph.nodes if node.node_type == "action"]
+        assert len(action_nodes) == 1
+        assert "nmap -sV target.internal/admin" in action_nodes[0].label
+        assert action_nodes[0].data["status"] == "failed"
+
+        root_node = next(node for node in graph.nodes if node.node_type == "root")
+        assert "nmap -sV target.internal/admin" in str(root_node.data.get("best_path_summary"))
+
+        outcome_node = next(node for node in graph.nodes if node.node_type == "outcome")
+        supporting_actions = outcome_node.data.get("supporting_actions")
+        assert isinstance(supporting_actions, list)
+        assert supporting_actions == [action_nodes[0].label]
 
 
 def test_attack_graph_builder_classifies_execute_skill_security_tools_as_exploit() -> None:
