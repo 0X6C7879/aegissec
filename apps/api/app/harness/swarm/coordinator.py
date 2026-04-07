@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-from app.db.models import TaskNodeStatus
+from app.db.models import MessageRole, TaskNodeStatus
 
 from .agent_profiles import SwarmAgentProfile, build_default_agent_profiles
 from .in_process_backend import InProcessAgentContext, InProcessSwarmBackend
@@ -21,6 +23,11 @@ class InProcessSwarmCoordinator:
         *,
         session_id: str,
         session_state: Any | None = None,
+        session: Any | None = None,
+        chat_runtime: Any | None = None,
+        runtime_service: Any | None = None,
+        skill_service: Any | None = None,
+        mcp_service: Any | None = None,
         profiles: dict[str, SwarmAgentProfile] | None = None,
         registry: SwarmRegistry | None = None,
         mailbox: SwarmMailbox | None = None,
@@ -29,6 +36,11 @@ class InProcessSwarmCoordinator:
     ) -> None:
         self.session_id = session_id
         self.session_state = session_state
+        self._session = session
+        self._chat_runtime = chat_runtime
+        self._runtime_service = runtime_service
+        self._skill_service = skill_service
+        self._mcp_service = mcp_service
         self._profiles = profiles or build_default_agent_profiles()
         self._registry = registry or SwarmRegistry()
         self._mailbox = mailbox or SwarmMailbox()
@@ -36,6 +48,28 @@ class InProcessSwarmCoordinator:
         self._backend = backend or InProcessSwarmBackend()
         self._notifications: list[SwarmNotification] = []
         self._coordinator_agent_id: str | None = None
+        self._agent_histories: dict[str, list[Any]] = {}
+        self._agent_session_states: dict[str, Any | None] = {}
+
+    @staticmethod
+    def _normalize_mapping(value: object) -> dict[str, Any] | None:
+        return dict(value) if isinstance(value, dict) else None
+
+    @staticmethod
+    def _normalize_string_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value]
+
+    @staticmethod
+    def _normalize_object_list(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+        return normalized
 
     def ensure_primary_agent(
         self, *, objective: str, metadata: dict[str, Any] | None = None
@@ -113,6 +147,10 @@ class InProcessSwarmCoordinator:
             title=objective,
             metadata={"role": profile.role, **dict(metadata or {})},
         )
+        self._agent_histories[agent_id] = []
+        self._agent_session_states[agent_id] = (
+            copy.deepcopy(self.session_state) if self.session_state is not None else None
+        )
         self._mailbox.ensure_queue(agent_id)
         self._backend.start(
             context=InProcessAgentContext(
@@ -124,14 +162,6 @@ class InProcessSwarmCoordinator:
                 metadata=dict(metadata or {}),
             ),
             runner=self._build_agent_runner(agent_id=agent_id, task_id=task.task_id),
-        )
-        await self._mailbox.send(
-            create_user_message(
-                sender_id=coordinator_agent_id,
-                recipient_id=agent_id,
-                content=objective,
-                metadata=dict(metadata or {}),
-            )
         )
         self._emit(
             SwarmNotification(
@@ -262,7 +292,6 @@ class InProcessSwarmCoordinator:
                         return {"shutdown": True, "reason": message.payload.get("reason")}
                     if message.kind == MailboxMessageKind.USER_MESSAGE:
                         last_message = message.as_payload()
-                        self._registry.update_status(agent_id, SwarmAgentStatus.IDLE)
                         self._emit(
                             SwarmNotification(
                                 agent_id=agent_id,
@@ -272,6 +301,66 @@ class InProcessSwarmCoordinator:
                                 metadata={"message_id": message.message_id},
                             )
                         )
+                        if self._chat_runtime is None:
+                            self._registry.update_status(agent_id, SwarmAgentStatus.IDLE)
+                            continue
+                        try:
+                            result = await self._execute_agent_message(
+                                agent_id=agent_id,
+                                context=context,
+                                task_id=task_id,
+                                content=str(message.payload.get("content") or ""),
+                            )
+                        except Exception as exc:
+                            self._registry.update_status(agent_id, SwarmAgentStatus.FAILED)
+                            self._task_manager.fail(task_id, summary=str(exc))
+                            self._emit(
+                                SwarmNotification(
+                                    agent_id=agent_id,
+                                    status=SwarmNotificationStatus.FAILED,
+                                    summary=str(exc),
+                                    task_id=task_id,
+                                    reason=str(exc),
+                                )
+                            )
+                            return {"error": str(exc)}
+
+                        self._registry.update_status(agent_id, SwarmAgentStatus.COMPLETED)
+                        usage_payload = self._normalize_mapping(result.get("usage"))
+                        evidence_ids = self._normalize_string_list(result.get("evidence_ids"))
+                        hypothesis_ids = self._normalize_string_list(result.get("hypothesis_ids"))
+                        graph_updates = self._normalize_object_list(result.get("graph_updates"))
+                        artifacts = self._normalize_string_list(result.get("artifacts"))
+                        reason = (
+                            str(result.get("reason"))
+                            if isinstance(result.get("reason"), str)
+                            else None
+                        )
+                        completed_task = self._task_manager.complete(
+                            task_id,
+                            summary=str(result.get("content") or "Agent execution completed."),
+                            result=result,
+                            usage=usage_payload,
+                        )
+                        if completed_task is not None:
+                            completed_task.metadata["profile_name"] = context.profile_name
+                        self._emit(
+                            SwarmNotification(
+                                agent_id=agent_id,
+                                status=SwarmNotificationStatus.COMPLETED,
+                                summary=str(result.get("content") or "Agent execution completed."),
+                                task_id=task_id,
+                                result=result,
+                                usage=usage_payload or {},
+                                evidence_ids=evidence_ids,
+                                hypothesis_ids=hypothesis_ids,
+                                graph_updates=graph_updates,
+                                artifacts=artifacts,
+                                reason=reason,
+                                metadata={"profile_name": context.profile_name},
+                            )
+                        )
+                        return result
                 self._registry.update_status(agent_id, SwarmAgentStatus.CANCELLED)
                 return {"cancelled": True}
             finally:
@@ -296,8 +385,192 @@ class InProcessSwarmCoordinator:
 
         return _runner
 
+    async def _execute_agent_message(
+        self,
+        *,
+        agent_id: str,
+        context: InProcessAgentContext,
+        task_id: str,
+        content: str,
+    ) -> dict[str, Any]:
+        if self._chat_runtime is None:
+            raise RuntimeError("Swarm agent runtime is not configured.")
+
+        executor_module = __import__("app.harness.executor", fromlist=["*"])
+        messages_module = __import__(
+            "app.harness.messages", fromlist=["ConversationMessage", "ToolCallResult"]
+        )
+        scheduling_module = __import__("app.harness.tool_scheduling", fromlist=["*"])
+        semantic_module = __import__(
+            "app.harness.semantic",
+            fromlist=[
+                "clear_pending_semantic_deltas",
+                "semantic_snapshot_from_state",
+                "stage_semantic_deltas",
+            ],
+        )
+        session_runner_module = __import__("app.harness.session_runner", fromlist=["*"])
+        capabilities_module = __import__("app.services.capabilities", fromlist=["CapabilityFacade"])
+        ConversationMessage = messages_module.ConversationMessage
+        ToolCallResult = messages_module.ToolCallResult
+        clear_pending_semantic_deltas = semantic_module.clear_pending_semantic_deltas
+        semantic_snapshot_from_state = semantic_module.semantic_snapshot_from_state
+        stage_semantic_deltas = semantic_module.stage_semantic_deltas
+
+        capability_facade = None
+        mcp_tool_inventory: list[dict[str, Any]] = []
+        if self._skill_service is not None and self._mcp_service is not None:
+            capability_facade = capabilities_module.CapabilityFacade(
+                skill_service=self._skill_service,
+                mcp_service=self._mcp_service,
+            )
+            mcp_tool_inventory = capability_facade.build_mcp_tool_inventory()
+
+        tool_runtime = executor_module.build_tool_runtime(
+            skill_service=self._skill_service,
+            session_id=self.session_id,
+            mcp_tool_inventory=mcp_tool_inventory,
+            include_swarm_tools=False,
+        )
+        conversation_messages = self._agent_histories.setdefault(agent_id, [])
+        agent_session_state = self._agent_session_states.get(agent_id)
+        session_object = self._session or SimpleNamespace(
+            id=self.session_id,
+            runtime_policy_json={},
+        )
+        assistant_message = SimpleNamespace(id=f"{agent_id}-assistant", generation_id=task_id)
+
+        async def execute_tool(tool_request: Any) -> Any:
+            prepared = executor_module.prepare_tool_execution(
+                runtime=tool_runtime,
+                tool_request=tool_request,
+                session=session_object,
+                assistant_message=assistant_message,
+                runtime_service=self._runtime_service,
+                skill_service=self._skill_service,
+                mcp_service=self._mcp_service,
+                session_state=agent_session_state,
+                swarm_coordinator=None,
+            )
+            if prepared.tool is None:
+                raise RuntimeError(f"Unsupported tool requested: {tool_request.tool_name}.")
+            if prepared.decision is None or not prepared.decision.allowed:
+                raise RuntimeError(prepared.decision.reason if prepared.decision else "Tool denied")
+            try:
+                tool_result = await executor_module.run_tool_with_hooks(
+                    runtime=tool_runtime,
+                    prepared=prepared,
+                    tool_request=tool_request,
+                )
+            except Exception as exc:
+                await executor_module.notify_tool_execution_error(
+                    runtime=tool_runtime,
+                    prepared=prepared,
+                    tool_request=tool_request,
+                    error=exc,
+                )
+                raise
+            if agent_session_state is not None and getattr(tool_result, "semantic_deltas", None):
+                stage_semantic_deltas(
+                    agent_session_state,
+                    tool_result.semantic_deltas,
+                )
+            return ToolCallResult(tool_name=tool_request.tool_name, payload=tool_result.payload)
+
+        async def batch_execute(tool_requests: list[Any]) -> list[Any]:
+            prepared_executions = [
+                executor_module.prepare_tool_execution(
+                    runtime=tool_runtime,
+                    tool_request=tool_request,
+                    session=session_object,
+                    assistant_message=assistant_message,
+                    runtime_service=self._runtime_service,
+                    skill_service=self._skill_service,
+                    mcp_service=self._mcp_service,
+                    session_state=agent_session_state,
+                    swarm_coordinator=None,
+                )
+                for tool_request in tool_requests
+            ]
+            phases = scheduling_module.build_tool_schedule(tool_requests, prepared_executions)
+            ordered_results: list[Any | None] = [None] * len(tool_requests)
+            for phase in phases:
+                if phase.lane == "readonly_parallel" and len(phase.items) > 1:
+
+                    async def run_parallel(item: Any) -> tuple[int, Any]:
+                        result = await execute_tool(item.tool_request)
+                        return item.order, result
+
+                    resolved = await asyncio.gather(*(run_parallel(item) for item in phase.items))
+                    for order, result in resolved:
+                        ordered_results[order] = result
+                    continue
+                for item in phase.items:
+                    ordered_results[item.order] = await execute_tool(item.tool_request)
+            return [result for result in ordered_results if result is not None]
+
+        setattr(execute_tool, "__batch_execute__", batch_execute)
+
+        available_skills = tool_runtime.available_skills
+        skill_context_prompt = (
+            f"Role: {context.profile_name}\n"
+            f"Title: {self._profiles[context.profile_name].title}\n"
+            f"Instructions: {self._profiles[context.profile_name].instructions}\n"
+            f"Objective: {context.objective}"
+        )
+        generate_reply_kwargs: dict[str, Any] = {
+            "conversation_messages": list(conversation_messages),
+            "available_skills": available_skills,
+            "skill_context_prompt": skill_context_prompt,
+            "execute_tool": execute_tool,
+        }
+        if session_runner_module.chat_runtime_supports_mcp_tools(self._chat_runtime):
+            generate_reply_kwargs["mcp_tools"] = mcp_tool_inventory
+        if session_runner_module.chat_runtime_supports_harness_state(self._chat_runtime):
+            generate_reply_kwargs["harness_state"] = agent_session_state
+
+        reply = await self._chat_runtime.generate_reply(content, [], **generate_reply_kwargs)
+        conversation_messages.append(ConversationMessage(role=MessageRole.USER, content=content))
+        conversation_messages.append(ConversationMessage(role=MessageRole.ASSISTANT, content=reply))
+
+        semantic_snapshot = (
+            semantic_snapshot_from_state(agent_session_state)
+            if agent_session_state is not None
+            else {}
+        )
+        if agent_session_state is not None:
+            clear_pending_semantic_deltas(agent_session_state)
+
+        return {
+            "content": reply,
+            "evidence_ids": self._normalize_string_list(semantic_snapshot.get("evidence_ids")),
+            "hypothesis_ids": self._normalize_string_list(semantic_snapshot.get("hypothesis_ids")),
+            "graph_updates": self._normalize_object_list(semantic_snapshot.get("graph_updates")),
+            "artifacts": self._normalize_string_list(semantic_snapshot.get("artifacts")),
+            "reason": (
+                str(semantic_snapshot.get("reason"))
+                if isinstance(semantic_snapshot.get("reason"), str)
+                else None
+            ),
+        }
+
 
 def build_default_swarm_coordinator(
-    *, session_id: str, session_state: Any | None = None
+    *,
+    session_id: str,
+    session_state: Any | None = None,
+    session: Any | None = None,
+    chat_runtime: Any | None = None,
+    runtime_service: Any | None = None,
+    skill_service: Any | None = None,
+    mcp_service: Any | None = None,
 ) -> InProcessSwarmCoordinator:
-    return InProcessSwarmCoordinator(session_id=session_id, session_state=session_state)
+    return InProcessSwarmCoordinator(
+        session_id=session_id,
+        session_state=session_state,
+        session=session,
+        chat_runtime=chat_runtime,
+        runtime_service=runtime_service,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+    )

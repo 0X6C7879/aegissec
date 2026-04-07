@@ -627,7 +627,7 @@ class StopSubagentTool(BaseTool[StopSubagentInput]):
         }
 
     def risk_level(self) -> ToolRiskLevel:
-        return ToolRiskLevel.MEDIUM
+        return ToolRiskLevel.DESTRUCTIVE
 
     def capability_tags(self) -> tuple[str, ...]:
         return ("swarm", "stop")
