@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -12,7 +14,6 @@ from pydantic import ValidationError
 from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 
-from app.agent.prompting import build_chat_capability_prompt, build_chat_prompt_budget
 from app.compat.mcp.service import (
     MCPDisabledServerError,
     MCPInvalidToolError,
@@ -47,8 +48,6 @@ from app.db.models import (
     MessageRole,
     MessageRollbackRequest,
     MessageStatus,
-    RuntimeExecuteRequest,
-    RuntimePolicy,
     Session,
     SessionConversationRead,
     SessionStatus,
@@ -490,6 +489,7 @@ async def _publish_assistant_summary(
     session_id: str,
     assistant_message: Message,
     summary: str,
+    semantic_snapshot: dict[str, object] | None = None,
 ) -> None:
     sanitized_summary = _sanitize_persisted_assistant_text(summary)
     if not sanitized_summary or _is_visible_transcript_noise(sanitized_summary):
@@ -526,13 +526,32 @@ async def _publish_assistant_summary(
             "event": SessionEventType.ASSISTANT_SUMMARY.value,
             "state": "summary.updated",
             "summary": sanitized_summary,
+            **(
+                {"semantic_state": semantic_snapshot}
+                if isinstance(semantic_snapshot, dict) and semantic_snapshot
+                else {}
+            ),
         },
     )
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.ASSISTANT_SUMMARY,
             session_id=session_id,
-            payload={"message_id": assistant_message.id, "summary": sanitized_summary},
+            payload={
+                "message_id": assistant_message.id,
+                "summary": sanitized_summary,
+                **(
+                    {
+                        "evidence_ids": semantic_snapshot.get("evidence_ids", []),
+                        "hypothesis_ids": semantic_snapshot.get("active_hypotheses", []),
+                        "graph_updates": semantic_snapshot.get("graph_hints", []),
+                        "artifacts": semantic_snapshot.get("artifacts", []),
+                        "reason": semantic_snapshot.get("reason"),
+                    }
+                    if isinstance(semantic_snapshot, dict) and semantic_snapshot
+                    else {}
+                ),
+            },
         )
     )
     await _publish_message_event(
@@ -545,6 +564,7 @@ async def _publish_assistant_summary(
         event_broker,
         session_id=session_id,
         assistant_message=assistant_message,
+        semantic_snapshot=semantic_snapshot,
     )
 
 
@@ -553,6 +573,7 @@ async def _publish_attack_graph_updated(
     *,
     session_id: str,
     assistant_message: Message,
+    semantic_snapshot: dict[str, object] | None = None,
 ) -> None:
     payload: dict[str, object] = {
         "run_id": "",
@@ -563,6 +584,16 @@ async def _publish_attack_graph_updated(
     }
     if assistant_message.generation_id is not None:
         payload["generation_id"] = assistant_message.generation_id
+    if isinstance(semantic_snapshot, dict) and semantic_snapshot:
+        payload.update(
+            {
+                "evidence_ids": semantic_snapshot.get("evidence_ids", []),
+                "hypothesis_ids": semantic_snapshot.get("active_hypotheses", []),
+                "graph_updates": semantic_snapshot.get("graph_hints", []),
+                "artifacts": semantic_snapshot.get("artifacts", []),
+                "reason": semantic_snapshot.get("reason"),
+            }
+        )
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.GRAPH_UPDATED,
@@ -645,6 +676,145 @@ async def _publish_assistant_trace(
             session_id=session_id,
             message=assistant_message,
         )
+
+
+def _semantic_snapshot_from_state(session_state: Any | None) -> dict[str, object]:
+    if session_state is None:
+        return {}
+    semantic_state = getattr(session_state, "semantic", None)
+    if semantic_state is None:
+        return {}
+    return {
+        "active_hypotheses": list(dict.fromkeys(getattr(semantic_state, "active_hypotheses", []))),
+        "evidence_ids": list(dict.fromkeys(getattr(semantic_state, "evidence_ids", []))),
+        "graph_hints": [dict(item) for item in getattr(semantic_state, "graph_hints", [])],
+        "artifacts": list(dict.fromkeys(getattr(semantic_state, "artifacts", []))),
+        "recent_entities": list(dict.fromkeys(getattr(semantic_state, "recent_entities", []))),
+        "recent_tools": list(dict.fromkeys(getattr(semantic_state, "recent_tools", []))),
+        "reason": getattr(semantic_state, "reason", None),
+    }
+
+
+def _stage_semantic_deltas(session_state: Any | None, raw_deltas: list[dict[str, Any]]) -> None:
+    if session_state is None or not raw_deltas:
+        return
+    harness_state = importlib.import_module("app.harness.state")
+    semantic_state = getattr(session_state, "semantic", None)
+    if semantic_state is None:
+        return
+
+    def merge_unique(target: list[str], values: list[str]) -> None:
+        seen = set(target)
+        for value in values:
+            if isinstance(value, str) and value and value not in seen:
+                target.append(value)
+                seen.add(value)
+
+    for raw_delta in raw_deltas:
+        if not isinstance(raw_delta, dict):
+            continue
+        delta = harness_state.HarnessSemanticDelta(
+            semantic_id=str(raw_delta.get("semantic_id") or ""),
+            source=str(raw_delta.get("source") or "tool"),
+            evidence_ids=[
+                str(item) for item in raw_delta.get("evidence_ids", []) if isinstance(item, str)
+            ],
+            hypothesis_ids=[
+                str(item) for item in raw_delta.get("hypothesis_ids", []) if isinstance(item, str)
+            ],
+            graph_hints=[
+                dict(item) for item in raw_delta.get("graph_hints", []) if isinstance(item, dict)
+            ],
+            artifacts=[
+                str(item) for item in raw_delta.get("artifacts", []) if isinstance(item, str)
+            ],
+            recent_entities=[
+                str(item) for item in raw_delta.get("recent_entities", []) if isinstance(item, str)
+            ],
+            recent_tools=[
+                str(item) for item in raw_delta.get("recent_tools", []) if isinstance(item, str)
+            ],
+            reason=(str(raw_delta.get("reason")) if raw_delta.get("reason") is not None else None),
+            metadata=(
+                dict(raw_delta.get("metadata", {}))
+                if isinstance(raw_delta.get("metadata"), dict)
+                else {}
+            ),
+        )
+        semantic_state.pending_deltas.append(delta)
+        merge_unique(semantic_state.evidence_ids, delta.evidence_ids)
+        merge_unique(semantic_state.active_hypotheses, delta.hypothesis_ids)
+        merge_unique(semantic_state.artifacts, delta.artifacts)
+        merge_unique(semantic_state.recent_entities, delta.recent_entities)
+        merge_unique(semantic_state.recent_tools, delta.recent_tools)
+        if delta.reason:
+            semantic_state.reason = delta.reason
+        existing_keys = {
+            json.dumps(item, ensure_ascii=False, sort_keys=True)
+            for item in semantic_state.graph_hints
+            if isinstance(item, dict)
+        }
+        for hint in delta.graph_hints:
+            hint_key = json.dumps(hint, ensure_ascii=False, sort_keys=True)
+            if hint_key not in existing_keys:
+                semantic_state.graph_hints.append(hint)
+                existing_keys.add(hint_key)
+
+
+def _stage_swarm_notification_semantics(
+    session_state: Any | None,
+    notifications: list[dict[str, Any]],
+) -> None:
+    semantic_deltas: list[dict[str, Any]] = []
+    for notification in notifications:
+        if not isinstance(notification, dict):
+            continue
+        semantic_deltas.append(
+            {
+                "semantic_id": str(
+                    notification.get("task_id")
+                    or notification.get("agent_id")
+                    or notification.get("summary")
+                    or "swarm"
+                ),
+                "source": "swarm_notification",
+                "evidence_ids": notification.get("evidence_ids", []),
+                "hypothesis_ids": notification.get("hypothesis_ids", []),
+                "graph_hints": notification.get("graph_updates", []),
+                "artifacts": notification.get("artifacts", []),
+                "reason": notification.get("reason") or notification.get("summary"),
+                "metadata": {
+                    "agent_id": notification.get("agent_id"),
+                    "task_id": notification.get("task_id"),
+                    "status": notification.get("status"),
+                },
+            }
+        )
+    _stage_semantic_deltas(session_state, semantic_deltas)
+
+
+def _drain_semantic_snapshot(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    session_state: Any | None,
+) -> dict[str, object]:
+    snapshot = _semantic_snapshot_from_state(session_state)
+    if session_state is None or not snapshot:
+        return snapshot
+    assistant_metadata = dict(assistant_message.metadata_json)
+    assistant_metadata["semantic_state"] = snapshot
+    repository.update_message(assistant_message, metadata_json=assistant_metadata)
+    if assistant_message.generation_id is not None:
+        generation = repository.get_generation(assistant_message.generation_id)
+        if generation is not None:
+            generation_metadata = dict(generation.metadata_json)
+            generation_metadata["semantic_state"] = snapshot
+            repository.update_generation(generation, metadata_json=generation_metadata)
+    semantic_state = getattr(session_state, "semantic", None)
+    if semantic_state is not None:
+        semantic_state.pending_deltas.clear()
+    return snapshot
 
 
 def _project_visible_stream_content(content: str) -> str:
@@ -1288,9 +1458,7 @@ async def _build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload
-        if isinstance(skill_payload, dict)
-        else None
+        else skill_payload if isinstance(skill_payload, dict) else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(
@@ -1390,10 +1558,65 @@ def _build_tool_executor(
     runtime_service: RuntimeService,
     skill_service: SkillService,
     mcp_service: MCPService,
+    mcp_tool_inventory: list[dict[str, Any]] | None = None,
+    session_state: Any | None = None,
+    swarm_coordinator: Any | None = None,
 ) -> Any:
+    harness_governance = importlib.import_module("app.harness.governance.checker")
+    harness_messages = importlib.import_module("app.harness.messages")
+    harness_tools_base = importlib.import_module("app.harness.tools.base")
+    harness_tools_defaults = importlib.import_module("app.harness.tools.defaults")
+    build_default_tool_hook_registry = harness_tools_defaults.build_default_tool_hook_registry
+    build_default_tool_registry = harness_tools_defaults.build_default_tool_registry
+    DefaultHarnessToolDecisionChecker = harness_governance.DefaultHarnessToolDecisionChecker
+    HarnessToolDecisionRequest = harness_governance.HarnessToolDecisionRequest
+    HarnessToolRuntimeError = harness_messages.ChatRuntimeError
+    ToolHookContext = harness_tools_base.ToolHookContext
+    ToolExecutionContext = harness_tools_base.ToolExecutionContext
+
     available_skills = skill_service.list_loaded_skills_for_agent(session_id=session.id)
+    decision_checker = DefaultHarnessToolDecisionChecker()
+    hook_registry = build_default_tool_hook_registry()
+    tool_registry = build_default_tool_registry(
+        mcp_tools=mcp_tool_inventory,
+        include_swarm_tools=swarm_coordinator is not None,
+    )
 
     async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        execution_context = ToolExecutionContext(
+            session=session,
+            assistant_message=assistant_message,
+            runtime_service=runtime_service,
+            skill_service=skill_service,
+            mcp_service=mcp_service,
+            available_skills=available_skills,
+            session_state=session_state,
+            swarm_coordinator=swarm_coordinator,
+        )
+        tool = tool_registry.get(tool_request.tool_name)
+        decision = (
+            decision_checker.evaluate(
+                HarnessToolDecisionRequest(
+                    tool_request=tool_request,
+                    tool=tool,
+                    execution_context=execution_context,
+                )
+            )
+            if tool is not None
+            else None
+        )
+        governance_metadata: dict[str, object] | None = (
+            {
+                "action": decision.action,
+                "reason": decision.reason,
+                "metadata": dict(decision.metadata),
+            }
+            if decision is not None
+            else None
+        )
+        tool_call_metadata: dict[str, object] = {"arguments": dict(tool_request.arguments)}
+        if governance_metadata is not None:
+            tool_call_metadata["governance"] = governance_metadata
         started_payload: dict[str, Any] = {
             "tool": tool_request.tool_name,
             "tool_call_id": tool_request.tool_call_id,
@@ -1428,6 +1651,7 @@ def _build_tool_executor(
                 "state": "tool.started",
                 "tool": tool_request.tool_name,
                 "tool_call_id": tool_request.tool_call_id,
+                **({"governance": governance_metadata} if governance_metadata is not None else {}),
             },
         )
         _append_transcript_segment(
@@ -1443,7 +1667,7 @@ def _build_tool_executor(
             ),
             tool_name=tool_request.tool_name,
             tool_call_id=tool_request.tool_call_id,
-            metadata_json={"arguments": dict(tool_request.arguments)},
+            metadata_json=tool_call_metadata,
         )
         await _publish_message_event(
             event_broker,
@@ -1480,10 +1704,15 @@ def _build_tool_executor(
                     if isinstance(tool_request.arguments.get("command"), str)
                     else None
                 ),
-                metadata_json={"arguments": dict(tool_request.arguments)},
+                metadata_json=tool_call_metadata,
             )
 
         async def publish_tool_failed(error_message: str) -> None:
+            semantic_snapshot = _drain_semantic_snapshot(
+                repository,
+                assistant_message=assistant_message,
+                session_state=session_state,
+            )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
                     assistant_message.generation_id,
@@ -1535,13 +1764,28 @@ def _build_tool_executor(
                     "tool": tool_request.tool_name,
                     "tool_call_id": tool_request.tool_call_id,
                     "error": error_message,
+                    **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
                 },
             )
             await event_broker.publish(
                 SessionEvent(
                     type=SessionEventType.TOOL_CALL_FAILED,
                     session_id=session.id,
-                    payload={**started_payload, "error": error_message},
+                    payload={
+                        **started_payload,
+                        "error": error_message,
+                        **(
+                            {
+                                "evidence_ids": semantic_snapshot.get("evidence_ids", []),
+                                "hypothesis_ids": semantic_snapshot.get("active_hypotheses", []),
+                                "graph_updates": semantic_snapshot.get("graph_hints", []),
+                                "artifacts": semantic_snapshot.get("artifacts", []),
+                                "reason": semantic_snapshot.get("reason"),
+                            }
+                            if semantic_snapshot
+                            else {}
+                        ),
+                    },
                 )
             )
             await _publish_message_event(
@@ -1554,53 +1798,131 @@ def _build_tool_executor(
                 event_broker,
                 session_id=session.id,
                 assistant_message=assistant_message,
+                semantic_snapshot=semantic_snapshot,
             )
 
-        if tool_request.tool_name == "execute_kali_command":
-            command = tool_request.arguments.get("command")
-            timeout_seconds = tool_request.arguments.get("timeout_seconds")
-            artifact_paths = tool_request.arguments.get("artifact_paths", [])
-            if not isinstance(command, str) or not command.strip():
-                await publish_tool_failed("Invalid command for execute_kali_command.")
-                raise ChatRuntimeError("Invalid command for execute_kali_command.")
-            if timeout_seconds is not None and not isinstance(timeout_seconds, int):
-                await publish_tool_failed("Invalid timeout for execute_kali_command.")
-                raise ChatRuntimeError("Invalid timeout for execute_kali_command.")
-            if not isinstance(artifact_paths, list) or not all(
-                isinstance(item, str) for item in artifact_paths
-            ):
-                await publish_tool_failed("Invalid artifact paths for execute_kali_command.")
-                raise ChatRuntimeError("Invalid artifact paths for execute_kali_command.")
-
-            try:
-                run = runtime_service.execute(
-                    RuntimeExecuteRequest(
-                        command=command,
-                        timeout_seconds=timeout_seconds,
+        async def publish_swarm_notifications(notifications: list[dict[str, Any]]) -> None:
+            for notification in notifications:
+                status = str(notification.get("status", "")).lower()
+                event_type = SessionEventType.WORKFLOW_TASK_UPDATED
+                if status == "planned":
+                    event_type = SessionEventType.TASK_PLANNED
+                elif status == "started":
+                    event_type = SessionEventType.TASK_STARTED
+                elif status in {"completed", "failed", "cancelled"}:
+                    event_type = SessionEventType.TASK_FINISHED
+                await event_broker.publish(
+                    SessionEvent(
+                        type=event_type,
                         session_id=session.id,
-                        artifact_paths=artifact_paths,
-                    ),
-                    runtime_policy=RuntimePolicy.model_validate(session.runtime_policy_json or {}),
+                        payload={
+                            "agent_id": notification.get("agent_id"),
+                            "task_id": notification.get("task_id"),
+                            "status": notification.get("status"),
+                            "summary": notification.get("summary"),
+                            "result": notification.get("result"),
+                            "usage": notification.get("usage"),
+                            "evidence_ids": notification.get("evidence_ids", []),
+                            "hypothesis_ids": notification.get("hypothesis_ids", []),
+                            "graph_updates": notification.get("graph_updates", []),
+                            "artifacts": notification.get("artifacts", []),
+                            "reason": notification.get("reason"),
+                            "metadata": notification.get("metadata", {}),
+                        },
+                    )
                 )
-            except ValidationError as exc:
-                await publish_tool_failed(f"Invalid runtime policy: {exc.errors()[0]['msg']}")
-                raise ChatRuntimeError("Invalid runtime policy for this session.") from exc
-            except (
-                RuntimeArtifactPathError,
-                RuntimeOperationError,
-                RuntimePolicyViolationError,
-            ) as exc:
-                await publish_tool_failed(str(exc))
-                raise ChatRuntimeError(str(exc)) from exc
 
-            command_result_payload: dict[str, Any] = {
-                "command": run.command,
-                "status": run.status.value,
-                "exit_code": run.exit_code,
-                "stdout": run.stdout,
-                "stderr": run.stderr,
-                "artifacts": [artifact.relative_path for artifact in run.artifacts],
-            }
+        async def _run_registry_tool() -> Any:
+            if tool is None:
+                raise HarnessToolRuntimeError(
+                    f"Unsupported tool requested: {tool_request.tool_name}."
+                )
+            if decision is None:
+                raise HarnessToolRuntimeError("Missing governance decision for tool execution.")
+            hooks = list(hook_registry.iter_hooks(tool.name))
+            before_context = ToolHookContext(
+                tool_request=tool_request,
+                tool=tool,
+                execution_context=execution_context,
+                decision=decision,
+            )
+            for hook in hooks:
+                await hook.before_execution(before_context)
+            return await tool.execute(execution_context, tool_request.arguments)
+
+        if tool is None:
+            error_message = f"Unsupported tool requested: {tool_request.tool_name}."
+            await publish_tool_failed(error_message)
+            raise ChatRuntimeError(error_message)
+
+        if decision is not None and not decision.allowed:
+            error_message = decision.reason or "Tool use denied by governance."
+            await publish_tool_failed(error_message)
+            raise ChatRuntimeError(error_message)
+
+        try:
+            tool_result = await _run_registry_tool()
+            if decision is not None:
+                hooks = list(hook_registry.iter_hooks(tool.name))
+                after_context = ToolHookContext(
+                    tool_request=tool_request,
+                    tool=tool,
+                    execution_context=execution_context,
+                    decision=decision,
+                    result=tool_result,
+                )
+                for hook in hooks:
+                    await hook.after_execution(after_context)
+        except (
+            HarnessToolRuntimeError,
+            MCPDisabledServerError,
+            MCPInvalidToolError,
+            RuntimeArtifactPathError,
+            RuntimeOperationError,
+            RuntimePolicyViolationError,
+            SkillLookupError,
+            SkillContentReadError,
+            ValidationError,
+        ) as exc:
+            if decision is not None:
+                error_context = ToolHookContext(
+                    tool_request=tool_request,
+                    tool=tool,
+                    execution_context=execution_context,
+                    decision=decision,
+                    error=exc,
+                )
+                for hook in hook_registry.iter_hooks(tool.name):
+                    await hook.on_execution_error(error_context)
+            await publish_tool_failed(str(exc))
+            raise ChatRuntimeError(str(exc)) from exc
+        except Exception as exc:
+            if decision is not None:
+                error_context = ToolHookContext(
+                    tool_request=tool_request,
+                    tool=tool,
+                    execution_context=execution_context,
+                    decision=decision,
+                    error=exc,
+                )
+                for hook in hook_registry.iter_hooks(tool.name):
+                    await hook.on_execution_error(error_context)
+            await publish_tool_failed(str(exc))
+            raise ChatRuntimeError(str(exc)) from exc
+
+        try:
+            _stage_semantic_deltas(session_state, tool_result.semantic_deltas)
+            swarm_notifications = tool_result.event_payload.get("swarm_notifications")
+            if isinstance(swarm_notifications, list):
+                _stage_swarm_notification_semantics(
+                    session_state,
+                    [item for item in swarm_notifications if isinstance(item, dict)],
+                )
+            semantic_snapshot = _drain_semantic_snapshot(
+                repository,
+                assistant_message=assistant_message,
+                session_state=session_state,
+            )
             transcript_segments = _message_transcript_segments(repository, assistant_message)
             tool_call_segment = _find_transcript_segment(
                 transcript_segments,
@@ -1613,28 +1935,31 @@ def _build_tool_executor(
                     assistant_message=assistant_message,
                     segment=tool_call_segment,
                     status="completed",
-                    metadata_json={"status": run.status.value, "run_id": run.id},
+                    metadata_json=(
+                        dict(tool_result.transcript_tool_call_metadata)
+                        if tool_result.transcript_tool_call_metadata
+                        else None
+                    ),
                 )
             _append_transcript_segment(
                 repository,
                 assistant_message=assistant_message,
                 kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-                status=run.status.value,
+                status=tool_result.status,
                 title=tool_request.tool_name,
                 text=None,
                 tool_name=tool_request.tool_name,
                 tool_call_id=tool_request.tool_call_id,
-                metadata_json={
-                    "arguments": dict(tool_request.arguments),
-                    "result": command_result_payload,
-                    "run_id": run.id,
-                    "command": run.command,
-                    "status": run.status.value,
-                    "exit_code": run.exit_code,
-                    "stdout": run.stdout,
-                    "stderr": run.stderr,
-                    "artifacts": [artifact.relative_path for artifact in run.artifacts],
-                },
+                metadata_json=(
+                    {
+                        **(
+                            dict(tool_result.transcript_result_metadata)
+                            if tool_result.transcript_result_metadata
+                            else {"result": tool_result.payload}
+                        ),
+                        **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
+                    }
+                ),
             )
             await _publish_assistant_trace(
                 repository,
@@ -1645,7 +1970,8 @@ def _build_tool_executor(
                     "state": "tool.finished",
                     "tool": tool_request.tool_name,
                     "tool_call_id": tool_request.tool_call_id,
-                    "status": run.status.value,
+                    **dict(tool_result.trace_entry),
+                    **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
                 },
             )
             await event_broker.publish(
@@ -1654,21 +1980,26 @@ def _build_tool_executor(
                     session_id=session.id,
                     payload={
                         **started_payload,
-                        "tool": tool_request.tool_name,
-                        "tool_call_id": tool_request.tool_call_id,
-                        "run_id": run.id,
-                        "command": run.command,
-                        "status": run.status.value,
-                        "exit_code": run.exit_code,
-                        "requested_timeout_seconds": run.requested_timeout_seconds,
-                        "stdout": run.stdout,
-                        "stderr": run.stderr,
-                        "created_at": run.created_at.isoformat(),
-                        "artifact_paths": [artifact.relative_path for artifact in run.artifacts],
-                        "result": command_result_payload,
+                        **dict(tool_result.event_payload),
+                        "result": tool_result.payload,
+                        **(
+                            {
+                                "evidence_ids": semantic_snapshot.get("evidence_ids", []),
+                                "hypothesis_ids": semantic_snapshot.get("active_hypotheses", []),
+                                "graph_updates": semantic_snapshot.get("graph_hints", []),
+                                "artifacts": semantic_snapshot.get("artifacts", []),
+                                "reason": semantic_snapshot.get("reason"),
+                            }
+                            if semantic_snapshot
+                            else {}
+                        ),
                     },
                 )
             )
+            if isinstance(swarm_notifications, list):
+                await publish_swarm_notifications(
+                    [item for item in swarm_notifications if isinstance(item, dict)]
+                )
             await _publish_message_event(
                 event_broker,
                 event_type=SessionEventType.MESSAGE_UPDATED,
@@ -1679,6 +2010,7 @@ def _build_tool_executor(
                 event_broker,
                 session_id=session.id,
                 assistant_message=assistant_message,
+                semantic_snapshot=semantic_snapshot,
             )
             if assistant_message.generation_id is not None:
                 tool_step = repository.get_open_generation_step(
@@ -1692,424 +2024,18 @@ def _build_tool_executor(
                         phase="tool_result",
                         status="completed",
                         state="finished",
-                        safe_summary=f"命令已完成，状态：{run.status.value}。",
+                        safe_summary=tool_result.safe_summary,
                         ended_at=utc_now(),
                         metadata_json={
                             **dict(tool_step.metadata_json),
-                            "result": command_result_payload,
-                            "run_id": run.id,
-                            "status": run.status.value,
+                            **dict(tool_result.step_metadata),
+                            **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
                         },
                     )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=command_result_payload)
-
-        if tool_request.tool_name == "list_available_skills":
-            skills_result_payload: dict[str, Any] = {
-                "skills": [skill.model_dump(mode="json") for skill in available_skills],
-            }
-            transcript_segments = _message_transcript_segments(repository, assistant_message)
-            tool_call_segment = _find_transcript_segment(
-                transcript_segments,
-                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
-                tool_call_id=tool_request.tool_call_id,
-            )
-            if tool_call_segment is not None:
-                _update_transcript_segment(
-                    repository,
-                    assistant_message=assistant_message,
-                    segment=tool_call_segment,
-                    status="completed",
-                )
-            _append_transcript_segment(
-                repository,
-                assistant_message=assistant_message,
-                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-                status="completed",
-                title=tool_request.tool_name,
-                text=None,
-                tool_name=tool_request.tool_name,
-                tool_call_id=tool_request.tool_call_id,
-                metadata_json={"result": skills_result_payload},
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={
-                    "state": "tool.finished",
-                    "tool": tool_request.tool_name,
-                    "tool_call_id": tool_request.tool_call_id,
-                },
-            )
-            await event_broker.publish(
-                SessionEvent(
-                    type=SessionEventType.TOOL_CALL_FINISHED,
-                    session_id=session.id,
-                    payload={**started_payload, "result": skills_result_payload},
-                )
-            )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_UPDATED,
-                session_id=session.id,
-                message=assistant_message,
-            )
-            await _publish_attack_graph_updated(
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-            )
-            if assistant_message.generation_id is not None:
-                tool_step = repository.get_open_generation_step(
-                    assistant_message.generation_id,
-                    kind="tool",
-                    tool_call_id=tool_request.tool_call_id,
-                )
-                if tool_step is not None:
-                    repository.update_generation_step(
-                        tool_step,
-                        phase="tool_result",
-                        status="completed",
-                        state="finished",
-                        safe_summary="已列出当前可用技能。",
-                        ended_at=utc_now(),
-                        metadata_json={
-                            **dict(tool_step.metadata_json),
-                            "result": skills_result_payload,
-                        },
-                    )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=skills_result_payload)
-
-        if tool_request.tool_name == "execute_skill":
-            skill_name_or_id = tool_request.arguments.get("skill_name_or_id")
-            current_prompt = tool_request.arguments.get("current_prompt")
-            user_goal = tool_request.arguments.get("user_goal")
-            use_selected_skill_set = bool(tool_request.arguments.get("use_selected_skill_set"))
-            if not isinstance(skill_name_or_id, str) or not skill_name_or_id.strip():
-                await publish_tool_failed("execute_skill requires a valid skill identifier.")
-                raise ChatRuntimeError("execute_skill requires a valid skill identifier.")
-
-            try:
-                if (
-                    use_selected_skill_set
-                    and isinstance(current_prompt, str)
-                    and current_prompt.strip()
-                ):
-                    skill_result_payload = skill_service.prepare_best_skill(
-                        session_id=session.id,
-                        current_prompt=current_prompt,
-                        user_goal=(
-                            user_goal
-                            if isinstance(user_goal, str) and user_goal.strip()
-                            else current_prompt
-                        ),
-                        include_reference_only=True,
-                        preferred_skill_identifier=skill_name_or_id,
-                    )
-                else:
-                    skill_result_payload = skill_service.execute_skill_by_name_or_directory_name(
-                        skill_name_or_id,
-                        session_id=session.id,
-                    )
-            except (SkillLookupError, SkillContentReadError) as exc:
-                await publish_tool_failed(str(exc))
-                raise ChatRuntimeError(str(exc)) from exc
-
-            transcript_segments = _message_transcript_segments(repository, assistant_message)
-            tool_call_segment = _find_transcript_segment(
-                transcript_segments,
-                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
-                tool_call_id=tool_request.tool_call_id,
-            )
-            if tool_call_segment is not None:
-                _update_transcript_segment(
-                    repository,
-                    assistant_message=assistant_message,
-                    segment=tool_call_segment,
-                    status="completed",
-                )
-            _append_transcript_segment(
-                repository,
-                assistant_message=assistant_message,
-                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-                status="completed",
-                title=tool_request.tool_name,
-                text=None,
-                tool_name=tool_request.tool_name,
-                tool_call_id=tool_request.tool_call_id,
-                metadata_json={
-                    "result": skill_result_payload,
-                    **(
-                        {"execution": dict(execution)}
-                        if isinstance((execution := skill_result_payload.get("execution")), dict)
-                        else {}
-                    ),
-                    **(
-                        {"skill": dict(skill_data)}
-                        if isinstance((skill_data := skill_result_payload.get("skill")), dict)
-                        else {}
-                    ),
-                },
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={
-                    "state": "tool.finished",
-                    "tool": tool_request.tool_name,
-                    "tool_call_id": tool_request.tool_call_id,
-                },
-            )
-            await event_broker.publish(
-                SessionEvent(
-                    type=SessionEventType.TOOL_CALL_FINISHED,
-                    session_id=session.id,
-                    payload={**started_payload, "result": skill_result_payload},
-                )
-            )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_UPDATED,
-                session_id=session.id,
-                message=assistant_message,
-            )
-            await _publish_attack_graph_updated(
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-            )
-            if assistant_message.generation_id is not None:
-                tool_step = repository.get_open_generation_step(
-                    assistant_message.generation_id,
-                    kind="tool",
-                    tool_call_id=tool_request.tool_call_id,
-                )
-                if tool_step is not None:
-                    skill_result = skill_result_payload.get("skill")
-                    skill_label = (
-                        str(skill_result.get("directory_name"))
-                        if isinstance(skill_result, dict)
-                        and isinstance(skill_result.get("directory_name"), str)
-                        else skill_name_or_id.strip()
-                    )
-                    repository.update_generation_step(
-                        tool_step,
-                        phase="tool_result",
-                        status="completed",
-                        state="finished",
-                        safe_summary=f"已准备 {skill_label} 技能上下文。",
-                        ended_at=utc_now(),
-                        metadata_json={
-                            **dict(tool_step.metadata_json),
-                            "result": skill_result_payload,
-                        },
-                    )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_result_payload)
-
-        if tool_request.tool_name == "read_skill_content":
-            skill_name_or_id = tool_request.arguments.get("skill_name_or_id")
-            if not isinstance(skill_name_or_id, str) or not skill_name_or_id.strip():
-                await publish_tool_failed("read_skill_content requires a valid skill identifier.")
-                raise ChatRuntimeError("read_skill_content requires a valid skill identifier.")
-
-            try:
-                skill_content = skill_service.read_skill_content_by_name_or_directory_name(
-                    skill_name_or_id
-                )
-            except (SkillLookupError, SkillContentReadError) as exc:
-                await publish_tool_failed(str(exc))
-                raise ChatRuntimeError(str(exc)) from exc
-
-            skill_content_payload: dict[str, Any] = {"skill": skill_content.model_dump(mode="json")}
-            transcript_segments = _message_transcript_segments(repository, assistant_message)
-            tool_call_segment = _find_transcript_segment(
-                transcript_segments,
-                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
-                tool_call_id=tool_request.tool_call_id,
-            )
-            if tool_call_segment is not None:
-                _update_transcript_segment(
-                    repository,
-                    assistant_message=assistant_message,
-                    segment=tool_call_segment,
-                    status="completed",
-                )
-            _append_transcript_segment(
-                repository,
-                assistant_message=assistant_message,
-                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-                status="completed",
-                title=tool_request.tool_name,
-                text=None,
-                tool_name=tool_request.tool_name,
-                tool_call_id=tool_request.tool_call_id,
-                metadata_json={"result": skill_content_payload},
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={
-                    "state": "tool.finished",
-                    "tool": tool_request.tool_name,
-                    "tool_call_id": tool_request.tool_call_id,
-                },
-            )
-            await event_broker.publish(
-                SessionEvent(
-                    type=SessionEventType.TOOL_CALL_FINISHED,
-                    session_id=session.id,
-                    payload={**started_payload, "result": skill_content_payload},
-                )
-            )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_UPDATED,
-                session_id=session.id,
-                message=assistant_message,
-            )
-            await _publish_attack_graph_updated(
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-            )
-            if assistant_message.generation_id is not None:
-                tool_step = repository.get_open_generation_step(
-                    assistant_message.generation_id,
-                    kind="tool",
-                    tool_call_id=tool_request.tool_call_id,
-                )
-                if tool_step is not None:
-                    repository.update_generation_step(
-                        tool_step,
-                        phase="tool_result",
-                        status="completed",
-                        state="finished",
-                        safe_summary=f"已读取 {skill_name_or_id} 的技能内容。",
-                        ended_at=utc_now(),
-                        metadata_json={
-                            **dict(tool_step.metadata_json),
-                            "result": skill_content_payload,
-                        },
-                    )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=skill_content_payload)
-
-        if tool_request.mcp_server_id is not None and tool_request.mcp_tool_name is not None:
-            try:
-                result = await mcp_service.call_tool(
-                    tool_request.mcp_server_id,
-                    tool_request.mcp_tool_name,
-                    dict(tool_request.arguments),
-                )
-            except (MCPDisabledServerError, MCPInvalidToolError) as exc:
-                await publish_tool_failed(str(exc))
-                raise ChatRuntimeError(str(exc)) from exc
-            except Exception as exc:
-                await publish_tool_failed(str(exc))
-                raise ChatRuntimeError(str(exc)) from exc
-
-            mcp_result_payload: dict[str, Any] = {
-                "server_id": tool_request.mcp_server_id,
-                "tool_name": tool_request.mcp_tool_name,
-                "result": result or {},
-            }
-            transcript_segments = _message_transcript_segments(repository, assistant_message)
-            tool_call_segment = _find_transcript_segment(
-                transcript_segments,
-                kind=AssistantTranscriptSegmentKind.TOOL_CALL,
-                tool_call_id=tool_request.tool_call_id,
-            )
-            if tool_call_segment is not None:
-                _update_transcript_segment(
-                    repository,
-                    assistant_message=assistant_message,
-                    segment=tool_call_segment,
-                    status="completed",
-                    metadata_json={
-                        "mcp_server_id": tool_request.mcp_server_id,
-                        "mcp_tool_name": tool_request.mcp_tool_name,
-                    },
-                )
-            _append_transcript_segment(
-                repository,
-                assistant_message=assistant_message,
-                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-                status="completed",
-                title=tool_request.tool_name,
-                text=None,
-                tool_name=tool_request.tool_name,
-                tool_call_id=tool_request.tool_call_id,
-                metadata_json={
-                    "arguments": dict(tool_request.arguments),
-                    "result": mcp_result_payload,
-                    "mcp_server_id": tool_request.mcp_server_id,
-                    "mcp_tool_name": tool_request.mcp_tool_name,
-                },
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={
-                    "state": "tool.finished",
-                    "tool": tool_request.tool_name,
-                    "tool_call_id": tool_request.tool_call_id,
-                    "mcp_server_id": tool_request.mcp_server_id,
-                    "mcp_tool_name": tool_request.mcp_tool_name,
-                },
-            )
-            await event_broker.publish(
-                SessionEvent(
-                    type=SessionEventType.TOOL_CALL_FINISHED,
-                    session_id=session.id,
-                    payload={**started_payload, "result": mcp_result_payload},
-                )
-            )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_UPDATED,
-                session_id=session.id,
-                message=assistant_message,
-            )
-            await _publish_attack_graph_updated(
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-            )
-            if assistant_message.generation_id is not None:
-                tool_step = repository.get_open_generation_step(
-                    assistant_message.generation_id,
-                    kind="tool",
-                    tool_call_id=tool_request.tool_call_id,
-                )
-                if tool_step is not None:
-                    repository.update_generation_step(
-                        tool_step,
-                        phase="tool_result",
-                        status="completed",
-                        state="finished",
-                        safe_summary=(
-                            f"已调用 MCP 工具 {tool_request.tool_name} -> "
-                            f"{tool_request.mcp_tool_name}。"
-                        ),
-                        ended_at=utc_now(),
-                        metadata_json={
-                            **dict(tool_step.metadata_json),
-                            "result": mcp_result_payload,
-                            "mcp_server_id": tool_request.mcp_server_id,
-                            "mcp_tool_name": tool_request.mcp_tool_name,
-                        },
-                    )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=mcp_result_payload)
-
-        error_message = f"Unsupported tool requested: {tool_request.tool_name}."
-        await publish_tool_failed(error_message)
-        raise ChatRuntimeError(error_message)
+        except Exception as exc:
+            await publish_tool_failed(str(exc))
+            raise ChatRuntimeError(str(exc)) from exc
+        return ToolCallResult(tool_name=tool_request.tool_name, payload=tool_result.payload)
 
     return execute_tool
 
@@ -2120,6 +2046,14 @@ def _chat_runtime_supports_mcp_tools(chat_runtime: ChatRuntime) -> bool:
     except (TypeError, ValueError):
         return False
     return "mcp_tools" in signature.parameters
+
+
+def _chat_runtime_supports_harness_state(chat_runtime: ChatRuntime) -> bool:
+    try:
+        signature = inspect.signature(chat_runtime.generate_reply)
+    except (TypeError, ValueError):
+        return False
+    return "harness_state" in signature.parameters
 
 
 async def _mark_queued_generations_failed(
@@ -2170,6 +2104,7 @@ async def _process_generation(
     skill_service: SkillService,
     mcp_service: MCPService,
 ) -> str:
+    active_session_state: Any | None = None
     with DBSession(db_engine) as worker_db_session:
         repository = SessionRepository(worker_db_session)
         generation = repository.get_generation(generation_id)
@@ -2208,22 +2143,44 @@ async def _process_generation(
                 if user_message is not None
                 else loaded_assistant_message.content
             )
-            available_skills = skill_service.list_loaded_skills_for_agent(
-                session_id=session.id,
-                current_prompt=latest_message_text,
-                scenario_type="chat_turn",
-            )
             capability_facade = CapabilityFacade(
                 skill_service=skill_service,
                 mcp_service=mcp_service,
             )
-            capability_fragments = capability_facade.build_prompt_fragments(
-                session_id=session.id,
-                task_name="chat_turn",
-                task_description=latest_message_text,
-                projection_summary=latest_message_text,
+            harness_memory = importlib.import_module("app.harness.memory")
+            harness_prompts = importlib.import_module("app.harness.prompts")
+            HarnessMemoryService = harness_memory.HarnessMemoryService
+            HarnessPromptAssembler = harness_prompts.HarnessPromptAssembler
+            prompt_assembler = HarnessPromptAssembler(
+                capability_facade=capability_facade,
+                skill_service=skill_service,
+                memory_service=HarnessMemoryService(),
             )
-            mcp_tool_inventory = capability_facade.build_mcp_tool_inventory()
+            prompt_assembly = prompt_assembler.build(
+                session=session,
+                repository=repository,
+                user_message=user_message,
+                assistant_message=loaded_assistant_message,
+                branch_id=generation.branch_id,
+                total_token_budget=total_token_budget,
+            )
+            active_session_state = prompt_assembly.session_state
+            latest_message_text = prompt_assembly.latest_message_text
+            available_skills = prompt_assembly.available_skills
+            mcp_tool_inventory = prompt_assembly.mcp_tool_inventory
+            harness_swarm = importlib.import_module("app.harness.swarm")
+            build_default_swarm_coordinator = harness_swarm.build_default_swarm_coordinator
+            swarm_coordinator = build_default_swarm_coordinator(
+                session_id=session.id,
+                session_state=prompt_assembly.session_state,
+            )
+            swarm_coordinator.ensure_primary_agent(
+                objective=latest_message_text,
+                metadata={
+                    "generation_id": generation.id,
+                    "phase": prompt_assembly.session_state.current_phase,
+                },
+            )
             execute_tool = _build_tool_executor(
                 session=session,
                 assistant_message=loaded_assistant_message,
@@ -2232,47 +2189,12 @@ async def _process_generation(
                 runtime_service=runtime_service,
                 skill_service=skill_service,
                 mcp_service=mcp_service,
+                mcp_tool_inventory=mcp_tool_inventory,
+                session_state=prompt_assembly.session_state,
+                swarm_coordinator=swarm_coordinator,
             )
-            latest_message_text = (
-                _build_conversation_messages([user_message])[0].content
-                if user_message is not None
-                else loaded_assistant_message.content
-            )
-            prompt_budget = build_chat_prompt_budget(
-                total_budget=total_token_budget,
-                available_skills=available_skills,
-                inventory_summary=capability_fragments["inventory_summary"],
-                schema_summary=capability_fragments["schema_summary"],
-                prompt_fragment=capability_fragments["prompt_fragment"],
-                latest_message_text=latest_message_text,
-                history_text="",
-            )
-            history_token_budget = max(
-                prompt_budget.component_tokens.get("history", 0),
-                total_token_budget // 2,
-            )
-            conversation_history = repository.build_conversation_context(
-                session_id=session.id,
-                branch_id=generation.branch_id,
-                rough_token_budget=history_token_budget,
-            )
-            history_text = "\n\n".join(message.content for message in conversation_history[:-1])
-            prompt_budget = build_chat_prompt_budget(
-                total_budget=total_token_budget,
-                available_skills=available_skills,
-                inventory_summary=capability_fragments["inventory_summary"],
-                schema_summary=capability_fragments["schema_summary"],
-                prompt_fragment=capability_fragments["prompt_fragment"],
-                latest_message_text=latest_message_text,
-                history_text=history_text,
-            )
-            skill_context_prompt = build_chat_capability_prompt(
-                inventory_summary=capability_fragments["inventory_summary"],
-                schema_summary=capability_fragments["schema_summary"],
-                prompt_fragment=capability_fragments["prompt_fragment"],
-                allocated_schema_tokens=prompt_budget.component_tokens.get("capability_schema", 0),
-                allocated_prompt_tokens=prompt_budget.component_tokens.get("capability_prompt", 0),
-            )
+            conversation_history = prompt_assembly.conversation_history
+            skill_context_prompt = prompt_assembly.skill_context_prompt
 
             await _publish_generation_started(
                 event_broker,
@@ -2410,16 +2332,22 @@ async def _process_generation(
 
             async def on_summary(summary: str) -> None:
                 if summary.strip():
+                    semantic_snapshot = _drain_semantic_snapshot(
+                        repository,
+                        assistant_message=loaded_assistant_message,
+                        session_state=prompt_assembly.session_state,
+                    )
                     await _publish_assistant_summary(
                         repository,
                         event_broker,
                         session_id=session.id,
                         assistant_message=loaded_assistant_message,
                         summary=summary.strip(),
+                        semantic_snapshot=semantic_snapshot,
                     )
 
             generate_reply_kwargs: dict[str, Any] = {
-                "conversation_messages": _build_conversation_messages(conversation_history),
+                "conversation_messages": prompt_assembly.conversation_messages,
                 "available_skills": available_skills,
                 "skill_context_prompt": skill_context_prompt,
                 "execute_tool": execute_tool,
@@ -2431,6 +2359,8 @@ async def _process_generation(
             }
             if _chat_runtime_supports_mcp_tools(chat_runtime):
                 generate_reply_kwargs["mcp_tools"] = mcp_tool_inventory
+            if _chat_runtime_supports_harness_state(chat_runtime):
+                generate_reply_kwargs["harness_state"] = prompt_assembly.session_state
 
             final_content = await chat_runtime.generate_reply(
                 (
@@ -2457,6 +2387,11 @@ async def _process_generation(
                 content=final_content,
                 status=MessageStatus.COMPLETED,
                 error_message="",
+            )
+            semantic_snapshot = _drain_semantic_snapshot(
+                repository,
+                assistant_message=loaded_assistant_message,
+                session_state=prompt_assembly.session_state,
             )
             final_delta = (
                 final_content[len(streamed_content) :]
@@ -2505,13 +2440,18 @@ async def _process_generation(
                 event_broker,
                 session_id=session.id,
                 assistant_message=loaded_assistant_message,
+                semantic_snapshot=semantic_snapshot,
             )
             await _publish_assistant_trace(
                 repository,
                 event_broker,
                 session_id=session.id,
                 assistant_message=loaded_assistant_message,
-                entry={"state": "generation.completed", "generation_id": generation.id},
+                entry={
+                    "state": "generation.completed",
+                    "generation_id": generation.id,
+                    **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
+                },
             )
             await _publish_message_event(
                 event_broker,
@@ -2562,17 +2502,27 @@ async def _process_generation(
                         segment=output_segment,
                         status="cancelled",
                     )
+                semantic_snapshot = _drain_semantic_snapshot(
+                    repository,
+                    assistant_message=assistant_message,
+                    session_state=active_session_state,
+                )
                 await _publish_assistant_trace(
                     repository,
                     event_broker,
                     session_id=session_id,
                     assistant_message=assistant_message,
-                    entry={"state": "generation.cancelled", "generation_id": generation_id},
+                    entry={
+                        "state": "generation.cancelled",
+                        "generation_id": generation_id,
+                        **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
+                    },
                 )
                 await _publish_attack_graph_updated(
                     event_broker,
                     session_id=session_id,
                     assistant_message=assistant_message,
+                    semantic_snapshot=semantic_snapshot,
                 )
                 _record_generation_step(
                     repository,
@@ -2621,6 +2571,11 @@ async def _process_generation(
                         segment=output_segment,
                         status="failed",
                     )
+                semantic_snapshot = _drain_semantic_snapshot(
+                    repository,
+                    assistant_message=assistant_message,
+                    session_state=active_session_state,
+                )
                 await _publish_assistant_trace(
                     repository,
                     event_broker,
@@ -2630,12 +2585,14 @@ async def _process_generation(
                         "state": "generation.failed",
                         "generation_id": generation_id,
                         "error": str(exc),
+                        **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
                     },
                 )
                 await _publish_attack_graph_updated(
                     event_broker,
                     session_id=session_id,
                     assistant_message=assistant_message,
+                    semantic_snapshot=semantic_snapshot,
                 )
                 _record_generation_step(
                     repository,
@@ -2723,6 +2680,16 @@ async def _run_session_worker(
                 terminal_error = exc
                 await generation_manager.reject_future(session_id, generation.id, exc)
                 await generation_manager.reject_pending(session_id, exc)
+                await _mark_queued_generations_failed(
+                    db_engine,
+                    session_id=session_id,
+                    error_message=str(exc),
+                )
+                break
+            except Exception as exc:
+                terminal_error = ChatRuntimeError(str(exc))
+                await generation_manager.reject_future(session_id, generation.id, terminal_error)
+                await generation_manager.reject_pending(session_id, terminal_error)
                 await _mark_queued_generations_failed(
                     db_engine,
                     session_id=session_id,

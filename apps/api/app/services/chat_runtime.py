@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -224,6 +225,7 @@ class ChatRuntime(Protocol):
         available_skills: list[SkillAgentSummaryRead] | None = None,
         mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
+        harness_state: object | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
     ) -> str: ...
@@ -242,71 +244,52 @@ class OpenAICompatibleChatRuntime:
         available_skills: list[SkillAgentSummaryRead] | None = None,
         mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
+        harness_state: object | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
     ) -> str:
-        api_key, base_url, model = self._require_configuration()
-        endpoint = f"{base_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        messages = self._build_initial_messages(
-            content,
-            attachments,
-            available_skills or [],
-            skill_context_prompt=skill_context_prompt,
+        harness_messages = importlib.import_module("app.harness.messages")
+        harness_compact = importlib.import_module("app.harness.compact")
+        harness_memory = importlib.import_module("app.harness.memory")
+        harness_query_engine = importlib.import_module("app.harness.query_engine")
+        harness_runtime = importlib.import_module("app.harness.runtime")
+        harness_state_module = importlib.import_module("app.harness.state")
+        HarnessChatRuntimeConfigurationError = harness_messages.ChatRuntimeConfigurationError
+        HarnessChatRuntimeError = harness_messages.ChatRuntimeError
+        HarnessCompactService = harness_compact.HarnessCompactService
+        HarnessMemoryService = harness_memory.HarnessMemoryService
+        OpenAIQueryEngine = harness_query_engine.OpenAIQueryEngine
+        HarnessRuntime = harness_runtime.HarnessRuntime
+        HarnessSessionState = harness_state_module.HarnessSessionState
+
+        session_state = harness_state if isinstance(harness_state, HarnessSessionState) else None
+        compact_service = HarnessCompactService(memory_service=HarnessMemoryService())
+
+        query_engine = OpenAIQueryEngine(
+            provider=self,
+            content=content,
+            attachments=attachments,
             conversation_messages=conversation_messages,
+            available_skills=available_skills or [],
+            mcp_tools=mcp_tools,
+            skill_context_prompt=skill_context_prompt,
+            max_turns=MAX_TOOL_STEPS + 1,
+            system_prompt=SYSTEM_PROMPT,
+            session_state=session_state,
+            compact_service=compact_service,
         )
-
-        for _ in range(MAX_TOOL_STEPS + 1):
-            payload = self._build_payload(
-                model,
-                messages,
-                mcp_tools=mcp_tools,
-                allow_tools=execute_tool is not None,
-                stream=callbacks is not None,
+        try:
+            return cast(
+                str,
+                await HarnessRuntime(query_engine=query_engine).generate_reply(
+                    execute_tool=execute_tool,
+                    callbacks=callbacks,
+                ),
             )
-            if callbacks is not None:
-                response_payload = await self._stream_completion(
-                    endpoint, headers, payload, callbacks
-                )
-            else:
-                response_payload = await self._request_completion(endpoint, headers, payload)
-            assistant_message = self._extract_message_payload(response_payload)
-            text_content = self._extract_message_content(assistant_message.get("content"))
-            tool_calls = self._extract_tool_calls(assistant_message, available_skills, mcp_tools)
-
-            if tool_calls:
-                if execute_tool is None:
-                    raise ChatRuntimeError(
-                        "LLM requested a tool call, but tool execution is unavailable."
-                    )
-
-                messages.append(self._assistant_message_for_history(assistant_message))
-                for tool_call in tool_calls:
-                    tool_result = await execute_tool(tool_call)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.tool_call_id,
-                            "content": json.dumps(
-                                {
-                                    "tool": tool_result.tool_name,
-                                    "payload": tool_result.payload,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
-                    )
-                continue
-
-            if text_content:
-                return text_content
-
-            raise ChatRuntimeError("LLM API response did not include text content.")
-
-        return await self._generate_tool_budget_reply(endpoint, headers, model, messages)
+        except HarnessChatRuntimeConfigurationError as exc:
+            raise ChatRuntimeConfigurationError(str(exc)) from exc
+        except HarnessChatRuntimeError as exc:
+            raise ChatRuntimeError(str(exc)) from exc
 
     def _require_configuration(self) -> tuple[str, str, str]:
         api_key = self._settings.llm_api_key
@@ -519,13 +502,14 @@ class OpenAICompatibleChatRuntime:
     def _tool_definitions(
         mcp_tools: list[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
-        return [
-            OpenAICompatibleChatRuntime._execute_kali_command_definition(),
-            OpenAICompatibleChatRuntime._list_available_skills_definition(),
-            OpenAICompatibleChatRuntime._execute_skill_definition(),
-            OpenAICompatibleChatRuntime._read_skill_content_definition(),
-            *OpenAICompatibleChatRuntime._mcp_tool_definitions(mcp_tools),
-        ]
+        build_default_tool_registry = importlib.import_module(
+            "app.harness.tools.defaults"
+        ).build_default_tool_registry
+
+        return cast(
+            list[dict[str, object]],
+            build_default_tool_registry(mcp_tools=mcp_tools).to_openai_tools_schema(),
+        )
 
     @staticmethod
     def _mcp_tool_definitions(
@@ -934,85 +918,52 @@ class AnthropicChatRuntime:
         available_skills: list[SkillAgentSummaryRead] | None = None,
         mcp_tools: list[Mapping[str, object]] | None = None,
         skill_context_prompt: str | None = None,
+        harness_state: object | None = None,
         execute_tool: ToolExecutor | None = None,
         callbacks: GenerationCallbacks | None = None,
     ) -> str:
-        api_key, base_url, model = self._require_configuration()
-        endpoint = self._build_messages_endpoint(base_url)
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        }
-        messages = self._build_initial_messages(
-            content,
-            attachments,
-            available_skills or [],
-            skill_context_prompt=skill_context_prompt,
+        harness_messages = importlib.import_module("app.harness.messages")
+        harness_compact = importlib.import_module("app.harness.compact")
+        harness_memory = importlib.import_module("app.harness.memory")
+        harness_query_engine = importlib.import_module("app.harness.query_engine")
+        harness_runtime = importlib.import_module("app.harness.runtime")
+        harness_state_module = importlib.import_module("app.harness.state")
+        HarnessChatRuntimeConfigurationError = harness_messages.ChatRuntimeConfigurationError
+        HarnessChatRuntimeError = harness_messages.ChatRuntimeError
+        HarnessCompactService = harness_compact.HarnessCompactService
+        HarnessMemoryService = harness_memory.HarnessMemoryService
+        AnthropicQueryEngine = harness_query_engine.AnthropicQueryEngine
+        HarnessRuntime = harness_runtime.HarnessRuntime
+        HarnessSessionState = harness_state_module.HarnessSessionState
+
+        session_state = harness_state if isinstance(harness_state, HarnessSessionState) else None
+        compact_service = HarnessCompactService(memory_service=HarnessMemoryService())
+
+        query_engine = AnthropicQueryEngine(
+            provider=self,
+            content=content,
+            attachments=attachments,
             conversation_messages=conversation_messages,
+            available_skills=available_skills or [],
+            mcp_tools=mcp_tools,
+            skill_context_prompt=skill_context_prompt,
+            max_turns=MAX_TOOL_STEPS + 1,
+            system_prompt=SYSTEM_PROMPT,
+            session_state=session_state,
+            compact_service=compact_service,
         )
-
-        for _ in range(MAX_TOOL_STEPS + 1):
-            payload = self._build_payload(
-                model,
-                messages,
-                mcp_tools=mcp_tools,
-                allow_tools=execute_tool is not None,
-                stream=callbacks is not None,
+        try:
+            return cast(
+                str,
+                await HarnessRuntime(query_engine=query_engine).generate_reply(
+                    execute_tool=execute_tool,
+                    callbacks=callbacks,
+                ),
             )
-            if callbacks is not None:
-                response_payload = await self._stream_completion(
-                    endpoint, headers, payload, callbacks
-                )
-            else:
-                response_payload = await self._request_completion(endpoint, headers, payload)
-            text_content, tool_uses = self._extract_response_content(response_payload)
-
-            if tool_uses:
-                if execute_tool is None:
-                    raise ChatRuntimeError(
-                        "LLM requested a tool call, but tool execution is unavailable."
-                    )
-
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": response_payload.get("content", []),
-                    }
-                )
-                tool_results: list[dict[str, object]] = []
-                for tool_use in tool_uses:
-                    tool_request = self._extract_tool_request_from_use(
-                        tool_use, available_skills, mcp_tools
-                    )
-                    tool_result = await execute_tool(tool_request)
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use.get("id"),
-                            "content": json.dumps(
-                                {
-                                    "tool": tool_result.tool_name,
-                                    "payload": tool_result.payload,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
-                    )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": tool_results,
-                    }
-                )
-                continue
-
-            if text_content:
-                return text_content
-
-            raise ChatRuntimeError("LLM API response did not include text content.")
-
-        return await self._generate_tool_budget_reply(endpoint, headers, model, messages)
+        except HarnessChatRuntimeConfigurationError as exc:
+            raise ChatRuntimeConfigurationError(str(exc)) from exc
+        except HarnessChatRuntimeError as exc:
+            raise ChatRuntimeError(str(exc)) from exc
 
     def _require_configuration(self) -> tuple[str, str, str]:
         api_key = self._settings.anthropic_api_key
@@ -1243,13 +1194,14 @@ class AnthropicChatRuntime:
     def _tool_definitions(
         mcp_tools: list[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
-        return [
-            AnthropicChatRuntime._execute_kali_command_definition(),
-            AnthropicChatRuntime._list_available_skills_definition(),
-            AnthropicChatRuntime._execute_skill_definition(),
-            AnthropicChatRuntime._read_skill_content_definition(),
-            *AnthropicChatRuntime._mcp_tool_definitions(mcp_tools),
-        ]
+        build_default_tool_registry = importlib.import_module(
+            "app.harness.tools.defaults"
+        ).build_default_tool_registry
+
+        return cast(
+            list[dict[str, object]],
+            build_default_tool_registry(mcp_tools=mcp_tools).to_anthropic_tools_schema(),
+        )
 
     @staticmethod
     def _mcp_tool_definitions(

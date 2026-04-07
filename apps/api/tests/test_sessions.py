@@ -1141,6 +1141,17 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert events[finished_index]["payload"]["stdout"] == "runtime command completed"
         assert events[finished_index]["payload"]["stderr"] == ""
         assert events[finished_index]["payload"]["artifact_paths"] == ["reports/auto.txt"]
+        assert events[finished_index]["payload"]["evidence_ids"] == [
+            f"runtime:{events[finished_index]['payload']['run_id']}"
+        ]
+        assert events[finished_index]["payload"]["hypothesis_ids"] == []
+        assert events[finished_index]["payload"]["artifacts"] == ["reports/auto.txt"]
+        assert events[finished_index]["payload"]["reason"] == (
+            "Runtime command completed with status success."
+        )
+        assert events[finished_index]["payload"]["graph_updates"][0]["stable_key"] == (
+            f"runtime:{events[finished_index]['payload']['run_id']}"
+        )
         assert events[finished_index]["payload"]["result"] == {
             "command": "printf 'auto tool' > reports/auto.txt",
             "status": "success",
@@ -1184,6 +1195,15 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert any(
             any(segment["kind"] == "tool_result" for segment in payload["assistant_transcript"])
             for payload in tool_update_payloads
+        )
+        trace_payloads = [
+            event["payload"] for event in events if event["type"] == "assistant.trace"
+        ]
+        assert any(
+            payload.get("state") == "tool.finished"
+            and payload.get("semantic_state", {}).get("evidence_ids")
+            == [f"runtime:{events[finished_index]['payload']['run_id']}"]
+            for payload in trace_payloads
         )
 
         runtime_status_response = client.get("/api/runtime/status")
@@ -2286,6 +2306,134 @@ Focus on web-CTF workflows including XSS, SQLi, file inclusion, and login bypass
             "context_injected": True,
         }
         assert chat_payload["assistant_message"]["content"] == "已收到 docx 自动技能上下文"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_governance_denies_write_command_before_runtime_execution(client: TestClient) -> None:
+    class DeniedToolChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="tool-call-1",
+                    tool_name="execute_kali_command",
+                    arguments={
+                        "command": "touch reports/blocked.txt",
+                        "timeout_seconds": 10,
+                        "artifact_paths": ["reports/blocked.txt"],
+                    },
+                )
+            )
+            return "unreachable"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: DeniedToolChatRuntime()
+
+    try:
+        session_response = client.post(
+            "/api/sessions",
+            json={
+                "title": "Governance Denial",
+                "runtime_policy_json": {
+                    "allow_network": True,
+                    "allow_write": False,
+                    "max_execution_seconds": 300,
+                    "max_command_length": 4000,
+                },
+            },
+        )
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "尝试写文件", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 502
+        assert "Runtime policy blocks write-capable commands." in chat_response.text
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_can_spawn_swarm_subagent_via_tool(client: TestClient) -> None:
+    class SwarmToolChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            tool_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="swarm-call-1",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent = tool_result.payload["agent"]
+            task = tool_result.payload["task"]
+            notifications = tool_result.payload["notifications"]
+            assert any(item["status"] == "planned" for item in notifications)
+            assert any(item["status"] == "started" for item in notifications)
+            return f"{agent['profile_name']}:{task['status']}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: SwarmToolChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Swarm Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "spawn planner", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 200
+        chat_payload = api_data(chat_response)
+        assert chat_payload["assistant_message"]["content"] == "planner_agent:in_progress"
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        tool_result_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_result" and segment["tool_call_id"] == "swarm-call-1"
+        )
+        assert tool_result_segment["metadata"]["result"]["agent"]["profile_name"] == "planner_agent"
+        assert tool_result_segment["metadata"]["result"]["task"]["status"] == "in_progress"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
