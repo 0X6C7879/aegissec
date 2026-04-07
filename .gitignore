@@ -15,3 +15,12 @@ pytest-of-ASUS/
 test-results/
 apps/api/data/*.db
 apps/api/data/runtime-workspace/
+.playwright-mcp/
+.sisyphus/notepads/test_optimization/
+temp_claude_code/
+=
+.editorconfig
+.prettierignore
+.prettierrc.json
+AGENTS.md
+TODO.md
