@@ -129,3 +129,14 @@ class RunLogRepository:
             1
         )
         return self.db_session.exec(statement).first()
+
+    def delete_logs_for_run_ids(self, run_ids: set[str]) -> int:
+        if not run_ids:
+            return 0
+
+        statement = select(RunLog).where(col(RunLog.run_id).in_(run_ids))
+        logs = list(self.db_session.exec(statement).all())
+        for log in logs:
+            self.db_session.delete(log)
+        self.db_session.commit()
+        return len(logs)

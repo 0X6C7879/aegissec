@@ -219,3 +219,14 @@ class RuntimeRepository:
             self.db_session.delete(artifact)
         self.db_session.commit()
         return len(artifacts)
+
+    def delete_runs(self, run_ids: set[str]) -> int:
+        if not run_ids:
+            return 0
+
+        statement = select(RuntimeExecutionRun).where(col(RuntimeExecutionRun.id).in_(run_ids))
+        runs = list(self.db_session.exec(statement).all())
+        for run in runs:
+            self.db_session.delete(run)
+        self.db_session.commit()
+        return len(runs)

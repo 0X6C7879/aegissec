@@ -649,6 +649,36 @@ class RuntimeService:
             "kept": len(preserved),
         }
 
+    def clear_runs(self) -> dict[str, int]:
+        runs = self._repository.list_runs(offset=0, limit=1_000_000)
+        if not runs:
+            return {"deleted_runs": 0, "deleted_artifacts": 0}
+
+        run_ids = {run.id for run in runs}
+        artifacts = self._repository.list_artifacts(offset=0, limit=1_000_000)
+        linked_artifacts = [artifact for artifact in artifacts if artifact.run_id in run_ids]
+
+        self._run_log_repository.delete_logs_for_run_ids(run_ids)
+        deleted_artifacts = self._repository.delete_artifacts(linked_artifacts)
+        deleted_runs = self._repository.delete_runs(run_ids)
+        self._run_log_repository.create_log(
+            session_id=None,
+            project_id=None,
+            run_id=None,
+            level="info",
+            source="runtime",
+            event_type="runtime.runs.clear",
+            message="Cleared runtime execution history.",
+            payload={
+                "deleted_runs": deleted_runs,
+                "deleted_artifacts": deleted_artifacts,
+            },
+        )
+        return {
+            "deleted_runs": deleted_runs,
+            "deleted_artifacts": deleted_artifacts,
+        }
+
     def execute(
         self,
         payload: RuntimeExecuteRequest,

@@ -303,6 +303,42 @@ def test_runtime_upload_download_and_cleanup_artifacts(client: TestClient) -> No
     assert "deleted_files" in cleanup_payload
 
 
+def test_runtime_can_clear_recent_runs(client: TestClient) -> None:
+    first_execute = client.post(
+        "/api/runtime/execute",
+        json={
+            "command": "printf 'one'",
+            "timeout_seconds": 10,
+            "artifact_paths": [],
+        },
+    )
+    second_execute = client.post(
+        "/api/runtime/execute",
+        json={
+            "command": "printf 'two'",
+            "timeout_seconds": 10,
+            "artifact_paths": [],
+        },
+    )
+
+    assert first_execute.status_code == 200
+    assert second_execute.status_code == 200
+
+    clear_response = client.post("/api/runtime/runs/clear")
+    assert clear_response.status_code == 200
+    clear_payload = api_data(clear_response)
+    assert clear_payload["deleted_runs"] == 2
+    assert clear_payload["deleted_artifacts"] == 0
+
+    status_response = client.get("/api/runtime/status")
+    assert status_response.status_code == 200
+    assert api_data(status_response)["recent_runs"] == []
+
+    runs_response = client.get("/api/runtime/runs")
+    assert runs_response.status_code == 200
+    assert api_data(runs_response) == []
+
+
 def test_runtime_profiles_and_session_profile_resolution(client: TestClient) -> None:
     profiles_response = client.get("/api/runtime/profiles")
     assert profiles_response.status_code == 200

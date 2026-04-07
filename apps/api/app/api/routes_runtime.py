@@ -283,3 +283,10 @@ async def cleanup_runtime_artifacts(
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> object:
     return ok_response(runtime_service.cleanup_artifacts())
+
+
+@router.post("/runs/clear")
+async def clear_runtime_runs(
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+) -> object:
+    return ok_response(runtime_service.clear_runs())
