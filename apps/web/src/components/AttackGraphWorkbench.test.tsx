@@ -74,6 +74,8 @@ function createGraph(): SessionGraph {
           tool_name: "shell_execute",
           request_summary: "确认可利用入口",
           observation_summary: "识别到开放端口与服务版本。",
+          created_at: "2026-04-04T04:00:00.000Z",
+          updated_at: "2026-04-04T04:10:00.000Z",
           related_findings: [
             {
               title: "开放端口",
@@ -209,31 +211,46 @@ describe("AttackGraphWorkbench", () => {
     render(<StatefulAttackGraphWorkbench />);
     await user.click(screen.getByRole("button", { name: "探测入口命令" }));
 
-    expect(screen.getByText("Overview")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "探测入口命令 详情" })).toBeVisible();
+    expect(screen.getByText("进行中")).toBeVisible();
+    expect(screen.queryByText("Overview")).not.toBeInTheDocument();
     expect(screen.getAllByText("Command").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Observation").length).toBeGreaterThan(0);
     expect(screen.getByText("nmap -sV target.internal")).toBeInTheDocument();
     expect(screen.getAllByText("识别到开放端口与服务版本。").length).toBeGreaterThan(0);
+    expect(screen.getByText("高级 / 调试")).toBeVisible();
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
     expect(screen.queryByText("Interpretation")).not.toBeInTheDocument();
+    expect(screen.getByText("source_message_id")).not.toBeVisible();
+    expect(screen.getByText("节点时间线")).not.toBeVisible();
+    expect(screen.getByText("Raw payload")).not.toBeVisible();
+    expect(screen.getByText("tool_name")).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "编辑" })).not.toBeVisible();
   });
 
-  it("command action debug metadata is hidden behind collapsed advanced disclosure", async () => {
+  it("command action advanced disclosure reveals hidden session, timeline, and raw details", async () => {
     const user = userEvent.setup();
 
     render(<StatefulAttackGraphWorkbench />);
     await user.click(screen.getByRole("button", { name: "探测入口命令" }));
 
-    expect(screen.getByText("高级信息")).toBeInTheDocument();
     expect(screen.getByText("source_message_id")).not.toBeVisible();
-    expect(screen.getByText("branch_id")).not.toBeVisible();
-    expect(screen.getByText("generation_id")).not.toBeVisible();
+    expect(screen.getByText("节点时间线")).not.toBeVisible();
+    expect(screen.getByText("Raw payload")).not.toBeVisible();
+    expect(screen.getByText("tool_name")).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "编辑" })).not.toBeVisible();
 
-    await user.click(screen.getByText("高级信息"));
+    await user.click(screen.getByText("高级 / 调试"));
 
     expect(screen.getByText("source_message_id")).toBeVisible();
+    expect(screen.getAllByText("message-1").length).toBeGreaterThan(0);
     expect(screen.getByText("branch_id")).toBeVisible();
     expect(screen.getByText("generation_id")).toBeVisible();
+    expect(screen.getByText("节点时间线")).toBeVisible();
+    expect(screen.getByText("Raw payload")).toBeVisible();
+    expect(screen.getByText("tool_name")).toBeVisible();
+    expect(screen.getByRole("button", { name: "编辑" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeVisible();
   });
 
   it("non-command nodes render concise milestone summaries instead of field dumps", async () => {
@@ -260,34 +277,21 @@ describe("AttackGraphWorkbench", () => {
     expect(screen.queryByText("Command")).not.toBeInTheDocument();
   });
 
-  it("conversation controls stay collapsed and show the missing-anchor hint only when opened", async () => {
+  it("anchorless command actions keep controls hidden until advanced disclosure is expanded", async () => {
     const user = userEvent.setup();
 
     render(<StatefulAttackGraphWorkbench />);
     await user.click(screen.getByRole("button", { name: "无锚点命令" }));
 
-    expect(screen.getByText("会话动作")).toBeInTheDocument();
+    expect(screen.getByText("高级 / 调试")).toBeInTheDocument();
     expect(screen.queryByText("该节点缺少会话锚点，无法直接对话操作。")).not.toBeVisible();
 
-    await user.click(screen.getByText("会话动作"));
+    await user.click(screen.getByText("高级 / 调试"));
 
     expect(screen.getByText("该节点缺少会话锚点，无法直接对话操作。")).toBeVisible();
     expect(screen.getByRole("button", { name: "编辑" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "重新生成" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "分叉" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "回滚" })).toBeDisabled();
-  });
-
-  it("raw payload stays collapsed until the user expands it", async () => {
-    const user = userEvent.setup();
-
-    render(<StatefulAttackGraphWorkbench />);
-    await user.click(screen.getByRole("button", { name: "探测入口命令" }));
-
-    expect(screen.getByText('"command": "nmap -sV target.internal"', { exact: false })).not.toBeVisible();
-
-    await user.click(screen.getByText("Raw payload"));
-
-    expect(screen.getByText('"command": "nmap -sV target.internal"', { exact: false })).toBeVisible();
   });
 });

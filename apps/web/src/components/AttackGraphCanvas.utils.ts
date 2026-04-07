@@ -855,6 +855,18 @@ export function isCommandLikeAction(node: SessionGraphNode): boolean {
   );
 }
 
+export function isCommandLikeAttackNode(node: SessionGraphNode): boolean {
+  return isCommandLikeAction(node);
+}
+
+export function getCommandLikeObservationSummary(node: SessionGraphNode): string | null {
+  if (!isCommandLikeAttackNode(node)) {
+    return null;
+  }
+
+  return getObservationSummary(node);
+}
+
 function buildListValue(items: string[]): string | null {
   if (items.length === 0) {
     return null;
@@ -938,7 +950,7 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
     ].filter((section) => section.items.length > 0);
   }
 
-  if (isCommandLikeAction(node)) {
+  if (isCommandLikeAttackNode(node)) {
     return [
       {
         title: "Command",
@@ -946,8 +958,8 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
       },
       {
         title: "Observation",
-        items: getObservationSummary(node)
-          ? [{ label: "观测摘要", value: getObservationSummary(node)! }]
+        items: getCommandLikeObservationSummary(node)
+          ? [{ label: "观测摘要", value: getCommandLikeObservationSummary(node)! }]
           : [],
       },
     ].filter((section) => section.items.length > 0);
