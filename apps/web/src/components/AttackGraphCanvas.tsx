@@ -3,9 +3,9 @@ import dagre from "dagre";
 import ReactFlow, {
   Background,
   BackgroundVariant,
-  Controls,
   Handle,
   MarkerType,
+  Panel,
   Position,
   useReactFlow,
   type Edge,
@@ -101,6 +101,48 @@ function AttackGraphFlowNode({ data }: NodeProps<AttackCanvasNodeData>) {
       {data.excerpt ? <p className="attack-graph-flow-node-summary">{data.excerpt}</p> : null}
       <Handle type="source" position={Position.Right} className="attack-graph-flow-handle" />
     </div>
+  );
+}
+
+function AttackGraphCanvasControls() {
+  const { fitView, zoomIn, zoomOut } = useReactFlow();
+
+  return (
+    <Panel position="bottom-right" className="attack-graph-controls">
+      <button
+        className="attack-graph-control-button"
+        type="button"
+        aria-label="缩小画布"
+        title="缩小画布"
+        onClick={() => {
+          void zoomOut({ duration: 140 });
+        }}
+      >
+        <span aria-hidden="true">−</span>
+      </button>
+      <button
+        className="attack-graph-control-button"
+        type="button"
+        aria-label="放大画布"
+        title="放大画布"
+        onClick={() => {
+          void zoomIn({ duration: 140 });
+        }}
+      >
+        <span aria-hidden="true">+</span>
+      </button>
+      <button
+        className="attack-graph-control-button attack-graph-control-button-fit"
+        type="button"
+        aria-label="适配视图"
+        title="适配视图"
+        onClick={() => {
+          void fitView({ padding: 0.11, duration: 180 });
+        }}
+      >
+        <span aria-hidden="true">□</span>
+      </button>
+    </Panel>
   );
 }
 
@@ -372,7 +414,7 @@ export function AttackGraphCanvas({
           size={1.1}
           color="rgba(0, 217, 255, 0.09)"
         />
-        <Controls showInteractive={false} position="bottom-right" />
+        <AttackGraphCanvasControls />
       </ReactFlow>
       {overlayTitle ? (
         <div className="attack-graph-canvas-overlay" data-testid="attack-graph-canvas-overlay">

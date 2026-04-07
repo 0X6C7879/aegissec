@@ -163,8 +163,23 @@ function createGraph(): SessionGraph {
 }
 
 describe("AttackGraphCanvas helpers", () => {
-  it("prefers the active node over the latest node when choosing autofocus target", () => {
-    expect(getAttackGraphAutoFocusNodeId(createGraph(), "action-side")).toBe("action-2");
+  it("prefers the best collaboration milestone over a newer side action when choosing autofocus target", () => {
+    const graph = createGraph();
+    const rootNode = graph.nodes.find((node) => node.id === "root-1")!;
+    const taskNode = graph.nodes.find((node) => node.id === "task-1")!;
+    const primaryAction = graph.nodes.find((node) => node.id === "action-2")!;
+    const sideAction = graph.nodes.find((node) => node.id === "action-side")!;
+
+    rootNode.data.best_path_summary = "关键验证";
+    taskNode.data.current_action_summary = "关键验证";
+    primaryAction.data.current = false;
+    primaryAction.data.status = "completed";
+    primaryAction.data.collaboration_value = 88;
+    primaryAction.data.milestone_reasons = ["outcome", "finding"];
+    sideAction.data.collaboration_value = 4;
+    sideAction.data.updated_at = "2026-04-04T09:00:00.000Z";
+
+    expect(getAttackGraphAutoFocusNodeId(graph, "action-side")).toBe("action-2");
   });
 
   it("stops auto focus once the user has interacted", () => {

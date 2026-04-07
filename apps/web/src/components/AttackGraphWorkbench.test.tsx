@@ -8,12 +8,15 @@ import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 vi.mock("./AttackGraphCanvas", () => ({
   AttackGraphCanvas: ({
     graph,
+    latestNodeId,
     onSelectNode,
   }: {
     graph: SessionGraph;
+    latestNodeId: string | null;
     onSelectNode: (nodeId: string | null) => void;
   }) => (
     <div data-testid="attack-graph-canvas-mock">
+      <output data-testid="attack-graph-focus-node">{latestNodeId ?? "none"}</output>
       {graph.nodes.map((node) => (
         <button key={node.id} type="button" onClick={() => onSelectNode(node.id)}>
           {node.label}
@@ -168,6 +171,38 @@ function StatefulAttackGraphWorkbench({
 }
 
 describe("AttackGraphWorkbench", () => {
+  it("passes the best-path anchor to the canvas instead of the most recent node", () => {
+    const graph = createGraph();
+    const rootNode = graph.nodes.find((node) => node.id === "root-node")!;
+    const taskNode = graph.nodes.find((node) => node.id === "task-node")!;
+    const commandNode = graph.nodes.find((node) => node.id === "command-node")!;
+    const anchorlessNode = graph.nodes.find((node) => node.id === "anchorless-node")!;
+
+    rootNode.data.best_path_summary = "探测入口命令";
+    taskNode.data.current_action_summary = "探测入口命令";
+    commandNode.data.status = "completed";
+    commandNode.data.current = false;
+    commandNode.data.collaboration_value = 92;
+    commandNode.data.milestone_reasons = ["outcome", "finding"];
+    commandNode.data.updated_at = "2026-04-04T05:00:00.000Z";
+    anchorlessNode.data.updated_at = "2026-04-04T09:00:00.000Z";
+
+    render(
+      <AttackGraphWorkbench
+        graph={graph}
+        selectedNodeId={null}
+        actionBusyId={null}
+        onSelectNode={vi.fn()}
+        onEditNode={vi.fn().mockResolvedValue(undefined)}
+        onRegenerateNode={vi.fn().mockResolvedValue(undefined)}
+        onForkNode={vi.fn().mockResolvedValue(undefined)}
+        onRollbackNode={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.getByTestId("attack-graph-focus-node")).toHaveTextContent("command-node");
+  });
+
   it("command action detail defaults to command and observation summary only", async () => {
     const user = userEvent.setup();
 

@@ -7,6 +7,7 @@ import {
   buildAttackNodeOverviewSummary,
   formatAttackNodeStatus,
   formatAttackNodeType,
+  getAttackGraphAutoFocusNodeId,
   getAttackNodeStatusTone,
   getAttackRelationLabel,
   readNumber,
@@ -65,60 +66,6 @@ function buildTimelineItems(node: SessionGraphNode | null): TimelineItem[] {
   }
 
   return items;
-}
-
-function getLatestNodeId(nodes: SessionGraphNode[]): string | null {
-  if (nodes.length === 0) {
-    return null;
-  }
-
-  const nodePriority = (node: SessionGraphNode): number => {
-    if (node.node_type === "action") {
-      return 0;
-    }
-    if (node.node_type === "task") {
-      return 1;
-    }
-    if (node.node_type === "outcome") {
-      return 2;
-    }
-    if (node.node_type === "root") {
-      return 3;
-    }
-    return 4;
-  };
-
-  let bestNode: SessionGraphNode | null = null;
-  let bestTimestamp = -1;
-  let bestSequence = -1;
-
-  for (const node of nodes) {
-    const timestamp = [
-      readString(node.data.last_seen_at),
-      readString(node.data.ended_at),
-      readString(node.data.updated_at),
-      readString(node.data.started_at),
-      readString(node.data.created_at),
-    ]
-      .map((value) => (value ? new Date(value).getTime() : -1))
-      .reduce((currentMax, candidate) => (candidate > currentMax ? candidate : currentMax), -1);
-    const sequence = readNumber(node.data.sequence) ?? -1;
-
-    if (
-      bestNode === null ||
-      nodePriority(node) < nodePriority(bestNode) ||
-      (nodePriority(node) === nodePriority(bestNode) && timestamp > bestTimestamp) ||
-      (nodePriority(node) === nodePriority(bestNode) &&
-        timestamp === bestTimestamp &&
-        sequence > bestSequence)
-    ) {
-      bestNode = node;
-      bestTimestamp = timestamp;
-      bestSequence = sequence;
-    }
-  }
-
-  return bestNode?.id ?? nodes[nodes.length - 1]?.id ?? null;
 }
 
 function buildRelationContext(edges: SessionGraphEdge[], nodeId: string): string {
@@ -203,30 +150,36 @@ export function AttackGraphWorkbench({
   onForkNode,
   onRollbackNode,
 }: AttackGraphWorkbenchProps) {
+  const graphData = useMemo<SessionGraph>(
+    () =>
+      graph ?? {
+        session_id: "",
+        workflow_run_id: "",
+        graph_type: "attack",
+        current_stage: null,
+        nodes: [],
+        edges: [],
+      },
+    [graph],
+  );
   const selectedNode = useMemo(
-    () => graph?.nodes.find((node) => node.id === selectedNodeId) ?? null,
-    [graph?.nodes, selectedNodeId],
+    () => graphData.nodes.find((node) => node.id === selectedNodeId) ?? null,
+    [graphData.nodes, selectedNodeId],
   );
   const selectedEdges = useMemo(
     () =>
       selectedNode
-        ? (graph?.edges ?? []).filter(
+        ? graphData.edges.filter(
             (edge) => edge.source === selectedNode.id || edge.target === selectedNode.id,
           )
         : [],
-    [graph?.edges, selectedNode],
+    [graphData.edges, selectedNode],
   );
   const timeline = useMemo(() => buildTimelineItems(selectedNode), [selectedNode]);
-  const latestNodeId = useMemo(() => getLatestNodeId(graph?.nodes ?? []), [graph?.nodes]);
-
-  const graphData: SessionGraph = graph ?? {
-    session_id: "",
-    workflow_run_id: "",
-    graph_type: "attack",
-    current_stage: null,
-    nodes: [],
-    edges: [],
-  };
+  const defaultFocusNodeId = useMemo(
+    () => getAttackGraphAutoFocusNodeId(graphData, null),
+    [graphData],
+  );
 
   const canvasOverlay =
     graphData.nodes.length === 0
@@ -275,7 +228,7 @@ export function AttackGraphWorkbench({
       <AttackGraphCanvas
         graph={graphData}
         selectedNodeId={selectedNodeId}
-        latestNodeId={latestNodeId}
+        latestNodeId={defaultFocusNodeId}
         onSelectNode={onSelectNode}
         overlayTitle={canvasOverlay?.title ?? null}
         overlayCopy={canvasOverlay?.copy ?? null}

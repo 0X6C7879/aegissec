@@ -228,6 +228,10 @@ function hasHypotheses(node: SessionGraphNode): boolean {
   return readRecordArray(node.data.related_hypotheses).length > 0;
 }
 
+function readMilestoneReasons(node: SessionGraphNode): Set<string> {
+  return new Set(readStringArray(node.data.milestone_reasons).map((item) => item.toLowerCase()));
+}
+
 function isActiveNode(node: SessionGraphNode): boolean {
   const status = getNodeStatus(node);
   return readBoolean(node.data.current) || readBoolean(node.data.active) || ACTIVE_STATUS.has(status ?? "");
@@ -236,6 +240,76 @@ function isActiveNode(node: SessionGraphNode): boolean {
 function hasOutcomeSupport(node: SessionGraphNode, index: GraphIndex): boolean {
   const outgoing = index.outgoing.get(node.id) ?? [];
   return outgoing.some((edge) => index.nodeMap.get(edge.target)?.node_type === "outcome");
+}
+
+function hasMeaningfulExecutionData(node: SessionGraphNode): boolean {
+  return Boolean(getObservationSummary(node) ?? getActionSummary(node));
+}
+
+function normalizeFocusHint(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function pushNormalizedHint(target: string[], value: string | null): void {
+  const normalized = normalizeFocusHint(value);
+  if (!normalized) {
+    return;
+  }
+
+  pushUnique(target, normalized);
+}
+
+function collectGraphFocusHints(graph: SessionGraph): string[] {
+  const hints: string[] = [];
+
+  for (const node of graph.nodes) {
+    if (node.node_type === "root" || node.node_type === "goal") {
+      pushNormalizedHint(hints, readString(node.data.best_path_summary));
+      continue;
+    }
+
+    if (node.node_type === "task") {
+      pushNormalizedHint(hints, readString(node.data.current_action_summary));
+      pushNormalizedHint(hints, readString(node.data.key_observation_summary));
+    }
+  }
+
+  return hints;
+}
+
+function collectTaskFocusHints(taskNode: SessionGraphNode | null): string[] {
+  if (!taskNode || taskNode.node_type !== "task") {
+    return [];
+  }
+
+  const hints: string[] = [];
+  pushNormalizedHint(hints, readString(taskNode.data.current_action_summary));
+  pushNormalizedHint(hints, readString(taskNode.data.key_observation_summary));
+  return hints;
+}
+
+function matchesFocusHint(node: SessionGraphNode, focusHints: string[]): boolean {
+  if (focusHints.length === 0) {
+    return false;
+  }
+
+  const candidates = [
+    normalizeFocusHint(node.label),
+    normalizeFocusHint(getActionSummary(node)),
+    normalizeFocusHint(getObservationSummary(node)),
+  ].filter((value): value is string => Boolean(value));
+
+  return candidates.some((candidate) =>
+    focusHints.some(
+      (hint) =>
+        hint.length >= 4 && (candidate === hint || candidate.includes(hint) || hint.includes(candidate)),
+    ),
+  );
 }
 
 function buildGraphIndex(graph: SessionGraph): GraphIndex {
@@ -279,49 +353,67 @@ function getNodeTimestamp(node: SessionGraphNode): number {
   return readNumber(node.data.sequence) ?? 0;
 }
 
-function getMilestonePriority(node: SessionGraphNode, index: GraphIndex): number {
-  let score = 0;
+function getBestPathPriority(
+  node: SessionGraphNode,
+  index: GraphIndex,
+  focusHints: string[],
+): number {
+  const status = getNodeStatus(node);
+  const reasons = readMilestoneReasons(node);
+  let priority = 0;
 
+  if (matchesFocusHint(node, focusHints)) {
+    priority += 700;
+  }
   if (isActiveNode(node)) {
-    score += 100;
-  }
-  if (BLOCKED_STATUS.has(getNodeStatus(node) ?? "")) {
-    score += 90;
-  }
-  if (hasOutcomeSupport(node, index)) {
-    score += 80;
-  }
-  if (hasFindings(node)) {
-    score += 70;
-  }
-  if (hasHypotheses(node)) {
-    score += 60;
-  }
-  if (readNumber(node.data.collaboration_value) !== null) {
-    score += readNumber(node.data.collaboration_value) ?? 0;
-  }
-  if (readNumber(node.data.attempts_count)) {
-    score += (readNumber(node.data.attempts_count) ?? 0) * 5;
-  }
-  if (getObservationSummary(node)) {
-    score += 15;
-  }
-  if (getActionSummary(node)) {
-    score += 10;
+    priority += 600;
+  } else if (BLOCKED_STATUS.has(status ?? "")) {
+    priority += 500;
+  } else if (reasons.has("outcome") || hasOutcomeSupport(node, index)) {
+    priority += 400;
+  } else if (hasFindings(node)) {
+    priority += 300;
+  } else if (hasHypotheses(node)) {
+    priority += 200;
+  } else if (hasMeaningfulExecutionData(node)) {
+    priority += 100;
   }
 
-  return score;
+  return priority;
 }
 
-function chooseBestNode(nodes: SessionGraphNode[], index: GraphIndex): SessionGraphNode | null {
+function chooseBestNode(
+  nodes: SessionGraphNode[],
+  index: GraphIndex,
+  focusHints: string[] = [],
+): SessionGraphNode | null {
   if (nodes.length === 0) {
     return null;
   }
 
   const ordered = [...nodes].sort((left, right) => {
-    const priorityDiff = getMilestonePriority(right, index) - getMilestonePriority(left, index);
+    const priorityDiff =
+      getBestPathPriority(right, index, focusHints) - getBestPathPriority(left, index, focusHints);
     if (priorityDiff !== 0) {
       return priorityDiff;
+    }
+
+    const collaborationDiff =
+      (readNumber(right.data.collaboration_value) ?? 0) -
+      (readNumber(left.data.collaboration_value) ?? 0);
+    if (collaborationDiff !== 0) {
+      return collaborationDiff;
+    }
+
+    const attemptsDiff =
+      (readNumber(right.data.attempts_count) ?? 0) - (readNumber(left.data.attempts_count) ?? 0);
+    if (attemptsDiff !== 0) {
+      return attemptsDiff;
+    }
+
+    const sequenceDiff = (readNumber(right.data.sequence) ?? 0) - (readNumber(left.data.sequence) ?? 0);
+    if (sequenceDiff !== 0) {
+      return sequenceDiff;
     }
 
     const timestampDiff = getNodeTimestamp(right) - getNodeTimestamp(left);
@@ -335,7 +427,11 @@ function chooseBestNode(nodes: SessionGraphNode[], index: GraphIndex): SessionGr
   return ordered[0] ?? null;
 }
 
-function chooseBestOutcomeSupportAction(graph: SessionGraph, index: GraphIndex): SessionGraphNode | null {
+function chooseBestOutcomeSupportAction(
+  graph: SessionGraph,
+  index: GraphIndex,
+  focusHints: string[] = [],
+): SessionGraphNode | null {
   const outcomeNodes = graph.nodes.filter((node) => node.node_type === "outcome");
   const completedOutcome = outcomeNodes.find((node) => OUTCOME_STATUS.has(getNodeStatus(node) ?? ""));
   const targetOutcome = completedOutcome ?? outcomeNodes[0];
@@ -352,34 +448,23 @@ function chooseBestOutcomeSupportAction(graph: SessionGraph, index: GraphIndex):
     return result;
   }, []);
 
-  return chooseBestNode(incomingNodes, index);
+  return chooseBestNode(incomingNodes, index, focusHints);
 }
 
-function chooseLatestMilestoneAction(graph: SessionGraph, index: GraphIndex): SessionGraphNode | null {
+function chooseBestMilestoneAction(
+  graph: SessionGraph,
+  index: GraphIndex,
+  focusHints: string[] = [],
+): SessionGraphNode | null {
   const actionNodes = graph.nodes.filter((node) => node.node_type === "action");
-  return chooseBestNode(actionNodes, index);
+  return chooseBestNode(actionNodes, index, focusHints);
 }
 
 function chooseDefaultFocusNode(graph: SessionGraph, latestNodeId: string | null, index: GraphIndex): SessionGraphNode | null {
-  const activeAction = chooseBestNode(
-    graph.nodes.filter((node) => node.node_type === "action" && isActiveNode(node)),
-    index,
-  );
-  if (activeAction) {
-    return activeAction;
-  }
-
-  const outcomeSupport = chooseBestOutcomeSupportAction(graph, index);
-  if (outcomeSupport) {
-    return outcomeSupport;
-  }
-
-  const blockedAction = chooseBestNode(
-    graph.nodes.filter((node) => node.node_type === "action" && BLOCKED_STATUS.has(getNodeStatus(node) ?? "")),
-    index,
-  );
-  if (blockedAction) {
-    return blockedAction;
+  const focusHints = collectGraphFocusHints(graph);
+  const bestMilestoneAction = chooseBestMilestoneAction(graph, index, focusHints);
+  if (bestMilestoneAction) {
+    return bestMilestoneAction;
   }
 
   if (latestNodeId) {
@@ -389,7 +474,7 @@ function chooseDefaultFocusNode(graph: SessionGraph, latestNodeId: string | null
     }
   }
 
-  return chooseLatestMilestoneAction(graph, index);
+  return chooseBestOutcomeSupportAction(graph, index, focusHints);
 }
 
 function pushUnique(target: string[], value: string): void {
@@ -604,10 +689,11 @@ function buildContextFromAction(actionId: string, index: GraphIndex): AttackPath
 export function chooseRepresentativeMilestoneChain(graph: SessionGraph, taskId: string): string[] {
   const index = buildGraphIndex(graph);
   const taskChain = buildTaskDependencyChain(taskId, index);
+  const taskNode = index.nodeMap.get(taskId) ?? null;
   const actions = graph.nodes.filter(
     (node) => actionBelongsToTask(node, taskId, index),
   );
-  const focusAction = chooseBestNode(actions, index);
+  const focusAction = chooseBestNode(actions, index, collectTaskFocusHints(taskNode));
   if (!focusAction) {
     return taskChain;
   }
@@ -637,7 +723,7 @@ export function getBestExecutionPathContext(
     return buildContextFromAction(selectedNode.id, index);
   }
   if (selectedNode?.node_type === "outcome") {
-    const supportAction = chooseBestOutcomeSupportAction(graph, index);
+    const supportAction = chooseBestOutcomeSupportAction(graph, index, collectGraphFocusHints(graph));
     if (supportAction) {
       const context = buildContextFromAction(supportAction.id, index);
       context.nodeIds.add(selectedNode.id);
