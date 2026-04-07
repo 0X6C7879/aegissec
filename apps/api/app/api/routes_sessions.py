@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Literal, cast
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -15,6 +14,8 @@ from fastapi import (
 from sqlmodel import Session as DBSession
 from sqlmodel import SQLModel
 
+from app.compat.mcp.service import MCPService, get_mcp_service
+from app.compat.skills.service import SkillService, get_skill_service
 from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
 from app.core.settings import Settings, get_settings
@@ -23,7 +24,6 @@ from app.db.models import (
     ChatGenerationRead,
     GenerationStatus,
     GenerationStepRead,
-    Message,
     MessageStatus,
     Session,
     SessionConversationRead,
@@ -56,6 +56,9 @@ from app.harness.continuations import (
     normalize_continuation_resolution_input,
     resolve_session_continuation,
 )
+from app.harness.session_runner import start_worker_if_needed as start_session_worker_if_needed
+from app.services.chat_runtime import ChatRuntime, get_chat_runtime
+from app.services.runtime import RuntimeService, get_runtime_service
 from app.services.session_generation import (
     GenerationCancelledError,
     SessionGenerationManager,
@@ -332,6 +335,11 @@ async def resume_session(
     session_id: str,
     db_session: DBSession = Depends(get_db_session),
     event_broker: SessionEventBroker = Depends(get_event_broker),
+    chat_runtime: ChatRuntime = Depends(get_chat_runtime),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+    skill_service: SkillService = Depends(get_skill_service),
+    mcp_service: MCPService = Depends(get_mcp_service),
+    generation_manager: SessionGenerationManager = Depends(get_generation_manager),
 ) -> object:
     repository = SessionRepository(db_session)
     session = _get_existing_session(repository, session_id)
@@ -344,6 +352,22 @@ async def resume_session(
             payload={"title": updated_session.title, "status": updated_session.status.value},
         )
     )
+    try:
+        await start_session_worker_if_needed(
+            db_session=db_session,
+            session_id=session_id,
+            event_broker=event_broker,
+            generation_manager=generation_manager,
+            chat_runtime=chat_runtime,
+            runtime_service=runtime_service,
+            skill_service=skill_service,
+            mcp_service=mcp_service,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
     return ok_response(session_read.model_dump(mode="json"))
 
 

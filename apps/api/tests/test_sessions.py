@@ -45,7 +45,7 @@ from app.services.chat_runtime import (
     ToolExecutor,
     get_chat_runtime,
 )
-from app.services.session_generation import recover_abandoned_generations
+from app.services.session_generation import get_generation_manager, recover_abandoned_generations
 from tests.utils import api_data
 
 TEST_POLL_INTERVAL_SECONDS = 0.01
@@ -1508,6 +1508,152 @@ def test_startup_recovery_requeues_abandoned_generations(client: TestClient) -> 
         assert recovered_generation.worker_id is None
         assert recovered_generation.lease_claimed_at is None
         assert recovered_generation.lease_expires_at is None
+
+
+def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
+    client: TestClient,
+) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-restart",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            stop_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-restart",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return f"stopped:{stop_result.payload['agent_id']}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Restart Recovery Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+        assert chat_response.status_code == 409
+        stale_continuation_token = chat_response.json()["detail"]["continuation_token"]
+
+        db_engine = app.state.database_engine
+        with DBSession(db_engine) as db_session:
+            repository = SessionRepository(db_session)
+            active_generation = repository.get_active_generation(session_id)
+            assert active_generation is not None
+            generation_id = active_generation.id
+            assistant_message_id = active_generation.assistant_message_id
+            repository.update_generation(
+                active_generation,
+                status=GenerationStatus.RUNNING,
+                worker_id="worker-restart",
+                lease_claimed_at=datetime.now(UTC) - timedelta(minutes=10),
+                lease_expires_at=datetime.now(UTC) - timedelta(minutes=5),
+            )
+
+        recovered_count = recover_abandoned_generations(db_engine)
+        assert recovered_count == 1
+
+        generation_manager = get_generation_manager()
+        generation_manager._states.pop(session_id, None)
+
+        with DBSession(db_engine) as db_session:
+            repository = SessionRepository(db_session)
+            recovered_generation = repository.get_generation(generation_id)
+            recovered_assistant_message = repository.get_message(assistant_message_id)
+            assert recovered_generation is not None
+            assert recovered_assistant_message is not None
+            assert recovered_generation.status == GenerationStatus.QUEUED
+            assert "pending_continuation" not in recovered_generation.metadata_json
+            assert "pending_continuation" not in recovered_assistant_message.metadata_json
+
+        stale_resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{stale_continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert stale_resolve_response.status_code == 409
+        assert stale_resolve_response.json()["detail"]["error"] == "already_aborted"
+
+        resume_response = client.post(f"/api/sessions/{session_id}/resume")
+        assert resume_response.status_code == 200
+
+        new_continuation_token: str | None = None
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            with DBSession(db_engine) as db_session:
+                repository = SessionRepository(db_session)
+                recovered_generation = repository.get_generation(generation_id)
+                assert recovered_generation is not None
+                pending_continuation = recovered_generation.metadata_json.get(
+                    "pending_continuation"
+                )
+                if isinstance(pending_continuation, dict):
+                    candidate = pending_continuation.get("continuation_token")
+                    if isinstance(candidate, str) and candidate != stale_continuation_token:
+                        new_continuation_token = candidate
+                        break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("generation did not pause again with a new continuation token")
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{new_continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert resolve_response.status_code == 200
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            assistant_message = next(
+                (
+                    message
+                    for message in reversed(conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ),
+                None,
+            )
+            if assistant_message and assistant_message["status"] == "completed":
+                assert assistant_message["content"].startswith("stopped:")
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("assistant message did not complete after recovered continuation")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
 
 
 def test_chat_preserves_think_blocks_in_persisted_content_and_transcript_by_default(

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from dataclasses import dataclass, field
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Session as DBSession
-
-from app.db.repositories import SessionRepository
 
 
 class GenerationCancelledError(Exception):
@@ -229,6 +227,5 @@ def get_generation_manager() -> SessionGenerationManager:
 
 
 def recover_abandoned_generations(db_engine: Engine) -> int:
-    with DBSession(db_engine) as db_session:
-        repository = SessionRepository(db_session)
-        return repository.recover_abandoned_generations()
+    harness_session_runner = importlib.import_module("app.harness.session_runner")
+    return int(harness_session_runner.recover_abandoned_generations(db_engine))

@@ -59,13 +59,11 @@ from app.db.session import get_db_session
 from app.harness.continuations import (
     clear_generation_continuation_state as harness_clear_generation_continuation_state,
 )
-from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import (
     ChatRuntime,
     ChatRuntimeConfigurationError,
     ChatRuntimeError,
     ConversationMessage,
-    GenerationCallbacks,
     ToolCallRequest,
     ToolCallResult,
     get_chat_runtime,
@@ -129,11 +127,15 @@ _SKILL_AUTOROUTE_CONTEXT_WINDOW = 6
 
 _harness_generation_events = importlib.import_module("app.harness.generation_events")
 _harness_semantic = importlib.import_module("app.harness.semantic")
+_harness_session_runner = importlib.import_module("app.harness.session_runner")
 _harness_tool_runtime_runner = importlib.import_module("app.harness.tool_runtime_runner")
 _harness_trace = importlib.import_module("app.harness.trace")
 _harness_transcript = importlib.import_module("app.harness.transcript")
 
 ToolRuntimeLifecycleRunner = _harness_tool_runtime_runner.ToolRuntimeLifecycleRunner
+process_generation = _harness_session_runner.process_generation
+run_session_worker = _harness_session_runner.run_session_worker
+start_session_worker_if_needed = _harness_session_runner.start_worker_if_needed
 _publish_attack_graph_updated = _harness_generation_events.publish_attack_graph_updated
 _publish_generation_cancelled = _harness_generation_events.publish_generation_cancelled
 _publish_generation_failed = _harness_generation_events.publish_generation_failed
@@ -1311,530 +1313,26 @@ async def _process_generation(
     skill_service: SkillService,
     mcp_service: MCPService,
 ) -> str:
-    active_session_state: Any | None = None
-    with DBSession(db_engine) as worker_db_session:
-        repository = SessionRepository(worker_db_session)
-        generation = repository.get_generation(generation_id)
-        if generation is None:
-            raise ChatRuntimeError("Generation record was not found.")
-        initial_assistant_message = repository.get_message(generation.assistant_message_id)
-        if initial_assistant_message is None:
-            raise ChatRuntimeError("Assistant message placeholder was not found.")
-
-    await generation_manager.begin_generation(
-        session_id,
-        generation_id=generation_id,
-        assistant_message_id=initial_assistant_message.id,
+    return cast(
+        str,
+        await process_generation(
+            db_engine=db_engine,
+            session_id=session_id,
+            generation_id=generation_id,
+            event_broker=event_broker,
+            generation_manager=generation_manager,
+            chat_runtime=chat_runtime,
+            runtime_service=runtime_service,
+            skill_service=skill_service,
+            mcp_service=mcp_service,
+            build_tool_executor=_build_tool_executor,
+            build_autorouted_skill_context=_build_autorouted_skill_context,
+            publish_assistant_trace=_publish_assistant_trace,
+            publish_assistant_summary=_publish_assistant_summary,
+            sanitize_persisted_assistant_text=_sanitize_persisted_assistant_text,
+            project_visible_stream_content=_project_visible_stream_content,
+        ),
     )
-    cancel_event = await generation_manager.get_cancel_event(session_id)
-
-    try:
-        with DBSession(db_engine) as worker_db_session:
-            repository = SessionRepository(worker_db_session)
-            session = _get_session_or_404(repository, session_id)
-            generation = repository.get_generation(generation_id)
-            assistant_message = repository.get_message(initial_assistant_message.id)
-            if generation is None or assistant_message is None:
-                raise ChatRuntimeError("Generation state could not be reloaded.")
-            loaded_assistant_message = assistant_message
-            user_message = (
-                repository.get_message(generation.user_message_id)
-                if generation.user_message_id is not None
-                else None
-            )
-            token_budget = generation.metadata_json.get("token_budget")
-            total_token_budget = token_budget if isinstance(token_budget, int) else 12_000
-
-            latest_message_text = (
-                user_message.content
-                if user_message is not None
-                else loaded_assistant_message.content
-            )
-            capability_facade = CapabilityFacade(
-                skill_service=skill_service,
-                mcp_service=mcp_service,
-            )
-            harness_memory = importlib.import_module("app.harness.memory")
-            harness_prompts = importlib.import_module("app.harness.prompts")
-            harness_session_runner = importlib.import_module("app.harness.session_runner")
-            HarnessMemoryService = harness_memory.HarnessMemoryService
-            HarnessPromptAssembler = harness_prompts.HarnessPromptAssembler
-            prompt_assembler = HarnessPromptAssembler(
-                capability_facade=capability_facade,
-                skill_service=skill_service,
-                memory_service=HarnessMemoryService(),
-            )
-            prompt_assembly = prompt_assembler.build(
-                session=session,
-                repository=repository,
-                user_message=user_message,
-                assistant_message=loaded_assistant_message,
-                branch_id=generation.branch_id,
-                total_token_budget=total_token_budget,
-            )
-            active_session_state = prompt_assembly.session_state
-            latest_message_text = prompt_assembly.latest_message_text
-            available_skills = prompt_assembly.available_skills
-            mcp_tool_inventory = prompt_assembly.mcp_tool_inventory
-            swarm_coordinator = harness_session_runner.build_swarm_coordinator(
-                session=session,
-                chat_runtime=chat_runtime,
-                runtime_service=runtime_service,
-                skill_service=skill_service,
-                mcp_service=mcp_service,
-                session_id=session.id,
-                prompt_assembly=prompt_assembly,
-                generation_id=generation.id,
-                latest_message_text=latest_message_text,
-            )
-            execute_tool = _build_tool_executor(
-                session=session,
-                assistant_message=loaded_assistant_message,
-                repository=repository,
-                event_broker=event_broker,
-                generation_manager=generation_manager,
-                runtime_service=runtime_service,
-                skill_service=skill_service,
-                mcp_service=mcp_service,
-                mcp_tool_inventory=mcp_tool_inventory,
-                session_state=prompt_assembly.session_state,
-                swarm_coordinator=swarm_coordinator,
-            )
-            conversation_history = prompt_assembly.conversation_history
-            skill_context_prompt = prompt_assembly.skill_context_prompt
-
-            await _publish_generation_started(
-                event_broker,
-                session_id=session.id,
-                generation_id=generation.id,
-                user_message_id=generation.user_message_id,
-                assistant_message_id=assistant_message.id,
-                queued_prompt_count=repository.queue_size(session.id),
-            )
-            _record_generation_step(
-                repository,
-                assistant_message=assistant_message,
-                kind="status",
-                phase="planning",
-                status="running",
-                state="started",
-                label="开始生成",
-                safe_summary=None,
-                metadata_json={"generation_id": generation.id},
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={"state": "generation.started", "generation_id": generation.id},
-            )
-
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=assistant_message,
-                entry={"state": "skill.autoroute.started"},
-            )
-            (
-                autorouted_skill_context,
-                autoroute_trace_entries,
-                autoroute_trace_entry,
-            ) = await _build_autorouted_skill_context(
-                available_skills=available_skills,
-                latest_message_text=latest_message_text,
-                recent_context_text="\n\n".join(
-                    message.content
-                    for message in conversation_history[-_SKILL_AUTOROUTE_CONTEXT_WINDOW:]
-                    if message.content.strip()
-                ),
-                execute_tool=execute_tool,
-            )
-            for trace_entry in autoroute_trace_entries:
-                await _publish_assistant_trace(
-                    repository,
-                    event_broker,
-                    session_id=session.id,
-                    assistant_message=assistant_message,
-                    entry=trace_entry,
-                )
-            if autorouted_skill_context:
-                skill_context_prompt = "\n\n".join(
-                    part
-                    for part in [skill_context_prompt, autorouted_skill_context]
-                    if part.strip()
-                )
-            generation_metadata = dict(generation.metadata_json)
-            existing_prompt_provenance = generation_metadata.get("prompt_provenance")
-            prompt_provenance = (
-                dict(existing_prompt_provenance)
-                if isinstance(existing_prompt_provenance, dict)
-                else {}
-            )
-            generation_metadata["prompt_provenance"] = {
-                **prompt_provenance,
-                "autorouted_skill": {
-                    "state": autoroute_trace_entry.get("state"),
-                    "skill": autoroute_trace_entry.get("skill"),
-                    "confidence": autoroute_trace_entry.get("confidence"),
-                    "reason": autoroute_trace_entry.get("reason"),
-                    "top_candidate": autoroute_trace_entry.get("top_candidate"),
-                    "candidates": autoroute_trace_entry.get("candidates", []),
-                    "context_injected": bool(autorouted_skill_context),
-                },
-            }
-            repository.update_generation(generation, metadata_json=generation_metadata)
-
-            raw_streamed_content = loaded_assistant_message.content
-            streamed_content = _project_visible_stream_content(raw_streamed_content)
-
-            async def on_text_delta(delta: str) -> None:
-                nonlocal raw_streamed_content, streamed_content
-                if cancel_event.is_set():
-                    raise asyncio.CancelledError
-                raw_streamed_content += delta
-                next_streamed_content = _project_visible_stream_content(raw_streamed_content)
-                if next_streamed_content == streamed_content:
-                    return
-
-                sanitized_delta = (
-                    next_streamed_content[len(streamed_content) :]
-                    if next_streamed_content.startswith(streamed_content)
-                    else next_streamed_content
-                )
-                is_incremental_output = next_streamed_content.startswith(streamed_content)
-                streamed_content = next_streamed_content
-                repository.update_message(
-                    loaded_assistant_message,
-                    content=streamed_content,
-                    status=MessageStatus.STREAMING,
-                )
-                _append_output_transcript_delta(
-                    repository,
-                    assistant_message=loaded_assistant_message,
-                    delta_text=sanitized_delta,
-                    status="running",
-                    append_to_current=is_incremental_output,
-                )
-                output_step = _get_or_create_output_step(
-                    repository,
-                    assistant_message=loaded_assistant_message,
-                )
-                if output_step is not None:
-                    repository.append_generation_step_delta(output_step, sanitized_delta)
-                await _publish_message_event(
-                    event_broker,
-                    event_type=SessionEventType.MESSAGE_DELTA,
-                    session_id=session.id,
-                    message=loaded_assistant_message,
-                    delta=sanitized_delta,
-                )
-                await _publish_message_event(
-                    event_broker,
-                    event_type=SessionEventType.MESSAGE_UPDATED,
-                    session_id=session.id,
-                    message=loaded_assistant_message,
-                )
-
-            async def on_summary(summary: str) -> None:
-                if summary.strip():
-                    semantic_snapshot = _drain_semantic_snapshot(
-                        repository,
-                        assistant_message=loaded_assistant_message,
-                        session_state=prompt_assembly.session_state,
-                    )
-                    await _publish_assistant_summary(
-                        repository,
-                        event_broker,
-                        session_id=session.id,
-                        assistant_message=loaded_assistant_message,
-                        summary=summary.strip(),
-                        semantic_snapshot=semantic_snapshot,
-                    )
-
-            generate_reply_kwargs = harness_session_runner.build_generate_reply_kwargs(
-                chat_runtime=chat_runtime,
-                prompt_assembly=prompt_assembly,
-                available_skills=available_skills,
-                skill_context_prompt=skill_context_prompt,
-                execute_tool=execute_tool,
-                callbacks=GenerationCallbacks(
-                    on_text_delta=on_text_delta,
-                    on_summary=on_summary,
-                    is_cancelled=cancel_event.is_set,
-                ),
-            )
-
-            final_content = await chat_runtime.generate_reply(
-                (
-                    user_message.content
-                    if user_message is not None
-                    else loaded_assistant_message.content
-                ),
-                (
-                    attachments_from_storage(user_message.attachments_json)
-                    if user_message is not None
-                    else []
-                ),
-                **generate_reply_kwargs,
-            )
-            final_content = _sanitize_persisted_assistant_text(final_content) or (
-                "模型已完成分析，但没有返回可展示的最终答复。"
-            )
-
-            if cancel_event.is_set():
-                raise asyncio.CancelledError
-
-            repository.update_message(
-                loaded_assistant_message,
-                content=final_content,
-                status=MessageStatus.COMPLETED,
-                error_message="",
-            )
-            semantic_snapshot = _drain_semantic_snapshot(
-                repository,
-                assistant_message=loaded_assistant_message,
-                session_state=prompt_assembly.session_state,
-            )
-            final_delta = (
-                final_content[len(streamed_content) :]
-                if final_content.startswith(streamed_content)
-                else final_content
-            )
-            final_is_incremental = final_content.startswith(streamed_content)
-            _append_output_transcript_delta(
-                repository,
-                assistant_message=loaded_assistant_message,
-                delta_text=final_delta,
-                status="completed",
-                append_to_current=final_is_incremental,
-            )
-            repository.mark_generation_completed(generation)
-            if final_content != streamed_content:
-                if final_delta:
-                    await _publish_message_event(
-                        event_broker,
-                        event_type=SessionEventType.MESSAGE_DELTA,
-                        session_id=session.id,
-                        message=loaded_assistant_message,
-                        delta=final_delta,
-                    )
-                await _publish_message_event(
-                    event_broker,
-                    event_type=SessionEventType.MESSAGE_UPDATED,
-                    session_id=session.id,
-                    message=loaded_assistant_message,
-                )
-            output_step = _get_or_create_output_step(
-                repository,
-                assistant_message=loaded_assistant_message,
-            )
-            if output_step is not None:
-                if final_content != output_step.delta_text:
-                    repository.update_generation_step(output_step, delta_text=final_content)
-                repository.update_generation_step(
-                    output_step,
-                    phase="synthesis",
-                    status="completed",
-                    state="completed",
-                    ended_at=utc_now(),
-                )
-            await _publish_attack_graph_updated(
-                event_broker,
-                session_id=session.id,
-                assistant_message=loaded_assistant_message,
-                semantic_snapshot=semantic_snapshot,
-            )
-            await _publish_assistant_trace(
-                repository,
-                event_broker,
-                session_id=session.id,
-                assistant_message=loaded_assistant_message,
-                entry={
-                    "state": "generation.completed",
-                    "generation_id": generation.id,
-                    **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
-                },
-            )
-            await _publish_message_event(
-                event_broker,
-                event_type=SessionEventType.MESSAGE_COMPLETED,
-                session_id=session.id,
-                message=loaded_assistant_message,
-            )
-            _record_generation_step(
-                repository,
-                assistant_message=loaded_assistant_message,
-                kind="status",
-                phase="completed",
-                status="completed",
-                state="completed",
-                label="生成完成",
-                safe_summary=None,
-                ended_at=utc_now(),
-                metadata_json={"generation_id": generation.id},
-            )
-            repository.close_open_generation_steps(
-                generation.id, status="completed", state="completed"
-            )
-            return loaded_assistant_message.id
-    except asyncio.CancelledError as exc:
-        with DBSession(db_engine) as worker_db_session:
-            repository = SessionRepository(worker_db_session)
-            generation = repository.get_generation(generation_id)
-            assistant_message = None
-            if generation is not None:
-                assistant_message = repository.get_message(generation.assistant_message_id)
-                _clear_generation_continuation_state(
-                    repository,
-                    generation,
-                    assistant_message,
-                    abort_reason="Active generation was cancelled.",
-                )
-                repository.cancel_generation(
-                    generation, error_message="Active generation was cancelled."
-                )
-            if assistant_message is not None:
-                repository.update_message(
-                    assistant_message,
-                    status=MessageStatus.CANCELLED,
-                    error_message="Active generation was cancelled.",
-                )
-                transcript_segments = _message_transcript_segments(repository, assistant_message)
-                output_segment = _find_transcript_segment(
-                    transcript_segments, kind=AssistantTranscriptSegmentKind.OUTPUT
-                )
-                if output_segment is not None:
-                    _update_transcript_segment(
-                        repository,
-                        assistant_message=assistant_message,
-                        segment=output_segment,
-                        status="cancelled",
-                    )
-                semantic_snapshot = _drain_semantic_snapshot(
-                    repository,
-                    assistant_message=assistant_message,
-                    session_state=active_session_state,
-                )
-                await _publish_assistant_trace(
-                    repository,
-                    event_broker,
-                    session_id=session_id,
-                    assistant_message=assistant_message,
-                    entry={
-                        "state": "generation.cancelled",
-                        "generation_id": generation_id,
-                        **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
-                    },
-                )
-                await _publish_attack_graph_updated(
-                    event_broker,
-                    session_id=session_id,
-                    assistant_message=assistant_message,
-                    semantic_snapshot=semantic_snapshot,
-                )
-                _record_generation_step(
-                    repository,
-                    assistant_message=assistant_message,
-                    kind="status",
-                    phase="cancelled",
-                    status="cancelled",
-                    state="cancelled",
-                    label="生成已取消",
-                    safe_summary=None,
-                    ended_at=utc_now(),
-                    metadata_json={"generation_id": generation_id},
-                )
-                repository.close_open_generation_steps(
-                    generation_id, status="cancelled", state="cancelled"
-                )
-                await _publish_generation_cancelled(
-                    event_broker,
-                    session_id=session_id,
-                    generation_id=generation_id,
-                    assistant_message_id=assistant_message.id,
-                )
-        raise GenerationCancelledError("Active generation was cancelled.") from exc
-    except (ChatRuntimeConfigurationError, ChatRuntimeError) as exc:
-        with DBSession(db_engine) as worker_db_session:
-            repository = SessionRepository(worker_db_session)
-            generation = repository.get_generation(generation_id)
-            assistant_message = None
-            if generation is not None:
-                assistant_message = repository.get_message(generation.assistant_message_id)
-                _clear_generation_continuation_state(
-                    repository,
-                    generation,
-                    assistant_message,
-                    abort_reason=str(exc),
-                )
-                repository.mark_generation_failed(generation, str(exc))
-            if assistant_message is not None:
-                repository.update_message(
-                    assistant_message,
-                    status=MessageStatus.FAILED,
-                    error_message=str(exc),
-                )
-                transcript_segments = _message_transcript_segments(repository, assistant_message)
-                output_segment = _find_transcript_segment(
-                    transcript_segments, kind=AssistantTranscriptSegmentKind.OUTPUT
-                )
-                if output_segment is not None:
-                    _update_transcript_segment(
-                        repository,
-                        assistant_message=assistant_message,
-                        segment=output_segment,
-                        status="failed",
-                    )
-                semantic_snapshot = _drain_semantic_snapshot(
-                    repository,
-                    assistant_message=assistant_message,
-                    session_state=active_session_state,
-                )
-                await _publish_assistant_trace(
-                    repository,
-                    event_broker,
-                    session_id=session_id,
-                    assistant_message=assistant_message,
-                    entry={
-                        "state": "generation.failed",
-                        "generation_id": generation_id,
-                        "error": str(exc),
-                        **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
-                    },
-                )
-                await _publish_attack_graph_updated(
-                    event_broker,
-                    session_id=session_id,
-                    assistant_message=assistant_message,
-                    semantic_snapshot=semantic_snapshot,
-                )
-                _record_generation_step(
-                    repository,
-                    assistant_message=assistant_message,
-                    kind="status",
-                    phase="failed",
-                    status="failed",
-                    state="failed",
-                    label="Generation failed",
-                    safe_summary=str(exc),
-                    ended_at=utc_now(),
-                    metadata_json={"generation_id": generation_id, "error": str(exc)},
-                )
-                repository.close_open_generation_steps(
-                    generation_id, status="failed", state="failed"
-                )
-                await _publish_generation_failed(
-                    event_broker,
-                    session_id=session_id,
-                    generation_id=generation_id,
-                    assistant_message_id=assistant_message.id,
-                    error_message=str(exc),
-                )
-        raise
-    finally:
-        await generation_manager.clear_current_generation(session_id, generation_id)
 
 
 async def _run_session_worker(
@@ -1848,96 +1346,22 @@ async def _run_session_worker(
     skill_service: SkillService,
     mcp_service: MCPService,
 ) -> None:
-    current_task = asyncio.current_task()
-    if current_task is None:
-        return
-    worker_id = f"session-worker-{uuid4()}"
-
-    terminal_error: ChatRuntimeError | ChatRuntimeConfigurationError | None = None
-
-    try:
-        while True:
-            with DBSession(db_engine) as worker_db_session:
-                repository = SessionRepository(worker_db_session)
-                generation = repository.claim_next_generation(session_id, worker_id=worker_id)
-
-            if generation is None:
-                break
-
-            try:
-                assistant_message_id = await _process_generation(
-                    db_engine=db_engine,
-                    session_id=session_id,
-                    generation_id=generation.id,
-                    event_broker=event_broker,
-                    generation_manager=generation_manager,
-                    chat_runtime=chat_runtime,
-                    runtime_service=runtime_service,
-                    skill_service=skill_service,
-                    mcp_service=mcp_service,
-                )
-                await generation_manager.resolve_future(
-                    session_id, generation.id, assistant_message_id
-                )
-            except GenerationCancelledError as exc:
-                await generation_manager.reject_future(session_id, generation.id, exc)
-                continue
-            except ChatRuntimeConfigurationError as exc:
-                terminal_error = exc
-                await generation_manager.reject_continuation_futures(session_id, exc)
-                await generation_manager.reject_future(session_id, generation.id, exc)
-                await generation_manager.reject_pending(session_id, exc)
-                await _mark_queued_generations_failed(
-                    db_engine,
-                    session_id=session_id,
-                    error_message=str(exc),
-                )
-                break
-            except ChatRuntimeError as exc:
-                terminal_error = exc
-                await generation_manager.reject_continuation_futures(session_id, exc)
-                await generation_manager.reject_future(session_id, generation.id, exc)
-                await generation_manager.reject_pending(session_id, exc)
-                await _mark_queued_generations_failed(
-                    db_engine,
-                    session_id=session_id,
-                    error_message=str(exc),
-                )
-                break
-            except Exception as exc:
-                terminal_error = ChatRuntimeError(str(exc))
-                await generation_manager.reject_continuation_futures(session_id, terminal_error)
-                await generation_manager.reject_future(session_id, generation.id, terminal_error)
-                await generation_manager.reject_pending(session_id, terminal_error)
-                await _mark_queued_generations_failed(
-                    db_engine,
-                    session_id=session_id,
-                    error_message=str(exc),
-                )
-                break
-    finally:
-        with DBSession(db_engine) as worker_db_session:
-            repository = SessionRepository(worker_db_session)
-            session = repository.get_session(session_id)
-            if session is not None:
-                if terminal_error is not None:
-                    session = repository.update_session(session, status=SessionStatus.ERROR)
-                    await _publish_session_updated(
-                        event_broker,
-                        session,
-                        error=str(terminal_error),
-                    )
-                elif (
-                    session.status == SessionStatus.RUNNING
-                    and repository.get_active_generation(session.id) is None
-                ):
-                    session = repository.update_session(session, status=SessionStatus.DONE)
-                    await _publish_session_updated(
-                        event_broker,
-                        session,
-                        queued_prompt_count=repository.queue_size(session.id),
-                    )
-        await generation_manager.worker_finished(session_id, current_task)
+    await run_session_worker(
+        db_engine=db_engine,
+        session_id=session_id,
+        event_broker=event_broker,
+        generation_manager=generation_manager,
+        chat_runtime=chat_runtime,
+        runtime_service=runtime_service,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+        build_tool_executor=_build_tool_executor,
+        build_autorouted_skill_context=_build_autorouted_skill_context,
+        publish_assistant_trace=_publish_assistant_trace,
+        publish_assistant_summary=_publish_assistant_summary,
+        sanitize_persisted_assistant_text=_sanitize_persisted_assistant_text,
+        project_visible_stream_content=_project_visible_stream_content,
+    )
 
 
 async def _start_worker_if_needed(
@@ -1951,17 +1375,9 @@ async def _start_worker_if_needed(
     skill_service: SkillService,
     mcp_service: MCPService,
 ) -> None:
-    if not await generation_manager.should_start_worker(session_id):
-        return
-    db_engine = db_session.get_bind()
-    if not isinstance(db_engine, Engine):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database engine is unavailable.",
-        )
-    worker_task = asyncio.create_task(
-        _run_session_worker(
-            db_engine=db_engine,
+    try:
+        await start_session_worker_if_needed(
+            db_session=db_session,
             session_id=session_id,
             event_broker=event_broker,
             generation_manager=generation_manager,
@@ -1969,9 +1385,18 @@ async def _start_worker_if_needed(
             runtime_service=runtime_service,
             skill_service=skill_service,
             mcp_service=mcp_service,
+            build_tool_executor=_build_tool_executor,
+            build_autorouted_skill_context=_build_autorouted_skill_context,
+            publish_assistant_trace=_publish_assistant_trace,
+            publish_assistant_summary=_publish_assistant_summary,
+            sanitize_persisted_assistant_text=_sanitize_persisted_assistant_text,
+            project_visible_stream_content=_project_visible_stream_content,
         )
-    )
-    await generation_manager.attach_worker(session_id, worker_task)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
 
 
 async def _await_generation_result(
