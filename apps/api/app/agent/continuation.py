@@ -123,6 +123,8 @@ class ContinuationResolution:
     continuation_token: str
     resolution_payload: dict[str, object]
     approved: bool
+    scope_confirmed: bool | None
+    outcome: str
     user_input: str
     resolved_by: str
     validation_status: str
@@ -135,6 +137,8 @@ class ContinuationResolution:
             "resolved_payload": dict(self.resolution_payload),
             "resolution_payload": dict(self.resolution_payload),
             "approved": self.approved,
+            "scope_confirmed": self.scope_confirmed,
+            "outcome": self.outcome,
             "user_input": self.user_input,
             "resolved_by": self.resolved_by,
             "validation_status": self.validation_status,

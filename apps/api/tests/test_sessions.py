@@ -1102,21 +1102,26 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             index for index, event_type in enumerate(event_types) if event_type == "message.updated"
         )
 
-        assert events[started_index]["payload"] == {
-            "tool": "execute_kali_command",
-            "tool_call_id": "tool-call-1",
-            "arguments": {
-                "command": "printf 'auto tool' > reports/auto.txt",
-                "timeout_seconds": 10,
-                "artifact_paths": ["reports/auto.txt"],
-            },
+        started_payload = events[started_index]["payload"]
+        assert started_payload["tool"] == "execute_kali_command"
+        assert started_payload["tool_call_id"] == "tool-call-1"
+        assert started_payload["arguments"] == {
             "command": "printf 'auto tool' > reports/auto.txt",
             "timeout_seconds": 10,
             "artifact_paths": ["reports/auto.txt"],
-            "message_id": api_data(chat_response)["assistant_message"]["id"],
-            "assistant_message_id": api_data(chat_response)["assistant_message"]["id"],
-            "generation_id": api_data(chat_response)["generation"]["id"],
         }
+        assert started_payload["command"] == "printf 'auto tool' > reports/auto.txt"
+        assert started_payload["timeout_seconds"] == 10
+        assert started_payload["artifact_paths"] == ["reports/auto.txt"]
+        assert started_payload["message_id"] == api_data(chat_response)["assistant_message"]["id"]
+        assert (
+            started_payload["assistant_message_id"]
+            == api_data(chat_response)["assistant_message"]["id"]
+        )
+        assert started_payload["generation_id"] == api_data(chat_response)["generation"]["id"]
+        assert started_payload["risk_level"] == "high"
+        assert started_payload["mutating_target_class"] == "runtime"
+        assert started_payload["command_summary"] == "printf 'auto tool' > reports/auto.txt"
         assert events[finished_index]["payload"]["tool"] == "execute_kali_command"
         assert events[finished_index]["payload"]["tool_call_id"] == "tool-call-1"
         assert (
@@ -1249,6 +1254,99 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
             "artifacts": ["reports/auto.txt"],
         }
         assert output_segment["text"] == "工具执行完成，状态：success。"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_readonly_parallel_batch_execution_preserves_order(client: TestClient) -> None:
+    class ParallelReadonlyChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            batch_execute = getattr(execute_tool, "__batch_execute__", None)
+            assert batch_execute is not None
+            batch_results = await batch_execute(
+                [
+                    ToolCallRequest(
+                        tool_call_id="parallel-call-1",
+                        tool_name="list_available_skills",
+                        arguments={},
+                    ),
+                    ToolCallRequest(
+                        tool_call_id="parallel-call-2",
+                        tool_name="list_available_skills",
+                        arguments={},
+                    ),
+                ]
+            )
+            assert [result.tool_name for result in batch_results] == [
+                "list_available_skills",
+                "list_available_skills",
+            ]
+            return f"parallel:{len(batch_results)}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ParallelReadonlyChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Readonly Parallel Batch"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "run readonly batch",
+                    "attachments": [],
+                    "wait_for_completion": True,
+                },
+            )
+
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+            assert chat_payload["assistant_message"]["content"] == "parallel:2"
+
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        event_types = [event["type"] for event in events]
+        assert event_types.count("tool.call.started") == 2
+        assert event_types.count("tool.call.finished") == 2
+        assert "tool.call.failed" not in event_types
+
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        tool_call_ids = [
+            segment["tool_call_id"]
+            for segment in transcript
+            if segment["kind"] == "tool_call" and segment["tool_name"] == "list_available_skills"
+        ]
+        tool_result_ids = [
+            segment["tool_call_id"]
+            for segment in transcript
+            if segment["kind"] == "tool_result" and segment["tool_name"] == "list_available_skills"
+        ]
+        assert tool_call_ids[:2] == ["parallel-call-1", "parallel-call-2"]
+        assert tool_result_ids[:2] == ["parallel-call-1", "parallel-call-2"]
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 
@@ -2527,6 +2625,167 @@ def test_chat_pauses_and_resumes_approval_required_tool(client: TestClient) -> N
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
+def test_chat_pauses_and_rejects_approval_required_tool(client: TestClient) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-reject",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-reject",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return "unreachable"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Rejected Approval Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 409
+        continuation_token = chat_response.json()["detail"]["continuation_token"]
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approved": False, "user_input": "Denied by operator."},
+        )
+        assert resolve_response.status_code == 200
+        resolution = api_data(resolve_response)["resolution"]
+        assert resolution["approved"] is False
+        assert resolution["outcome"] == "rejected"
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            assistant_message = next(
+                (
+                    message
+                    for message in reversed(conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ),
+                None,
+            )
+            if assistant_message and assistant_message["status"] == "failed":
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("assistant message did not fail after approval rejection")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_cannot_resolve_already_resolved_continuation(client: TestClient) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-resolved",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            stop_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-resolved",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return f"stopped:{stop_result.payload['agent_id']}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post(
+            "/api/sessions", json={"title": "Already Resolved Continuation Session"}
+        )
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+        assert chat_response.status_code == 409
+        continuation_token = chat_response.json()["detail"]["continuation_token"]
+
+        resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert resolve_response.status_code == 200
+
+        second_resolve_response = client.post(
+            f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
+            json={"approve": True},
+        )
+        assert second_resolve_response.status_code == 409
+        detail = second_resolve_response.json()["detail"]
+        assert detail["error"] == "already_resolved"
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
 def test_chat_pauses_and_resumes_scope_confirmation_tool(
     client: TestClient, monkeypatch: MonkeyPatch
 ) -> None:
@@ -2691,10 +2950,24 @@ def test_cannot_resolve_cancelled_continuation(client: TestClient) -> None:
             f"/api/sessions/{session_id}/continuations/{continuation_token}/resolve",
             json={"approve": True},
         )
-        assert resolve_response.status_code == 404
-        assert resolve_response.json()["detail"] == "Continuation not found"
+        assert resolve_response.status_code == 409
+        detail = resolve_response.json()["detail"]
+        assert detail["error"] == "already_aborted"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_invalid_continuation_token_returns_not_found(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Invalid Continuation Session"})
+    session_id = api_data(session_response)["id"]
+
+    resolve_response = client.post(
+        f"/api/sessions/{session_id}/continuations/does-not-exist/resolve",
+        json={"approve": True},
+    )
+
+    assert resolve_response.status_code == 404
+    assert resolve_response.json()["detail"] == "Continuation not found"
 
 
 def test_chat_autoroutes_ctf_web_skill_context_from_contextual_match(

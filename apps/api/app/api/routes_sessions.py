@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from collections.abc import Awaitable, Callable
 from typing import Literal, cast
 
@@ -51,6 +50,12 @@ from app.db.repositories import (
     SessionRepository,
 )
 from app.db.session import get_db_session, get_websocket_db_session
+from app.harness.continuations import (
+    ContinuationResolutionError,
+    clear_generation_continuation_state,
+    normalize_continuation_resolution_input,
+    resolve_session_continuation,
+)
 from app.services.session_generation import (
     GenerationCancelledError,
     SessionGenerationManager,
@@ -61,65 +66,11 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 class ContinuationResolveRequest(SQLModel):
-    approve: bool = True
+    approve: bool | None = None
+    approved: bool | None = None
+    scope_confirmed: bool | None = None
     user_input: str | None = None
     resolution_payload: dict[str, object] | None = None
-
-
-def _find_generation_for_continuation(
-    repository: SessionRepository,
-    session_id: str,
-    continuation_token: str,
-) -> tuple[ChatGeneration, dict[str, object], object] | tuple[None, None, None]:
-    continuation_store_module = importlib.import_module("app.agent.continuation_store")
-    store = continuation_store_module.ContinuationStore()
-    for generation in repository.list_generations(session_id):
-        raw_pause_state = generation.metadata_json.get("pause_state")
-        if not isinstance(raw_pause_state, dict):
-            continue
-        pause_state = dict(raw_pause_state)
-        store.ensure_pause_state(pause_state)
-        contract = store.continuation_for_token(pause_state, continuation_token=continuation_token)
-        if contract is not None:
-            return generation, pause_state, contract
-    return None, None, None
-
-
-def _clear_generation_continuation_state(
-    repository: SessionRepository,
-    generation: ChatGeneration,
-    assistant_message: Message | None,
-    *,
-    abort_reason: str | None = None,
-) -> None:
-    continuation_store_module = importlib.import_module("app.agent.continuation_store")
-    store = continuation_store_module.ContinuationStore()
-
-    generation_metadata = dict(generation.metadata_json)
-    raw_pause_state = generation_metadata.get("pause_state")
-    pause_state = dict(raw_pause_state) if isinstance(raw_pause_state, dict) else None
-    if pause_state is not None:
-        store.ensure_pause_state(pause_state)
-        if abort_reason:
-            active_contracts = list(store.active_continuations(pause_state))
-            for contract in active_contracts:
-                continuation_token = getattr(contract, "continuation_token", None)
-                if isinstance(continuation_token, str) and continuation_token:
-                    store.abort_continuation(
-                        pause_state,
-                        continuation_token=continuation_token,
-                        reason=abort_reason,
-                    )
-        generation_metadata["pause_state"] = pause_state
-    generation_metadata.pop("pending_continuation", None)
-    repository.update_generation(generation, metadata_json=generation_metadata)
-
-    if assistant_message is not None:
-        assistant_metadata = dict(assistant_message.metadata_json)
-        if pause_state is not None:
-            assistant_metadata["pause_state"] = pause_state
-        assistant_metadata.pop("pending_continuation", None)
-        repository.update_message(assistant_message, metadata_json=assistant_metadata)
 
 
 def _get_existing_session(
@@ -407,122 +358,31 @@ async def resolve_continuation(
 ) -> object:
     repository = SessionRepository(db_session)
     session = _get_existing_session(repository, session_id)
-
-    generation, pause_state, contract = _find_generation_for_continuation(
-        repository,
-        session_id,
-        continuation_token,
-    )
-    if generation is None or pause_state is None or contract is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Continuation not found",
-        )
-
-    assistant_message = repository.get_message(generation.assistant_message_id)
-    if assistant_message is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assistant message not found for continuation.",
-        )
-
-    has_continuation_future = cast(
-        Callable[[str, str], Awaitable[bool]] | None,
-        getattr(generation_manager, "has_continuation_future", None),
-    )
-    continuation_future_active = (
-        await has_continuation_future(session_id, continuation_token)
-        if callable(has_continuation_future)
-        else False
-    )
-
-    if (
-        session.status != SessionStatus.PAUSED
-        or generation.status != GenerationStatus.RUNNING
-        or not continuation_future_active
-    ):
-        _clear_generation_continuation_state(
-            repository,
-            generation,
-            assistant_message,
-            abort_reason="Continuation is no longer resumable.",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Continuation is no longer resumable.",
-                "continuation_token": continuation_token,
-                "action": (
-                    getattr(contract, "protocol_payload", {}).get("action")
-                    if isinstance(getattr(contract, "protocol_payload", {}), dict)
-                    else None
-                ),
-            },
-        )
-
-    continuation_store_module = importlib.import_module("app.agent.continuation_store")
-    store = continuation_store_module.ContinuationStore()
-    store.ensure_pause_state(pause_state)
-    resolved_contract, resolution, validation_error = store.resolve_continuation(
-        pause_state,
-        continuation_token=continuation_token,
+    request = normalize_continuation_resolution_input(
         approve=payload.approve,
+        approved=payload.approved,
+        scope_confirmed=payload.scope_confirmed,
         user_input=payload.user_input,
-        resolution_payload=payload.resolution_payload or {},
+        resolution_payload=payload.resolution_payload,
     )
-    if validation_error is not None or resolved_contract is None or resolution is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=validation_error or "Unable to resolve continuation.",
+    try:
+        resolved = await resolve_session_continuation(
+            repository=repository,
+            session=session,
+            continuation_token=continuation_token,
+            request=request,
+            event_broker=event_broker,
+            generation_manager=generation_manager,
         )
-
-    generation_metadata = dict(generation.metadata_json)
-    generation_metadata["pause_state"] = pause_state
-    generation_metadata["continuation_resolution"] = resolution.to_state()
-    generation_metadata.pop("pending_continuation", None)
-    repository.update_generation(generation, metadata_json=generation_metadata)
-
-    assistant_metadata = dict(assistant_message.metadata_json)
-    assistant_metadata["pause_state"] = pause_state
-    assistant_metadata["continuation_resolution"] = resolution.to_state()
-    assistant_metadata.pop("pending_continuation", None)
-    repository.update_message(assistant_message, metadata_json=assistant_metadata)
-
-    updated_session = repository.update_session(session, status=SessionStatus.RUNNING)
-    await generation_manager.resolve_continuation_future(
-        session_id,
-        continuation_token,
-        resolution.to_state(),
-    )
-
-    await event_broker.publish(
-        SessionEvent(
-            type=SessionEventType.WORKFLOW_TASK_UPDATED,
-            session_id=session.id,
-            payload={
-                "continuation_token": continuation_token,
-                "status": "resolved",
-                "protocol_kind": getattr(contract, "protocol_kind", None),
-                "tool_name": getattr(contract, "tool_name", None),
-                "task_id": getattr(contract, "task_id", None),
-                "resolution": resolution.to_state(),
-            },
-        )
-    )
-    await event_broker.publish(
-        SessionEvent(
-            type=SessionEventType.SESSION_UPDATED,
-            session_id=updated_session.id,
-            payload={"title": updated_session.title, "status": updated_session.status.value},
-        )
-    )
+    except ContinuationResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return ok_response(
         {
-            "session": to_session_read(updated_session).model_dump(mode="json"),
+            "session": to_session_read(resolved.session).model_dump(mode="json"),
             "continuation_token": continuation_token,
             "status": "resolved",
-            "resolution": resolution.to_state(),
+            "resolution": resolved.resolution.to_state(),
         }
     )
 
@@ -539,7 +399,7 @@ async def cancel_session(
     active_generation = repository.get_active_generation(session_id)
     if active_generation is not None:
         active_assistant_message = repository.get_message(active_generation.assistant_message_id)
-        _clear_generation_continuation_state(
+        clear_generation_continuation_state(
             repository,
             active_generation,
             active_assistant_message,
@@ -571,7 +431,7 @@ async def cancel_session(
     )
     for queued_generation in queued_generations:
         assistant_message = repository.get_message(queued_generation.assistant_message_id)
-        _clear_generation_continuation_state(
+        clear_generation_continuation_state(
             repository,
             queued_generation,
             assistant_message,

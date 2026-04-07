@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -683,4 +684,10 @@ def build_default_tool_registry(
 
 
 def build_default_tool_hook_registry() -> ToolHookRegistry:
-    return ToolHookRegistry()
+    harness_hooks = importlib.import_module("app.harness.hooks")
+    registry = ToolHookRegistry()
+    registry.register_global(harness_hooks.PreToolUseHook())
+    registry.register_global(harness_hooks.PostToolUseHook())
+    registry.register_global(harness_hooks.PostEvidenceIngestHook())
+    registry.register_global(harness_hooks.OnExecutionErrorHook())
+    return registry

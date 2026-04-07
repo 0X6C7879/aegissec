@@ -81,8 +81,6 @@ class ContinuationStore:
             if isinstance(required_fields, list)
             else []
         )
-        if contract.protocol_kind == "approval" and not approve:
-            return False, payload, "approval_required"
         if isinstance(user_input, str) and user_input.strip() and "user_input" not in payload:
             payload["user_input"] = user_input
         if contract.protocol_kind == "approval" and "approved" not in payload:
@@ -93,6 +91,21 @@ class ContinuationStore:
         if contract.protocol_kind == "interaction" and not payload and not user_input:
             return False, payload, "interaction_payload_required"
         return True, payload, "ok"
+
+    def _resolution_outcome(
+        self,
+        *,
+        contract: ContinuationContract,
+        approve: bool,
+        normalized_payload: dict[str, object],
+    ) -> tuple[str, bool | None]:
+        raw_scope_confirmed = normalized_payload.get("scope_confirmed")
+        scope_confirmed = raw_scope_confirmed if isinstance(raw_scope_confirmed, bool) else None
+        if contract.protocol_kind == "approval":
+            return ("approved" if approve else "rejected"), scope_confirmed
+        if scope_confirmed is not None:
+            return ("scope_confirmed" if scope_confirmed else "scope_rejected"), scope_confirmed
+        return "resolved", scope_confirmed
 
     def resolve_continuation(
         self,
@@ -105,17 +118,16 @@ class ContinuationStore:
     ) -> tuple[ContinuationContract | None, ContinuationResolution | None, str | None]:
         self.ensure_pause_state(pause_state)
         state = ContinuationStoreState.from_state(pause_state.get("continuation"))
-        contract = next(
-            (
-                item
-                for item in state.continuations
-                if item.continuation_token == continuation_token
-                and item.continuation_status == "pending"
-            ),
-            None,
+        contract = self.continuation_for_token_any(
+            pause_state,
+            continuation_token=continuation_token,
         )
         if contract is None:
             return None, None, "not_found"
+        if contract.continuation_status == "resolved":
+            return contract, None, "already_resolved"
+        if contract.continuation_status == "aborted":
+            return contract, None, "already_aborted"
         valid, normalized_payload, reason = self.validate_resolution_payload(
             contract=contract,
             approve=approve,
@@ -142,8 +154,15 @@ class ContinuationStore:
             return contract, None, reason
 
         now = datetime.now(UTC).isoformat()
+        outcome, scope_confirmed = self._resolution_outcome(
+            contract=contract,
+            approve=approve,
+            normalized_payload=normalized_payload,
+        )
         normalized_resolution = {
             "approved": approve,
+            "scope_confirmed": scope_confirmed,
+            "outcome": outcome,
             "user_input": user_input if isinstance(user_input, str) else "",
             "resolution_payload": dict(normalized_payload),
         }
@@ -151,6 +170,8 @@ class ContinuationStore:
             continuation_token=continuation_token,
             resolution_payload=normalized_payload,
             approved=approve,
+            scope_confirmed=scope_confirmed,
+            outcome=outcome,
             user_input=user_input if isinstance(user_input, str) else "",
             resolved_by=str(
                 normalized_payload.get("resolved_by")
@@ -327,6 +348,19 @@ class ContinuationStore:
             None,
         )
 
+    def continuation_for_token_any(
+        self,
+        pause_state: dict[str, object],
+        *,
+        continuation_token: str,
+    ) -> ContinuationContract | None:
+        self.ensure_pause_state(pause_state)
+        state = ContinuationStoreState.from_state(pause_state.get("continuation"))
+        return next(
+            (item for item in state.continuations if item.continuation_token == continuation_token),
+            None,
+        )
+
     def active_pending(self, pause_state: dict[str, object]) -> dict[str, object] | None:
         active = self.active_contract(pause_state)
         return self._compatibility_entry(active) if active is not None else None
@@ -425,7 +459,7 @@ class ContinuationStore:
         user_input: str | None,
         resolution_payload: dict[str, object] | None,
     ) -> dict[str, object] | None:
-        contract = self.continuation_for_token(
+        contract = self.continuation_for_token_any(
             pause_state,
             continuation_token=continuation_token,
         )
@@ -464,6 +498,8 @@ class ContinuationStore:
             "resolved_at": resolved_contract.resolved_at,
             "resolution": {
                 "approved": resolution.approved,
+                "scope_confirmed": resolution.scope_confirmed,
+                "outcome": resolution.outcome,
                 "user_input": resolution.user_input,
                 "resolution_payload": dict(resolution.resolution_payload),
                 "resolved_by": resolution.resolved_by,

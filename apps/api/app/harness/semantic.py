@@ -4,6 +4,9 @@ import importlib
 import json
 from typing import Any
 
+from app.db.models import Message
+from app.db.repositories import SessionRepository
+
 
 def semantic_snapshot_from_state(session_state: Any | None) -> dict[str, object]:
     if session_state is None:
@@ -124,3 +127,25 @@ def stage_swarm_notification_semantics(
             }
         )
     stage_semantic_deltas(session_state, semantic_deltas)
+
+
+def drain_semantic_snapshot(
+    repository: SessionRepository,
+    *,
+    assistant_message: Message,
+    session_state: Any | None,
+) -> dict[str, object]:
+    snapshot = semantic_snapshot_from_state(session_state)
+    if session_state is None or not snapshot:
+        return snapshot
+    assistant_metadata = dict(assistant_message.metadata_json)
+    assistant_metadata["semantic_state"] = snapshot
+    repository.update_message(assistant_message, metadata_json=assistant_metadata)
+    if assistant_message.generation_id is not None:
+        generation = repository.get_generation(assistant_message.generation_id)
+        if generation is not None:
+            generation_metadata = dict(generation.metadata_json)
+            generation_metadata["semantic_state"] = snapshot
+            repository.update_generation(generation, metadata_json=generation_metadata)
+    clear_pending_semantic_deltas(session_state)
+    return snapshot

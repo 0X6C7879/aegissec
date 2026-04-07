@@ -86,6 +86,10 @@ def test_pause_runtime_resolves_by_token_without_legacy_active_primary() -> None
     assert resolved is not None
     assert resolved["continuation_token"] == "token-1"
     assert resolved["status"] == "resolved"
+    resolution = resolved["resolution"]
+    assert isinstance(resolution, dict)
+    assert resolution["outcome"] == "resolved"
+    assert resolution["scope_confirmed"] is None
     assert continuation_state["active_token"] is None
     assert pause_snapshot["active"] is None
     assert pause_snapshot["pending_interactions"] == []
@@ -93,3 +97,55 @@ def test_pause_runtime_resolves_by_token_without_legacy_active_primary() -> None
     assert isinstance(resolved_interactions, list)
     assert resolved_interactions
     assert resolved_interactions[-1]["continuation_token"] == "token-1"
+
+
+def test_continuation_store_resolves_approval_denial_as_valid_outcome() -> None:
+    store = ContinuationStore()
+    pause_state: dict[str, object] = {}
+    store.register_pending(
+        pause_state, _pending_entry(continuation_token="approval-1", kind="approval")
+    )
+
+    contract, resolution, error = store.resolve_continuation(
+        pause_state,
+        continuation_token="approval-1",
+        approve=False,
+        user_input="Denied by operator.",
+        resolution_payload={"resolved_by": "unit-test"},
+    )
+
+    assert error is None
+    assert contract is not None
+    assert contract.continuation_status == "resolved"
+    assert resolution is not None
+    assert resolution.approved is False
+    assert resolution.outcome == "rejected"
+    resolved_approvals = pause_state["resolved_approvals"]
+    assert isinstance(resolved_approvals, list)
+    assert resolved_approvals[-1]["resolution"]["outcome"] == "rejected"
+
+
+def test_continuation_store_distinguishes_already_aborted_token() -> None:
+    store = ContinuationStore()
+    pause_state: dict[str, object] = {}
+    store.register_pending(pause_state, _pending_entry(continuation_token="aborted-1"))
+    aborted = store.abort_continuation(
+        pause_state,
+        continuation_token="aborted-1",
+        reason="Session was cancelled.",
+    )
+
+    assert aborted is not None
+
+    contract, resolution, error = store.resolve_continuation(
+        pause_state,
+        continuation_token="aborted-1",
+        approve=True,
+        user_input=None,
+        resolution_payload={},
+    )
+
+    assert contract is not None
+    assert contract.continuation_status == "aborted"
+    assert resolution is None
+    assert error == "already_aborted"

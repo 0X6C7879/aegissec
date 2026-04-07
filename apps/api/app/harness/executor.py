@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .messages import ChatRuntimeError, ToolCallRequest
@@ -23,6 +23,84 @@ class PreparedToolExecution:
     governance_metadata: dict[str, object] | None
     tool_call_metadata: dict[str, object]
     started_payload: dict[str, Any]
+    trace_entry: dict[str, Any] = field(default_factory=dict)
+    pre_hooks_applied: bool = False
+
+
+@dataclass(slots=True)
+class ToolExecutionErrorArtifacts:
+    transcript_tool_call_metadata: dict[str, Any] = field(default_factory=dict)
+    event_payload: dict[str, Any] = field(default_factory=dict)
+    trace_entry: dict[str, Any] = field(default_factory=dict)
+    step_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _merge_dict(target: dict[str, Any], updates: dict[str, Any]) -> None:
+    if updates:
+        target.update(updates)
+
+
+def _materialize_evidence_products(result: Any) -> dict[str, Any]:
+    event_payload = dict(getattr(result, "event_payload", {}) or {})
+    semantic_deltas = list(getattr(result, "semantic_deltas", []) or [])
+
+    evidence_ids: list[str] = []
+    hypothesis_ids: list[str] = []
+    graph_updates: list[dict[str, Any]] = []
+    artifacts: list[Any] = []
+    reasons: list[str] = []
+
+    def add_unique_strings(target: list[str], values: object) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if isinstance(value, str) and value not in target:
+                target.append(value)
+
+    def add_unique_artifacts(values: object) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if value not in artifacts:
+                artifacts.append(value)
+
+    def add_graph_updates(values: object) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                if normalized not in graph_updates:
+                    graph_updates.append(normalized)
+
+    add_unique_strings(evidence_ids, event_payload.get("evidence_ids"))
+    add_unique_strings(hypothesis_ids, event_payload.get("hypothesis_ids"))
+    add_graph_updates(event_payload.get("graph_updates"))
+    add_unique_artifacts(event_payload.get("artifacts"))
+    if isinstance(event_payload.get("reason"), str) and event_payload["reason"]:
+        reasons.append(event_payload["reason"])
+
+    for delta in semantic_deltas:
+        if not isinstance(delta, dict):
+            continue
+        add_unique_strings(evidence_ids, delta.get("evidence_ids"))
+        add_unique_strings(hypothesis_ids, delta.get("hypothesis_ids"))
+        add_graph_updates(delta.get("graph_updates"))
+        add_graph_updates(delta.get("graph_hints"))
+        add_unique_artifacts(delta.get("artifacts"))
+        if isinstance(delta.get("reason"), str) and delta["reason"]:
+            reasons.append(delta["reason"])
+
+    reason = reasons[0] if reasons else None
+    if not any((evidence_ids, hypothesis_ids, graph_updates, artifacts, reason)):
+        return {}
+    return {
+        "evidence_ids": evidence_ids,
+        "hypothesis_ids": hypothesis_ids,
+        "graph_updates": graph_updates,
+        "artifacts": artifacts,
+        "reason": reason,
+    }
 
 
 def build_tool_runtime(
@@ -140,25 +218,93 @@ async def run_tool_with_hooks(
         raise ChatRuntimeError("Missing governance decision for tool execution.")
     tools_base = importlib.import_module("app.harness.tools.base")
     hooks = list(runtime.hook_registry.iter_hooks(tool.name))
-    before_context = tools_base.ToolHookContext(
-        tool_request=tool_request,
-        tool=tool,
-        execution_context=prepared.execution_context,
-        decision=prepared.decision,
-    )
-    for hook in hooks:
-        await hook.before_execution(before_context)
+    if not prepared.pre_hooks_applied:
+        await apply_pre_tool_hooks(runtime=runtime, prepared=prepared, tool_request=tool_request)
     result = await tool.execute(prepared.execution_context, tool_request.arguments)
     after_context = tools_base.ToolHookContext(
         tool_request=tool_request,
         tool=tool,
         execution_context=prepared.execution_context,
         decision=prepared.decision,
+        tool_call_metadata=dict(prepared.tool_call_metadata),
+        started_payload=dict(prepared.started_payload),
         result=result,
+        transcript_tool_call_metadata=dict(result.transcript_tool_call_metadata),
+        transcript_result_metadata=dict(result.transcript_result_metadata),
+        event_payload=dict(result.event_payload),
+        trace_entry=dict(result.trace_entry),
+        step_metadata=dict(result.step_metadata),
+        semantic_deltas=list(result.semantic_deltas),
     )
     for hook in hooks:
         await hook.after_execution(after_context)
+    _merge_dict(result.transcript_tool_call_metadata, after_context.transcript_tool_call_metadata)
+    _merge_dict(result.transcript_result_metadata, after_context.transcript_result_metadata)
+    _merge_dict(result.event_payload, after_context.event_payload)
+    _merge_dict(result.trace_entry, after_context.trace_entry)
+    _merge_dict(result.step_metadata, after_context.step_metadata)
+    if after_context.semantic_deltas:
+        result.semantic_deltas = [*result.semantic_deltas, *after_context.semantic_deltas]
+
+    evidence_products = _materialize_evidence_products(result)
+    if evidence_products:
+        evidence_context = tools_base.ToolHookContext(
+            tool_request=tool_request,
+            tool=tool,
+            execution_context=prepared.execution_context,
+            decision=prepared.decision,
+            tool_call_metadata=dict(prepared.tool_call_metadata),
+            started_payload=dict(prepared.started_payload),
+            result=result,
+            transcript_tool_call_metadata=dict(result.transcript_tool_call_metadata),
+            transcript_result_metadata=dict(result.transcript_result_metadata),
+            event_payload=dict(result.event_payload),
+            trace_entry=dict(result.trace_entry),
+            step_metadata=dict(result.step_metadata),
+            semantic_deltas=list(result.semantic_deltas),
+            evidence_ingest=evidence_products,
+        )
+        for hook in hooks:
+            await hook.after_evidence_ingest(evidence_context)
+        _merge_dict(
+            result.transcript_tool_call_metadata, evidence_context.transcript_tool_call_metadata
+        )
+        _merge_dict(result.transcript_result_metadata, evidence_context.transcript_result_metadata)
+        _merge_dict(result.event_payload, evidence_context.event_payload)
+        _merge_dict(result.trace_entry, evidence_context.trace_entry)
+        _merge_dict(result.step_metadata, evidence_context.step_metadata)
+        if evidence_context.semantic_deltas:
+            result.semantic_deltas = [*result.semantic_deltas, *evidence_context.semantic_deltas]
     return result
+
+
+async def apply_pre_tool_hooks(
+    *,
+    runtime: HarnessToolRuntime,
+    prepared: PreparedToolExecution,
+    tool_request: ToolCallRequest,
+) -> PreparedToolExecution:
+    tool = prepared.tool
+    decision = prepared.decision
+    if tool is None or decision is None:
+        return prepared
+    tools_base = importlib.import_module("app.harness.tools.base")
+    hook_context = tools_base.ToolHookContext(
+        tool_request=tool_request,
+        tool=tool,
+        execution_context=prepared.execution_context,
+        decision=decision,
+        tool_call_metadata=dict(prepared.tool_call_metadata),
+        started_payload=dict(prepared.started_payload),
+        trace_entry=dict(prepared.trace_entry),
+    )
+    for hook in runtime.hook_registry.iter_hooks(tool.name):
+        await hook.before_execution(hook_context)
+    prepared.tool_call_metadata = hook_context.tool_call_metadata
+    prepared.started_payload = hook_context.started_payload
+    prepared.trace_entry = hook_context.trace_entry
+    prepared.pre_hooks_applied = True
+    return prepared
 
 
 async def notify_tool_execution_error(
@@ -167,18 +313,26 @@ async def notify_tool_execution_error(
     prepared: PreparedToolExecution,
     tool_request: ToolCallRequest,
     error: Exception,
-) -> None:
+) -> ToolExecutionErrorArtifacts:
     tool = prepared.tool
     decision = prepared.decision
     if tool is None or decision is None:
-        return
+        return ToolExecutionErrorArtifacts()
     tools_base = importlib.import_module("app.harness.tools.base")
     error_context = tools_base.ToolHookContext(
         tool_request=tool_request,
         tool=tool,
         execution_context=prepared.execution_context,
         decision=decision,
+        tool_call_metadata=dict(prepared.tool_call_metadata),
+        started_payload=dict(prepared.started_payload),
         error=error,
     )
     for hook in runtime.hook_registry.iter_hooks(tool.name):
         await hook.on_execution_error(error_context)
+    return ToolExecutionErrorArtifacts(
+        transcript_tool_call_metadata=error_context.transcript_tool_call_metadata,
+        event_payload=error_context.event_payload,
+        trace_entry=error_context.trace_entry,
+        step_metadata=error_context.step_metadata,
+    )

@@ -57,14 +57,25 @@ class ToolHookContext:
     tool: BaseTool[Any]
     execution_context: ToolExecutionContext
     decision: Any
+    tool_call_metadata: dict[str, Any] = field(default_factory=dict)
+    started_payload: dict[str, Any] = field(default_factory=dict)
     result: ToolResult | None = None
     error: Exception | None = None
+    transcript_tool_call_metadata: dict[str, Any] = field(default_factory=dict)
+    transcript_result_metadata: dict[str, Any] = field(default_factory=dict)
+    event_payload: dict[str, Any] = field(default_factory=dict)
+    trace_entry: dict[str, Any] = field(default_factory=dict)
+    step_metadata: dict[str, Any] = field(default_factory=dict)
+    semantic_deltas: list[dict[str, Any]] = field(default_factory=list)
+    evidence_ingest: dict[str, Any] = field(default_factory=dict)
 
 
 class ToolExecutionHooks(Protocol):
     async def before_execution(self, context: ToolHookContext) -> None: ...
 
     async def after_execution(self, context: ToolHookContext) -> None: ...
+
+    async def after_evidence_ingest(self, context: ToolHookContext) -> None: ...
 
     async def on_execution_error(self, context: ToolHookContext) -> None: ...
 
@@ -74,6 +85,9 @@ class NoOpToolExecutionHooks:
         del context
 
     async def after_execution(self, context: ToolHookContext) -> None:
+        del context
+
+    async def after_evidence_ingest(self, context: ToolHookContext) -> None:
         del context
 
     async def on_execution_error(self, context: ToolHookContext) -> None:
