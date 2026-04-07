@@ -38,7 +38,7 @@ class ApiError(BaseModel):
 
 
 class ApiErrorResponse(BaseModel):
-    detail: str
+    detail: str | dict[str, object]
     error: ApiError
     meta: ResponseMeta | None = None
 

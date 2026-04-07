@@ -15,10 +15,11 @@ logger = logging.getLogger("aegissec.api")
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
-        detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+        detail = exc.detail if isinstance(exc.detail, str | dict) else "Request failed"
+        message = detail.get("message", "Request failed") if isinstance(detail, dict) else detail
         payload = ApiErrorResponse(
             detail=detail,
-            error=ApiError(code=f"http_{exc.status_code}", message=detail),
+            error=ApiError(code=f"http_{exc.status_code}", message=message),
             meta=ResponseMeta(request_id=get_request_id()),
         )
         return JSONResponse(status_code=exc.status_code, content=payload.model_dump(mode="json"))
