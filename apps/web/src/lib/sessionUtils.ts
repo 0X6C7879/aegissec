@@ -116,7 +116,7 @@ export function mergeSessionMessage(
       if (a.sequence != null && b.sequence != null) {
         return a.sequence - b.sequence;
       }
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime();
     });
   }
 

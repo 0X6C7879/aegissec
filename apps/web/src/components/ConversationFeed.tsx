@@ -239,25 +239,11 @@ function mergeMissingGenerationToolSegments(
   for (const segment of generationSegments) {
     const existingIndex = findEquivalentToolSegmentIndex(merged, segment);
     if (existingIndex >= 0) {
-      if (segment.kind === "tool_result" || segment.kind === "error") {
-        const existingSegment = merged[existingIndex];
-        if (existingSegment) {
-          merged[existingIndex] = {
-            ...existingSegment,
-            ...segment,
-            id: existingSegment.id,
-            sequence: existingSegment.sequence,
-            recorded_at: existingSegment.recorded_at,
-            metadata:
-              existingSegment.metadata || segment.metadata
-                ? {
-                    ...(existingSegment.metadata ?? {}),
-                    ...(segment.metadata ?? {}),
-                  }
-                : undefined,
-            text: segment.text ?? existingSegment.text,
-          };
-        }
+      const existingSegment = merged[existingIndex];
+      if (existingSegment) {
+        merged[existingIndex] =
+          mergeOrPickToolSegment(existingSegment, segment, { preserveStableFields: true }) ??
+          existingSegment;
       }
       continue;
     }
@@ -856,6 +842,208 @@ function readShellArtifacts(segment: AssistantTranscriptSegment | null): string[
   return labels;
 }
 
+type ToolSegmentRichness = {
+  score: number;
+  hasRenderable: boolean;
+};
+
+function scoreStandaloneToolText(text: string | null | undefined, command: string | null): number {
+  if (!text) {
+    return 0;
+  }
+
+  const normalized = text.trim();
+  if (normalized.length === 0) {
+    return 0;
+  }
+
+  if (command && normalized === command.trim()) {
+    return 0;
+  }
+
+  if (isGenericShellSummary(normalized)) {
+    return 1;
+  }
+
+  return normalized.includes("\n") ? 4 : 3;
+}
+
+function readToolSegmentRichness(segment: AssistantTranscriptSegment | null): ToolSegmentRichness {
+  if (!segment) {
+    return { score: 0, hasRenderable: false };
+  }
+
+  const command = readSegmentCommand(segment);
+  const stdout = readShellDisplayField(segment, ["stdout"]);
+  const stderr = readShellDisplayField(segment, ["stderr"]);
+  const exitCode = readShellDisplayField(segment, ["exit_code"]);
+  const errorText = readShellErrorText({
+    error: segment.kind === "error" ? segment : null,
+    result: segment.kind === "tool_result" ? segment : null,
+    call: segment.kind === "tool_call" ? segment : null,
+    status: segment.status ?? null,
+  });
+  const fallbackOutput =
+    stdout === null && stderr === null
+      ? readShellFallbackOutput(segment, command ?? "Shell", errorText)
+      : null;
+  const hasStdout = hasVisibleShellText(stdout);
+  const hasStderr = hasVisibleShellText(stderr);
+  const hasFallbackOutput = hasVisibleShellText(fallbackOutput);
+  const hasErrorText = typeof errorText === "string" && errorText.trim().length > 0;
+  const hasExitCode = exitCode !== null;
+  const artifactCount = readShellArtifacts(segment).length;
+  const textScore = scoreStandaloneToolText(segment.text, command);
+  const fallbackScore =
+    fallbackOutput && fallbackOutput.text.trim().length > 0
+      ? isGenericShellSummary(fallbackOutput.text) ? 1 : 8
+      : 0;
+  const score =
+    (command ? 1 : 0) +
+    (hasStdout ? 16 : 0) +
+    (hasStderr ? 12 : 0) +
+    fallbackScore +
+    (hasErrorText ? 12 : 0) +
+    (hasExitCode ? 4 : 0) +
+    (artifactCount > 0 ? 2 : 0) +
+    textScore;
+
+  return {
+    score,
+    hasRenderable: hasStdout || hasStderr || hasFallbackOutput || hasErrorText,
+  };
+}
+
+function preferPopulatedString(
+  preferred: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null | undefined {
+  if (typeof preferred === "string" && preferred.trim().length > 0) {
+    return preferred;
+  }
+
+  if (typeof fallback === "string" && fallback.trim().length > 0) {
+    return fallback;
+  }
+
+  return preferred ?? fallback;
+}
+
+function mergePreferredValue(preferred: unknown, fallback: unknown): unknown {
+  if (isRecord(preferred) && isRecord(fallback)) {
+    const merged: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(fallback), ...Object.keys(preferred)]);
+    for (const key of keys) {
+      merged[key] = mergePreferredValue(preferred[key], fallback[key]);
+    }
+    return merged;
+  }
+
+  if (Array.isArray(preferred)) {
+    return preferred.length > 0 ? preferred : fallback;
+  }
+
+  if (Array.isArray(fallback)) {
+    return fallback;
+  }
+
+  if (typeof preferred === "string") {
+    return preferred.trim().length > 0 ? preferred : fallback ?? preferred;
+  }
+
+  if (preferred !== undefined && preferred !== null) {
+    return preferred;
+  }
+
+  if (typeof fallback === "string") {
+    return fallback;
+  }
+
+  return fallback ?? preferred;
+}
+
+function mergeToolSegmentMetadata(
+  preferred: Record<string, unknown> | undefined,
+  fallback: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const merged = mergePreferredValue(preferred, fallback);
+  return isRecord(merged) ? merged : undefined;
+}
+
+function pickPreferredToolSegment(
+  existing: AssistantTranscriptSegment,
+  candidate: AssistantTranscriptSegment,
+): AssistantTranscriptSegment {
+  const existingRichness = readToolSegmentRichness(existing);
+  const candidateRichness = readToolSegmentRichness(candidate);
+
+  if (candidateRichness.score > existingRichness.score) {
+    return candidate;
+  }
+
+  if (candidateRichness.score < existingRichness.score) {
+    return existing;
+  }
+
+  if (candidateRichness.hasRenderable && !existingRichness.hasRenderable) {
+    return candidate;
+  }
+
+  if (!candidateRichness.hasRenderable && existingRichness.hasRenderable) {
+    return existing;
+  }
+
+  const existingTextScore = scoreStandaloneToolText(existing.text, readSegmentCommand(existing));
+  const candidateTextScore = scoreStandaloneToolText(candidate.text, readSegmentCommand(candidate));
+
+  if (candidateTextScore > existingTextScore) {
+    return candidate;
+  }
+
+  return existing;
+}
+
+function mergeOrPickToolSegment(
+  existing: AssistantTranscriptSegment | null,
+  candidate: AssistantTranscriptSegment | null,
+  options?: { preserveStableFields?: boolean },
+): AssistantTranscriptSegment | null {
+  if (!existing) {
+    return candidate;
+  }
+
+  if (!candidate) {
+    return existing;
+  }
+
+  const preferred = pickPreferredToolSegment(existing, candidate);
+  const fallback = preferred === existing ? candidate : existing;
+  const preferredTextScore = scoreStandaloneToolText(preferred.text, readSegmentCommand(preferred));
+  const fallbackTextScore = scoreStandaloneToolText(fallback.text, readSegmentCommand(fallback));
+  const merged: AssistantTranscriptSegment = {
+    ...fallback,
+    ...preferred,
+    status: preferPopulatedString(preferred.status, fallback.status),
+    title: preferPopulatedString(preferred.title, fallback.title),
+    text:
+      preferredTextScore >= fallbackTextScore
+        ? (preferred.text ?? fallback.text)
+        : (fallback.text ?? preferred.text),
+    tool_name: preferPopulatedString(preferred.tool_name, fallback.tool_name),
+    tool_call_id: preferPopulatedString(preferred.tool_call_id, fallback.tool_call_id),
+    updated_at: preferPopulatedString(preferred.updated_at, fallback.updated_at) ?? preferred.updated_at,
+    metadata: mergeToolSegmentMetadata(preferred.metadata, fallback.metadata),
+  };
+
+  if (options?.preserveStableFields) {
+    merged.id = existing.id;
+    merged.sequence = existing.sequence;
+    merged.recorded_at = existing.recorded_at;
+  }
+
+  return merged;
+}
+
 function buildToolPairs(
   segments: AssistantTranscriptSegment[],
 ): Map<string, TranscriptToolPair> {
@@ -877,14 +1065,14 @@ function buildToolPairs(
       error: null,
     };
 
-    if (segment.kind === "tool_call" && pair.call === null) {
-      pair.call = segment;
+    if (segment.kind === "tool_call") {
+      pair.call = mergeOrPickToolSegment(pair.call, segment);
     }
     if (segment.kind === "tool_result") {
-      pair.result = segment;
+      pair.result = mergeOrPickToolSegment(pair.result, segment);
     }
     if (segment.kind === "error") {
-      pair.error = segment;
+      pair.error = mergeOrPickToolSegment(pair.error, segment);
     }
 
     pairs.set(segment.tool_call_id, pair);
