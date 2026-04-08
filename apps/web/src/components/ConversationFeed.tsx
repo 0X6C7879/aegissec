@@ -1069,7 +1069,9 @@ function buildToolPairs(
       pair.call = mergeOrPickToolSegment(pair.call, segment);
     }
     if (segment.kind === "tool_result") {
-      pair.result = mergeOrPickToolSegment(pair.result, segment);
+      pair.result = mergeOrPickToolSegment(pair.result, segment, {
+        preserveStableFields: pair.result !== null,
+      });
     }
     if (segment.kind === "error") {
       pair.error = mergeOrPickToolSegment(pair.error, segment);

@@ -9,6 +9,115 @@ import {
   shouldStoreRealtimeEvent,
   toSessionMessageEvent,
 } from "./sessionUtils";
+import type { SessionConversation, SessionDetail } from "../types/sessions";
+
+function createBaseConversation(): SessionConversation {
+  return {
+    session: {
+      id: "session-1",
+      title: "当前对话",
+      status: "running",
+      project_id: null,
+      goal: null,
+      scenario_type: null,
+      current_phase: null,
+      runtime_policy_json: null,
+      created_at: "2026-04-01T10:00:00.000Z",
+      updated_at: "2026-04-01T10:00:00.000Z",
+      deleted_at: null,
+    },
+    active_branch: null,
+    branches: [],
+    messages: [],
+    generations: [
+      {
+        id: "generation-1",
+        session_id: "session-1",
+        branch_id: "branch-1",
+        action: "reply",
+        assistant_message_id: "assistant-message-1",
+        status: "running",
+        reasoning_trace: [],
+        steps: [],
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+      },
+    ],
+    active_generation_id: "generation-1",
+    queued_generation_count: 0,
+  };
+}
+
+function createBaseSessionDetail(messages: SessionDetail["messages"] = []): SessionDetail {
+  return {
+    id: "session-1",
+    title: "当前对话",
+    status: "running",
+    project_id: null,
+    goal: null,
+    scenario_type: null,
+    current_phase: null,
+    runtime_policy_json: null,
+    created_at: "2026-04-01T10:00:00.000Z",
+    updated_at: "2026-04-01T10:00:00.000Z",
+    deleted_at: null,
+    messages,
+  };
+}
+
+function createRichShellMetadata() {
+  return {
+    result: {
+      output: {
+        stdout: "result stdout",
+        stderr: "result stderr",
+        exit_code: 0,
+        artifact_paths: ["artifacts/result.log"],
+      },
+      execution: {
+        payload: {
+          data: {
+            stdout: "result execution stdout",
+          },
+        },
+      },
+    },
+    output: {
+      stdout: "output stdout",
+      stderr: "output stderr",
+      exit_code: 0,
+      artifact_paths: ["artifacts/output.log"],
+    },
+    execution: {
+      payload: {
+        data: {
+          stdout: "execution payload stdout",
+          stderr: "execution payload stderr",
+          exit_code: 0,
+          artifact_paths: ["artifacts/execution.log"],
+        },
+      },
+    },
+    payload: {
+      data: {
+        stdout: "payload data stdout",
+        stderr: "payload data stderr",
+        exit_code: 0,
+        artifact_paths: ["artifacts/payload.log"],
+      },
+    },
+    data: {
+      stdout: "data stdout",
+      stderr: "data stderr",
+      exit_code: 0,
+      artifact_paths: ["artifacts/data.log"],
+    },
+    stdout: "top-level stdout",
+    stderr: "top-level stderr",
+    exit_code: 0,
+    artifact_paths: ["artifacts/top.log"],
+  };
+}
 
 describe("sessionUtils realtime summaries", () => {
   it("maps generation cancellation events to safe timeline text", () => {
@@ -529,6 +638,102 @@ describe("sessionUtils realtime summaries", () => {
     ]);
   });
 
+  it("does not downgrade rich live tool step metadata when a later thin replay arrives", () => {
+    const withRichResult = mergeConversationGenerationEvent(
+      createBaseConversation(),
+      "tool.call.finished",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-rich-1",
+        command: "bash -lc whoami",
+        status: "completed",
+        ...createRichShellMetadata(),
+      },
+      "2026-04-01T10:00:05.000Z",
+      17,
+    );
+
+    const withThinReplay = mergeConversationGenerationEvent(
+      withRichResult,
+      "tool.call.finished",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-rich-1",
+        command: "bash -lc whoami",
+        status: "completed",
+        result: {
+          status: "completed",
+        },
+      },
+      "2026-04-01T10:00:06.000Z",
+      18,
+    );
+
+    expect(withThinReplay?.generations[0]?.steps).toMatchObject([
+      {
+        kind: "tool",
+        tool_call_id: "tool-rich-1",
+        status: "completed",
+        metadata: {
+          result: {
+            status: "completed",
+            output: {
+              stdout: "result stdout",
+              stderr: "result stderr",
+              exit_code: 0,
+              artifact_paths: ["artifacts/result.log"],
+            },
+            execution: {
+              payload: {
+                data: {
+                  stdout: "result execution stdout",
+                },
+              },
+            },
+          },
+          output: {
+            stdout: "output stdout",
+            stderr: "output stderr",
+            exit_code: 0,
+            artifact_paths: ["artifacts/output.log"],
+          },
+          execution: {
+            payload: {
+              data: {
+                stdout: "execution payload stdout",
+                stderr: "execution payload stderr",
+                exit_code: 0,
+                artifact_paths: ["artifacts/execution.log"],
+              },
+            },
+          },
+          payload: {
+            data: {
+              stdout: "payload data stdout",
+              stderr: "payload data stderr",
+              exit_code: 0,
+              artifact_paths: ["artifacts/payload.log"],
+            },
+          },
+          data: {
+            stdout: "data stdout",
+            stderr: "data stderr",
+            exit_code: 0,
+            artifact_paths: ["artifacts/data.log"],
+          },
+          stdout: "top-level stdout",
+          stderr: "top-level stderr",
+          exit_code: 0,
+          artifact_paths: ["artifacts/top.log"],
+        },
+      },
+    ]);
+  });
+
   it("keeps the stronger assistant body when a later update only carries partial content", () => {
     const merged = mergeSessionMessage(
       {
@@ -572,6 +777,298 @@ describe("sessionUtils realtime summaries", () => {
         content: "最终答复包含完整结论",
       },
     ]);
+  });
+
+  it("preserves an existing rich transcript when the incoming tool segment is thin", () => {
+    const merged = mergeSessionMessage(
+      createBaseSessionDetail([
+        {
+          id: "assistant-message-1",
+          session_id: "session-1",
+          role: "assistant",
+          content: "最终答复",
+          assistant_transcript: [
+            {
+              id: "segment-rich",
+              sequence: 1,
+              kind: "tool_result",
+              status: "completed",
+              title: "命令执行结果",
+              text: "工具执行完成。",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-transcript-1",
+              recorded_at: "2026-04-01T10:00:01.000Z",
+              updated_at: "2026-04-01T10:00:02.000Z",
+              metadata: createRichShellMetadata(),
+            },
+          ],
+          attachments: [],
+          created_at: "2026-04-01T10:00:01.000Z",
+        },
+      ]),
+      {
+        id: "assistant-message-1",
+        session_id: "session-1",
+        role: "assistant",
+        content: "最终答复",
+        assistant_transcript: [
+          {
+            id: "segment-rich",
+            sequence: 1,
+            kind: "tool_result",
+            status: "completed",
+            title: "命令执行结果",
+            text: "命令已完成。",
+            tool_name: "execute_kali_command",
+            tool_call_id: "tool-transcript-1",
+            recorded_at: "2026-04-01T10:00:03.000Z",
+            updated_at: "2026-04-01T10:00:04.000Z",
+            metadata: {
+              result: {
+                status: "completed",
+              },
+            },
+          },
+        ],
+        attachments: [],
+        created_at: "2026-04-01T10:00:04.000Z",
+      },
+    );
+
+    expect(merged?.messages[0]?.assistant_transcript).toMatchObject([
+      {
+        id: "segment-rich",
+        tool_call_id: "tool-transcript-1",
+        metadata: {
+          result: {
+            status: "completed",
+            output: {
+              stdout: "result stdout",
+              stderr: "result stderr",
+              exit_code: 0,
+              artifact_paths: ["artifacts/result.log"],
+            },
+          },
+          execution: {
+            payload: {
+              data: {
+                stdout: "execution payload stdout",
+                stderr: "execution payload stderr",
+              },
+            },
+          },
+          payload: {
+            data: {
+              stdout: "payload data stdout",
+              stderr: "payload data stderr",
+            },
+          },
+          data: {
+            stdout: "data stdout",
+            stderr: "data stderr",
+          },
+          stdout: "top-level stdout",
+          stderr: "top-level stderr",
+          exit_code: 0,
+          artifact_paths: ["artifacts/top.log"],
+        },
+      },
+    ]);
+  });
+
+  it("enriches a thin incoming transcript from richer generation tool step context", () => {
+    const detailWithGeneration = {
+      ...createBaseSessionDetail([
+        {
+          id: "assistant-message-1",
+          session_id: "session-1",
+          generation_id: "generation-1",
+          role: "assistant",
+          content: "占位答复",
+          assistant_transcript: [],
+          attachments: [],
+          created_at: "2026-04-01T10:00:01.000Z",
+        },
+      ]),
+      generations: [
+        {
+          id: "generation-1",
+          session_id: "session-1",
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "completed",
+          reasoning_trace: [],
+          steps: [
+            {
+              id: "generation-step-rich",
+              generation_id: "generation-1",
+              session_id: "session-1",
+              message_id: "assistant-message-1",
+              sequence: 1,
+              kind: "tool",
+              phase: "tool_result",
+              status: "completed",
+              state: "finished",
+              label: "命令执行结果",
+              safe_summary: "工具执行完成。",
+              delta_text: "",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-generation-1",
+              command: "bash -lc whoami",
+              metadata: createRichShellMetadata(),
+              started_at: "2026-04-01T10:00:01.000Z",
+              ended_at: "2026-04-01T10:00:02.000Z",
+            },
+          ],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:02.000Z",
+        },
+      ],
+    };
+
+    const merged = mergeSessionMessage(detailWithGeneration, {
+      id: "assistant-message-1",
+      session_id: "session-1",
+      generation_id: "generation-1",
+      role: "assistant",
+      content: "最终答复",
+      assistant_transcript: [
+        {
+          id: "segment-thin-incoming",
+          sequence: 1,
+          kind: "tool_result",
+          status: "completed",
+          title: "命令执行结果",
+          text: "命令已完成。",
+          tool_name: "execute_kali_command",
+          tool_call_id: "tool-generation-1",
+          recorded_at: "2026-04-01T10:00:03.000Z",
+          updated_at: "2026-04-01T10:00:04.000Z",
+          metadata: {
+            result: {
+              status: "completed",
+            },
+          },
+        },
+      ],
+      attachments: [],
+      created_at: "2026-04-01T10:00:04.000Z",
+    });
+
+    const mergedSegment = merged?.messages[0]?.assistant_transcript[0];
+    expect(merged?.messages[0]?.assistant_transcript).toHaveLength(1);
+    expect(mergedSegment?.id).toBe("segment-thin-incoming");
+    expect(mergedSegment?.tool_call_id).toBe("tool-generation-1");
+    expect(mergedSegment?.metadata).toMatchObject({
+      result: {
+        status: "completed",
+        output: {
+          stdout: "result stdout",
+          stderr: "result stderr",
+          exit_code: 0,
+        },
+      },
+      output: {
+        stdout: "output stdout",
+        stderr: "output stderr",
+      },
+      execution: {
+        payload: {
+          data: {
+            stdout: "execution payload stdout",
+            stderr: "execution payload stderr",
+          },
+        },
+      },
+      payload: {
+        data: {
+          stdout: "payload data stdout",
+        },
+      },
+      data: {
+        stdout: "data stdout",
+      },
+      stdout: "top-level stdout",
+      stderr: "top-level stderr",
+      exit_code: 0,
+    });
+    expect(mergedSegment?.metadata?.["artifact_paths"]).toEqual(["artifacts/top.log"]);
+  });
+
+  it("merges tool transcript segments semantically by kind and tool_call_id even when ids differ", () => {
+    const merged = mergeSessionMessage(
+      createBaseSessionDetail([
+        {
+          id: "assistant-message-1",
+          session_id: "session-1",
+          role: "assistant",
+          content: "最终答复",
+          assistant_transcript: [
+            {
+              id: "segment-original",
+              sequence: 1,
+              kind: "tool_result",
+              status: "completed",
+              title: "命令执行结果",
+              text: "第一次回放。",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-semantic-1",
+              recorded_at: "2026-04-01T10:00:01.000Z",
+              updated_at: "2026-04-01T10:00:02.000Z",
+              metadata: {
+                output: {
+                  stdout: "existing stdout",
+                },
+                artifact_paths: ["artifacts/existing.log"],
+              },
+            },
+          ],
+          attachments: [],
+          created_at: "2026-04-01T10:00:01.000Z",
+        },
+      ]),
+      {
+        id: "assistant-message-1",
+        session_id: "session-1",
+        role: "assistant",
+        content: "最终答复",
+        assistant_transcript: [
+          {
+            id: "segment-replayed-with-new-id",
+            sequence: 1,
+            kind: "tool_result",
+            status: "completed",
+            title: "命令执行结果",
+            text: "第二次回放。",
+            tool_name: "execute_kali_command",
+            tool_call_id: "tool-semantic-1",
+            recorded_at: "2026-04-01T10:00:03.000Z",
+            updated_at: "2026-04-01T10:00:04.000Z",
+            metadata: {
+              output: {
+                stderr: "incoming stderr",
+              },
+              artifact_paths: ["artifacts/incoming.log"],
+            },
+          },
+        ],
+        attachments: [],
+        created_at: "2026-04-01T10:00:04.000Z",
+      },
+    );
+
+    const mergedSegment = merged?.messages[0]?.assistant_transcript[0];
+
+    expect(merged?.messages[0]?.assistant_transcript).toHaveLength(1);
+    expect(mergedSegment?.id).toBe("segment-original");
+    expect(mergedSegment?.tool_call_id).toBe("tool-semantic-1");
+    expect(mergedSegment?.metadata).toMatchObject({
+      output: {
+        stdout: "existing stdout",
+        stderr: "incoming stderr",
+      },
+    });
   });
 
   it("dedupes replayed timeline entries by server cursor", () => {

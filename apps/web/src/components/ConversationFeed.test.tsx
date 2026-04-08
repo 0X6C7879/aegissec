@@ -1531,6 +1531,243 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("命令已完成，状态：success。")).not.toBeInTheDocument();
   });
 
+  it("keeps rich shell stdout visible after a later persisted thin transcript update arrives", () => {
+    const initialMessages = buildMessages({
+      assistant: {
+        content: "",
+        assistant_transcript: [
+          buildTranscriptSegment({
+            id: "segment-tool-call-lifecycle",
+            kind: "tool_call",
+            sequence: 1,
+            status: "running",
+            tool_name: "execute_kali_command",
+            tool_call_id: "tool-lifecycle-1",
+            text: "uname -a",
+            metadata: {
+              command: "uname -a",
+            },
+          }),
+        ],
+      },
+    });
+    const liveRichStep = buildStep({
+      id: "step-tool-result-lifecycle-rich",
+      kind: "tool",
+      phase: "tool_result",
+      status: "completed",
+      sequence: 2,
+      tool_name: "execute_kali_command",
+      tool_call_id: "tool-lifecycle-1",
+      command: "uname -a",
+      safe_summary: "命令已完成，状态：success。",
+      metadata: {
+        result: {
+          stdout: "Linux aegis 6.8.0",
+          stderr: "warning: pseudo tty reused",
+          exit_code: 0,
+        },
+      },
+    });
+
+    const { container, rerender } = render(
+      <ConversationFeed
+        messages={initialMessages}
+        generations={[
+          buildGeneration({
+            status: "running",
+            steps: [liveRichStep],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    const initialTerminalOutput =
+      container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(initialTerminalOutput).toContain("Linux aegis 6.8.0");
+    expect(initialTerminalOutput).toContain("warning: pseudo tty reused");
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+
+    rerender(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "持久化回放后输出仍然保留。",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-lifecycle",
+                kind: "tool_call",
+                sequence: 1,
+                status: "completed",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-lifecycle-1",
+                text: "uname -a",
+                metadata: {
+                  command: "uname -a",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-lifecycle-thin",
+                kind: "tool_result",
+                sequence: 2,
+                status: "completed",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-lifecycle-1",
+                text: "命令已完成，状态：success。",
+                metadata: {
+                  result: {
+                    status: "success",
+                    command: "uname -a",
+                  },
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            status: "completed",
+            steps: [liveRichStep],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("Linux aegis 6.8.0");
+    expect(terminalOutput).toContain("warning: pseudo tty reused");
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+    expect(screen.queryByText("命令已完成，状态：success。")).not.toBeInTheDocument();
+    expect(screen.getByText("持久化回放后输出仍然保留。")).toBeInTheDocument();
+  });
+
+  it("chooses the richer duplicate tool_result for the same tool_call_id", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "重复结果优先级校验完成。",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-rich-choice",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-rich-choice-1",
+                text: "python inspect.py",
+                metadata: {
+                  command: "python inspect.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-rich-choice-thin",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-rich-choice-1",
+                text: "命令已完成，状态：success。",
+                metadata: {
+                  result: {
+                    status: "success",
+                    command: "python inspect.py",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-rich-choice-rich",
+                kind: "tool_result",
+                sequence: 3,
+                tool_name: "bash",
+                tool_call_id: "tool-rich-choice-1",
+                text: "rich duplicate result",
+                metadata: {
+                  result: {
+                    stdout: "rich duplicate stdout",
+                    stderr: "rich duplicate stderr",
+                    exit_code: 3,
+                  },
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[buildGeneration({ steps: [] })]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("rich duplicate stdout");
+    expect(terminalOutput).toContain("rich duplicate stderr");
+    expect(screen.getByText("退出码：3")).toBeInTheDocument();
+    expect(screen.queryByText("命令已完成，状态：success。")).not.toBeInTheDocument();
+  });
+
+  it("renders stdout and stderr from a final persisted message without active generation fallback", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            generation_id: undefined,
+            content: "最终持久化消息也会展示 shell 输出。",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-persisted-only",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-persisted-only-1",
+                text: "python final.py",
+                metadata: {
+                  command: "python final.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-persisted-only",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-persisted-only-1",
+                text: "工具执行完成，状态：success。",
+                metadata: {
+                  result: {
+                    stdout: "persisted stdout survives",
+                    stderr: "persisted stderr survives",
+                    exit_code: 0,
+                  },
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("persisted stdout survives");
+    expect(terminalOutput).toContain("persisted stderr survives");
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+    expect(screen.getByText("最终持久化消息也会展示 shell 输出。")).toBeInTheDocument();
+  });
+
   it("renders live shell output when the generation step stores results under metadata.output", () => {
     const { container } = render(
       <ConversationFeed

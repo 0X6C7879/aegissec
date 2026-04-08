@@ -83,6 +83,280 @@ function pickPreferredAssistantContent(existingContent: string, incomingContent:
   return incomingContent;
 }
 
+const TOOL_TRANSCRIPT_KINDS = ["tool_call", "tool_result", "error"] as const;
+
+function compareAssistantTranscriptSegments(
+  left: AssistantTranscriptSegment,
+  right: AssistantTranscriptSegment,
+): number {
+  if (left.sequence !== right.sequence) {
+    return left.sequence - right.sequence;
+  }
+
+  const recordedAtDifference = toTimestamp(left.recorded_at) - toTimestamp(right.recorded_at);
+  if (recordedAtDifference !== 0) {
+    return recordedAtDifference;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function isToolTranscriptKind(kind: AssistantTranscriptSegment["kind"]): boolean {
+  return TOOL_TRANSCRIPT_KINDS.includes(kind as (typeof TOOL_TRANSCRIPT_KINDS)[number]);
+}
+
+function isToolTranscriptSegment(segment: AssistantTranscriptSegment): boolean {
+  return isToolTranscriptKind(segment.kind);
+}
+
+function getSemanticToolTranscriptKey(segment: AssistantTranscriptSegment): string | null {
+  if (!isToolTranscriptSegment(segment) || !segment.tool_call_id) {
+    return null;
+  }
+
+  return `${segment.kind}:${segment.tool_call_id}`;
+}
+
+function preferPopulatedTranscriptString(
+  preferred: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null | undefined {
+  if (typeof preferred === "string" && preferred.trim().length > 0) {
+    return preferred;
+  }
+
+  if (typeof fallback === "string" && fallback.trim().length > 0) {
+    return fallback;
+  }
+
+  return preferred ?? fallback;
+}
+
+function readTranscriptSegmentCommand(segment: AssistantTranscriptSegment): string | null {
+  if (!segment.metadata) {
+    return null;
+  }
+
+  return readFirstNonEmptyString(segment.metadata, ["command"]);
+}
+
+function scoreStandaloneTranscriptToolText(
+  text: string | null | undefined,
+  command: string | null,
+): number {
+  if (!text) {
+    return 0;
+  }
+
+  const normalized = text.trim();
+  if (normalized.length === 0) {
+    return 0;
+  }
+
+  if (command && normalized === command.trim()) {
+    return 0;
+  }
+
+  return normalized.includes("\n") ? 4 : 3;
+}
+
+function readToolTranscriptSegmentRichness(segment: AssistantTranscriptSegment): number {
+  const command = readTranscriptSegmentCommand(segment);
+  const textScore = scoreStandaloneTranscriptToolText(segment.text, command);
+
+  return (
+    scoreToolMetadataRichness(segment.metadata) +
+    textScore +
+    (segment.status ? 2 : 0) +
+    (segment.tool_name ? 1 : 0) +
+    (segment.title ? 1 : 0)
+  );
+}
+
+function mergeAssistantTranscriptText(
+  preferred: AssistantTranscriptSegment,
+  fallback: AssistantTranscriptSegment,
+): string | null | undefined {
+  const preferredTextScore = scoreStandaloneTranscriptToolText(
+    preferred.text,
+    readTranscriptSegmentCommand(preferred),
+  );
+  const fallbackTextScore = scoreStandaloneTranscriptToolText(
+    fallback.text,
+    readTranscriptSegmentCommand(fallback),
+  );
+
+  if (preferredTextScore >= fallbackTextScore) {
+    return preferred.text ?? fallback.text;
+  }
+
+  return fallback.text ?? preferred.text;
+}
+
+function mergeAssistantToolTranscriptSegment(
+  existing: AssistantTranscriptSegment,
+  incoming: AssistantTranscriptSegment,
+): AssistantTranscriptSegment {
+  const existingRichness = readToolTranscriptSegmentRichness(existing);
+  const incomingRichness = readToolTranscriptSegmentRichness(incoming);
+  const preferred = incomingRichness > existingRichness ? incoming : existing;
+  const fallback = preferred === existing ? incoming : existing;
+
+  return {
+    ...fallback,
+    ...preferred,
+    id: existing.id,
+    sequence: existing.sequence,
+    recorded_at: existing.recorded_at,
+    updated_at:
+      preferPopulatedTranscriptString(preferred.updated_at, fallback.updated_at) ?? existing.updated_at,
+    status: preferPopulatedTranscriptString(preferred.status, fallback.status),
+    title: preferPopulatedTranscriptString(preferred.title, fallback.title),
+    text: mergeAssistantTranscriptText(preferred, fallback),
+    tool_name: preferPopulatedTranscriptString(preferred.tool_name, fallback.tool_name),
+    tool_call_id: preferPopulatedTranscriptString(preferred.tool_call_id, fallback.tool_call_id),
+    metadata: mergePreferredToolMetadata(preferred.metadata, fallback.metadata),
+  };
+}
+
+function mergeAssistantNonToolTranscriptSegment(
+  existing: AssistantTranscriptSegment,
+  incoming: AssistantTranscriptSegment,
+): AssistantTranscriptSegment {
+  return {
+    ...existing,
+    ...incoming,
+    id: existing.id,
+    sequence: existing.sequence,
+    recorded_at: existing.recorded_at,
+    updated_at:
+      preferPopulatedTranscriptString(incoming.updated_at, existing.updated_at) ?? existing.updated_at,
+    status: incoming.status ?? existing.status,
+    title: incoming.title ?? existing.title,
+    text: incoming.text ?? existing.text,
+    tool_name: incoming.tool_name ?? existing.tool_name,
+    tool_call_id: incoming.tool_call_id ?? existing.tool_call_id,
+    metadata: mergePreferredToolMetadata(existing.metadata, incoming.metadata),
+  };
+}
+
+function mergeAssistantTranscriptSegment(
+  existing: AssistantTranscriptSegment,
+  incoming: AssistantTranscriptSegment,
+): AssistantTranscriptSegment {
+  const existingSemanticKey = getSemanticToolTranscriptKey(existing);
+  const incomingSemanticKey = getSemanticToolTranscriptKey(incoming);
+  if (existingSemanticKey && incomingSemanticKey && existingSemanticKey === incomingSemanticKey) {
+    return mergeAssistantToolTranscriptSegment(existing, incoming);
+  }
+
+  return mergeAssistantNonToolTranscriptSegment(existing, incoming);
+}
+
+function findAssistantTranscriptMergeIndex(
+  segments: AssistantTranscriptSegment[],
+  candidate: AssistantTranscriptSegment,
+): number {
+  const exactIdMatchIndex = segments.findIndex((segment) => segment.id === candidate.id);
+  if (exactIdMatchIndex >= 0) {
+    return exactIdMatchIndex;
+  }
+
+  const semanticKey = getSemanticToolTranscriptKey(candidate);
+  if (!semanticKey) {
+    return -1;
+  }
+
+  return segments.findIndex((segment) => getSemanticToolTranscriptKey(segment) === semanticKey);
+}
+
+function isChatGenerationCandidate(value: unknown): value is ChatGeneration {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.assistant_message_id === "string"
+  );
+}
+
+function mapGenerationToolStepToTranscriptSegment(
+  step: GenerationStep,
+): AssistantTranscriptSegment | null {
+  if (step.kind !== "tool") {
+    return null;
+  }
+
+  const kind: AssistantTranscriptSegment["kind"] =
+    step.status === "failed" || step.phase === "failed"
+      ? "error"
+      : step.phase === "tool_running" || step.status === "running"
+        ? "tool_call"
+        : "tool_result";
+
+  return {
+    id: step.id,
+    sequence: step.sequence,
+    kind,
+    status: step.status,
+    title: step.label ?? null,
+    text: step.safe_summary || step.delta_text || null,
+    tool_name: step.tool_name ?? null,
+    tool_call_id: step.tool_call_id ?? null,
+    recorded_at: step.started_at,
+    updated_at: step.ended_at ?? step.started_at,
+    metadata: step.metadata,
+  };
+}
+
+function collectGenerationTranscriptEnrichment(
+  detail: SessionDetail,
+  message: SessionMessage,
+): AssistantTranscriptSegment[] {
+  const detailRecord: Record<string, unknown> | null = isRecord(detail) ? detail : null;
+  const rawGenerations = detailRecord?.["generations"];
+  if (!Array.isArray(rawGenerations)) {
+    return [];
+  }
+
+  return rawGenerations
+    .filter(isChatGenerationCandidate)
+    .filter(
+      (generation) =>
+        generation.id === message.generation_id || generation.assistant_message_id === message.id,
+    )
+    .flatMap((generation) =>
+      (generation.steps ?? [])
+        .map((step) => mapGenerationToolStepToTranscriptSegment(step))
+        .filter((segment): segment is AssistantTranscriptSegment => segment !== null),
+    )
+    .sort(compareAssistantTranscriptSegments);
+}
+
+function mergeAssistantTranscriptSegments(
+  existingTranscript: AssistantTranscriptSegment[],
+  incomingTranscript: AssistantTranscriptSegment[],
+  enrichmentTranscript: AssistantTranscriptSegment[],
+): AssistantTranscriptSegment[] {
+  const merged: AssistantTranscriptSegment[] = [];
+
+  for (const segment of [...existingTranscript, ...incomingTranscript, ...enrichmentTranscript]) {
+    const existingIndex = findAssistantTranscriptMergeIndex(merged, segment);
+    if (existingIndex < 0) {
+      merged.push(segment);
+      continue;
+    }
+
+    const existingSegment = merged[existingIndex];
+    if (!existingSegment) {
+      continue;
+    }
+
+    merged[existingIndex] = mergeAssistantTranscriptSegment(existingSegment, segment);
+  }
+
+  return merged.sort(compareAssistantTranscriptSegments);
+}
+
 export function sortSessions(sessions: SessionSummary[]): SessionSummary[] {
   return [...sessions].sort(
     (left, right) => toTimestamp(right.updated_at) - toTimestamp(left.updated_at),
@@ -107,18 +381,12 @@ export function mergeSessionMessage(
   }
 
   const existingMessage = detail.messages.find((item) => item.id === message.id) ?? null;
-  let mergedTranscript = message.assistant_transcript;
-  if (existingMessage && existingMessage.assistant_transcript.length > 0) {
-    const existingIds = new Set(existingMessage.assistant_transcript.map((t) => t.id));
-    const newItems = message.assistant_transcript.filter((t) => !existingIds.has(t.id));
-    mergedTranscript = [...existingMessage.assistant_transcript, ...newItems].sort((a, b) => {
-      // Sort by sequence if available, otherwise by time
-      if (a.sequence != null && b.sequence != null) {
-        return a.sequence - b.sequence;
-      }
-      return new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime();
-    });
-  }
+  const generationTranscriptEnrichment = collectGenerationTranscriptEnrichment(detail, message);
+  const mergedTranscript = mergeAssistantTranscriptSegments(
+    existingMessage?.assistant_transcript ?? [],
+    message.assistant_transcript,
+    generationTranscriptEnrichment,
+  );
 
   const nextMessage = existingMessage
     ? {
@@ -953,6 +1221,128 @@ function buildToolStepMetadata(data: Record<string, unknown>): Record<string, un
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
+const TOOL_METADATA_RICH_RECORD_KEYS = [
+  "output",
+  "execution",
+  "payload",
+  "data",
+  "result",
+] as const;
+
+const TOOL_METADATA_RICH_VALUE_KEYS = [
+  "stdout",
+  "stderr",
+  "text",
+  "message",
+  "summary",
+  "safe_summary",
+  "command",
+  "exit_code",
+  "status",
+  "artifact_paths",
+  "artifacts",
+  "run_id",
+] as const;
+
+function scoreToolMetadataRichness(value: unknown): number {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? Math.min(value.trim().length, 120) + 2 : 0;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? 4 : 0;
+  }
+
+  if (typeof value === "boolean") {
+    return 2;
+  }
+
+  if (Array.isArray(value)) {
+    return value.reduce((total, entry) => total + scoreToolMetadataRichness(entry), value.length);
+  }
+
+  if (!isRecord(value)) {
+    return 0;
+  }
+
+  let score = Object.keys(value).length * 3;
+
+  for (const key of TOOL_METADATA_RICH_RECORD_KEYS) {
+    if (isRecord(value[key])) {
+      score += 10;
+    }
+  }
+
+  for (const key of TOOL_METADATA_RICH_VALUE_KEYS) {
+    if (value[key] !== undefined) {
+      score += 6;
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    score += scoreToolMetadataRichness(nestedValue);
+  }
+
+  return score;
+}
+
+function mergePreferredToolMetadataValue(existingValue: unknown, incomingValue: unknown): unknown {
+  if (incomingValue === undefined) {
+    return existingValue;
+  }
+
+  if (existingValue === undefined) {
+    return incomingValue;
+  }
+
+  if (isRecord(existingValue) && isRecord(incomingValue)) {
+    return mergePreferredToolMetadata(existingValue, incomingValue);
+  }
+
+  if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
+    const mergedValues = [...existingValue, ...incomingValue];
+    const dedupedValues: unknown[] = [];
+    const seen = new Set<string>();
+
+    for (const value of mergedValues) {
+      const dedupeKey = JSON.stringify(value);
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+
+      seen.add(dedupeKey);
+      dedupedValues.push(value);
+    }
+
+    return dedupedValues;
+  }
+
+  const existingScore = scoreToolMetadataRichness(existingValue);
+  const incomingScore = scoreToolMetadataRichness(incomingValue);
+
+  return incomingScore >= existingScore ? incomingValue : existingValue;
+}
+
+function mergePreferredToolMetadata(
+  existingMetadata: Record<string, unknown> | undefined,
+  incomingMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!existingMetadata) {
+    return incomingMetadata;
+  }
+
+  if (!incomingMetadata) {
+    return existingMetadata;
+  }
+
+  const mergedMetadata: Record<string, unknown> = { ...existingMetadata };
+  for (const [key, incomingValue] of Object.entries(incomingMetadata)) {
+    mergedMetadata[key] = mergePreferredToolMetadataValue(mergedMetadata[key], incomingValue);
+  }
+
+  return mergedMetadata;
+}
+
 function mergeGenerationStepList(
   currentSteps: GenerationStep[] | undefined,
   incomingStep: GenerationStep,
@@ -985,6 +1375,10 @@ function mergeGenerationStepList(
   }
 
   const existingStep = steps[existingIndex];
+  const nextMetadata =
+    existingStep.kind === "tool" && incomingStep.kind === "tool"
+      ? mergePreferredToolMetadata(existingStep.metadata, incomingStep.metadata)
+      : incomingStep.metadata ?? existingStep.metadata;
   const nextDeltaText =
     incomingStep.kind === "output"
       ? incomingStep.status === "completed" &&
@@ -1000,7 +1394,7 @@ function mergeGenerationStepList(
     ...incomingStep,
     delta_text: nextDeltaText,
     safe_summary: incomingStep.safe_summary ?? existingStep.safe_summary,
-    metadata: incomingStep.metadata ?? existingStep.metadata,
+    metadata: nextMetadata,
     ended_at: incomingStep.ended_at ?? existingStep.ended_at,
   };
 
