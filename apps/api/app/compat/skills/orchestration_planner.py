@@ -68,8 +68,11 @@ def build_skill_orchestration_plan(
                 prepared_for_execution=True,
                 trust_level=_trust_level(primary_skill),
                 verification_mode=_verification_mode(primary_skill),
+                version=primary_skill.version,
+                model_hint=primary_skill.model_hint,
                 fanout_group=primary_skill.fanout_group,
                 context_strategy=primary_skill.context_strategy,
+                execution_policy=_execution_policy(primary_skill),
                 preflight_checks=_preflight_payloads(primary_skill.preflight_checks),
                 notes=_candidate_notes(primary_candidate),
             )
@@ -98,8 +101,11 @@ def build_skill_orchestration_plan(
                 prepared_for_execution=False,
                 trust_level=_trust_level(skill),
                 verification_mode=_verification_mode(skill),
+                version=skill.version,
+                model_hint=skill.model_hint,
                 fanout_group=skill.fanout_group,
                 context_strategy=skill.context_strategy,
+                execution_policy=_execution_policy(skill),
                 preflight_checks=_preflight_payloads(skill.preflight_checks),
                 notes=_candidate_notes(candidate),
             )
@@ -120,8 +126,11 @@ def build_skill_orchestration_plan(
                 prepared_for_execution=False,
                 trust_level=_trust_level(skill),
                 verification_mode=_verification_mode(skill),
+                version=skill.version,
+                model_hint=skill.model_hint,
                 fanout_group=skill.fanout_group,
                 context_strategy=skill.context_strategy,
+                execution_policy=_execution_policy(skill),
                 notes=_candidate_notes(candidate),
             )
         )
@@ -145,14 +154,22 @@ def build_skill_orchestration_plan(
         steps.append(
             SkillOrchestrationStep(
                 step_id=reducer_step_id,
+                skill_id=f"internal:reducer:{stage_name}",
                 name=f"{stage_name} reducer",
+                directory_name="internal-reducer",
                 role=SkillOrchestrationStepRole.REDUCER,
                 execution_intent=SkillExecutionIntent.REDUCE_RESULTS,
                 stage_name=stage_name,
+                node_kind="internal",
+                internal_node=True,
+                prepared_for_context=True,
+                prepared_for_execution=True,
+                trust_level="internal_system",
+                execution_policy={"retry_limit": 0},
                 depends_on=list(reducer_dependencies),
                 notes=[
-                    "Reducer stays as an internal orchestration step until the executor "
-                    "phase is implemented."
+                    "Reducer executes as an internal orchestration node above the fixed "
+                    "skill facades."
                 ],
             )
         )
@@ -165,14 +182,22 @@ def build_skill_orchestration_plan(
         steps.append(
             SkillOrchestrationStep(
                 step_id=f"stage:{stage_name}:verifier",
+                skill_id=f"internal:verifier:{stage_name}",
                 name=f"{stage_name} verifier",
+                directory_name="internal-verifier",
                 role=SkillOrchestrationStepRole.VERIFIER,
                 execution_intent=SkillExecutionIntent.VERIFY_RESULTS,
                 stage_name=stage_name,
+                node_kind="internal",
+                internal_node=True,
+                prepared_for_context=True,
+                prepared_for_execution=True,
+                trust_level="internal_system",
+                execution_policy={"retry_limit": 0},
                 depends_on=list(verifier_dependencies),
                 notes=[
-                    "Verifier is represented as a typed plan step only; fixed facades "
-                    "remain unchanged."
+                    "Verifier executes as an internal orchestration node while fixed skill "
+                    "facades remain unchanged."
                 ],
             )
         )
@@ -182,6 +207,9 @@ def build_skill_orchestration_plan(
         mode=stage_policy.mode,
         failure_policy=stage_policy.failure_policy,
         max_parallel_workers=stage_policy.max_parallel_workers,
+        worker_timeout_ms=stage_policy.worker_timeout_ms,
+        orchestration_timeout_ms=stage_policy.orchestration_timeout_ms,
+        retry_limit=stage_policy.retry_limit,
         steps=steps,
         concurrency_groups=concurrency_groups,
         replan_triggers=list(stage_policy.replan_triggers),
@@ -254,3 +282,8 @@ def _trust_level(compiled_skill: skill_models.CompiledSkill) -> str | None:
 def _verification_mode(compiled_skill: skill_models.CompiledSkill) -> str | None:
     metadata = compiled_skill.trust_metadata
     return None if metadata is None else metadata.verification_mode
+
+
+def _execution_policy(compiled_skill: skill_models.CompiledSkill) -> dict[str, object]:
+    policy = compiled_skill.execution_policy
+    return {} if policy is None else policy.to_payload()

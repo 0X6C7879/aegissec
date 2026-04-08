@@ -107,6 +107,19 @@ export function mergeSessionMessage(
   }
 
   const existingMessage = detail.messages.find((item) => item.id === message.id) ?? null;
+  let mergedTranscript = message.assistant_transcript;
+  if (existingMessage && existingMessage.assistant_transcript.length > 0) {
+    const existingIds = new Set(existingMessage.assistant_transcript.map((t) => t.id));
+    const newItems = message.assistant_transcript.filter((t) => !existingIds.has(t.id));
+    mergedTranscript = [...existingMessage.assistant_transcript, ...newItems].sort((a, b) => {
+      // Sort by sequence if available, otherwise by time
+      if (a.sequence != null && b.sequence != null) {
+        return a.sequence - b.sequence;
+      }
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+  }
+
   const nextMessage = existingMessage
     ? {
         ...existingMessage,
@@ -120,11 +133,7 @@ export function mergeSessionMessage(
           message.attachments.length > 0 || existingMessage.attachments.length === 0
             ? message.attachments
             : existingMessage.attachments,
-        assistant_transcript:
-          message.assistant_transcript.length > 0 ||
-          existingMessage.assistant_transcript.length === 0
-            ? message.assistant_transcript
-            : existingMessage.assistant_transcript,
+        assistant_transcript: mergedTranscript,
       }
     : message;
 
@@ -1855,6 +1864,38 @@ function toAssistantTranscriptSegmentList(
       const recordedAt =
         typeof entry.recorded_at === "string" ? entry.recorded_at : fallbackTimestamp;
       const updatedAt = typeof entry.updated_at === "string" ? entry.updated_at : recordedAt;
+      const metadata = isRecord(entry.metadata)
+        ? { ...entry.metadata }
+        : isRecord(entry.metadata_payload)
+          ? { ...entry.metadata_payload }
+          : {};
+
+      for (const key of [
+        "arguments",
+        "command",
+        "status",
+        "stdout",
+        "stderr",
+        "exit_code",
+        "output",
+        "execution",
+        "payload",
+        "data",
+        "result",
+        "text",
+        "message",
+        "summary",
+        "safe_summary",
+        "error",
+        "artifacts",
+        "artifact_paths",
+        "run_id",
+        "created_at",
+      ] as const) {
+        if (entry[key] !== undefined && metadata[key] === undefined) {
+          metadata[key] = entry[key];
+        }
+      }
 
       return [
         {
@@ -1874,11 +1915,7 @@ function toAssistantTranscriptSegmentList(
               : null,
           recorded_at: recordedAt,
           updated_at: updatedAt,
-          metadata: isRecord(entry.metadata)
-            ? entry.metadata
-            : isRecord(entry.metadata_payload)
-              ? entry.metadata_payload
-              : undefined,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         } satisfies AssistantTranscriptSegment,
       ];
     })

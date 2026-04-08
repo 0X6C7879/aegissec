@@ -330,6 +330,54 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText(/"stdout":/)).not.toBeInTheDocument();
   });
 
+  it("reads shell stdout and stderr from top-level metadata fields", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-top-level-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-top-level-1",
+                text: "curl -s http://target",
+                metadata: {
+                  command: "curl -s http://target",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-top-level-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-top-level-1",
+                text: "工具执行完成，状态：success。",
+                metadata: {
+                  command: "curl -s http://target",
+                  stdout: "top-level stdout",
+                  stderr: "top-level stderr",
+                  exit_code: 0,
+                },
+              }),
+            ],
+            content: "顶层 metadata 已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("top-level stdout")).toBeInTheDocument();
+    expect(screen.getByText("top-level stderr")).toBeInTheDocument();
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+  });
+
   it("reads metadata.output stdout and stderr while preserving present-empty stdout", () => {
     const { container } = render(
       <ConversationFeed
@@ -380,7 +428,55 @@ describe("ConversationFeed", () => {
     fireEvent.click(container.querySelector(".assistant-tool-summary")!);
 
     expect(screen.getByText("(empty)")).toBeInTheDocument();
-    expect(screen.getByText(/warn one\s+warn two/)).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes('"warn one"'))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes('"warn two"'))).toBeInTheDocument();
+  });
+
+  it("formats object and array shell outputs into readable strings", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-structured-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-structured-1",
+                text: "python report.py",
+                metadata: {
+                  command: "python report.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-structured-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-structured-1",
+                text: "已生成结构化结果。",
+                metadata: {
+                  stdout: { findings: 2, success: true },
+                  stderr: ["warning", "retry"],
+                },
+              }),
+            ],
+            content: "结构化结果已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText((content) => content.includes('"findings": 2'))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes('"success": true'))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes('"warning"'))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes('"retry"'))).toBeInTheDocument();
   });
 
   it("renders result-only shell blocks and reads metadata.result.output.text", () => {
@@ -431,6 +527,56 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("退出码：0")).toBeInTheDocument();
   });
 
+  it.each([
+    ["text", { text: "text fallback rendered" }, "text fallback rendered"],
+    ["safe_summary", { safe_summary: "scan summary rendered" }, "scan summary rendered"],
+    ["summary", { summary: "summary fallback rendered" }, "summary fallback rendered"],
+    ["message", { message: "message fallback rendered" }, "message fallback rendered"],
+  ])(
+    "renders shell fallback output from %s when stdout/stderr are absent",
+    (_fieldName, metadata, expectedText) => {
+      const { container } = render(
+        <ConversationFeed
+          messages={buildMessages({
+            assistant: {
+              assistant_transcript: [
+                buildTranscriptSegment({
+                  id: "segment-fallback-call",
+                  kind: "tool_call",
+                  sequence: 1,
+                  tool_name: "bash",
+                  tool_call_id: "tool-fallback-1",
+                  text: "python collect.py",
+                  metadata: {
+                    command: "python collect.py",
+                  },
+                }),
+                buildTranscriptSegment({
+                  id: `segment-fallback-result-${expectedText}`,
+                  kind: "tool_result",
+                  sequence: 2,
+                  tool_name: "bash",
+                  tool_call_id: "tool-fallback-1",
+                  text: "工具执行完成，状态：success。",
+                  metadata,
+                }),
+              ],
+              content: "fallback 已展示。",
+            },
+          })}
+          generations={[buildGeneration()]}
+          events={[]}
+          runtimeRuns={[]}
+        />,
+      );
+
+      fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+      expect(screen.getByText(expectedText)).toBeInTheDocument();
+      expect(container.querySelector(".assistant-tool-error-copy")).toBeNull();
+    },
+  );
+
   it("renders result-only shell output even when the backend omits command metadata", () => {
     const { container } = render(
       <ConversationFeed
@@ -473,6 +619,53 @@ describe("ConversationFeed", () => {
 
     expect(screen.getByText("fallback stdout still visible")).toBeInTheDocument();
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
+  });
+
+  it("falls back to reference shell metadata when the paired result is present but thin", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-reference-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-reference-1",
+                text: "curl -s http://target/admin",
+                metadata: {
+                  command: "curl -s http://target/admin",
+                  stdout: "reference stdout survives",
+                  stderr: "reference stderr survives",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-reference-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-reference-1",
+                text: "工具执行完成，状态：success。",
+                metadata: {
+                  status: "success",
+                  command: "curl -s http://target/admin",
+                },
+              }),
+            ],
+            content: "reference fallback 已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("reference stdout survives")).toBeInTheDocument();
+    expect(screen.getByText("reference stderr survives")).toBeInTheDocument();
   });
 
   it("globally pairs non-adjacent tool segments by tool_call_id and falls back to message and summary text", () => {
@@ -890,6 +1083,75 @@ describe("ConversationFeed", () => {
     fireEvent.click(container.querySelector(".assistant-tool-summary")!);
 
     expect(screen.getByText(/test session starts\s+collected 16 items/)).toBeInTheDocument();
+  });
+
+  it("upgrades a thin transcript tool_result with richer live generation output for the same tool_call_id", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-thin-live",
+                kind: "tool_call",
+                sequence: 1,
+                status: "completed",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-thin-1",
+                text: "curl -s http://target/admin",
+                metadata: {
+                  command: "curl -s http://target/admin",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-thin-live",
+                kind: "tool_result",
+                sequence: 2,
+                status: "completed",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-thin-1",
+                text: "工具执行完成，状态：success。",
+                metadata: {
+                  command: "curl -s http://target/admin",
+                  status: "success",
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            status: "running",
+            steps: [
+              buildStep({
+                id: "step-tool-result-thin-live",
+                kind: "tool",
+                phase: "tool_result",
+                status: "completed",
+                sequence: 3,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-thin-1",
+                command: "curl -s http://target/admin",
+                safe_summary: "命令已完成，状态：success。",
+                metadata: {
+                  stdout: "live stdout survives merge",
+                  stderr: "",
+                  exit_code: 0,
+                },
+              }),
+            ],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("live stdout survives merge")).toBeInTheDocument();
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
   });
 
   it("renders live shell output when the generation step stores results under metadata.output", () => {

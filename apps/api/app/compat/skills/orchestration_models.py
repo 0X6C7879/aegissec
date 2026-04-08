@@ -72,6 +72,8 @@ class SkillWorkerExecutionStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
 
 
 class SkillReductionStatus(str, Enum):
@@ -111,12 +113,17 @@ class SkillOrchestrationStep:
     stage_name: str
     skill_id: str | None = None
     directory_name: str | None = None
+    node_kind: str = "skill"
+    internal_node: bool = False
     prepared_for_context: bool = False
     prepared_for_execution: bool = False
     trust_level: str | None = None
     verification_mode: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     fanout_group: str | None = None
     context_strategy: str | None = None
+    execution_policy: dict[str, object] = field(default_factory=dict)
     depends_on: list[str] = field(default_factory=list)
     preflight_checks: list[dict[str, object]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -138,14 +145,22 @@ class SkillOrchestrationStep:
             payload["skill_id"] = self.skill_id
         if self.directory_name is not None:
             payload["directory_name"] = self.directory_name
+        payload["node_kind"] = self.node_kind
+        payload["internal_node"] = self.internal_node
         if self.trust_level is not None:
             payload["trust_level"] = self.trust_level
         if self.verification_mode is not None:
             payload["verification_mode"] = self.verification_mode
+        if self.version is not None:
+            payload["version"] = self.version
+        if self.model_hint is not None:
+            payload["model_hint"] = self.model_hint
         if self.fanout_group is not None:
             payload["fanout_group"] = self.fanout_group
         if self.context_strategy is not None:
             payload["context_strategy"] = self.context_strategy
+        if self.execution_policy:
+            payload["execution_policy"] = dict(self.execution_policy)
         return payload
 
 
@@ -155,6 +170,9 @@ class SkillOrchestrationStage:
     mode: SkillOrchestrationMode
     failure_policy: SkillOrchestrationFailurePolicy
     max_parallel_workers: int
+    worker_timeout_ms: int | None = None
+    orchestration_timeout_ms: int | None = None
+    retry_limit: int = 0
     steps: list[SkillOrchestrationStep] = field(default_factory=list)
     concurrency_groups: list[SkillOrchestrationConcurrencyGroup] = field(default_factory=list)
     replan_triggers: list[str] = field(default_factory=list)
@@ -166,6 +184,9 @@ class SkillOrchestrationStage:
             "mode": self.mode.value,
             "failure_policy": self.failure_policy.value,
             "max_parallel_workers": self.max_parallel_workers,
+            "worker_timeout_ms": self.worker_timeout_ms,
+            "orchestration_timeout_ms": self.orchestration_timeout_ms,
+            "retry_limit": self.retry_limit,
             "steps": [step.to_payload() for step in self.steps],
             "concurrency_groups": [group.to_payload() for group in self.concurrency_groups],
             "replan_triggers": list(self.replan_triggers),
@@ -210,8 +231,12 @@ class SkillWorkerExecutionResult:
     execution_intent: SkillExecutionIntent
     status: SkillWorkerExecutionStatus
     skill_id: str | None = None
+    node_kind: str = "skill"
+    internal_node: bool = False
     duration_ms: int = 0
     trust_level: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     prepared_for_context: bool = False
     prepared_for_execution: bool = False
     required: bool = True
@@ -219,6 +244,12 @@ class SkillWorkerExecutionResult:
     execution_output: dict[str, object] | None = None
     warnings: list[str] = field(default_factory=list)
     approval_needed: bool = False
+    attempt_count: int = 1
+    retry_count: int = 0
+    timeout_ms: int | None = None
+    cancelled: bool = False
+    timed_out: bool = False
+    cancellation_reason: str | None = None
     failure_reason: str | None = None
     summary_for_prompt: str | None = None
 
@@ -230,6 +261,8 @@ class SkillWorkerExecutionResult:
             "role": self.role.value,
             "execution_intent": self.execution_intent.value,
             "status": self.status.value,
+            "node_kind": self.node_kind,
+            "internal_node": self.internal_node,
             "duration_ms": self.duration_ms,
             "prepared_for_context": self.prepared_for_context,
             "prepared_for_execution": self.prepared_for_execution,
@@ -237,13 +270,25 @@ class SkillWorkerExecutionResult:
             "preflight_results": [dict(item) for item in self.preflight_results],
             "warnings": list(self.warnings),
             "approval_needed": self.approval_needed,
+            "attempt_count": self.attempt_count,
+            "retry_count": self.retry_count,
+            "cancelled": self.cancelled,
+            "timed_out": self.timed_out,
         }
         if self.skill_id is not None:
             payload["skill_id"] = self.skill_id
         if self.trust_level is not None:
             payload["trust_level"] = self.trust_level
+        if self.version is not None:
+            payload["version"] = self.version
+        if self.model_hint is not None:
+            payload["model_hint"] = self.model_hint
+        if self.timeout_ms is not None:
+            payload["timeout_ms"] = self.timeout_ms
         if self.execution_output is not None:
             payload["execution_output"] = dict(self.execution_output)
+        if self.cancellation_reason is not None:
+            payload["cancellation_reason"] = self.cancellation_reason
         if self.failure_reason is not None:
             payload["failure_reason"] = self.failure_reason
         if self.summary_for_prompt is not None:
@@ -319,9 +364,13 @@ class SkillOrchestrationExecutionResult:
     status: str
     duration_ms: int
     worker_results: list[SkillWorkerExecutionResult] = field(default_factory=list)
+    node_results: list[SkillWorkerExecutionResult] = field(default_factory=list)
     reduction_result: SkillReductionResult | None = None
     verification_result: SkillVerificationResult | None = None
     stage_transition: SkillStageTransition | None = None
+    orchestration_timeout_ms: int | None = None
+    cancelled: bool = False
+    timed_out: bool = False
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -333,6 +382,10 @@ class SkillOrchestrationExecutionResult:
             "status": self.status,
             "duration_ms": self.duration_ms,
             "worker_results": [result.to_payload() for result in self.worker_results],
+            "node_results": [result.to_payload() for result in self.node_results],
+            "orchestration_timeout_ms": self.orchestration_timeout_ms,
+            "cancelled": self.cancelled,
+            "timed_out": self.timed_out,
             "warnings": list(self.warnings),
             "notes": list(self.notes),
         }

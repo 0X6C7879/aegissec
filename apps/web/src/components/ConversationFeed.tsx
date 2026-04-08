@@ -199,18 +199,18 @@ function hasAuthoritativeAssistantPrimarySegment(
   });
 }
 
-function hasEquivalentToolSegment(
+function findEquivalentToolSegmentIndex(
   segments: AssistantTranscriptSegment[],
   candidate: AssistantTranscriptSegment,
-): boolean {
+): number {
   if (
     !candidate.tool_call_id ||
     (candidate.kind !== "tool_call" && candidate.kind !== "tool_result" && candidate.kind !== "error")
   ) {
-    return false;
+    return -1;
   }
 
-  return segments.some(
+  return segments.findIndex(
     (segment) =>
       segment.kind === candidate.kind && segment.tool_call_id === candidate.tool_call_id,
   );
@@ -237,7 +237,28 @@ function mergeMissingGenerationToolSegments(
     .sort(compareTranscriptSegments);
 
   for (const segment of generationSegments) {
-    if (hasEquivalentToolSegment(merged, segment)) {
+    const existingIndex = findEquivalentToolSegmentIndex(merged, segment);
+    if (existingIndex >= 0) {
+      if (segment.kind === "tool_result" || segment.kind === "error") {
+        const existingSegment = merged[existingIndex];
+        if (existingSegment) {
+          merged[existingIndex] = {
+            ...existingSegment,
+            ...segment,
+            id: existingSegment.id,
+            sequence: existingSegment.sequence,
+            recorded_at: existingSegment.recorded_at,
+            metadata:
+              existingSegment.metadata || segment.metadata
+                ? {
+                    ...(existingSegment.metadata ?? {}),
+                    ...(segment.metadata ?? {}),
+                  }
+                : undefined,
+            text: segment.text ?? existingSegment.text,
+          };
+        }
+      }
       continue;
     }
 
@@ -522,7 +543,72 @@ function readPathValue(
   return { found: true, value: current };
 }
 
-function stringifyShellValue(value: unknown): string {
+function humanizeIdentifier(value: string): string {
+  return value
+    .split(/[/_\-\s.]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function truncateCommand(value: string, maxLength = 64): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
+}
+
+const SHELL_CANDIDATE_RECORD_PATHS = [
+  ["result"],
+  ["output"],
+  ["result", "output"],
+  ["execution"],
+  ["result", "execution"],
+  ["payload"],
+  ["result", "payload"],
+  ["data"],
+  ["result", "data"],
+  ["arguments"],
+  ["result", "arguments"],
+] as const;
+
+const SHELL_FALLBACK_FIELD_NAMES = [
+  "text",
+  "safe_summary",
+  "summary",
+  "message",
+  "error",
+] as const;
+
+const SHELL_ARTIFACT_FIELD_NAMES = ["artifacts", "artifact_paths"] as const;
+
+function collectShellCandidateRecords(
+  segment: AssistantTranscriptSegment | null,
+): Record<string, unknown>[] {
+  const metadata = segment?.metadata;
+  if (!metadata) {
+    return [];
+  }
+
+  const records: Record<string, unknown>[] = [];
+  const seenRecords = new Set<Record<string, unknown>>();
+
+  for (const path of SHELL_CANDIDATE_RECORD_PATHS) {
+    const candidate = readPathValue(metadata, path);
+    if (!candidate.found || !isRecord(candidate.value) || seenRecords.has(candidate.value)) {
+      continue;
+    }
+
+    seenRecords.add(candidate.value);
+    records.push(candidate.value);
+  }
+
+  if (!seenRecords.has(metadata)) {
+    seenRecords.add(metadata);
+    records.push(metadata);
+  }
+
+  return records;
+}
+
+function coerceShellDisplayValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
@@ -539,116 +625,81 @@ function stringifyShellValue(value: unknown): string {
     return "";
   }
 
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return "";
-    }
-
-    return value.map((entry) => stringifyShellValue(entry)).join("\n");
-  }
-
-  if (isRecord(value)) {
-    if (Object.keys(value).length === 0) {
-      return "";
-    }
-
+  if (Array.isArray(value) || isRecord(value)) {
     return JSON.stringify(value, null, 2) ?? "";
   }
 
   return String(value);
 }
 
-function humanizeIdentifier(value: string): string {
-  return value
-    .split(/[/_\-\s.]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function truncateCommand(value: string, maxLength = 64): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
-}
-
-const SHELL_STDOUT_PATHS = [
-  ["stdout"],
-  ["result", "stdout"],
-  ["output", "stdout"],
-  ["result", "output", "stdout"],
-  ["execution", "stdout"],
-  ["result", "execution", "stdout"],
-  ["payload", "stdout"],
-  ["result", "payload", "stdout"],
-  ["data", "stdout"],
-] as const;
-
-const SHELL_STDERR_PATHS = [
-  ["stderr"],
-  ["result", "stderr"],
-  ["output", "stderr"],
-  ["result", "output", "stderr"],
-  ["execution", "stderr"],
-  ["result", "execution", "stderr"],
-  ["payload", "stderr"],
-  ["result", "payload", "stderr"],
-  ["data", "stderr"],
-] as const;
-
-const SHELL_EXIT_CODE_PATHS = [["exit_code"], ["result", "exit_code"]] as const;
-
-const SHELL_COMMAND_PATHS = [
-  ["command"],
-  ["arguments", "command"],
-  ["result", "command"],
-  ["output", "command"],
-  ["result", "output", "command"],
-  ["execution", "command"],
-  ["result", "execution", "command"],
-  ["payload", "command"],
-  ["result", "payload", "command"],
-  ["data", "command"],
-] as const;
-
-const SHELL_OUTPUT_FALLBACK_PATHS = [
-  ["result", "text"],
-  ["result", "message"],
-  ["result", "summary"],
-  ["result", "safe_summary"],
-  ["output", "text"],
-  ["result", "output", "text"],
-  ["execution", "text"],
-  ["result", "execution", "text"],
-  ["payload", "text"],
-  ["result", "payload", "text"],
-  ["data", "text"],
-  ["text"],
-  ["message"],
-  ["summary"],
-  ["safe_summary"],
-] as const;
-
-function readPresentShellText(
+function readShellDisplayField(
   segment: AssistantTranscriptSegment | null,
-  paths: readonly (readonly string[])[],
+  fieldNames: readonly string[],
 ): PresentShellTextValue | null {
-  const metadata = segment?.metadata;
-  if (!metadata) {
-    return null;
-  }
+  for (const record of collectShellCandidateRecords(segment)) {
+    for (const fieldName of fieldNames) {
+      if (!hasOwnKey(record, fieldName)) {
+        continue;
+      }
 
-  for (const path of paths) {
-    const candidate = readPathValue(metadata, path);
-    if (!candidate.found) {
-      continue;
+      return {
+        present: true,
+        text: coerceShellDisplayValue(record[fieldName]),
+      };
     }
-
-    return {
-      present: true,
-      text: stringifyShellValue(candidate.value),
-    };
   }
 
   return null;
+}
+
+function readPrioritizedShellDisplayField(
+  segments: readonly (AssistantTranscriptSegment | null)[],
+  fieldNames: readonly string[],
+): PresentShellTextValue | null {
+  for (const segment of segments) {
+    const value = readShellDisplayField(segment, fieldNames);
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function isGenericShellSummary(candidate: string): boolean {
+  const normalized = candidate.replace(/\s+/g, " ").trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  return (
+    /^命令已完成[，,]?状态[:：]?\s*[\w-]+[。.]?$/.test(normalized) ||
+    /^工具执行完成[，,]?状态[:：]?\s*[\w-]+[。.]?$/.test(normalized) ||
+    /^命令执行(?:完成|结束)[。.]?$/.test(normalized) ||
+    /^tool(?: execution)? completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/.test(normalized) ||
+    /^command completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/.test(normalized) ||
+    /^completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/.test(normalized)
+  );
+}
+
+function isUsableShellFallbackText(
+  candidate: string,
+  command: string,
+  excludedText: string | null,
+): boolean {
+  const normalizedCandidate = candidate.trim();
+  if (normalizedCandidate.length === 0) {
+    return true;
+  }
+
+  const normalizedCommand = command.trim();
+  const normalizedExcludedText = excludedText?.trim() ?? null;
+
+  return !(
+    normalizedCandidate === normalizedCommand ||
+    (normalizedExcludedText !== null && normalizedCandidate === normalizedExcludedText) ||
+    isGenericShellSummary(normalizedCandidate)
+  );
 }
 
 function readSegmentCommand(segment: AssistantTranscriptSegment): string | null {
@@ -657,7 +708,7 @@ function readSegmentCommand(segment: AssistantTranscriptSegment): string | null 
     segment.tool_name === "bash" ||
     segment.tool_name === "sh" ||
     segment.tool_name === "zsh";
-  const command = readPresentShellText(segment, SHELL_COMMAND_PATHS)?.text.trim() ?? null;
+  const command = readShellDisplayField(segment, ["command"])?.text.trim() ?? null;
 
   return (
     (command && command.length > 0 ? command : null) ??
@@ -684,53 +735,7 @@ function inferSkillTitle(segment: AssistantTranscriptSegment): string | null {
   return rawName ? humanizeIdentifier(rawName) : null;
 }
 
-function readShellRecord(
-  segment: AssistantTranscriptSegment | null,
-): Record<string, unknown> | undefined {
-  return segment?.metadata;
-}
-
-function readShellResultRecord(
-  segment: AssistantTranscriptSegment | null,
-): Record<string, unknown> | undefined {
-  return readNestedRecord(segment?.metadata, "result");
-}
-
-function readShellTextValue(
-  segment: AssistantTranscriptSegment | null,
-  paths: readonly (readonly string[])[],
-): PresentShellTextValue | null {
-  return readPresentShellText(segment, paths);
-}
-
-function readShellExitCode(segment: AssistantTranscriptSegment | null): string | null {
-  const metadata = segment?.metadata;
-  if (!metadata) {
-    return null;
-  }
-
-  for (const path of SHELL_EXIT_CODE_PATHS) {
-    const candidate = readPathValue(metadata, path);
-    if (!candidate.found) {
-      continue;
-    }
-
-    const value = candidate.value;
-    if (
-      typeof value === "number" ||
-      typeof value === "string" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint"
-    ) {
-      const text = String(value).trim();
-      return text.length > 0 ? text : null;
-    }
-  }
-
-  return null;
-}
-
-function readShellOutputFallback(
+function readShellFallbackOutput(
   segment: AssistantTranscriptSegment | null,
   command: string,
   excludedText: string | null = null,
@@ -739,9 +744,22 @@ function readShellOutputFallback(
     return null;
   }
 
-  const metadataFallback = readPresentShellText(segment, SHELL_OUTPUT_FALLBACK_PATHS);
-  if (metadataFallback) {
-    return metadataFallback;
+  for (const record of collectShellCandidateRecords(segment)) {
+    for (const fieldName of SHELL_FALLBACK_FIELD_NAMES) {
+      if (!hasOwnKey(record, fieldName)) {
+        continue;
+      }
+
+      const text = coerceShellDisplayValue(record[fieldName]);
+      if (!isUsableShellFallbackText(text, command, excludedText)) {
+        continue;
+      }
+
+      return {
+        present: true,
+        text,
+      };
+    }
   }
 
   const candidate = segment.text;
@@ -749,19 +767,93 @@ function readShellOutputFallback(
     return null;
   }
 
-  const normalizedCandidate = candidate.trim();
-  const normalizedCommand = command.trim();
-  const normalizedExcludedText = excludedText?.trim() ?? null;
-
-  if (
-    normalizedCandidate.length === 0 ||
-    normalizedCandidate === normalizedCommand ||
-    (normalizedExcludedText !== null && normalizedCandidate === normalizedExcludedText)
-  ) {
+  if (!isUsableShellFallbackText(candidate, command, excludedText)) {
     return null;
   }
 
   return { present: true, text: candidate };
+}
+
+function isShellFailureStatus(status: string | null | undefined): boolean {
+  if (!status) {
+    return false;
+  }
+
+  const normalized = status.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  return ["failed", "error", "cancelled", "canceled", "timed_out", "timeout", "denied", "killed"].includes(
+    normalized,
+  );
+}
+
+function isShellCompletedStatus(status: string | null | undefined): boolean {
+  if (!status) {
+    return false;
+  }
+
+  const normalized = status.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  return ["completed", "done", "success", "succeeded", "finished"].includes(normalized);
+}
+
+function hasVisibleShellText(value: PresentShellTextValue | null): boolean {
+  return typeof value?.text === "string" && value.text.trim().length > 0;
+}
+
+function readShellErrorText({
+  error,
+  result,
+  call,
+  status,
+}: {
+  error: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  call: AssistantTranscriptSegment | null;
+  status: string | null;
+}): string | null {
+  const explicitError =
+    readPrioritizedShellDisplayField([error, result, call], ["error", "detail"])?.text.trim() ??
+    error?.text?.trim() ??
+    null;
+  if (explicitError) {
+    return explicitError;
+  }
+
+  if (!isShellFailureStatus(status)) {
+    return null;
+  }
+
+  return readPrioritizedShellDisplayField([error, result, call], ["message"])?.text.trim() ?? null;
+}
+
+function readShellArtifacts(segment: AssistantTranscriptSegment | null): string[] {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const record of collectShellCandidateRecords(segment)) {
+    for (const fieldName of SHELL_ARTIFACT_FIELD_NAMES) {
+      if (!hasOwnKey(record, fieldName)) {
+        continue;
+      }
+
+      for (const label of readArtifactLabels(record[fieldName])) {
+        if (seen.has(label)) {
+          continue;
+        }
+
+        seen.add(label);
+        labels.push(label);
+      }
+    }
+  }
+
+  return labels;
 }
 
 function buildToolPairs(
@@ -1144,25 +1236,35 @@ function AssistantShellBlock({
     return null;
   }
 
-  const command = readSegmentCommand(call ?? reference) ?? "Shell";
-  const stdout = readShellTextValue(result ?? reference, SHELL_STDOUT_PATHS);
-  const stderr = readShellTextValue(error ?? result ?? reference, SHELL_STDERR_PATHS);
+  const command = readSegmentCommand(call ?? result ?? reference) ?? "Shell";
+  const stdout = readPrioritizedShellDisplayField([result, call, error], ["stdout"]);
+  const stderr = readPrioritizedShellDisplayField([result, error, call], ["stderr"]);
+  const exitCode = readPrioritizedShellDisplayField([result, call, error], ["exit_code"]);
+  const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+  const shellErrorText = readShellErrorText({
+    error,
+    result,
+    call,
+    status,
+  });
   const outputFallback =
     stdout === null && stderr === null
-      ? readShellOutputFallback(result ?? reference, command, error?.text?.trim() ?? null)
+      ? readShellFallbackOutput(result, command, shellErrorText) ??
+        readShellFallbackOutput(call, command, shellErrorText) ??
+        readShellFallbackOutput(error, command, shellErrorText)
       : null;
-  const exitCode = readShellExitCode(result ?? reference);
-  const artifacts = [
-    ...readArtifactLabels(readShellRecord(result ?? reference)?.artifacts),
-    ...readArtifactLabels(readShellResultRecord(result ?? reference)?.artifacts),
-  ];
-  const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+  const hasVisibleOutput =
+    hasVisibleShellText(stdout) || hasVisibleShellText(stderr) || hasVisibleShellText(outputFallback);
+  const hasShellError = Boolean(error || shellErrorText || isShellFailureStatus(status));
+  const artifacts = [...readShellArtifacts(result), ...readShellArtifacts(call), ...readShellArtifacts(error)].filter(
+    (artifact, index, allArtifacts) => allArtifacts.indexOf(artifact) === index,
+  );
 
   return (
     <details
       className={`assistant-tool-block assistant-shell-block${error ? " assistant-shell-block-error" : ""}`}
       data-status={status ?? undefined}
-      open={Boolean(error)}
+      open={hasShellError || (hasVisibleOutput && isShellCompletedStatus(status))}
     >
       <summary className="assistant-tool-summary">
         <div className="assistant-tool-summary-copy">
@@ -1177,33 +1279,15 @@ function AssistantShellBlock({
       </summary>
       <div className="assistant-tool-body">
         <div className="assistant-tool-detail-group">
-          <span className="assistant-tool-detail-label">命令</span>
-          <pre className="assistant-terminal-output">{command}</pre>
+          <pre className="assistant-terminal-output">
+            <span className="assistant-terminal-output-prompt">$ {command}</span>
+            {stdout !== null && stdout.text ? `\n${stdout.text}` : ""}
+            {stderr !== null && stderr.text ? `\n${stderr.text}` : ""}
+            {outputFallback !== null && outputFallback.text ? `\n${outputFallback.text}` : ""}
+          </pre>
         </div>
-        {stdout !== null ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">标准输出</span>
-            <pre className="assistant-terminal-output">{stdout.text || "(empty)"}</pre>
-          </div>
-        ) : null}
-        {stderr !== null ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">标准错误</span>
-            <pre className="assistant-terminal-output assistant-terminal-output-error">
-              {stderr.text || "(empty)"}
-            </pre>
-          </div>
-        ) : null}
-        {outputFallback !== null ? (
-          <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">输出</span>
-            <pre className="assistant-terminal-output assistant-terminal-output-fallback">
-              {outputFallback.text || "(empty)"}
-            </pre>
-          </div>
-        ) : null}
         {exitCode !== null ? (
-          <p className="assistant-tool-inline-meta">退出码：{exitCode}</p>
+          <p className="assistant-tool-inline-meta">退出码：{exitCode.text || "(empty)"}</p>
         ) : null}
         {artifacts.length > 0 ? (
           <div className="assistant-tool-detail-group">
@@ -1217,8 +1301,8 @@ function AssistantShellBlock({
             </div>
           </div>
         ) : null}
-        {error?.text?.trim() ? (
-          <p className="assistant-tool-error-copy">{error.text.trim()}</p>
+        {shellErrorText ? (
+          <p className="assistant-tool-error-copy">{shellErrorText}</p>
         ) : null}
       </div>
     </details>
@@ -1756,3 +1840,4 @@ export function ConversationFeed(props: ConversationFeedProps) {
     </section>
   );
 }
+

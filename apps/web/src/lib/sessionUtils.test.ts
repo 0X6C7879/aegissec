@@ -128,6 +128,64 @@ describe("sessionUtils realtime summaries", () => {
     });
   });
 
+  it("preserves shell result fields from transcript segment roots when metadata is absent", () => {
+    expect(
+      toSessionMessageEvent(
+        {
+          id: "assistant-message-2",
+          session_id: "session-1",
+          role: "assistant",
+          content: "最终答复",
+          attachments: [],
+          assistant_transcript: [
+            {
+              id: "segment-root-shell",
+              sequence: 1,
+              kind: "tool_result",
+              status: "completed",
+              title: "工具执行结果",
+              text: null,
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-root-1",
+              recorded_at: "2026-04-01T10:00:03.000Z",
+              updated_at: "2026-04-01T10:00:04.000Z",
+              command: "curl -s http://target",
+              stdout: "root stdout",
+              stderr: "",
+              result: {
+                stdout: "root stdout",
+              },
+              output: {
+                text: "root output text",
+              },
+            },
+          ],
+        },
+        "session-1",
+        "2026-04-01T10:00:04.000Z",
+      ),
+    ).toMatchObject({
+      id: "assistant-message-2",
+      assistant_transcript: [
+        {
+          kind: "tool_result",
+          tool_name: "execute_kali_command",
+          metadata: {
+            command: "curl -s http://target",
+            stdout: "root stdout",
+            stderr: "",
+            result: {
+              stdout: "root stdout",
+            },
+            output: {
+              text: "root output text",
+            },
+          },
+        },
+      ],
+    });
+  });
+
   it("merges live reasoning events into conversation generations", () => {
     const merged = mergeConversationReasoningEvent(
       {

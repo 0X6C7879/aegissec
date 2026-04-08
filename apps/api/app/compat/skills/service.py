@@ -21,6 +21,7 @@ from app.compat.skills.executor import (
 from app.compat.skills.orchestration_planner import (
     build_skill_orchestration_plan as build_skill_orchestration_preview,
 )
+from app.compat.skills.preflight import SkillPreflightCheck, can_auto_run_preflight
 from app.compat.skills.parser import parse_skill_file, read_skill_markdown
 from app.compat.skills.scanner import (
     compatibility_skill_scan_placeholders,
@@ -490,6 +491,99 @@ class SkillService:
         del resolution_result
         planner_output = build_skill_orchestration_preview(skill_set_plan)
         return planner_output.to_payload()
+
+    def build_skill_orchestration_preview_payload(
+        self,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        workflow_stage: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+        include_reference_only: bool = True,
+    ) -> dict[str, object]:
+        preview_payload = self.resolve_best_skill(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=workflow_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=include_reference_only,
+        )
+        orchestration_plan = cast(
+            dict[str, object], preview_payload.get("skill_orchestration_plan", {})
+        )
+        preview_payload["stage_policy"] = self._active_stage_policy_payload(orchestration_plan)
+        preview_payload["worker_promotion_candidates"] = self._worker_promotion_candidates(
+            orchestration_plan
+        )
+        preview_payload["preflight_summary"] = self._orchestration_preflight_summary(
+            orchestration_plan
+        )
+        return preview_payload
+
+    def build_skill_orchestration_preview_prompt_fragment(
+        self,
+        **kwargs: object,
+    ) -> str:
+        preview_payload = self.build_skill_orchestration_preview_payload(
+            touched_paths=cast(list[str] | None, kwargs.get("touched_paths")),
+            workspace_path=cast(str | None, kwargs.get("workspace_path")),
+            session_id=cast(str | None, kwargs.get("session_id")),
+            top_k=cast(int | None, kwargs.get("top_k")),
+            user_goal=cast(str | None, kwargs.get("user_goal")),
+            current_prompt=cast(str | None, kwargs.get("current_prompt")),
+            scenario_type=cast(str | None, kwargs.get("scenario_type")),
+            agent_role=cast(str | None, kwargs.get("agent_role")),
+            workflow_stage=cast(str | None, kwargs.get("workflow_stage")),
+            available_tools=cast(list[str] | None, kwargs.get("available_tools")),
+            invocation_arguments=cast(dict[str, object] | None, kwargs.get("invocation_arguments")),
+            include_reference_only=cast(bool | None, kwargs.get("include_reference_only"))
+            if isinstance(kwargs.get("include_reference_only"), bool)
+            else True,
+        )
+        lines = ["Skill orchestration preview:"]
+        selected_skills = preview_payload.get("selected_skills")
+        if isinstance(selected_skills, list) and selected_skills:
+            lines.append(
+                "- selected="
+                + ", ".join(
+                    str(item.get("directory_name") or item.get("name") or "unknown")
+                    for item in selected_skills
+                    if isinstance(item, dict)
+                )
+            )
+        orchestration_plan = preview_payload.get("skill_orchestration_plan")
+        if isinstance(orchestration_plan, dict):
+            lines.extend(self._orchestration_plan_preview_lines(orchestration_plan))
+        preflight_summary = preview_payload.get("preflight_summary")
+        if isinstance(preflight_summary, dict):
+            lines.append(
+                "- preflight_planned="
+                + str(preflight_summary.get("planned_count"))
+                + " | auto_runnable="
+                + str(preflight_summary.get("auto_runnable_count"))
+                + " | approval_gated="
+                + str(preflight_summary.get("approval_gated_count"))
+            )
+        suppression_reasons = preview_payload.get("suppression_reasons")
+        if isinstance(suppression_reasons, dict) and suppression_reasons:
+            lines.append(
+                "- suppressed=" + ", ".join(str(skill_id) for skill_id in suppression_reasons)
+            )
+        return "\n".join(lines)
 
     def execute_skill_orchestration_plan(
         self,
@@ -1083,10 +1177,16 @@ class SkillService:
                 lines.append(f"  why={primary_why}")
             verification_mode = prepared_primary_skill.get("verification_mode")
             trust_level = prepared_primary_skill.get("trust_level")
+            version = prepared_primary_skill.get("version")
+            model_hint = prepared_primary_skill.get("model_hint")
             if isinstance(verification_mode, str) and verification_mode.strip():
                 lines.append(f"  verification_mode={verification_mode}")
             if isinstance(trust_level, str) and trust_level.strip():
                 lines.append(f"  trust_level={trust_level}")
+            if isinstance(version, str) and version.strip():
+                lines.append(f"  version={version}")
+            if isinstance(model_hint, str) and model_hint.strip():
+                lines.append(f"  model_hint={model_hint}")
             preflight_checks = prepared_primary_skill.get("preflight_checks")
             if isinstance(preflight_checks, list) and preflight_checks:
                 preflight_names = [
@@ -1106,6 +1206,12 @@ class SkillService:
                     f"prepared_for_context={item.get('prepared_for_context')} | "
                     f"prepared_for_execution={item.get('prepared_for_execution')}"
                 )
+                version = item.get("version")
+                model_hint = item.get("model_hint")
+                if isinstance(version, str) and version.strip():
+                    lines.append(f"  version={version}")
+                if isinstance(model_hint, str) and model_hint.strip():
+                    lines.append(f"  model_hint={model_hint}")
                 packing_explanation = item.get("packing_explanation")
                 if isinstance(packing_explanation, dict):
                     supporting_why = packing_explanation.get(
@@ -1281,6 +1387,162 @@ class SkillService:
         if len(guidance_lines) > 2:
             lines.extend(guidance_lines)
         return "\n".join(lines)
+
+    @staticmethod
+    def _active_stage_policy_payload(orchestration_plan: dict[str, object]) -> dict[str, object]:
+        stages = orchestration_plan.get("stages")
+        if not isinstance(stages, list) or not stages:
+            return {}
+        active_stage = orchestration_plan.get("active_stage")
+        selected_stage = next(
+            (
+                stage
+                for stage in stages
+                if isinstance(stage, dict) and stage.get("stage_name") == active_stage
+            ),
+            None,
+        )
+        if not isinstance(selected_stage, dict):
+            selected_stage = next((stage for stage in stages if isinstance(stage, dict)), None)
+        if not isinstance(selected_stage, dict):
+            return {}
+        return {
+            "stage_name": selected_stage.get("stage_name"),
+            "mode": selected_stage.get("mode"),
+            "failure_policy": selected_stage.get("failure_policy"),
+            "max_parallel_workers": selected_stage.get("max_parallel_workers"),
+            "worker_timeout_ms": selected_stage.get("worker_timeout_ms"),
+            "orchestration_timeout_ms": selected_stage.get("orchestration_timeout_ms"),
+            "retry_limit": selected_stage.get("retry_limit"),
+            "notes": list(selected_stage.get("notes", []))
+            if isinstance(selected_stage.get("notes"), list)
+            else [],
+        }
+
+    @staticmethod
+    def _worker_promotion_candidates(orchestration_plan: dict[str, object]) -> list[str]:
+        stages = orchestration_plan.get("stages")
+        if not isinstance(stages, list):
+            return []
+        active_stage = orchestration_plan.get("active_stage")
+        selected_stage = next(
+            (
+                stage
+                for stage in stages
+                if isinstance(stage, dict) and stage.get("stage_name") == active_stage
+            ),
+            None,
+        )
+        if not isinstance(selected_stage, dict):
+            return []
+        stage_steps = selected_stage.get("steps")
+        if not isinstance(stage_steps, list):
+            return []
+        return [
+            str(step.get("directory_name") or step.get("name") or "unknown")
+            for step in stage_steps
+            if isinstance(step, dict) and step.get("execution_intent") == "candidate_worker"
+        ]
+
+    def _orchestration_preflight_summary(
+        self,
+        orchestration_plan: dict[str, object],
+    ) -> dict[str, object]:
+        planned_count = 0
+        auto_runnable_count = 0
+        approval_gated_count = 0
+        planned_names: list[str] = []
+        stages = orchestration_plan.get("stages")
+        if not isinstance(stages, list):
+            return {
+                "planned_count": 0,
+                "auto_runnable_count": 0,
+                "approval_gated_count": 0,
+                "planned_names": [],
+            }
+        for stage in stages:
+            if not isinstance(stage, dict):
+                continue
+            stage_steps = stage.get("steps")
+            if not isinstance(stage_steps, list):
+                continue
+            for step in stage_steps:
+                if not isinstance(step, dict):
+                    continue
+                trust_level = cast(str | None, step.get("trust_level"))
+                for payload in cast(list[dict[str, object]], step.get("preflight_checks", [])):
+                    check = SkillPreflightCheck(
+                        name=str(payload.get("name") or "preflight"),
+                        kind=str(payload.get("kind") or payload.get("name") or "generic"),
+                        required=bool(payload.get("required", True)),
+                        read_only=bool(payload.get("read_only", True)),
+                        description=cast(str | None, payload.get("description")),
+                        metadata=cast(dict[str, object], payload.get("metadata", {})),
+                    )
+                    planned_count += 1
+                    planned_names.append(check.name)
+                    if can_auto_run_preflight(check, trust_level=trust_level):
+                        auto_runnable_count += 1
+                    else:
+                        approval_gated_count += 1
+        return {
+            "planned_count": planned_count,
+            "auto_runnable_count": auto_runnable_count,
+            "approval_gated_count": approval_gated_count,
+            "planned_names": planned_names,
+        }
+
+    @classmethod
+    def _orchestration_plan_preview_lines(cls, orchestration_plan: dict[str, object]) -> list[str]:
+        lines = ["- active_stage=" + str(orchestration_plan.get("active_stage"))]
+        stage_policy = cls._active_stage_policy_payload(orchestration_plan)
+        if stage_policy:
+            lines.append(
+                "- mode="
+                + str(stage_policy.get("mode"))
+                + " | failure_policy="
+                + str(stage_policy.get("failure_policy"))
+                + " | max_parallel_workers="
+                + str(stage_policy.get("max_parallel_workers"))
+            )
+            lines.append(
+                "- worker_timeout_ms="
+                + str(stage_policy.get("worker_timeout_ms"))
+                + " | orchestration_timeout_ms="
+                + str(stage_policy.get("orchestration_timeout_ms"))
+                + " | retry_limit="
+                + str(stage_policy.get("retry_limit"))
+            )
+        worker_candidates = cls._worker_promotion_candidates(orchestration_plan)
+        if worker_candidates:
+            lines.append("- candidate_workers=" + ", ".join(worker_candidates))
+        stages = orchestration_plan.get("stages")
+        if isinstance(stages, list) and stages:
+            first_stage = next((stage for stage in stages if isinstance(stage, dict)), None)
+            if isinstance(first_stage, dict):
+                steps = first_stage.get("steps")
+                if isinstance(steps, list):
+                    reducer_nodes = [
+                        str(step.get("skill_id") or step.get("step_id"))
+                        for step in steps
+                        if isinstance(step, dict) and step.get("role") == "reducer"
+                    ]
+                    verifier_nodes = [
+                        str(step.get("skill_id") or step.get("step_id"))
+                        for step in steps
+                        if isinstance(step, dict) and step.get("role") == "verifier"
+                    ]
+                    if reducer_nodes:
+                        lines.append("- reducer_nodes=" + ", ".join(reducer_nodes))
+                    if verifier_nodes:
+                        lines.append("- verifier_nodes=" + ", ".join(verifier_nodes))
+        replan_triggers = orchestration_plan.get("replan_triggers")
+        if isinstance(replan_triggers, list) and replan_triggers:
+            lines.append(
+                "- replan_triggers="
+                + ", ".join(str(trigger) for trigger in replan_triggers if str(trigger).strip())
+            )
+        return lines
 
     def _explanation_text(self, value: object) -> str:
         if isinstance(value, dict):
@@ -1912,6 +2174,8 @@ class SkillService:
             context=self._string_skill_field(record, "context_hint"),
             agent=self._string_skill_field(record, "agent"),
             effort=self._string_skill_field(record, "effort"),
+            version=self._string_metadata_value(compat_metadata, "version"),
+            model_hint=self._string_metadata_value(compat_metadata, "model_hint"),
             verification_mode=self._string_metadata_value(compat_metadata, "verification_mode"),
             shell_profile=self._string_metadata_value(compat_metadata, "shell_profile"),
             trust_level=self._string_metadata_value(compat_metadata, "trust_level"),
@@ -2068,6 +2332,8 @@ class SkillService:
             "context_hint": parsed.context_hint,
             "agent": parsed.agent,
             "effort": parsed.effort,
+            "version": parsed.version,
+            "model_hint": parsed.model_hint,
             "verification_mode": (
                 None if parsed.trust_metadata is None else parsed.trust_metadata.verification_mode
             ),
@@ -2151,6 +2417,8 @@ class SkillService:
             context=compiled_skill.context_hint,
             agent=compiled_skill.agent,
             effort=compiled_skill.effort,
+            version=compiled_skill.version,
+            model_hint=compiled_skill.model_hint,
             verification_mode=(
                 None
                 if compiled_skill.trust_metadata is None
@@ -2277,6 +2545,8 @@ class SkillService:
             "context": compiled_skill.context_hint,
             "agent": compiled_skill.agent,
             "effort": compiled_skill.effort,
+            "version": compiled_skill.version,
+            "model_hint": compiled_skill.model_hint,
             "verification_mode": (
                 None
                 if compiled_skill.trust_metadata is None
@@ -2583,6 +2853,8 @@ class SkillService:
             "context": self._string_skill_field(record, "context_hint"),
             "agent": self._string_skill_field(record, "agent"),
             "effort": self._string_skill_field(record, "effort"),
+            "version": self._string_metadata_value(compat_metadata, "version"),
+            "model_hint": self._string_metadata_value(compat_metadata, "model_hint"),
             "verification_mode": self._string_metadata_value(compat_metadata, "verification_mode"),
             "shell_profile": self._string_metadata_value(compat_metadata, "shell_profile"),
             "trust_level": self._string_metadata_value(compat_metadata, "trust_level"),

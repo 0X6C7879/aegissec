@@ -138,6 +138,8 @@ class ParsedSkillFrontmatter:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     verification_mode: str | None = None
     shell_profile: str | None = None
     trust_level: str | None = None
@@ -184,6 +186,8 @@ class ParsedSkillRecordData:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     trust_metadata: SkillTrustMetadata | None = None
     preflight_checks: list[SkillPreflightCheck] = field(default_factory=list)
     orchestration_role: str | None = None
@@ -224,6 +228,8 @@ class CompiledSkill:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     trust_metadata: SkillTrustMetadata | None = None
     preflight_checks: list[SkillPreflightCheck] = field(default_factory=list)
     orchestration_role: str | None = None

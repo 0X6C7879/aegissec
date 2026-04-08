@@ -894,6 +894,8 @@ def test_skill_metadata_frontmatter_is_exposed_additively_through_payloads(
             "phase-demo": """---
 name: phase-demo
 description: Phase metadata demo
+version: 2.1.0
+model_hint: claude-sonnet
 verification_mode: targeted
 shell_profile: readonly
 trust_level: trusted
@@ -942,6 +944,8 @@ Use the prepared phase metadata only.
     phase_demo_identity = cast(dict[str, object], phase_demo_record["resolved_identity"])
 
     assert phase_demo_record["raw_frontmatter"] == {"unknown_flag": True}
+    assert phase_demo_record["version"] == "2.1.0"
+    assert phase_demo_record["model_hint"] == "claude-sonnet"
     assert phase_demo_record["verification_mode"] == "targeted"
     assert phase_demo_record["shell_profile"] == "readonly"
     assert phase_demo_record["trust_level"] == "local_trusted"
@@ -966,6 +970,8 @@ Use the prepared phase metadata only.
     prepared_invocation = cast(dict[str, object], selected_skill["prepared_invocation"])
     pending_actions = cast(list[dict[str, object]], prepared_invocation["pending_actions"])
 
+    assert selected_skill["version"] == "2.1.0"
+    assert selected_skill["model_hint"] == "claude-sonnet"
     assert selected_skill["verification_mode"] == "targeted"
     assert selected_hints["keep_facade"] == "execute_skill"
     assert selected_execution_policy["shell_allowed"] is False
@@ -976,6 +982,8 @@ Use the prepared phase metadata only.
     content_payload = cast(dict[str, object], api_data(content_response))
     content_preflight_checks = cast(list[dict[str, object]], content_payload["preflight_checks"])
     content_result_schema = cast(dict[str, object], content_payload["result_schema"])
+    assert content_payload["version"] == "2.1.0"
+    assert content_payload["model_hint"] == "claude-sonnet"
     assert content_payload["trust_level"] == "local_trusted"
     assert content_preflight_checks[1]["name"] == "runtime-profile"
     assert content_result_schema["required"] == ["summary"]
@@ -1992,6 +2000,8 @@ def _build_compiled_skill(
     context_strategy: str | None = "focused",
     verification_mode: str | None = "targeted",
     trust_level: str | None = "local_trusted",
+    version: str | None = "1.0.0",
+    model_hint: str | None = "gpt-5.4",
     preflight_checks: list[SkillPreflightCheck] | None = None,
 ) -> CompiledSkill:
     return CompiledSkill(
@@ -2019,6 +2029,8 @@ def _build_compiled_skill(
         orchestration_role=orchestration_role,
         fanout_group=fanout_group,
         context_strategy=context_strategy,
+        version=version,
+        model_hint=model_hint,
         prepared_prompt=f"Prepared primary skill: {directory_name}",
     )
 

@@ -14,6 +14,9 @@ class SkillStagePolicy:
     mode: SkillOrchestrationMode
     failure_policy: SkillOrchestrationFailurePolicy
     max_parallel_workers: int
+    worker_timeout_ms: int | None = None
+    orchestration_timeout_ms: int | None = None
+    retry_limit: int = 0
     allow_supporting_worker_promotion: bool = False
     include_reducer: bool = False
     include_verifier: bool = False
@@ -26,6 +29,9 @@ class SkillStagePolicy:
             "mode": self.mode.value,
             "failure_policy": self.failure_policy.value,
             "max_parallel_workers": self.max_parallel_workers,
+            "worker_timeout_ms": self.worker_timeout_ms,
+            "orchestration_timeout_ms": self.orchestration_timeout_ms,
+            "retry_limit": self.retry_limit,
             "allow_supporting_worker_promotion": self.allow_supporting_worker_promotion,
             "include_reducer": self.include_reducer,
             "include_verifier": self.include_verifier,
@@ -58,6 +64,9 @@ def build_skill_stage_policy(
             ),
             failure_policy=SkillOrchestrationFailurePolicy.BEST_EFFORT,
             max_parallel_workers=max_parallel_workers,
+            worker_timeout_ms=5000,
+            orchestration_timeout_ms=15000,
+            retry_limit=1,
             allow_supporting_worker_promotion=supporting_count > 0,
             include_reducer=supporting_count > 0,
             include_verifier=False,
@@ -81,6 +90,9 @@ def build_skill_stage_policy(
             ),
             failure_policy=SkillOrchestrationFailurePolicy.FAIL_FAST,
             max_parallel_workers=max_parallel_workers,
+            worker_timeout_ms=4000,
+            orchestration_timeout_ms=12000,
+            retry_limit=0,
             allow_supporting_worker_promotion=supporting_count > 0,
             include_reducer=supporting_count > 1,
             include_verifier=True,
@@ -96,6 +108,9 @@ def build_skill_stage_policy(
             mode=SkillOrchestrationMode.SINGLE_PRIMARY,
             failure_policy=SkillOrchestrationFailurePolicy.FAIL_FAST,
             max_parallel_workers=1,
+            worker_timeout_ms=4000,
+            orchestration_timeout_ms=8000,
+            retry_limit=0,
             allow_supporting_worker_promotion=False,
             include_reducer=supporting_count > 0 or reference_count > 0,
             include_verifier=True,
@@ -113,6 +128,9 @@ def build_skill_stage_policy(
             mode=SkillOrchestrationMode.SINGLE_PRIMARY,
             failure_policy=SkillOrchestrationFailurePolicy.BEST_EFFORT,
             max_parallel_workers=1,
+            worker_timeout_ms=3000,
+            orchestration_timeout_ms=6000,
+            retry_limit=0,
             allow_supporting_worker_promotion=False,
             include_reducer=supporting_count > 0 or reference_count > 0,
             include_verifier=True,
@@ -153,6 +171,9 @@ def build_skill_stage_policy(
         ),
         failure_policy=SkillOrchestrationFailurePolicy.BEST_EFFORT,
         max_parallel_workers=max_parallel_workers,
+        worker_timeout_ms=4000,
+        orchestration_timeout_ms=12000,
+        retry_limit=1,
         allow_supporting_worker_promotion=supporting_count > 0,
         include_reducer=supporting_count > 0,
         include_verifier=False,

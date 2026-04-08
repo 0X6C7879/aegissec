@@ -18,6 +18,26 @@ class SkillContextRead(BaseModel):
     prompt_fragment: str
 
 
+class SkillOrchestrationPreviewRequest(BaseModel):
+    touched_paths: list[str] = []
+    workspace_path: str | None = None
+    session_id: str | None = None
+    top_k: int | None = None
+    user_goal: str | None = None
+    current_prompt: str | None = None
+    scenario_type: str | None = None
+    agent_role: str | None = None
+    workflow_stage: str | None = None
+    available_tools: list[str] | None = None
+    invocation_arguments: dict[str, object] | None = None
+    include_reference_only: bool = True
+
+
+class SkillOrchestrationPreviewRead(BaseModel):
+    payload: dict[str, object]
+    prompt_fragment: str
+
+
 @router.get("", response_model=list[SkillRecordRead])
 async def list_skills(
     skill_service: SkillService = Depends(get_skill_service),
@@ -32,6 +52,20 @@ async def get_skill_context(
     return SkillContextRead(
         payload=skill_service.build_skill_context_payload(),
         prompt_fragment=skill_service.build_skill_context_prompt_fragment(),
+    )
+
+
+@router.post("/orchestration-plan", response_model=SkillOrchestrationPreviewRead)
+async def preview_skill_orchestration_plan(
+    payload: SkillOrchestrationPreviewRequest,
+    skill_service: SkillService = Depends(get_skill_service),
+) -> SkillOrchestrationPreviewRead:
+    request_payload = payload.model_dump()
+    return SkillOrchestrationPreviewRead(
+        payload=skill_service.build_skill_orchestration_preview_payload(**request_payload),
+        prompt_fragment=skill_service.build_skill_orchestration_preview_prompt_fragment(
+            **request_payload
+        ),
     )
 
 

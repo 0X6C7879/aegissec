@@ -70,6 +70,8 @@ def compile_skill_record(
         context_hint=parsed_frontmatter.context_hint,
         agent=parsed_frontmatter.agent,
         effort=parsed_frontmatter.effort,
+        version=parsed_frontmatter.version,
+        model_hint=parsed_frontmatter.model_hint,
         trust_metadata=_trust_metadata(record, parsed_frontmatter),
         preflight_checks=list(parsed_frontmatter.preflight_checks),
         orchestration_role=parsed_frontmatter.orchestration_role,
@@ -139,6 +141,10 @@ def build_prepared_prompt_fragment(
         lines.append(f"Agent: {compiled_skill.agent}")
     if compiled_skill.effort:
         lines.append(f"Effort: {compiled_skill.effort}")
+    if compiled_skill.version:
+        lines.append(f"Version: {compiled_skill.version}")
+    if compiled_skill.model_hint:
+        lines.append(f"Model hint: {compiled_skill.model_hint}")
     if compiled_skill.trust_metadata is not None:
         if compiled_skill.trust_metadata.verification_mode:
             lines.append(f"Verification mode: {compiled_skill.trust_metadata.verification_mode}")

@@ -909,6 +909,8 @@ class SkillRecordRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     verification_mode: str | None = None
     shell_profile: str | None = None
     trust_level: str | None = None
@@ -951,6 +953,8 @@ class SkillAgentSummaryRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     verification_mode: str | None = None
     shell_profile: str | None = None
     trust_level: str | None = None
@@ -1003,6 +1007,8 @@ class SkillContentRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    version: str | None = None
+    model_hint: str | None = None
     verification_mode: str | None = None
     shell_profile: str | None = None
     trust_level: str | None = None
