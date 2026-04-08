@@ -2,20 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 from uuid import NAMESPACE_URL, uuid5
 
 import yaml
 
 from app.db.models import SkillRecordStatus
 
+from .discovery_cache import build_discovery_provenance, canonicalize_skill_path
 from .models import (
     DiscoveredSkillFile,
     ParsedSkillFrontmatter,
     ParsedSkillRecordData,
     SkillSourceIdentity,
 )
+from .orchestration_models import (
+    SkillExecutionPolicy,
+    SkillOrchestrationHints,
+    SkillResultSchema,
+)
+from .preflight import SkillPreflightCheck
+from .trust import SkillTrustMetadata, resolve_effective_trust_level
 
 KNOWN_FRONTMATTER_FIELDS = {
     "name",
@@ -38,6 +48,28 @@ KNOWN_FRONTMATTER_FIELDS = {
     "context",
     "agent",
     "effort",
+    "verification_mode",
+    "verification-mode",
+    "shell_profile",
+    "shell-profile",
+    "trust_level",
+    "trust-level",
+    "preflight_checks",
+    "preflight-checks",
+    "orchestration_role",
+    "orchestration-role",
+    "orchestration_hints",
+    "orchestration-hints",
+    "fanout_group",
+    "fanout-group",
+    "preferred_stage",
+    "preferred-stage",
+    "context_strategy",
+    "context-strategy",
+    "execution_policy",
+    "execution-policy",
+    "result_schema",
+    "result-schema",
     "family",
     "domain",
     "task_mode",
@@ -45,6 +77,12 @@ KNOWN_FRONTMATTER_FIELDS = {
     "tags",
 }
 SIMPLE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$", re.IGNORECASE)
+StructuredMetadataT = TypeVar(
+    "StructuredMetadataT",
+    SkillOrchestrationHints,
+    SkillExecutionPolicy,
+    SkillResultSchema,
+)
 
 
 def read_skill_markdown(entry_file: str) -> str:
@@ -64,6 +102,20 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         source_root=discovered_file.root_dir,
         relative_path=relative_path,
         fingerprint=content_hash,
+        canonical_source_root=canonicalize_skill_path(discovered_file.root_dir),
+        canonical_entry_file=canonicalize_skill_path(discovered_file.entry_file),
+        discovery_provenance=(
+            dict(discovered_file.discovery_provenance)
+            if discovered_file.discovery_provenance
+            else build_discovery_provenance(
+                source_root=discovered_file.root_dir,
+                entry_file=discovered_file.entry_file,
+                relative_path=relative_path,
+                source_kind=discovered_file.source_kind.value,
+                root_label=discovered_file.root_label,
+                metadata=discovered_file.metadata,
+            )
+        ),
     )
 
     try:
@@ -109,6 +161,15 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         context_hint=parsed_frontmatter.context_hint,
         agent=parsed_frontmatter.agent,
         effort=parsed_frontmatter.effort,
+        trust_metadata=_build_trust_metadata(parsed_frontmatter, discovered_file),
+        preflight_checks=list(parsed_frontmatter.preflight_checks),
+        orchestration_role=parsed_frontmatter.orchestration_role,
+        orchestration_hints=parsed_frontmatter.orchestration_hints,
+        fanout_group=parsed_frontmatter.fanout_group,
+        preferred_stage=parsed_frontmatter.preferred_stage,
+        context_strategy=parsed_frontmatter.context_strategy,
+        execution_policy=parsed_frontmatter.execution_policy,
+        result_schema=parsed_frontmatter.result_schema,
         semantic_family=parsed_frontmatter.semantic_family,
         semantic_domain=parsed_frontmatter.semantic_domain,
         semantic_task_mode=parsed_frontmatter.semantic_task_mode,
@@ -119,6 +180,8 @@ def parse_skill_file(discovered_file: DiscoveredSkillFile) -> ParsedSkillRecordD
         content_hash=content_hash,
         last_scanned_at=now,
         source_identity=source_identity,
+        root_label=discovered_file.root_label,
+        discovery_provenance=dict(source_identity.discovery_provenance),
         raw_frontmatter=_with_compat_metadata(
             parsed_frontmatter.raw_frontmatter,
             activation_paths=parsed_frontmatter.activation_paths,
@@ -156,6 +219,41 @@ def parse_skill_frontmatter(text: str, *, directory_name: str) -> ParsedSkillFro
         context_hint=_extract_optional_string(frontmatter, ("context",)),
         agent=_extract_optional_string(frontmatter, ("agent",)),
         effort=_extract_optional_string(frontmatter, ("effort",)),
+        verification_mode=_extract_optional_string(
+            frontmatter,
+            ("verification_mode", "verification-mode"),
+        ),
+        shell_profile=_extract_optional_string(frontmatter, ("shell_profile", "shell-profile")),
+        trust_level=_extract_optional_string(frontmatter, ("trust_level", "trust-level")),
+        preflight_checks=_extract_preflight_checks(frontmatter),
+        orchestration_role=_extract_optional_string(
+            frontmatter,
+            ("orchestration_role", "orchestration-role"),
+        ),
+        orchestration_hints=_extract_optional_structured_metadata(
+            frontmatter,
+            ("orchestration_hints", "orchestration-hints"),
+            SkillOrchestrationHints,
+        ),
+        fanout_group=_extract_optional_string(frontmatter, ("fanout_group", "fanout-group")),
+        preferred_stage=_extract_optional_string(
+            frontmatter,
+            ("preferred_stage", "preferred-stage"),
+        ),
+        context_strategy=_extract_optional_string(
+            frontmatter,
+            ("context_strategy", "context-strategy"),
+        ),
+        execution_policy=_extract_optional_structured_metadata(
+            frontmatter,
+            ("execution_policy", "execution-policy"),
+            SkillExecutionPolicy,
+        ),
+        result_schema=_extract_optional_structured_metadata(
+            frontmatter,
+            ("result_schema", "result-schema"),
+            SkillResultSchema,
+        ),
         semantic_family=_extract_optional_string(frontmatter, ("family",)),
         semantic_domain=_extract_optional_string(frontmatter, ("domain",)),
         semantic_task_mode=_extract_optional_string(frontmatter, ("task_mode", "task-mode")),
@@ -349,6 +447,84 @@ def _extract_string_list(
     return values
 
 
+def _extract_preflight_checks(frontmatter: dict[str, object]) -> list[SkillPreflightCheck]:
+    raw_value = _coalesce_frontmatter_value(frontmatter, ("preflight_checks", "preflight-checks"))
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise SkillParseError(
+            "Frontmatter field 'preflight_checks/preflight-checks' must be an array."
+        )
+
+    checks: list[SkillPreflightCheck] = []
+    for item in raw_value:
+        if isinstance(item, str):
+            stripped_name = item.strip()
+            if stripped_name:
+                checks.append(SkillPreflightCheck(name=stripped_name))
+            continue
+        if not isinstance(item, dict):
+            raise SkillParseError(
+                "Frontmatter field 'preflight_checks/preflight-checks' "
+                "must contain strings or objects."
+            )
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise SkillParseError(
+                "Each preflight check object must include a non-empty string 'name'."
+            )
+        kind = item.get("kind")
+        required = item.get("required")
+        read_only = item.get("read_only", item.get("read-only", True))
+        description = item.get("description")
+        if kind is not None and (not isinstance(kind, str) or not kind.strip()):
+            raise SkillParseError("Preflight check field 'kind' must be a non-empty string.")
+        if required is not None and not isinstance(required, bool):
+            raise SkillParseError("Preflight check field 'required' must be a boolean.")
+        if not isinstance(read_only, bool):
+            raise SkillParseError("Preflight check field 'read_only/read-only' must be a boolean.")
+        if description is not None and not isinstance(description, str):
+            raise SkillParseError("Preflight check field 'description' must be a string.")
+        metadata = {
+            key: value
+            for key, value in item.items()
+            if key not in {"name", "kind", "required", "read_only", "read-only", "description"}
+        }
+        checks.append(
+            SkillPreflightCheck(
+                name=name.strip(),
+                kind=(kind.strip() if isinstance(kind, str) and kind.strip() else "generic"),
+                required=required if isinstance(required, bool) else True,
+                read_only=read_only,
+                description=description.strip()
+                if isinstance(description, str) and description.strip()
+                else None,
+                metadata=metadata,
+            )
+        )
+    return checks
+
+
+def _extract_optional_structured_metadata[StructuredMetadataT](
+    frontmatter: dict[str, object],
+    keys: tuple[str, ...],
+    metadata_type: Callable[[dict[str, object]], StructuredMetadataT],
+) -> StructuredMetadataT | None:
+    raw_value = _coalesce_frontmatter_value(frontmatter, keys)
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        joined_keys = "/".join(keys)
+        raise SkillParseError(f"Frontmatter field '{joined_keys}' must be an object.")
+    normalized: dict[str, object] = {}
+    for key, value in raw_value.items():
+        if not isinstance(key, str):
+            joined_keys = "/".join(keys)
+            raise SkillParseError(f"Frontmatter field '{joined_keys}' must use string keys.")
+        normalized[key] = value
+    return metadata_type(normalized)
+
+
 def _coalesce_frontmatter_value(
     frontmatter: dict[str, object],
     keys: tuple[str, ...],
@@ -397,3 +573,18 @@ def _with_compat_metadata(
     if compat_payload:
         enriched["_compat"] = compat_payload
     return enriched
+
+
+def _build_trust_metadata(
+    parsed_frontmatter: ParsedSkillFrontmatter,
+    discovered_file: DiscoveredSkillFile,
+) -> SkillTrustMetadata | None:
+    trust_metadata = SkillTrustMetadata(
+        verification_mode=parsed_frontmatter.verification_mode,
+        shell_profile=parsed_frontmatter.shell_profile,
+        trust_level=resolve_effective_trust_level(
+            source=discovered_file.source.value,
+            source_kind=discovered_file.source_kind.value,
+        ),
+    )
+    return None if trust_metadata.is_empty else trust_metadata

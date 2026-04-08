@@ -909,11 +909,23 @@ class SkillRecordRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    verification_mode: str | None = None
+    shell_profile: str | None = None
+    trust_level: str | None = None
+    preflight_checks: list[dict[str, object]] = Field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: dict[str, object] | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: dict[str, object] | None = None
+    result_schema: dict[str, object] | None = None
     aliases: list[str] = Field(default_factory=list)
     paths: list[str] = Field(default_factory=list)
     shell_enabled: bool = True
     prepared_invocation: dict[str, object] | None = None
     resolved_identity: dict[str, object] = Field(default_factory=dict)
+    discovery_provenance: dict[str, object] = Field(default_factory=dict)
 
 
 class SkillAgentSummaryRead(SQLModel):
@@ -939,6 +951,17 @@ class SkillAgentSummaryRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    verification_mode: str | None = None
+    shell_profile: str | None = None
+    trust_level: str | None = None
+    preflight_checks: list[dict[str, object]] = Field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: dict[str, object] | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: dict[str, object] | None = None
+    result_schema: dict[str, object] | None = None
     family: str | None = None
     domain: str | None = None
     task_mode: str | None = None
@@ -951,6 +974,7 @@ class SkillAgentSummaryRead(SQLModel):
     prepared_for_context: bool = False
     prepared_for_execution: bool = False
     active_due_to_touched_paths: bool = False
+    discovery_provenance: dict[str, object] = Field(default_factory=dict)
     rank: int = 0
     total_score: int = 0
     score_breakdown: dict[str, object] = Field(default_factory=dict)
@@ -979,11 +1003,23 @@ class SkillContentRead(SQLModel):
     context: str | None = None
     agent: str | None = None
     effort: str | None = None
+    verification_mode: str | None = None
+    shell_profile: str | None = None
+    trust_level: str | None = None
+    preflight_checks: list[dict[str, object]] = Field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: dict[str, object] | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: dict[str, object] | None = None
+    result_schema: dict[str, object] | None = None
     aliases: list[str] = Field(default_factory=list)
     paths: list[str] = Field(default_factory=list)
     shell_enabled: bool = True
     prepared_invocation: dict[str, object] | None = None
     resolved_identity: dict[str, object] = Field(default_factory=dict)
+    discovery_provenance: dict[str, object] = Field(default_factory=dict)
     content: str
 
 

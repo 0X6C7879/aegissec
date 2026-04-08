@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import import_module
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -9,6 +10,17 @@ from fastapi import Depends
 from sqlmodel import Session as DBSession
 
 from app.compat.skills import models as skill_models
+from app.compat.skills.discovery_cache import (
+    SkillDiscoveryCache,
+    build_compiled_skill_cache_key,
+    build_root_cache_key,
+)
+from app.compat.skills.executor import (
+    execute_skill_orchestration_plan as execute_skill_orchestration_runtime,
+)
+from app.compat.skills.orchestration_planner import (
+    build_skill_orchestration_plan as build_skill_orchestration_preview,
+)
 from app.compat.skills.parser import parse_skill_file, read_skill_markdown
 from app.compat.skills.scanner import (
     compatibility_skill_scan_placeholders,
@@ -18,6 +30,7 @@ from app.compat.skills.scanner import (
 )
 from app.core.settings import Settings, get_settings
 from app.db.models import (
+    CompatibilitySource,
     SkillAgentSummaryRead,
     SkillContentRead,
     SkillRecord,
@@ -181,6 +194,7 @@ class SkillService:
         self._repository = SkillRepository(db_session)
         self._mcp_repository = MCPRepository(db_session)
         self._settings = settings
+        self._cache = SkillDiscoveryCache()
 
     def list_skills(self) -> list[SkillRecordRead]:
         return [
@@ -467,6 +481,88 @@ class SkillService:
         )
         return [record.to_payload() for record in usage_records]
 
+    def build_skill_orchestration_plan(
+        self,
+        skill_set_plan: SkillSetPlan,
+        *,
+        resolution_result: skill_models.SkillResolutionResult,
+    ) -> dict[str, object]:
+        del resolution_result
+        planner_output = build_skill_orchestration_preview(skill_set_plan)
+        return planner_output.to_payload()
+
+    def execute_skill_orchestration_plan(
+        self,
+        orchestration_plan: dict[str, object],
+        *,
+        arguments: dict[str, object] | None = None,
+        workspace_path: str | None = None,
+        touched_paths: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, object]:
+        execution_result = execute_skill_orchestration_runtime(
+            orchestration_plan=orchestration_plan,
+            execute_skill_facade=self.execute_skill_by_name_or_directory_name,
+            arguments=arguments,
+            workspace_path=workspace_path,
+            touched_paths=touched_paths,
+            session_id=session_id,
+        )
+        return execution_result.to_payload()
+
+    def maybe_replan_skills_for_stage_transition(
+        self,
+        stage_transition: dict[str, object] | None,
+        *,
+        touched_paths: list[str] | None = None,
+        workspace_path: str | None = None,
+        session_id: str | None = None,
+        top_k: int | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        agent_role: str | None = None,
+        available_tools: list[str] | None = None,
+        invocation_arguments: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        if not isinstance(stage_transition, dict):
+            return None
+        if stage_transition.get("replan_required") is not True:
+            return None
+        next_stage = stage_transition.get("to_stage")
+        if not isinstance(next_stage, str) or not next_stage.strip():
+            return None
+        replanned_payload = self.resolve_best_skill(
+            touched_paths=touched_paths,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            top_k=top_k,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            agent_role=agent_role,
+            workflow_stage=next_stage,
+            available_tools=available_tools,
+            invocation_arguments=invocation_arguments,
+            include_reference_only=True,
+        )
+        if replanned_payload.get("status") != "selected":
+            return {
+                "workflow_stage": next_stage,
+                "status": replanned_payload.get("status"),
+                "selected_skill_ids": replanned_payload.get("selected_skill_ids", []),
+                "skill_orchestration_plan": replanned_payload.get("skill_orchestration_plan", {}),
+                "resolution_summary": replanned_payload.get("resolution_summary", {}),
+            }
+        return {
+            "workflow_stage": next_stage,
+            "selected_skill_ids": replanned_payload.get("selected_skill_ids", []),
+            "skill_budget": replanned_payload.get("skill_budget", {}),
+            "skill_set_plan": replanned_payload.get("skill_set_plan", {}),
+            "skill_orchestration_plan": replanned_payload.get("skill_orchestration_plan", {}),
+            "resolution_summary": replanned_payload.get("resolution_summary", {}),
+        }
+
     def resolve_skill_candidates(
         self,
         *,
@@ -666,6 +762,37 @@ class SkillService:
             touched_paths=touched_paths,
             session_id=session_id,
         )
+        orchestration_execution = None
+        skill_orchestration_plan = cast(
+            dict[str, object] | None, best_skill_result.get("skill_orchestration_plan")
+        )
+        if isinstance(skill_orchestration_plan, dict):
+            orchestration_execution = self.execute_skill_orchestration_plan(
+                skill_orchestration_plan,
+                arguments=invocation_arguments,
+                workspace_path=workspace_path,
+                touched_paths=touched_paths,
+                session_id=session_id,
+            )
+        stage_transition = None
+        replanned_skill_context = None
+        if isinstance(orchestration_execution, dict):
+            stage_transition = cast(
+                dict[str, object] | None, orchestration_execution.get("stage_transition")
+            )
+            replanned_skill_context = self.maybe_replan_skills_for_stage_transition(
+                stage_transition,
+                touched_paths=touched_paths,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                top_k=top_k,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                agent_role=agent_role,
+                available_tools=available_tools,
+                invocation_arguments=invocation_arguments,
+            )
         prepared_context_prompt = self._build_prepared_skill_context_prompt(
             prepared_primary_skill=cast(
                 dict[str, object] | None, prepared_set.get("prepared_primary_skill")
@@ -680,9 +807,23 @@ class SkillService:
             suppression_reasons=cast(
                 dict[str, object], best_skill_result.get("suppression_reasons", {})
             ),
+            orchestration_plan=skill_orchestration_plan,
+            orchestration_execution=orchestration_execution,
+            stage_transition=stage_transition,
+            replanned_orchestration_plan=(
+                None
+                if not isinstance(replanned_skill_context, dict)
+                else cast(
+                    dict[str, object] | None,
+                    replanned_skill_context.get("skill_orchestration_plan"),
+                )
+            ),
         )
         prepared_result = dict(best_skill_result)
         prepared_result.update(prepared_set)
+        prepared_result["skill_orchestration_execution"] = orchestration_execution or {}
+        prepared_result["skill_stage_transition"] = stage_transition or {}
+        prepared_result["replanned_skill_context"] = replanned_skill_context or {}
         prepared_result["prepared_context_prompt"] = prepared_context_prompt
         return prepared_result
 
@@ -786,6 +927,42 @@ class SkillService:
                 list(selected_skill_ids) if isinstance(selected_skill_ids, list) else []
             )
             anchored_result["skill_set_plan"] = updated_plan
+        orchestration_plan = anchored_result.get("skill_orchestration_plan")
+        if isinstance(orchestration_plan, dict):
+            updated_orchestration_plan = dict(orchestration_plan)
+            selected_skill_ids = anchored_result.get("selected_skill_ids")
+            updated_orchestration_plan["primary_skill_id"] = updated_preferred.get("id")
+            updated_orchestration_plan["selected_skill_ids"] = (
+                list(selected_skill_ids) if isinstance(selected_skill_ids, list) else []
+            )
+            stages_payload = updated_orchestration_plan.get("stages")
+            if isinstance(stages_payload, list):
+                updated_stages: list[dict[str, object]] = []
+                for stage in stages_payload:
+                    if not isinstance(stage, dict):
+                        continue
+                    updated_stage = dict(stage)
+                    raw_steps = updated_stage.get("steps")
+                    if isinstance(raw_steps, list):
+                        updated_steps: list[dict[str, object]] = []
+                        for step in raw_steps:
+                            if not isinstance(step, dict):
+                                continue
+                            updated_step = dict(step)
+                            step_skill_id = updated_step.get("skill_id")
+                            if step_skill_id == updated_preferred.get("id"):
+                                updated_step["role"] = "primary"
+                                updated_step["execution_intent"] = "execute_primary"
+                                updated_step["prepared_for_execution"] = True
+                            elif step_skill_id == primary_identity:
+                                updated_step["role"] = "supporting"
+                                updated_step["execution_intent"] = "candidate_worker"
+                                updated_step["prepared_for_execution"] = False
+                            updated_steps.append(updated_step)
+                        updated_stage["steps"] = updated_steps
+                    updated_stages.append(updated_stage)
+                updated_orchestration_plan["stages"] = updated_stages
+            anchored_result["skill_orchestration_plan"] = updated_orchestration_plan
         return anchored_result
 
     def _prepare_selected_skill_set(
@@ -852,6 +1029,10 @@ class SkillService:
         intent_profile: dict[str, object] | None,
         suppressed_skills: list[dict[str, object]],
         suppression_reasons: dict[str, object],
+        orchestration_plan: dict[str, object] | None = None,
+        orchestration_execution: dict[str, object] | None = None,
+        stage_transition: dict[str, object] | None = None,
+        replanned_orchestration_plan: dict[str, object] | None = None,
     ) -> str:
         lines: list[str] = []
         execution_payload = (
@@ -900,6 +1081,21 @@ class SkillService:
                     "why_high_relevance", "high blended relevance"
                 )
                 lines.append(f"  why={primary_why}")
+            verification_mode = prepared_primary_skill.get("verification_mode")
+            trust_level = prepared_primary_skill.get("trust_level")
+            if isinstance(verification_mode, str) and verification_mode.strip():
+                lines.append(f"  verification_mode={verification_mode}")
+            if isinstance(trust_level, str) and trust_level.strip():
+                lines.append(f"  trust_level={trust_level}")
+            preflight_checks = prepared_primary_skill.get("preflight_checks")
+            if isinstance(preflight_checks, list) and preflight_checks:
+                preflight_names = [
+                    str(item.get("name"))
+                    for item in preflight_checks
+                    if isinstance(item, dict) and isinstance(item.get("name"), str)
+                ]
+                if preflight_names:
+                    lines.append(f"  preflight={', '.join(preflight_names)}")
 
         if prepared_supporting_skills:
             lines.extend(["", "Supporting skills prepared for context:"])
@@ -935,6 +1131,117 @@ class SkillService:
             )
         if selected_explanations:
             lines.extend(["", "Why these skills were selected together:", *selected_explanations])
+
+        if isinstance(orchestration_plan, dict):
+            active_stage = orchestration_plan.get("active_stage")
+            stages = orchestration_plan.get("stages")
+            lines.extend(["", "Orchestration plan preview:"])
+            if isinstance(active_stage, str) and active_stage.strip():
+                lines.append(f"- active_stage={active_stage}")
+            if isinstance(stages, list) and stages:
+                first_stage = stages[0]
+                if isinstance(first_stage, dict):
+                    lines.append(
+                        "- mode="
+                        f"{first_stage.get('mode')} | "
+                        f"failure_policy={first_stage.get('failure_policy')} | "
+                        f"max_parallel_workers={first_stage.get('max_parallel_workers')}"
+                    )
+                    stage_steps = first_stage.get("steps")
+                    if isinstance(stage_steps, list):
+                        candidate_workers = [
+                            str(step.get("directory_name") or step.get("name") or "unknown")
+                            for step in stage_steps
+                            if isinstance(step, dict) and step.get("role") == "supporting"
+                        ]
+                        reference_steps = [
+                            str(step.get("directory_name") or step.get("name") or "unknown")
+                            for step in stage_steps
+                            if isinstance(step, dict) and step.get("role") == "reference"
+                        ]
+                        reducer_present = any(
+                            isinstance(step, dict) and step.get("role") == "reducer"
+                            for step in stage_steps
+                        )
+                        verifier_present = any(
+                            isinstance(step, dict) and step.get("role") == "verifier"
+                            for step in stage_steps
+                        )
+                        if candidate_workers:
+                            lines.append(f"- candidate_workers={', '.join(candidate_workers)}")
+                        if reference_steps:
+                            lines.append(f"- reference_only={', '.join(reference_steps)}")
+                        if reducer_present:
+                            lines.append("- reducer=enabled")
+                        if verifier_present:
+                            lines.append("- verifier=enabled")
+            replan_triggers = orchestration_plan.get("replan_triggers")
+            if isinstance(replan_triggers, list) and replan_triggers:
+                lines.append(
+                    "- replan_triggers="
+                    + ", ".join(str(trigger) for trigger in replan_triggers if str(trigger).strip())
+                )
+
+        if isinstance(orchestration_execution, dict) and orchestration_execution:
+            lines.extend(["", "Orchestration execution summary:"])
+            lines.append(
+                "- status="
+                + str(orchestration_execution.get("status"))
+                + " | duration_ms="
+                + str(orchestration_execution.get("duration_ms"))
+            )
+            worker_results = orchestration_execution.get("worker_results")
+            if isinstance(worker_results, list):
+                executed_workers = [
+                    str(result.get("name") or result.get("skill_id") or "unknown")
+                    for result in worker_results
+                    if isinstance(result, dict)
+                    and result.get("status") == "succeeded"
+                    and result.get("role") == "supporting"
+                ]
+                approval_pending = [
+                    str(result.get("name") or result.get("skill_id") or "unknown")
+                    for result in worker_results
+                    if isinstance(result, dict) and result.get("approval_needed") is True
+                ]
+                if executed_workers:
+                    lines.append(f"- executed_workers={', '.join(executed_workers)}")
+                if approval_pending:
+                    lines.append(f"- approval_pending={', '.join(approval_pending)}")
+            reduction_result = orchestration_execution.get("reduction_result")
+            if isinstance(reduction_result, dict):
+                lines.append(
+                    "- reduction_status=" + str(reduction_result.get("status") or "unknown")
+                )
+            verification_result = orchestration_execution.get("verification_result")
+            if isinstance(verification_result, dict):
+                lines.append(
+                    "- verification_passed="
+                    + str(verification_result.get("passed"))
+                    + " | requested_next_stage="
+                    + str(verification_result.get("requested_next_stage"))
+                )
+
+        if isinstance(stage_transition, dict) and stage_transition:
+            lines.extend(["", "Stage transition:"])
+            lines.append(
+                "- from_stage="
+                + str(stage_transition.get("from_stage"))
+                + " | to_stage="
+                + str(stage_transition.get("to_stage"))
+                + " | replan_required="
+                + str(stage_transition.get("replan_required"))
+            )
+
+        if isinstance(replanned_orchestration_plan, dict) and replanned_orchestration_plan:
+            lines.extend(["", "Replanned orchestration preview:"])
+            lines.append(
+                "- next_active_stage="
+                + str(
+                    replanned_orchestration_plan.get("active_stage")
+                    or replanned_orchestration_plan.get("workflow_stage")
+                )
+            )
 
         if suppressed_skills:
             lines.extend(["", "Suppressed skills:"])
@@ -1163,6 +1470,12 @@ class SkillService:
             "selected_skill_rank": prepared_result.get("selected_skill_rank"),
             "skill_budget": prepared_result.get("skill_budget", {}),
             "skill_set_plan": prepared_result.get("skill_set_plan", {}),
+            "skill_orchestration_plan": prepared_result.get("skill_orchestration_plan", {}),
+            "skill_orchestration_execution": prepared_result.get(
+                "skill_orchestration_execution", {}
+            ),
+            "skill_stage_transition": prepared_result.get("skill_stage_transition", {}),
+            "replanned_skill_context": prepared_result.get("replanned_skill_context", {}),
             "skill_runtime_usage": prepared_result.get("skill_runtime_usage", []),
             "intent_profile": prepared_result.get("intent_profile"),
             "prepared_selected_skills": prepared_result.get("prepared_selected_skills", []),
@@ -1376,6 +1689,8 @@ class SkillService:
         return primary_skill if isinstance(primary_skill, dict) else None
 
     def rescan_skills(self) -> list[SkillRecordRead]:
+        self._cache.clear_entry_content_cache()
+        self._cache.clear_scan_roots_cache()
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
         self._repository.replace_all(records)
         return self.list_skills()
@@ -1388,10 +1703,46 @@ class SkillService:
         return to_skill_record_read(updated)
 
     def _scan_and_parse(self) -> list[skill_models.ParsedSkillRecordData]:
-        discovered_files = scan_skill_files(resolve_skill_scan_roots(self._settings))
+        discovered_files = scan_skill_files(self._resolve_scan_roots())
         parsed_records = [parse_skill_file(discovered_file) for discovered_file in discovered_files]
         parsed_records.extend(self._scan_mcp_capability_records())
         return parsed_records
+
+    def _resolve_scan_roots(
+        self,
+        *,
+        discovery_paths: list[str] | None = None,
+    ) -> list[skill_models.SkillScanRoot]:
+        normalized_discovery_paths = [
+            path for path in discovery_paths or [] if path and path.strip()
+        ]
+        return self._cache.get_or_resolve_scan_roots(
+            include_compatibility_roots=self._settings.skill_compatibility_scan_enabled,
+            extra_dirs=list(self._settings.skill_extra_dirs),
+            discovery_paths=normalized_discovery_paths,
+            resolver=lambda: self._resolve_skill_scan_roots_with_compatibility(
+                normalized_discovery_paths,
+            ),
+        )
+
+    def _resolve_skill_scan_roots_with_compatibility(
+        self,
+        discovery_paths: list[str],
+    ) -> list[skill_models.SkillScanRoot]:
+        if not discovery_paths or not self._resolve_skill_scan_roots_supports_discovery_paths():
+            return resolve_skill_scan_roots(self._settings)
+        return resolve_skill_scan_roots(
+            self._settings,
+            discovery_paths=discovery_paths,
+        )
+
+    @staticmethod
+    def _resolve_skill_scan_roots_supports_discovery_paths() -> bool:
+        parameters = signature(resolve_skill_scan_roots).parameters.values()
+        return any(
+            parameter.kind is Parameter.VAR_KEYWORD or parameter.name == "discovery_paths"
+            for parameter in parameters
+        )
 
     def list_active_compiled_skills(
         self,
@@ -1491,7 +1842,7 @@ class SkillService:
         return None
 
     def _supported_root_keys(self) -> set[tuple[object, object, str]]:
-        roots = resolve_skill_scan_roots(self._settings)
+        roots = self._resolve_scan_roots()
         roots.extend(compatibility_skill_scan_placeholders())
         return {
             (
@@ -1534,10 +1885,12 @@ class SkillService:
 
     def _build_skill_content(self, record: SkillRecord) -> SkillContentRead:
         compat_metadata = self._compat_metadata(record)
+        compiled_skill = None
         prepared_invocation: dict[str, object] | None = None
         if record.status == SkillRecordStatus.LOADED and record.enabled:
+            compiled_skill = self._compile_skill_record(record)
             prepared_invocation = self._summarize_prepared_invocation(
-                self._compile_skill_record(record).prepared_invocation
+                compiled_skill.prepared_invocation
             )
         return SkillContentRead(
             id=record.id,
@@ -1559,6 +1912,23 @@ class SkillService:
             context=self._string_skill_field(record, "context_hint"),
             agent=self._string_skill_field(record, "agent"),
             effort=self._string_skill_field(record, "effort"),
+            verification_mode=self._string_metadata_value(compat_metadata, "verification_mode"),
+            shell_profile=self._string_metadata_value(compat_metadata, "shell_profile"),
+            trust_level=self._string_metadata_value(compat_metadata, "trust_level"),
+            preflight_checks=self._preflight_checks(record),
+            orchestration_role=self._string_metadata_value(
+                compat_metadata,
+                "orchestration_role",
+            ),
+            orchestration_hints=self._structured_metadata_value(
+                compat_metadata,
+                "orchestration_hints",
+            ),
+            fanout_group=self._string_metadata_value(compat_metadata, "fanout_group"),
+            preferred_stage=self._string_metadata_value(compat_metadata, "preferred_stage"),
+            context_strategy=self._string_metadata_value(compat_metadata, "context_strategy"),
+            execution_policy=self._structured_metadata_value(compat_metadata, "execution_policy"),
+            result_schema=self._structured_metadata_value(compat_metadata, "result_schema"),
             aliases=self._string_list_skill_field(record, "aliases"),
             paths=self._activation_paths(record),
             shell_enabled=self._bool_metadata_value(
@@ -1568,6 +1938,11 @@ class SkillService:
             ),
             prepared_invocation=prepared_invocation,
             resolved_identity=self._resolved_identity_payload_for_record(record),
+            discovery_provenance=(
+                self._discovery_provenance_for_record(record)
+                if compiled_skill is None
+                else dict(compiled_skill.discovery_provenance)
+            ),
             content=self._read_skill_entry_file(record),
         )
 
@@ -1584,21 +1959,39 @@ class SkillService:
         else:
             record = None
             entry_file = record_or_entry_file
-        entry_path = Path(entry_file)
         try:
-            return read_skill_markdown(str(entry_path))
+            return self._cache.read_entry_content(entry_file, read_skill_markdown)
         except OSError as exc:
+            entry_path = Path(entry_file)
             raise SkillContentReadError(
                 f"Failed to read skill content from '{entry_path.as_posix()}'."
             ) from exc
 
-    def _compile_skill_record(self, record: SkillRecord) -> skill_models.CompiledSkill:
-        content = self._read_skill_entry_file(record)
+    def _compile_skill_record(
+        self,
+        record: SkillRecord,
+        *,
+        invocation_request: skill_models.SkillInvocationRequest | None = None,
+    ) -> skill_models.CompiledSkill:
+        source_kind = self._infer_source_kind(record)
+        cache_key = build_compiled_skill_cache_key(
+            record=record,
+            source_kind=source_kind.value,
+            relative_path=self._relative_path_for_record(record, source_kind),
+            invocation_request=invocation_request,
+        )
         compiler_module = import_module("app.compat.skills.compiler")
         registry_module = import_module("app.compat.skills.registry")
-        compiled_skill = cast(
-            skill_models.CompiledSkill,
-            compiler_module.compile_skill_record(record, content),
+        compiled_skill = self._cache.get_or_compile_skill(
+            cache_key,
+            lambda: cast(
+                skill_models.CompiledSkill,
+                compiler_module.compile_skill_record(
+                    record,
+                    self._read_skill_entry_file(record),
+                    invocation_request=invocation_request,
+                ),
+            ),
         )
         registry = cast(_CompiledSkillRegistryProtocol, registry_module.CompiledSkillRegistry())
         registry.register(compiled_skill)
@@ -1611,21 +2004,13 @@ class SkillService:
         touched_paths: list[str] | None = None,
         invocation_request: skill_models.SkillInvocationRequest | None = None,
     ) -> _CompiledSkillRegistryProtocol:
-        compiler_module = import_module("app.compat.skills.compiler")
         registry_module = import_module("app.compat.skills.registry")
         registry = cast(_CompiledSkillRegistryProtocol, registry_module.CompiledSkillRegistry())
         for record in self._list_visible_skill_records():
             if record.status != SkillRecordStatus.LOADED or not record.enabled:
                 continue
             registry.register(
-                cast(
-                    skill_models.CompiledSkill,
-                    compiler_module.compile_skill_record(
-                        record,
-                        self._read_skill_entry_file(record),
-                        invocation_request=invocation_request,
-                    ),
-                )
+                self._compile_skill_record(record, invocation_request=invocation_request)
             )
 
         discovery_paths = self._discovery_paths(
@@ -1637,7 +2022,12 @@ class SkillService:
         supported_roots = {
             self._normalize_path(record.root_dir) for record in self._list_visible_skill_records()
         }
-        for discovered_file in scan_skill_files(discover_claude_skill_scan_roots(discovery_paths)):
+        dynamic_roots = [
+            root
+            for root in self._resolve_scan_roots(discovery_paths=discovery_paths)
+            if root.source == CompatibilitySource.CLAUDE
+        ]
+        for discovered_file in scan_skill_files(dynamic_roots):
             if self._normalize_path(discovered_file.root_dir) in supported_roots:
                 continue
             parsed_record = parse_skill_file(discovered_file)
@@ -1645,14 +2035,7 @@ class SkillService:
                 continue
             transient_record = self._to_skill_record(parsed_record)
             registry.register(
-                cast(
-                    skill_models.CompiledSkill,
-                    compiler_module.compile_skill_record(
-                        transient_record,
-                        self._read_skill_entry_file(transient_record),
-                        invocation_request=invocation_request,
-                    ),
-                )
+                self._compile_skill_record(transient_record, invocation_request=invocation_request)
             )
         return registry
 
@@ -1685,10 +2068,44 @@ class SkillService:
             "context_hint": parsed.context_hint,
             "agent": parsed.agent,
             "effort": parsed.effort,
+            "verification_mode": (
+                None if parsed.trust_metadata is None else parsed.trust_metadata.verification_mode
+            ),
+            "shell_profile": (
+                None if parsed.trust_metadata is None else parsed.trust_metadata.shell_profile
+            ),
+            "trust_level": (
+                None if parsed.trust_metadata is None else parsed.trust_metadata.trust_level
+            ),
+            "preflight_checks": [check.to_payload() for check in parsed.preflight_checks],
+            "orchestration_role": parsed.orchestration_role,
+            "orchestration_hints": (
+                None
+                if parsed.orchestration_hints is None
+                else parsed.orchestration_hints.to_payload()
+            ),
+            "fanout_group": parsed.fanout_group,
+            "preferred_stage": parsed.preferred_stage,
+            "context_strategy": parsed.context_strategy,
+            "execution_policy": (
+                None if parsed.execution_policy is None else parsed.execution_policy.to_payload()
+            ),
+            "result_schema": (
+                None if parsed.result_schema is None else parsed.result_schema.to_payload()
+            ),
             "semantic_family": parsed.semantic_family,
             "semantic_domain": parsed.semantic_domain,
             "semantic_task_mode": parsed.semantic_task_mode,
             "semantic_tags": list(parsed.semantic_tags),
+            "root_label": parsed.root_label,
+            "discovery_provenance": dict(
+                parsed.discovery_provenance
+                or (
+                    {}
+                    if parsed.source_identity is None
+                    else parsed.source_identity.discovery_provenance
+                )
+            ),
         }
         raw_frontmatter["_compat"] = compat_payload
         return SkillRecord(
@@ -1734,6 +2151,41 @@ class SkillService:
             context=compiled_skill.context_hint,
             agent=compiled_skill.agent,
             effort=compiled_skill.effort,
+            verification_mode=(
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.verification_mode
+            ),
+            shell_profile=(
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.shell_profile
+            ),
+            trust_level=(
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.trust_level
+            ),
+            preflight_checks=[check.to_payload() for check in compiled_skill.preflight_checks],
+            orchestration_role=compiled_skill.orchestration_role,
+            orchestration_hints=(
+                None
+                if compiled_skill.orchestration_hints is None
+                else compiled_skill.orchestration_hints.to_payload()
+            ),
+            fanout_group=compiled_skill.fanout_group,
+            preferred_stage=compiled_skill.preferred_stage,
+            context_strategy=compiled_skill.context_strategy,
+            execution_policy=(
+                None
+                if compiled_skill.execution_policy is None
+                else compiled_skill.execution_policy.to_payload()
+            ),
+            result_schema=(
+                None
+                if compiled_skill.result_schema is None
+                else compiled_skill.result_schema.to_payload()
+            ),
             aliases=list(compiled_skill.aliases),
             paths=list(compiled_skill.activation_paths),
             shell_enabled=compiled_skill.shell_enabled,
@@ -1741,6 +2193,7 @@ class SkillService:
                 compiled_skill.prepared_invocation
             ),
             resolved_identity=self._resolved_identity_payload(compiled_skill),
+            discovery_provenance=dict(compiled_skill.discovery_provenance),
             content=(
                 import_module("app.compat.skills.mcp_bridge").read_mcp_skill_markdown(
                     compiled_skill
@@ -1824,6 +2277,41 @@ class SkillService:
             "context": compiled_skill.context_hint,
             "agent": compiled_skill.agent,
             "effort": compiled_skill.effort,
+            "verification_mode": (
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.verification_mode
+            ),
+            "shell_profile": (
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.shell_profile
+            ),
+            "trust_level": (
+                None
+                if compiled_skill.trust_metadata is None
+                else compiled_skill.trust_metadata.trust_level
+            ),
+            "preflight_checks": [check.to_payload() for check in compiled_skill.preflight_checks],
+            "orchestration_role": compiled_skill.orchestration_role,
+            "orchestration_hints": (
+                None
+                if compiled_skill.orchestration_hints is None
+                else compiled_skill.orchestration_hints.to_payload()
+            ),
+            "fanout_group": compiled_skill.fanout_group,
+            "preferred_stage": compiled_skill.preferred_stage,
+            "context_strategy": compiled_skill.context_strategy,
+            "execution_policy": (
+                None
+                if compiled_skill.execution_policy is None
+                else compiled_skill.execution_policy.to_payload()
+            ),
+            "result_schema": (
+                None
+                if compiled_skill.result_schema is None
+                else compiled_skill.result_schema.to_payload()
+            ),
             "family": compiled_skill.semantic_family,
             "domain": compiled_skill.semantic_domain,
             "task_mode": compiled_skill.semantic_task_mode,
@@ -1837,6 +2325,7 @@ class SkillService:
             "prepared_for_context": prepared_for_context,
             "prepared_for_execution": prepared_for_execution,
             "resolved_identity": self._resolved_identity_payload(compiled_skill),
+            "discovery_provenance": dict(compiled_skill.discovery_provenance),
             "active_due_to_touched_paths": active_due_to_touched_paths,
             "selected": selected,
             "role": role,
@@ -1949,6 +2438,10 @@ class SkillService:
             skill_set_plan,
             resolution_result=resolution_result,
         )
+        skill_orchestration_plan = self.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
         suppressed_skills = [
             self._resolved_skill_candidate_payload(candidate, touched_paths=touched_paths)
             for candidate in skill_set_plan.suppressed_candidates
@@ -1991,6 +2484,7 @@ class SkillService:
                 payload_builder=self._resolved_skill_candidate_payload,
                 touched_paths=touched_paths,
             ),
+            "skill_orchestration_plan": skill_orchestration_plan,
             "skill_runtime_usage": skill_runtime_usage,
             "intent_profile": (
                 None
@@ -2089,6 +2583,25 @@ class SkillService:
             "context": self._string_skill_field(record, "context_hint"),
             "agent": self._string_skill_field(record, "agent"),
             "effort": self._string_skill_field(record, "effort"),
+            "verification_mode": self._string_metadata_value(compat_metadata, "verification_mode"),
+            "shell_profile": self._string_metadata_value(compat_metadata, "shell_profile"),
+            "trust_level": self._string_metadata_value(compat_metadata, "trust_level"),
+            "preflight_checks": self._preflight_checks(record),
+            "orchestration_role": self._string_metadata_value(
+                compat_metadata,
+                "orchestration_role",
+            ),
+            "orchestration_hints": self._structured_metadata_value(
+                compat_metadata,
+                "orchestration_hints",
+            ),
+            "fanout_group": self._string_metadata_value(compat_metadata, "fanout_group"),
+            "preferred_stage": self._string_metadata_value(compat_metadata, "preferred_stage"),
+            "context_strategy": self._string_metadata_value(compat_metadata, "context_strategy"),
+            "execution_policy": self._structured_metadata_value(
+                compat_metadata, "execution_policy"
+            ),
+            "result_schema": self._structured_metadata_value(compat_metadata, "result_schema"),
             "family": self._string_skill_field(record, "semantic_family"),
             "domain": self._string_skill_field(record, "semantic_domain"),
             "task_mode": self._string_skill_field(record, "semantic_task_mode"),
@@ -2101,6 +2614,7 @@ class SkillService:
                 default=source_kind is not skill_models.SkillSourceKind.MCP,
             ),
             "resolved_identity": self._resolved_identity_payload_for_record(record),
+            "discovery_provenance": self._discovery_provenance_for_record(record),
             "raw_frontmatter": self._visible_raw_frontmatter(record),
         }
         if record.status == SkillRecordStatus.LOADED and record.enabled:
@@ -2224,6 +2738,30 @@ class SkillService:
         value = payload.get(key)
         return value if isinstance(value, bool) else default
 
+    @staticmethod
+    def _structured_metadata_value(
+        payload: dict[str, object], key: str
+    ) -> dict[str, object] | None:
+        value = payload.get(key)
+        return dict(value) if isinstance(value, dict) else None
+
+    @staticmethod
+    def _discovery_provenance_for_record(record: SkillRecord) -> dict[str, object]:
+        provenance = SkillService._compat_metadata(record).get("discovery_provenance")
+        if not isinstance(provenance, dict):
+            return {}
+        sanitized = dict(provenance)
+        sanitized.pop("canonical_root", None)
+        sanitized.pop("canonical_entry_file", None)
+        return sanitized
+
+    @staticmethod
+    def _preflight_checks(record: SkillRecord) -> list[dict[str, object]]:
+        raw_checks = SkillService._compat_metadata(record).get("preflight_checks")
+        if not isinstance(raw_checks, list):
+            return []
+        return [dict(item) for item in raw_checks if isinstance(item, dict)]
+
 
 def resolve_skill_scan_roots(
     settings: Settings,
@@ -2237,17 +2775,14 @@ def resolve_skill_scan_roots(
     if discovery_paths:
         roots.extend(discover_claude_skill_scan_roots(discovery_paths))
 
-    deduped: dict[tuple[object, object, str], skill_models.SkillScanRoot] = {}
+    deduped: dict[tuple[str, str, str, str], skill_models.SkillScanRoot] = {}
     for root in roots:
         deduped[
-            (
-                root.source,
-                root.scope,
-                (
-                    root.root_dir.strip().casefold()
-                    if "://" in root.root_dir
-                    else Path(root.root_dir).resolve(strict=False).as_posix().casefold()
-                ),
+            build_root_cache_key(
+                source=root.source.value,
+                scope=root.scope.value,
+                root_dir=root.root_dir,
+                source_kind=root.source_kind.value,
             )
         ] = root
     return list(deduped.values())

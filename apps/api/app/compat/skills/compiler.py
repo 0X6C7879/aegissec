@@ -5,8 +5,10 @@ import re
 from pathlib import Path
 
 from app.compat.skills import models as skill_models
+from app.compat.skills.discovery_cache import build_discovery_provenance, canonicalize_skill_path
 from app.compat.skills.intent_routing import infer_skill_semantics
 from app.compat.skills.parser import parse_skill_frontmatter
+from app.compat.skills.trust import SkillTrustMetadata, resolve_effective_trust_level
 from app.db.models import SkillRecord
 
 INLINE_SHELL_RE = re.compile(r"^(?P<indent>\s*)!(?P<command>\S.*)$")
@@ -32,6 +34,9 @@ def compile_skill_record(
         source_root=record.root_dir,
         relative_path=_relative_skill_path(record),
         fingerprint=record.content_hash or hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        canonical_source_root=canonicalize_skill_path(record.root_dir),
+        canonical_entry_file=canonicalize_skill_path(record.entry_file),
+        discovery_provenance=_discovery_provenance(record),
     )
     semantic_family, semantic_domain, semantic_task_mode, semantic_tags = infer_skill_semantics(
         directory_name=record.directory_name,
@@ -65,6 +70,15 @@ def compile_skill_record(
         context_hint=parsed_frontmatter.context_hint,
         agent=parsed_frontmatter.agent,
         effort=parsed_frontmatter.effort,
+        trust_metadata=_trust_metadata(record, parsed_frontmatter),
+        preflight_checks=list(parsed_frontmatter.preflight_checks),
+        orchestration_role=parsed_frontmatter.orchestration_role,
+        orchestration_hints=parsed_frontmatter.orchestration_hints,
+        fanout_group=parsed_frontmatter.fanout_group,
+        preferred_stage=parsed_frontmatter.preferred_stage,
+        context_strategy=parsed_frontmatter.context_strategy,
+        execution_policy=parsed_frontmatter.execution_policy,
+        result_schema=parsed_frontmatter.result_schema,
         semantic_family=semantic_family,
         semantic_domain=semantic_domain,
         semantic_task_mode=semantic_task_mode,
@@ -75,6 +89,7 @@ def compile_skill_record(
             "shell_enabled",
             default=identity.source_kind is not skill_models.SkillSourceKind.MCP,
         ),
+        discovery_provenance=_discovery_provenance(record),
     )
     prepared_invocation = prepare_skill_invocation(
         compiled_skill,
@@ -124,6 +139,19 @@ def build_prepared_prompt_fragment(
         lines.append(f"Agent: {compiled_skill.agent}")
     if compiled_skill.effort:
         lines.append(f"Effort: {compiled_skill.effort}")
+    if compiled_skill.trust_metadata is not None:
+        if compiled_skill.trust_metadata.verification_mode:
+            lines.append(f"Verification mode: {compiled_skill.trust_metadata.verification_mode}")
+        if compiled_skill.trust_metadata.shell_profile:
+            lines.append(f"Shell profile: {compiled_skill.trust_metadata.shell_profile}")
+        if compiled_skill.trust_metadata.trust_level:
+            lines.append(f"Trust level: {compiled_skill.trust_metadata.trust_level}")
+    if compiled_skill.orchestration_role:
+        lines.append(f"Orchestration role: {compiled_skill.orchestration_role}")
+    if compiled_skill.preferred_stage:
+        lines.append(f"Preferred stage: {compiled_skill.preferred_stage}")
+    if compiled_skill.context_strategy:
+        lines.append(f"Context strategy: {compiled_skill.context_strategy}")
     lines.append(f"Invocable: {str(compiled_skill.invocable).lower()}")
     lines.append(f"Dynamic: {str(compiled_skill.dynamic).lower()}")
     if compiled_skill.loaded_from:
@@ -142,6 +170,11 @@ def build_prepared_prompt_fragment(
             lines.append(
                 "Shell expansions detected: "
                 f"{len(prepared_invocation.shell_expansions)} pending approval ({status})."
+            )
+        if compiled_skill.preflight_checks:
+            lines.append(
+                "Preflight checks planned: "
+                + ", ".join(check.name for check in compiled_skill.preflight_checks)
             )
     if rendered_content:
         lines.extend(["", rendered_content])
@@ -168,6 +201,14 @@ def prepare_skill_invocation(
         )
         for expansion in shell_expansions
     ]
+    pending_actions.extend(
+        skill_models.SkillInvocationPendingAction(
+            action_type="preflight_check",
+            status="planned",
+            payload=check.to_payload(),
+        )
+        for check in compiled_skill.preflight_checks
+    )
     return skill_models.PreparedSkillInvocation(
         request=invocation_request,
         context=skill_models.SkillInvocationContext(
@@ -330,3 +371,46 @@ def _resolve_skill_directory(compiled_skill: skill_models.CompiledSkill) -> str:
     if compiled_skill.identity.source_kind == skill_models.SkillSourceKind.MCP:
         return compiled_skill.identity.source_root
     return Path(compiled_skill.entry_file).resolve().parent.as_posix()
+
+
+def _trust_metadata(
+    record: SkillRecord,
+    parsed_frontmatter: skill_models.ParsedSkillFrontmatter,
+) -> SkillTrustMetadata | None:
+    if parsed_frontmatter.verification_mode is not None:
+        verification_mode: str | None = parsed_frontmatter.verification_mode
+    else:
+        verification_mode = _string_compat_value(_compat_metadata(record), "verification_mode")
+    if parsed_frontmatter.shell_profile is not None:
+        shell_profile: str | None = parsed_frontmatter.shell_profile
+    else:
+        shell_profile = _string_compat_value(_compat_metadata(record), "shell_profile")
+    if parsed_frontmatter.trust_level is not None:
+        trust_level: str | None = parsed_frontmatter.trust_level
+    else:
+        trust_level = _string_compat_value(_compat_metadata(record), "trust_level")
+    effective_trust_level = resolve_effective_trust_level(
+        source=record.source.value,
+        source_kind=infer_skill_source_kind(record).value,
+    )
+    trust_metadata = SkillTrustMetadata(
+        verification_mode=verification_mode,
+        shell_profile=shell_profile,
+        trust_level=effective_trust_level if trust_level is not None else effective_trust_level,
+    )
+    return None if trust_metadata.is_empty else trust_metadata
+
+
+def _discovery_provenance(record: SkillRecord) -> dict[str, object]:
+    compat_metadata = _compat_metadata(record)
+    provenance = compat_metadata.get("discovery_provenance")
+    if isinstance(provenance, dict):
+        return dict(provenance)
+    return build_discovery_provenance(
+        source_root=record.root_dir,
+        entry_file=record.entry_file,
+        relative_path=_relative_skill_path(record),
+        source_kind=infer_skill_source_kind(record).value,
+        root_label=_string_compat_value(compat_metadata, "root_label"),
+        metadata=compat_metadata,
+    )

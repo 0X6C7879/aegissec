@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.db.models import MCPCapability, MCPCapabilityKind, MCPServer, SkillRecordStatus
 
+from .discovery_cache import build_discovery_provenance, canonicalize_skill_path
 from .models import ParsedSkillRecordData, SkillSourceIdentity, SkillSourceKind
 
 
@@ -139,6 +140,14 @@ def _build_mcp_skill_record(
     )
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     now = datetime.now(UTC)
+    discovery_provenance = build_discovery_provenance(
+        source_root=f"mcp://skills/{server.id}",
+        entry_file=entry_file,
+        relative_path=relative_path,
+        source_kind=SkillSourceKind.MCP.value,
+        root_label="mcp-skills",
+        metadata=compat_metadata,
+    )
     return ParsedSkillRecordData(
         id=str(uuid5(NAMESPACE_URL, entry_file)),
         source=server.source,
@@ -173,6 +182,8 @@ def _build_mcp_skill_record(
         context_hint="MCP capability bridge",
         agent="capability-facade",
         effort="low",
+        root_label="mcp-skills",
+        discovery_provenance=discovery_provenance,
         source_identity=SkillSourceIdentity(
             source_kind=SkillSourceKind.MCP,
             source=server.source,
@@ -180,6 +191,9 @@ def _build_mcp_skill_record(
             source_root=f"mcp://skills/{server.id}",
             relative_path=relative_path,
             fingerprint=content_hash,
+            canonical_source_root=canonicalize_skill_path(f"mcp://skills/{server.id}"),
+            canonical_entry_file=canonicalize_skill_path(entry_file),
+            discovery_provenance=discovery_provenance,
         ),
     )
 

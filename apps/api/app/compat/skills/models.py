@@ -8,6 +8,14 @@ from enum import Enum
 
 from app.db.models import CompatibilityScope, CompatibilitySource, SkillRecordStatus
 
+from .orchestration_models import (
+    SkillExecutionPolicy,
+    SkillOrchestrationHints,
+    SkillResultSchema,
+)
+from .preflight import SkillPreflightCheck
+from .trust import SkillTrustMetadata
+
 
 class SkillSourceKind(str, Enum):
     FILESYSTEM = "filesystem"
@@ -88,6 +96,7 @@ class DiscoveredSkillFile:
     source_kind: SkillSourceKind = SkillSourceKind.FILESYSTEM
     root_label: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    discovery_provenance: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -98,12 +107,15 @@ class SkillSourceIdentity:
     source_root: str
     relative_path: str
     fingerprint: str
+    canonical_source_root: str | None = None
+    canonical_entry_file: str | None = None
+    discovery_provenance: dict[str, object] = field(default_factory=dict)
 
     @property
     def dedup_key(self) -> tuple[str, str, str, str]:
         return (
             self.source_kind.value,
-            self.source_root.casefold(),
+            (self.canonical_source_root or self.source_root).casefold(),
             self.relative_path.casefold(),
             self.fingerprint,
         )
@@ -126,6 +138,17 @@ class ParsedSkillFrontmatter:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    verification_mode: str | None = None
+    shell_profile: str | None = None
+    trust_level: str | None = None
+    preflight_checks: list[SkillPreflightCheck] = field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: SkillOrchestrationHints | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: SkillExecutionPolicy | None = None
+    result_schema: SkillResultSchema | None = None
     semantic_family: str | None = None
     semantic_domain: str | None = None
     semantic_task_mode: str | None = None
@@ -161,11 +184,22 @@ class ParsedSkillRecordData:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    trust_metadata: SkillTrustMetadata | None = None
+    preflight_checks: list[SkillPreflightCheck] = field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: SkillOrchestrationHints | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: SkillExecutionPolicy | None = None
+    result_schema: SkillResultSchema | None = None
     semantic_family: str | None = None
     semantic_domain: str | None = None
     semantic_task_mode: str | None = None
     semantic_tags: list[str] = field(default_factory=list)
     source_identity: SkillSourceIdentity | None = None
+    root_label: str | None = None
+    discovery_provenance: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -190,6 +224,15 @@ class CompiledSkill:
     context_hint: str | None = None
     agent: str | None = None
     effort: str | None = None
+    trust_metadata: SkillTrustMetadata | None = None
+    preflight_checks: list[SkillPreflightCheck] = field(default_factory=list)
+    orchestration_role: str | None = None
+    orchestration_hints: SkillOrchestrationHints | None = None
+    fanout_group: str | None = None
+    preferred_stage: str | None = None
+    context_strategy: str | None = None
+    execution_policy: SkillExecutionPolicy | None = None
+    result_schema: SkillResultSchema | None = None
     semantic_family: str | None = None
     semantic_domain: str | None = None
     semantic_task_mode: str | None = None
@@ -199,6 +242,7 @@ class CompiledSkill:
     execution_mode: CompiledSkillExecutionMode = CompiledSkillExecutionMode.REFERENCE_ONLY
     prepared_prompt: str = ""
     prepared_invocation: PreparedSkillInvocation | None = None
+    discovery_provenance: dict[str, object] = field(default_factory=dict)
 
     @property
     def is_conditional(self) -> bool:

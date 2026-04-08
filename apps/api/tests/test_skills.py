@@ -2,14 +2,27 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
+from time import perf_counter, sleep
 from typing import cast
 
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.compat.skills.models import DiscoveredSkillFile, SkillScanRoot
+from app.compat.skills.models import (
+    CompiledSkill,
+    DiscoveredSkillFile,
+    ResolvedSkillCandidate,
+    SkillCandidateRole,
+    SkillCandidateScoreBreakdown,
+    SkillResolutionRequest,
+    SkillResolutionResult,
+    SkillScanRoot,
+    SkillSourceIdentity,
+    SkillSourceKind,
+)
 from app.compat.skills.parser import parse_skill_file
+from app.compat.skills.preflight import SkillPreflightCheck
 from app.compat.skills.scanner import (
     compatibility_skill_scan_placeholders,
     default_skill_scan_roots,
@@ -17,6 +30,8 @@ from app.compat.skills.scanner import (
     scan_skill_files,
 )
 from app.compat.skills.service import SkillService
+from app.compat.skills.stage_policy import build_skill_stage_policy
+from app.compat.skills.trust import SkillTrustMetadata
 from app.core.settings import Settings
 from app.db.models import (
     CompatibilityScope,
@@ -713,6 +728,708 @@ description: MCP-origin demo skill
     assert expansion.status == "disabled"
 
 
+def test_compiled_skill_registry_dedupes_canonical_source_roots() -> None:
+    models_module = import_module("app.compat.skills.models")
+    registry_module = import_module("app.compat.skills.registry")
+
+    canonical_root = "D:/repo/skills"
+    first_skill = models_module.CompiledSkill(
+        identity=models_module.SkillSourceIdentity(
+            source_kind=models_module.SkillSourceKind.FILESYSTEM,
+            source=CompatibilitySource.LOCAL,
+            scope=CompatibilityScope.PROJECT,
+            source_root="D:/repo/./skills",
+            relative_path="demo/SKILL.md",
+            fingerprint="same-fingerprint",
+            canonical_source_root=canonical_root,
+            canonical_entry_file="D:/repo/skills/demo/SKILL.md",
+        ),
+        skill_id="demo-id",
+        name="demo",
+        directory_name="demo",
+        entry_file="D:/repo/skills/demo/SKILL.md",
+        description="Demo skill",
+        content="first",
+    )
+    duplicate_skill = models_module.CompiledSkill(
+        identity=models_module.SkillSourceIdentity(
+            source_kind=models_module.SkillSourceKind.FILESYSTEM,
+            source=CompatibilitySource.LOCAL,
+            scope=CompatibilityScope.PROJECT,
+            source_root="D:/repo/skills",
+            relative_path="demo/SKILL.md",
+            fingerprint="same-fingerprint",
+            canonical_source_root=canonical_root,
+            canonical_entry_file="D:/repo/skills/demo/SKILL.md",
+        ),
+        skill_id="demo-id-duplicate",
+        name="demo",
+        directory_name="demo",
+        entry_file="D:/repo/skills/demo/SKILL.md",
+        description="Demo skill",
+        content="second",
+    )
+
+    registry = registry_module.CompiledSkillRegistry()
+    registry.register(first_skill)
+    registry.register(duplicate_skill)
+
+    assert len(registry.list_entries()) == 1
+    assert registry.get_by_token("demo").entry_file == "D:/repo/skills/demo/SKILL.md"
+
+
+def test_skill_service_caches_resolved_scan_roots_for_same_discovery_paths(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    calls = 0
+    cached_root = tmp_path / "project" / "skills"
+
+    def _resolve(
+        _settings: Settings, *, discovery_paths: list[str] | None = None
+    ) -> list[SkillScanRoot]:
+        nonlocal calls
+        calls += 1
+        return [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(cached_root),
+            ),
+            *([] if not discovery_paths else discover_claude_skill_scan_roots(discovery_paths)),
+        ]
+
+    monkeypatch.setattr("app.compat.skills.service.resolve_skill_scan_roots", _resolve)
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (_, skill_service):
+        first = skill_service._resolve_scan_roots(discovery_paths=[str(tmp_path / "workspace")])
+        second = skill_service._resolve_scan_roots(discovery_paths=[str(tmp_path / "workspace")])
+
+    assert calls == 1
+    assert [root.root_dir for root in first] == [root.root_dir for root in second]
+
+
+def test_skill_service_reuses_compiled_skill_cache_for_repeat_reads(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    adscan_entry = skills_root / "adscan" / "SKILL.md"
+
+    _write_skill(
+        adscan_entry,
+        """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration without using ADscan itself.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    compiler_module = import_module("app.compat.skills.compiler")
+    original_compile = compiler_module.compile_skill_record
+    compile_calls = 0
+
+    def _counting_compile(
+        record: SkillRecord,
+        content: str,
+        invocation_request: object | None = None,
+    ) -> object:
+        nonlocal compile_calls
+        compile_calls += 1
+        return original_compile(record, content, invocation_request=invocation_request)
+
+    monkeypatch.setattr("app.compat.skills.compiler.compile_skill_record", _counting_compile)
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="adscan",
+                entry_file=adscan_entry,
+                name="adscan",
+                description="Active Directory 枚举 skill",
+                compatibility=["opencode"],
+            )
+        )
+        session.commit()
+
+        first = skill_service.execute_skill_by_name_or_directory_name("adscan")
+        second = skill_service.get_skill_content("adscan-id")
+
+    assert first["execution"]["status"] == "prepared"
+    assert second is not None
+    assert compile_calls == 1
+
+
+def test_skill_metadata_frontmatter_is_exposed_additively_through_payloads(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    records = _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "phase-demo": """---
+name: phase-demo
+description: Phase metadata demo
+verification_mode: targeted
+shell_profile: readonly
+trust_level: trusted
+preflight_checks:
+  - name: workspace-visible
+    kind: workspace
+    required: true
+  - name: runtime-profile
+orchestration_role: supporting
+orchestration_hints:
+  summarize_first: true
+  keep_facade: execute_skill
+fanout_group: recon
+preferred_stage: analysis
+context_strategy: focused
+execution_policy:
+  approval: manual
+  shell_allowed: false
+result_schema:
+  type: object
+  required:
+    - summary
+unknown_flag: true
+---
+# phase-demo
+
+Use the prepared phase metadata only.
+""",
+        },
+    )
+    phase_demo_id = next(
+        record["id"] for record in records if record["directory_name"] == "phase-demo"
+    )
+    phase_demo_record = next(
+        record for record in records if record["directory_name"] == "phase-demo"
+    )
+    phase_demo_preflight_checks = cast(
+        list[dict[str, object]], phase_demo_record["preflight_checks"]
+    )
+    phase_demo_orchestration_hints = cast(
+        dict[str, object], phase_demo_record["orchestration_hints"]
+    )
+    phase_demo_execution_policy = cast(dict[str, object], phase_demo_record["execution_policy"])
+    phase_demo_result_schema = cast(dict[str, object], phase_demo_record["result_schema"])
+    phase_demo_provenance = cast(dict[str, object], phase_demo_record["discovery_provenance"])
+    phase_demo_identity = cast(dict[str, object], phase_demo_record["resolved_identity"])
+
+    assert phase_demo_record["raw_frontmatter"] == {"unknown_flag": True}
+    assert phase_demo_record["verification_mode"] == "targeted"
+    assert phase_demo_record["shell_profile"] == "readonly"
+    assert phase_demo_record["trust_level"] == "local_trusted"
+    assert phase_demo_preflight_checks[0]["name"] == "workspace-visible"
+    assert phase_demo_record["orchestration_role"] == "supporting"
+    assert phase_demo_orchestration_hints["summarize_first"] is True
+    assert phase_demo_record["fanout_group"] == "recon"
+    assert phase_demo_record["preferred_stage"] == "analysis"
+    assert phase_demo_record["context_strategy"] == "focused"
+    assert phase_demo_execution_policy["approval"] == "manual"
+    assert phase_demo_result_schema["type"] == "object"
+    assert phase_demo_provenance["relative_path"] == "phase-demo/SKILL.md"
+    assert phase_demo_identity["relative_path"] == "phase-demo/SKILL.md"
+
+    context_response = client.get("/api/skills/skill-context")
+    assert context_response.status_code == 200
+    context_payload = cast(dict[str, object], api_data(context_response)["payload"])
+    context_skills = cast(list[dict[str, object]], context_payload["skills"])
+    selected_skill = next(item for item in context_skills if item["directory_name"] == "phase-demo")
+    selected_hints = cast(dict[str, object], selected_skill["orchestration_hints"])
+    selected_execution_policy = cast(dict[str, object], selected_skill["execution_policy"])
+    prepared_invocation = cast(dict[str, object], selected_skill["prepared_invocation"])
+    pending_actions = cast(list[dict[str, object]], prepared_invocation["pending_actions"])
+
+    assert selected_skill["verification_mode"] == "targeted"
+    assert selected_hints["keep_facade"] == "execute_skill"
+    assert selected_execution_policy["shell_allowed"] is False
+    assert any(action["action_type"] == "preflight_check" for action in pending_actions)
+
+    content_response = client.get(f"/api/skills/{phase_demo_id}/content")
+    assert content_response.status_code == 200
+    content_payload = cast(dict[str, object], api_data(content_response))
+    content_preflight_checks = cast(list[dict[str, object]], content_payload["preflight_checks"])
+    content_result_schema = cast(dict[str, object], content_payload["result_schema"])
+    assert content_payload["trust_level"] == "local_trusted"
+    assert content_preflight_checks[1]["name"] == "runtime-profile"
+    assert content_result_schema["required"] == ["summary"]
+
+
+def test_skill_service_builds_additive_orchestration_plan_after_skill_set_plan(
+    tmp_path: Path,
+    test_settings: Settings,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "service.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(
+            skill_id="primary-id",
+            directory_name="primary-skill",
+            verification_mode="targeted",
+            trust_level="local_trusted",
+        )
+        supporting_skill = _build_compiled_skill(
+            skill_id="support-id",
+            directory_name="support-skill",
+            orchestration_role="supporting",
+            fanout_group="recon",
+        )
+        reference_skill = _build_compiled_skill(
+            skill_id="reference-id",
+            directory_name="reference-skill",
+            orchestration_role="reference",
+        )
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(
+                workflow_stage="deep-analysis",
+                agent_role="security-review",
+            ),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    supporting_skill,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["Supporting complement"],
+                )
+            ],
+            reference_candidates=[
+                _build_resolved_candidate(
+                    reference_skill,
+                    role=SkillCandidateRole.REFERENCE,
+                    rank=3,
+                    reasons=["Reference context"],
+                )
+            ],
+        )
+        skill_set_plan = skill_service.build_skill_set_plan(
+            resolution_result,
+            workflow_stage="deep-analysis",
+            agent_role="security-review",
+        )
+
+        runtime_usage = skill_service.build_skill_runtime_usage_records(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+        support_usage = next(item for item in runtime_usage if item["skill_id"] == "support-id")
+        assert support_usage["prepared_for_execution"] is False
+
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+        assert orchestration_plan["primary_skill_id"] == "primary-id"
+        assert orchestration_plan["active_stage"] == "deep-analysis"
+        stages = cast(list[dict[str, object]], orchestration_plan["stages"])
+        assert len(stages) == 1
+        stage_payload = stages[0]
+        assert stage_payload["mode"] == "primary_with_parallel_supporting"
+        assert stage_payload["failure_policy"] == "best_effort"
+        steps = cast(list[dict[str, object]], stage_payload["steps"])
+        primary_step = next(step for step in steps if step.get("skill_id") == "primary-id")
+        supporting_step = next(step for step in steps if step.get("skill_id") == "support-id")
+        reducer_step = next(step for step in steps if step.get("role") == "reducer")
+        assert primary_step["execution_intent"] == "execute_primary"
+        assert primary_step["prepared_for_execution"] is True
+        assert supporting_step["execution_intent"] == "candidate_worker"
+        assert supporting_step["prepared_for_execution"] is False
+        assert reducer_step["execution_intent"] == "reduce_results"
+
+
+def test_skill_context_payload_exposes_orchestration_plan_additively(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "service.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        supporting_skill = _build_compiled_skill(
+            skill_id="support-id",
+            directory_name="support-skill",
+            fanout_group="recon",
+        )
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(
+                workflow_stage="analysis",
+                agent_role="security-review",
+            ),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    supporting_skill,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["Supporting complement"],
+                )
+            ],
+        )
+
+        monkeypatch.setattr(
+            skill_service,
+            "resolve_skill_candidates",
+            lambda **_kwargs: resolution_result,
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: {
+                "execution": {
+                    "prepared_prompt": f"Prepared primary skill: {name_or_slug}",
+                    "status": "prepared",
+                },
+                "skill": {"id": name_or_slug, "directory_name": name_or_slug},
+            },
+        )
+
+        payload = skill_service.build_skill_context_payload(
+            workflow_stage="analysis",
+            agent_role="security-review",
+        )
+
+    orchestration_plan = cast(dict[str, object], payload["skill_orchestration_plan"])
+    assert orchestration_plan["primary_skill_id"] == "primary-id"
+    prepared_context_prompt = cast(str, payload["prepared_context_prompt"])
+    assert "Orchestration plan preview:" in prepared_context_prompt
+    assert "candidate_workers=support-skill" in prepared_context_prompt
+
+
+def test_skill_service_executes_orchestration_workers_in_parallel_and_reduces_results(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "parallel.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        support_a = _build_compiled_skill(skill_id="support-a", directory_name="support-a")
+        support_b = _build_compiled_skill(skill_id="support-b", directory_name="support-b")
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(
+                workflow_stage="deep-analysis",
+                agent_role="security-review",
+            ),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    support_a,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["Support A"],
+                ),
+                _build_resolved_candidate(
+                    support_b,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=3,
+                    reasons=["Support B"],
+                ),
+            ],
+        )
+        skill_set_plan = skill_service.build_skill_set_plan(
+            resolution_result,
+            workflow_stage="deep-analysis",
+            agent_role="security-review",
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: _sleeping_execution_payload(name_or_slug, delay=0.1),
+        )
+
+        started_at = perf_counter()
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-1",
+        )
+        elapsed = perf_counter() - started_at
+
+    assert execution["status"] == "completed"
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    reduced = cast(dict[str, object], execution["reduction_result"])
+    verified = cast(dict[str, object], execution["verification_result"])
+    assert elapsed < 0.25
+    assert {result.get("skill_id") for result in worker_results} >= {
+        "primary-id",
+        "support-a",
+        "support-b",
+    }
+    assert reduced["status"] == "completed"
+    assert verified["passed"] is True
+
+
+def test_skill_service_auto_runs_trusted_readonly_preflight_only(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "preflight.db") as (_, skill_service):
+        trusted_skill = _build_compiled_skill(
+            skill_id="trusted-id",
+            directory_name="trusted-skill",
+            preflight_checks=[SkillPreflightCheck(name="workspace", kind="pwd", read_only=True)],
+        )
+        external_skill = _build_compiled_skill(
+            skill_id="external-id",
+            directory_name="external-skill",
+            trust_level="external_mcp",
+            preflight_checks=[SkillPreflightCheck(name="workspace", kind="pwd", read_only=True)],
+        )
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="deep-analysis"),
+            primary_candidate=_build_resolved_candidate(
+                trusted_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Trusted primary"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    external_skill,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["External support"],
+                )
+            ],
+        )
+        skill_set_plan = skill_service.build_skill_set_plan(
+            resolution_result,
+            workflow_stage="deep-analysis",
+            agent_role=None,
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: _execution_payload(name_or_slug),
+        )
+
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-2",
+        )
+
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    trusted_result = next(
+        result for result in worker_results if result.get("skill_id") == "trusted-id"
+    )
+    external_result = next(
+        result for result in worker_results if result.get("skill_id") == "external-id"
+    )
+    trusted_preflight = cast(list[dict[str, object]], trusted_result["preflight_results"])[0]
+    external_preflight = cast(list[dict[str, object]], external_result["preflight_results"])[0]
+    assert trusted_preflight["status"] == "succeeded"
+    assert trusted_preflight["auto_ran"] is True
+    assert str(tmp_path) in cast(str, trusted_preflight["output_summary"])
+    assert external_preflight["status"] == "approval_required"
+    assert external_result["status"] == "skipped"
+    assert external_result["approval_needed"] is True
+
+
+def test_skill_service_does_not_advance_stage_when_required_approval_is_pending(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "approval.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        external_support = _build_compiled_skill(
+            skill_id="external-id",
+            directory_name="external-skill",
+            trust_level="external_mcp",
+            preflight_checks=[SkillPreflightCheck(name="workspace", kind="pwd", read_only=True)],
+        )
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="execution"),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    external_support,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["Approval-gated support"],
+                )
+            ],
+        )
+        skill_set_plan = skill_service.build_skill_set_plan(
+            resolution_result,
+            workflow_stage="execution",
+            agent_role=None,
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=resolution_result,
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: _execution_payload(name_or_slug),
+        )
+
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-approval",
+        )
+
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    verification = cast(dict[str, object], execution["verification_result"])
+    stage_transition = cast(dict[str, object], execution["stage_transition"])
+    external_result = next(
+        result for result in worker_results if result.get("skill_id") == "external-id"
+    )
+    assert external_result["status"] == "skipped"
+    assert external_result["approval_needed"] is True
+    assert verification["passed"] is False
+    assert "Approval is still required" in " ".join(cast(list[str], verification["reasons"]))
+    assert stage_transition["to_stage"] == "execution"
+    assert stage_transition["replan_required"] is False
+
+
+def test_build_skill_stage_policy_handles_verify_stage_without_worker_promotion() -> None:
+    policy = build_skill_stage_policy(
+        workflow_stage="verify",
+        supporting_count=2,
+        reference_count=1,
+    )
+
+    assert policy.stage_name == "verify"
+    assert policy.mode.value == "single_primary"
+    assert policy.allow_supporting_worker_promotion is False
+    assert policy.include_verifier is True
+    assert policy.max_parallel_workers == 1
+
+
+def test_skill_service_replans_when_stage_transition_requests_next_stage(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "replan.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        supporting_skill = _build_compiled_skill(
+            skill_id="support-id", directory_name="support-skill"
+        )
+        initial_resolution = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="deep-analysis"),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    supporting_skill,
+                    role=SkillCandidateRole.SUPPORTING,
+                    rank=2,
+                    reasons=["Support match"],
+                )
+            ],
+        )
+        skill_set_plan = skill_service.build_skill_set_plan(
+            initial_resolution,
+            workflow_stage="deep-analysis",
+            agent_role=None,
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_set_plan,
+            resolution_result=initial_resolution,
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: _execution_payload(name_or_slug),
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "resolve_best_skill",
+            lambda **kwargs: {
+                "status": "selected",
+                "selected_skill_ids": ["exec-primary"],
+                "skill_budget": {"workflow_stage": kwargs.get("workflow_stage")},
+                "skill_set_plan": {"workflow_stage": kwargs.get("workflow_stage")},
+                "skill_orchestration_plan": {
+                    "active_stage": kwargs.get("workflow_stage"),
+                    "stages": [],
+                },
+                "resolution_summary": {"primary_skill_id": "exec-primary"},
+            },
+        )
+
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-3",
+        )
+        stage_transition = cast(dict[str, object], execution["stage_transition"])
+        replanned = skill_service.maybe_replan_skills_for_stage_transition(
+            stage_transition,
+            workspace_path=str(tmp_path),
+            current_prompt="continue",
+            invocation_arguments={},
+        )
+
+    assert stage_transition["to_stage"] == "execution"
+    assert stage_transition["replan_required"] is True
+    assert isinstance(replanned, dict)
+    assert replanned["workflow_stage"] == "execution"
+    replanned_plan = cast(dict[str, object], replanned["skill_orchestration_plan"])
+    assert replanned_plan["active_stage"] == "execution"
+
+
 def test_skill_service_only_auto_activates_conditional_paths_on_match(
     tmp_path: Path,
     test_settings: Settings,
@@ -1264,3 +1981,81 @@ def _build_skill_record(
         error_message=error_message,
         content_hash=f"hash-{directory_name}",
     )
+
+
+def _build_compiled_skill(
+    *,
+    skill_id: str,
+    directory_name: str,
+    orchestration_role: str | None = None,
+    fanout_group: str | None = None,
+    context_strategy: str | None = "focused",
+    verification_mode: str | None = "targeted",
+    trust_level: str | None = "local_trusted",
+    preflight_checks: list[SkillPreflightCheck] | None = None,
+) -> CompiledSkill:
+    return CompiledSkill(
+        identity=SkillSourceIdentity(
+            source_kind=SkillSourceKind.FILESYSTEM,
+            source=CompatibilitySource.LOCAL,
+            scope=CompatibilityScope.PROJECT,
+            source_root="D:/repo/skills",
+            relative_path=f"{directory_name}/SKILL.md",
+            fingerprint=f"fingerprint-{skill_id}",
+        ),
+        skill_id=skill_id,
+        name=directory_name,
+        directory_name=directory_name,
+        entry_file=f"D:/repo/skills/{directory_name}/SKILL.md",
+        description=f"Description for {directory_name}",
+        content=f"# {directory_name}\n",
+        invocable=True,
+        trust_metadata=SkillTrustMetadata(
+            verification_mode=verification_mode,
+            shell_profile="readonly",
+            trust_level=trust_level,
+        ),
+        preflight_checks=(list(preflight_checks) if preflight_checks is not None else []),
+        orchestration_role=orchestration_role,
+        fanout_group=fanout_group,
+        context_strategy=context_strategy,
+        prepared_prompt=f"Prepared primary skill: {directory_name}",
+    )
+
+
+def _build_resolved_candidate(
+    compiled_skill: CompiledSkill,
+    *,
+    role: SkillCandidateRole,
+    rank: int,
+    reasons: list[str],
+) -> ResolvedSkillCandidate:
+    return ResolvedSkillCandidate(
+        compiled_skill=compiled_skill,
+        score_breakdown=SkillCandidateScoreBreakdown(path_score=rank),
+        rank=rank,
+        reasons=list(reasons),
+        selection_explanation={"why_high_relevance": reasons[0]},
+        packing_explanation={"why_selected": reasons[0]},
+        selected=role is not SkillCandidateRole.REJECTED,
+        role=role,
+    )
+
+
+def _execution_payload(name_or_slug: str) -> dict[str, object]:
+    return {
+        "execution": {
+            "status": "prepared",
+            "prepared_prompt": f"Prepared primary skill: {name_or_slug}",
+            "prepared_invocation": {"pending_actions": []},
+        },
+        "skill": {
+            "id": name_or_slug,
+            "directory_name": name_or_slug,
+        },
+    }
+
+
+def _sleeping_execution_payload(name_or_slug: str, *, delay: float) -> dict[str, object]:
+    sleep(delay)
+    return _execution_payload(name_or_slug)

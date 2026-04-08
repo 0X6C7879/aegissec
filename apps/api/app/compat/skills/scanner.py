@@ -8,6 +8,12 @@ from typing import cast
 from app.core.settings import REPO_ROOT
 from app.db.models import CompatibilityScope, CompatibilitySource
 
+from .discovery_cache import (
+    build_discovered_file_cache_key,
+    build_discovery_provenance,
+    build_root_cache_key,
+    canonicalize_skill_path,
+)
 from .models import DiscoveredSkillFile, SkillScanRoot, SkillSourceKind
 
 
@@ -184,18 +190,23 @@ def compatibility_skill_scan_placeholders(
 def discover_claude_skill_scan_roots(
     candidate_paths: list[str],
 ) -> list[SkillScanRoot]:
-    discovered: dict[str, SkillScanRoot] = {}
+    discovered: dict[tuple[str, str, str, str], SkillScanRoot] = {}
     for candidate_path in candidate_paths:
         for base_dir in _iter_search_base_dirs(candidate_path):
             for ancestor in (base_dir, *base_dir.parents):
                 skill_root = ancestor / ".claude" / "skills"
                 if not skill_root.exists() or not skill_root.is_dir():
                     continue
-                resolved_root = skill_root.resolve().as_posix()
-                normalized_root = resolved_root.casefold()
-                if normalized_root in discovered:
+                resolved_root = canonicalize_skill_path(skill_root.as_posix())
+                root_key = build_root_cache_key(
+                    source=CompatibilitySource.CLAUDE,
+                    scope=CompatibilityScope.PROJECT,
+                    root_dir=resolved_root,
+                    source_kind=SkillSourceKind.FILESYSTEM.value,
+                )
+                if root_key in discovered:
                     continue
-                discovered[normalized_root] = SkillScanRoot(
+                discovered[root_key] = SkillScanRoot(
                     source=CompatibilitySource.CLAUDE,
                     scope=CompatibilityScope.PROJECT,
                     root_dir=resolved_root,
@@ -206,12 +217,12 @@ def discover_claude_skill_scan_roots(
 
 
 def scan_skill_files(scan_roots: list[SkillScanRoot]) -> list[DiscoveredSkillFile]:
-    discovered: dict[str, DiscoveredSkillFile] = {}
+    discovered: dict[tuple[str, str, str, str, str], DiscoveredSkillFile] = {}
     for scan_root in scan_roots:
         if not scan_root.enabled:
             continue
         for discovered_file in _discover_skill_files_for_root(scan_root):
-            discovered[discovered_file.entry_file] = discovered_file
+            discovered[build_discovered_file_cache_key(discovered_file)] = discovered_file
 
     return sorted(
         discovered.values(), key=lambda item: (item.source.value, item.scope.value, item.entry_file)
@@ -243,18 +254,28 @@ def _discover_skill_files_for_root(scan_root: SkillScanRoot) -> list[DiscoveredS
             continue
 
         metadata = dict(scan_root.metadata)
-        metadata.setdefault("loaded_from", skill_file.resolve().as_posix())
+        resolved_entry = canonicalize_skill_path(skill_file.as_posix())
+        metadata.setdefault("loaded_from", resolved_entry)
+        relative_path = skill_file.resolve().relative_to(resolved_root).as_posix()
         discovered.append(
             DiscoveredSkillFile(
                 source=scan_root.source,
                 scope=scan_root.scope,
                 root_dir=resolved_root.as_posix(),
                 directory_name=skill_file.parent.name,
-                entry_file=skill_file.resolve().as_posix(),
-                relative_path=skill_file.resolve().relative_to(resolved_root).as_posix(),
+                entry_file=resolved_entry,
+                relative_path=relative_path,
                 source_kind=scan_root.source_kind,
                 root_label=scan_root.root_label,
                 metadata=metadata,
+                discovery_provenance=build_discovery_provenance(
+                    source_root=resolved_root.as_posix(),
+                    entry_file=resolved_entry,
+                    relative_path=relative_path,
+                    source_kind=scan_root.source_kind.value,
+                    root_label=scan_root.root_label,
+                    metadata=metadata,
+                ),
             )
         )
     return discovered
