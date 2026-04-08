@@ -84,6 +84,17 @@ function pickPreferredAssistantContent(existingContent: string, incomingContent:
 }
 
 const TOOL_TRANSCRIPT_KINDS = ["tool_call", "tool_result", "error"] as const;
+const THIN_TOOL_RESULT_TEXT_PATTERNS = [
+  /^工具调用已完成[。.]?$/i,
+  /^工具执行完成[。.]?$/i,
+  /^命令(?:调用)?已完成[。.]?$/i,
+  /^命令执行(?:完成|结束)[。.]?$/i,
+  /^工具执行完成[，,]?状态[:：]?\s*[\w-]+[。.]?$/i,
+  /^命令已完成[，,]?状态[:：]?\s*[\w-]+[。.]?$/i,
+  /^tool(?: execution)? completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/i,
+  /^command completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/i,
+  /^completed(?:[,:]?\s*status[:：]?\s*[\w-]+)?[.]?$/i,
+] as const;
 
 function compareAssistantTranscriptSegments(
   left: AssistantTranscriptSegment,
@@ -109,9 +120,22 @@ function isToolTranscriptSegment(segment: AssistantTranscriptSegment): boolean {
   return isToolTranscriptKind(segment.kind);
 }
 
-function getSemanticToolTranscriptKey(segment: AssistantTranscriptSegment): string | null {
+function isThinToolResultText(text: string | null | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+
+  const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  return THIN_TOOL_RESULT_TEXT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function getTranscriptSemanticKey(segment: AssistantTranscriptSegment): string | null {
   if (!isToolTranscriptSegment(segment) || !segment.tool_call_id) {
-    return null;
+    return segment.id ? `id:${segment.id}` : null;
   }
 
   return `${segment.kind}:${segment.tool_call_id}`;
@@ -157,103 +181,127 @@ function scoreStandaloneTranscriptToolText(
     return 0;
   }
 
-  return normalized.includes("\n") ? 4 : 3;
-}
-
-function readToolTranscriptSegmentRichness(segment: AssistantTranscriptSegment): number {
-  const command = readTranscriptSegmentCommand(segment);
-  const textScore = scoreStandaloneTranscriptToolText(segment.text, command);
-
-  return (
-    scoreToolMetadataRichness(segment.metadata) +
-    textScore +
-    (segment.status ? 2 : 0) +
-    (segment.tool_name ? 1 : 0) +
-    (segment.title ? 1 : 0)
-  );
-}
-
-function mergeAssistantTranscriptText(
-  preferred: AssistantTranscriptSegment,
-  fallback: AssistantTranscriptSegment,
-): string | null | undefined {
-  const preferredTextScore = scoreStandaloneTranscriptToolText(
-    preferred.text,
-    readTranscriptSegmentCommand(preferred),
-  );
-  const fallbackTextScore = scoreStandaloneTranscriptToolText(
-    fallback.text,
-    readTranscriptSegmentCommand(fallback),
-  );
-
-  if (preferredTextScore >= fallbackTextScore) {
-    return preferred.text ?? fallback.text;
+  if (isThinToolResultText(normalized)) {
+    return 1;
   }
 
-  return fallback.text ?? preferred.text;
+  return normalized.includes("\n") ? 5 : 3;
 }
 
-function mergeAssistantToolTranscriptSegment(
+function scoreTranscriptSegmentRichness(segment: AssistantTranscriptSegment): number {
+  const command = readTranscriptSegmentCommand(segment);
+  const textScore = scoreStandaloneTranscriptToolText(segment.text, command);
+  const metadataScore = scoreShellMetadataRichness(segment.metadata);
+  const hasRenderablePayload = hasRenderableShellPayload(segment.metadata);
+  const statusScore =
+    typeof segment.status === "string" && segment.status.trim().length > 0 ? 4 : 0;
+  const toolScore = segment.tool_name ? 2 : 0;
+  const titleScore = segment.title ? 1 : 0;
+  const kindScore =
+    segment.kind === "tool_result"
+      ? 22
+      : segment.kind === "error"
+        ? 18
+        : segment.kind === "tool_call"
+          ? 6
+          : 0;
+
+  return (
+    metadataScore +
+    (hasRenderablePayload ? 36 : 0) +
+    kindScore +
+    textScore +
+    statusScore +
+    toolScore +
+    titleScore
+  );
+}
+
+function mergeTranscriptTextPreferRicher(
+  existing: AssistantTranscriptSegment,
+  incoming: AssistantTranscriptSegment,
+): string | null | undefined {
+  const existingTextScore = scoreStandaloneTranscriptToolText(
+    existing.text,
+    readTranscriptSegmentCommand(existing),
+  );
+  const incomingTextScore = scoreStandaloneTranscriptToolText(
+    incoming.text,
+    readTranscriptSegmentCommand(incoming),
+  );
+
+  if (incomingTextScore > existingTextScore) {
+    return incoming.text ?? existing.text;
+  }
+
+  if (existingTextScore > incomingTextScore) {
+    return existing.text ?? incoming.text;
+  }
+
+  return (mergeScalarPreferRicher(existing.text, incoming.text) as string | null | undefined) ??
+    existing.text ??
+    incoming.text;
+}
+
+function pickEarlierTimestamp(existing: string, incoming: string): string {
+  return toTimestamp(incoming) < toTimestamp(existing) ? incoming : existing;
+}
+
+function pickLaterTimestamp(existing: string, incoming: string): string {
+  return toTimestamp(incoming) >= toTimestamp(existing) ? incoming : existing;
+}
+
+function mergeTranscriptSegmentPreferRicher(
   existing: AssistantTranscriptSegment,
   incoming: AssistantTranscriptSegment,
 ): AssistantTranscriptSegment {
-  const existingRichness = readToolTranscriptSegmentRichness(existing);
-  const incomingRichness = readToolTranscriptSegmentRichness(incoming);
+  const existingRichness = scoreTranscriptSegmentRichness(existing);
+  const incomingRichness = scoreTranscriptSegmentRichness(incoming);
   const preferred = incomingRichness > existingRichness ? incoming : existing;
   const fallback = preferred === existing ? incoming : existing;
+  const existingSemanticKey = getTranscriptSemanticKey(existing);
+  const incomingSemanticKey = getTranscriptSemanticKey(incoming);
+  const semanticEquivalentByToolCall =
+    existingSemanticKey !== null &&
+    incomingSemanticKey !== null &&
+    !existingSemanticKey.startsWith("id:") &&
+    existingSemanticKey === incomingSemanticKey;
+  const shouldPreserveStableIdentity = existing.id === incoming.id || semanticEquivalentByToolCall;
 
   return {
     ...fallback,
     ...preferred,
-    id: existing.id,
-    sequence: existing.sequence,
-    recorded_at: existing.recorded_at,
+    id: shouldPreserveStableIdentity ? existing.id : preferred.id,
+    sequence: shouldPreserveStableIdentity
+      ? Math.min(existing.sequence, incoming.sequence)
+      : preferred.sequence,
+    recorded_at: shouldPreserveStableIdentity
+      ? pickEarlierTimestamp(existing.recorded_at, incoming.recorded_at)
+      : preferred.recorded_at,
     updated_at:
-      preferPopulatedTranscriptString(preferred.updated_at, fallback.updated_at) ?? existing.updated_at,
-    status: preferPopulatedTranscriptString(preferred.status, fallback.status),
-    title: preferPopulatedTranscriptString(preferred.title, fallback.title),
-    text: mergeAssistantTranscriptText(preferred, fallback),
-    tool_name: preferPopulatedTranscriptString(preferred.tool_name, fallback.tool_name),
-    tool_call_id: preferPopulatedTranscriptString(preferred.tool_call_id, fallback.tool_call_id),
-    metadata: mergePreferredToolMetadata(preferred.metadata, fallback.metadata),
+      preferPopulatedTranscriptString(
+        pickLaterTimestamp(existing.updated_at, incoming.updated_at),
+        preferred.updated_at,
+      ) ?? existing.updated_at,
+    status: mergeScalarPreferRicher(existing.status, incoming.status) as string | null | undefined,
+    title: mergeScalarPreferRicher(existing.title, incoming.title) as string | null | undefined,
+    text: mergeTranscriptTextPreferRicher(existing, incoming),
+    tool_name: preferPopulatedTranscriptString(
+      mergeScalarPreferRicher(existing.tool_name, incoming.tool_name) as string | null | undefined,
+      preferred.tool_name ?? fallback.tool_name,
+    ),
+    tool_call_id: preferPopulatedTranscriptString(
+      mergeScalarPreferRicher(existing.tool_call_id, incoming.tool_call_id) as
+        | string
+        | null
+        | undefined,
+      preferred.tool_call_id ?? fallback.tool_call_id,
+    ),
+    metadata: mergeMetadataPreferRicher(existing.metadata, incoming.metadata),
   };
 }
 
-function mergeAssistantNonToolTranscriptSegment(
-  existing: AssistantTranscriptSegment,
-  incoming: AssistantTranscriptSegment,
-): AssistantTranscriptSegment {
-  return {
-    ...existing,
-    ...incoming,
-    id: existing.id,
-    sequence: existing.sequence,
-    recorded_at: existing.recorded_at,
-    updated_at:
-      preferPopulatedTranscriptString(incoming.updated_at, existing.updated_at) ?? existing.updated_at,
-    status: incoming.status ?? existing.status,
-    title: incoming.title ?? existing.title,
-    text: incoming.text ?? existing.text,
-    tool_name: incoming.tool_name ?? existing.tool_name,
-    tool_call_id: incoming.tool_call_id ?? existing.tool_call_id,
-    metadata: mergePreferredToolMetadata(existing.metadata, incoming.metadata),
-  };
-}
-
-function mergeAssistantTranscriptSegment(
-  existing: AssistantTranscriptSegment,
-  incoming: AssistantTranscriptSegment,
-): AssistantTranscriptSegment {
-  const existingSemanticKey = getSemanticToolTranscriptKey(existing);
-  const incomingSemanticKey = getSemanticToolTranscriptKey(incoming);
-  if (existingSemanticKey && incomingSemanticKey && existingSemanticKey === incomingSemanticKey) {
-    return mergeAssistantToolTranscriptSegment(existing, incoming);
-  }
-
-  return mergeAssistantNonToolTranscriptSegment(existing, incoming);
-}
-
-function findAssistantTranscriptMergeIndex(
+function findTranscriptMergeIndex(
   segments: AssistantTranscriptSegment[],
   candidate: AssistantTranscriptSegment,
 ): number {
@@ -262,12 +310,12 @@ function findAssistantTranscriptMergeIndex(
     return exactIdMatchIndex;
   }
 
-  const semanticKey = getSemanticToolTranscriptKey(candidate);
-  if (!semanticKey) {
+  const semanticKey = getTranscriptSemanticKey(candidate);
+  if (!semanticKey || semanticKey.startsWith("id:")) {
     return -1;
   }
 
-  return segments.findIndex((segment) => getSemanticToolTranscriptKey(segment) === semanticKey);
+  return segments.findIndex((segment) => getTranscriptSemanticKey(segment) === semanticKey);
 }
 
 function isChatGenerationCandidate(value: unknown): value is ChatGeneration {
@@ -304,11 +352,19 @@ function mapGenerationToolStepToTranscriptSegment(
     tool_call_id: step.tool_call_id ?? null,
     recorded_at: step.started_at,
     updated_at: step.ended_at ?? step.started_at,
-    metadata: step.metadata,
+    metadata: mergeMetadataPreferRicher(
+      step.metadata,
+      step.command || step.status
+        ? {
+            ...(step.command ? { command: step.command } : {}),
+            ...(step.status ? { status: step.status } : {}),
+          }
+        : undefined,
+    ),
   };
 }
 
-function collectGenerationTranscriptEnrichment(
+function collectGenerationToolSegmentsForMessage(
   detail: SessionDetail,
   message: SessionMessage,
 ): AssistantTranscriptSegment[] {
@@ -327,20 +383,22 @@ function collectGenerationTranscriptEnrichment(
     .flatMap((generation) =>
       (generation.steps ?? [])
         .map((step) => mapGenerationToolStepToTranscriptSegment(step))
-        .filter((segment): segment is AssistantTranscriptSegment => segment !== null),
+        .filter(
+          (segment): segment is AssistantTranscriptSegment =>
+            segment !== null && isToolTranscriptSegment(segment),
+        ),
     )
     .sort(compareAssistantTranscriptSegments);
 }
 
-function mergeAssistantTranscriptSegments(
+function mergeTranscriptCollectionsPreferRicher(
   existingTranscript: AssistantTranscriptSegment[],
   incomingTranscript: AssistantTranscriptSegment[],
-  enrichmentTranscript: AssistantTranscriptSegment[],
 ): AssistantTranscriptSegment[] {
-  const merged: AssistantTranscriptSegment[] = [];
+  const merged: AssistantTranscriptSegment[] = [...existingTranscript];
 
-  for (const segment of [...existingTranscript, ...incomingTranscript, ...enrichmentTranscript]) {
-    const existingIndex = findAssistantTranscriptMergeIndex(merged, segment);
+  for (const segment of incomingTranscript) {
+    const existingIndex = findTranscriptMergeIndex(merged, segment);
     if (existingIndex < 0) {
       merged.push(segment);
       continue;
@@ -351,10 +409,30 @@ function mergeAssistantTranscriptSegments(
       continue;
     }
 
-    merged[existingIndex] = mergeAssistantTranscriptSegment(existingSegment, segment);
+    merged[existingIndex] = mergeTranscriptSegmentPreferRicher(existingSegment, segment);
   }
 
   return merged.sort(compareAssistantTranscriptSegments);
+}
+
+function enrichTranscriptWithGenerationSegments(
+  messageTranscript: AssistantTranscriptSegment[],
+  generationSegments: AssistantTranscriptSegment[],
+): AssistantTranscriptSegment[] {
+  return mergeTranscriptCollectionsPreferRicher(messageTranscript, generationSegments);
+}
+
+function mergeAssistantTranscriptSegments(
+  existingTranscript: AssistantTranscriptSegment[],
+  incomingTranscript: AssistantTranscriptSegment[],
+  enrichmentTranscript: AssistantTranscriptSegment[],
+): AssistantTranscriptSegment[] {
+  const mergedPersistedTranscript = mergeTranscriptCollectionsPreferRicher(
+    existingTranscript,
+    incomingTranscript,
+  );
+
+  return enrichTranscriptWithGenerationSegments(mergedPersistedTranscript, enrichmentTranscript);
 }
 
 export function sortSessions(sessions: SessionSummary[]): SessionSummary[] {
@@ -381,7 +459,7 @@ export function mergeSessionMessage(
   }
 
   const existingMessage = detail.messages.find((item) => item.id === message.id) ?? null;
-  const generationTranscriptEnrichment = collectGenerationTranscriptEnrichment(detail, message);
+  const generationTranscriptEnrichment = collectGenerationToolSegmentsForMessage(detail, message);
   const mergedTranscript = mergeAssistantTranscriptSegments(
     existingMessage?.assistant_transcript ?? [],
     message.assistant_transcript,
@@ -1221,72 +1299,289 @@ function buildToolStepMetadata(data: Record<string, unknown>): Record<string, un
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
-const TOOL_METADATA_RICH_RECORD_KEYS = [
-  "output",
-  "execution",
-  "payload",
-  "data",
-  "result",
+type ShellMetadataScoreRule = {
+  path: readonly string[];
+  weight: number;
+};
+
+const SHELL_METADATA_HIGH_PRIORITY_RULES: readonly ShellMetadataScoreRule[] = [
+  { path: ["stdout"], weight: 72 },
+  { path: ["stderr"], weight: 68 },
+  { path: ["exit_code"], weight: 64 },
+  { path: ["artifacts"], weight: 60 },
+  { path: ["artifact_paths"], weight: 60 },
+  { path: ["output", "stdout"], weight: 70 },
+  { path: ["output", "stderr"], weight: 66 },
+  { path: ["output", "text"], weight: 62 },
+  { path: ["output", "exit_code"], weight: 60 },
+  { path: ["output", "artifacts"], weight: 58 },
+  { path: ["output", "artifact_paths"], weight: 58 },
+  { path: ["result", "stdout"], weight: 74 },
+  { path: ["result", "stderr"], weight: 70 },
+  { path: ["result", "exit_code"], weight: 66 },
+  { path: ["result", "artifacts"], weight: 62 },
+  { path: ["result", "artifact_paths"], weight: 62 },
+  { path: ["result", "output", "stdout"], weight: 78 },
+  { path: ["result", "output", "stderr"], weight: 74 },
+  { path: ["result", "output", "text"], weight: 70 },
+  { path: ["result", "output", "exit_code"], weight: 68 },
+  { path: ["execution"], weight: 60 },
+  { path: ["result", "execution"], weight: 66 },
+  { path: ["payload"], weight: 56 },
+  { path: ["result", "payload"], weight: 62 },
+  { path: ["data"], weight: 56 },
+  { path: ["result", "data"], weight: 62 },
 ] as const;
 
-const TOOL_METADATA_RICH_VALUE_KEYS = [
-  "stdout",
-  "stderr",
-  "text",
-  "message",
-  "summary",
-  "safe_summary",
-  "command",
-  "exit_code",
-  "status",
-  "artifact_paths",
-  "artifacts",
-  "run_id",
+const SHELL_METADATA_MEDIUM_PRIORITY_RULES: readonly ShellMetadataScoreRule[] = [
+  { path: ["command"], weight: 20 },
+  { path: ["status"], weight: 16 },
 ] as const;
 
-function scoreToolMetadataRichness(value: unknown): number {
+const SHELL_METADATA_LOW_PRIORITY_RULES: readonly ShellMetadataScoreRule[] = [
+  { path: ["safe_summary"], weight: 6 },
+  { path: ["summary"], weight: 5 },
+  { path: ["message"], weight: 4 },
+  { path: ["text"], weight: 4 },
+] as const;
+
+const SHELL_RENDERABLE_PATHS = [
+  ["stdout"],
+  ["stderr"],
+  ["exit_code"],
+  ["artifacts"],
+  ["artifact_paths"],
+  ["output"],
+  ["output", "stdout"],
+  ["output", "stderr"],
+  ["output", "text"],
+  ["output", "exit_code"],
+  ["result"],
+  ["result", "stdout"],
+  ["result", "stderr"],
+  ["result", "exit_code"],
+  ["result", "artifacts"],
+  ["result", "artifact_paths"],
+  ["result", "output"],
+  ["result", "output", "stdout"],
+  ["result", "output", "stderr"],
+  ["result", "output", "text"],
+  ["execution"],
+  ["result", "execution"],
+  ["payload"],
+  ["result", "payload"],
+  ["data"],
+  ["result", "data"],
+] as const;
+
+function readMetadataPath(
+  metadata: Record<string, unknown> | undefined,
+  path: readonly string[],
+): { found: boolean; value: unknown } {
+  if (!metadata || path.length === 0) {
+    return { found: false, value: undefined };
+  }
+
+  let current: unknown = metadata;
+  for (const key of path) {
+    if (!isRecord(current) || !Object.prototype.hasOwnProperty.call(current, key)) {
+      return { found: false, value: undefined };
+    }
+    current = current[key];
+  }
+
+  return { found: true, value: current };
+}
+
+function isMeaningfulShellPayloadValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
   if (typeof value === "string") {
-    return value.trim().length > 0 ? Math.min(value.trim().length, 120) + 2 : 0;
+    return value.trim().length > 0;
   }
 
   if (typeof value === "number") {
-    return Number.isFinite(value) ? 4 : 0;
+    return Number.isFinite(value);
   }
 
   if (typeof value === "boolean") {
-    return 2;
+    return true;
   }
 
   if (Array.isArray(value)) {
-    return value.reduce((total, entry) => total + scoreToolMetadataRichness(entry), value.length);
+    return value.length > 0 && value.some((item) => isMeaningfulShellPayloadValue(item));
   }
 
-  if (!isRecord(value)) {
+  if (isRecord(value)) {
+    if (Object.keys(value).length === 0) {
+      return false;
+    }
+
+    return Object.values(value).some((entry) => isMeaningfulShellPayloadValue(entry));
+  }
+
+  return true;
+}
+
+function scoreMetadataValueCompleteness(value: unknown): number {
+  if (value === null || value === undefined) {
     return 0;
   }
 
-  let score = Object.keys(value).length * 3;
-
-  for (const key of TOOL_METADATA_RICH_RECORD_KEYS) {
-    if (isRecord(value[key])) {
-      score += 10;
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) {
+      return 0;
     }
+
+    return Math.min(40, Math.max(2, Math.ceil(normalized.length / 12))) +
+      (normalized.includes("\n") ? 8 : 0);
   }
 
-  for (const key of TOOL_METADATA_RICH_VALUE_KEYS) {
-    if (value[key] !== undefined) {
-      score += 6;
-    }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? 8 : 0;
   }
 
-  for (const nestedValue of Object.values(value)) {
-    score += scoreToolMetadataRichness(nestedValue);
+  if (typeof value === "boolean") {
+    return 4;
+  }
+
+  if (Array.isArray(value)) {
+    return (
+      value.length * 4 +
+      value.reduce<number>((total, entry) => total + scoreMetadataValueCompleteness(entry), 0)
+    );
+  }
+
+  if (isRecord(value)) {
+    return (
+      Object.keys(value).length * 3 +
+      Object.values(value).reduce<number>(
+        (total, entry) => total + scoreMetadataValueCompleteness(entry),
+        0,
+      )
+    );
+  }
+
+  return 1;
+}
+
+function scoreShellMetadataRichness(metadata: Record<string, unknown> | undefined): number {
+  if (!metadata) {
+    return 0;
+  }
+
+  let score = scoreMetadataValueCompleteness(metadata);
+  for (const rule of SHELL_METADATA_HIGH_PRIORITY_RULES) {
+    const candidate = readMetadataPath(metadata, rule.path);
+    if (!candidate.found || !isMeaningfulShellPayloadValue(candidate.value)) {
+      continue;
+    }
+
+    score += rule.weight + scoreMetadataValueCompleteness(candidate.value);
+  }
+
+  for (const rule of SHELL_METADATA_MEDIUM_PRIORITY_RULES) {
+    const candidate = readMetadataPath(metadata, rule.path);
+    if (!candidate.found || !isMeaningfulShellPayloadValue(candidate.value)) {
+      continue;
+    }
+
+    score += rule.weight + Math.ceil(scoreMetadataValueCompleteness(candidate.value) / 2);
+  }
+
+  for (const rule of SHELL_METADATA_LOW_PRIORITY_RULES) {
+    const candidate = readMetadataPath(metadata, rule.path);
+    if (!candidate.found || !isMeaningfulShellPayloadValue(candidate.value)) {
+      continue;
+    }
+
+    score += rule.weight + Math.ceil(scoreMetadataValueCompleteness(candidate.value) / 4);
   }
 
   return score;
 }
 
-function mergePreferredToolMetadataValue(existingValue: unknown, incomingValue: unknown): unknown {
+function hasRenderableShellPayload(metadata: Record<string, unknown> | undefined): boolean {
+  if (!metadata) {
+    return false;
+  }
+
+  return SHELL_RENDERABLE_PATHS.some((path) => {
+    const candidate = readMetadataPath(metadata, path);
+    return candidate.found && isMeaningfulShellPayloadValue(candidate.value);
+  });
+}
+
+function buildArrayItemIdentity(value: unknown): string {
+  if (typeof value === "string") {
+    return `string:${value}`;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return `${typeof value}:${String(value)}`;
+  }
+
+  if (isRecord(value)) {
+    const explicitKey = readFirstNonEmptyString(value, [
+      "id",
+      "path",
+      "relative_path",
+      "name",
+      "tool_call_id",
+      "kind",
+    ]);
+    if (explicitKey) {
+      return `record:${explicitKey}`;
+    }
+
+    return `record:${JSON.stringify(value)}`;
+  }
+
+  return `other:${JSON.stringify(value)}`;
+}
+
+function mergeArrayPreferComplete(
+  existingValue: unknown[] | undefined,
+  incomingValue: unknown[] | undefined,
+): unknown[] | undefined {
+  if (!existingValue) {
+    return incomingValue ? [...incomingValue] : existingValue;
+  }
+
+  if (!incomingValue) {
+    return [...existingValue];
+  }
+
+  const merged: unknown[] = [];
+  const indexByIdentity = new Map<string, number>();
+
+  for (const entry of [...existingValue, ...incomingValue]) {
+    const identity = buildArrayItemIdentity(entry);
+    const existingIndex = indexByIdentity.get(identity);
+
+    if (existingIndex === undefined) {
+      indexByIdentity.set(identity, merged.length);
+      merged.push(entry);
+      continue;
+    }
+
+    const currentEntry = merged[existingIndex];
+    if (isRecord(currentEntry) && isRecord(entry)) {
+      merged[existingIndex] =
+        mergeMetadataPreferRicher(currentEntry, entry) ?? currentEntry;
+      continue;
+    }
+
+    merged[existingIndex] = mergeScalarPreferRicher(currentEntry, entry);
+  }
+
+  return merged;
+}
+
+function mergeScalarPreferRicher(existingValue: unknown, incomingValue: unknown): unknown {
   if (incomingValue === undefined) {
     return existingValue;
   }
@@ -1295,52 +1590,125 @@ function mergePreferredToolMetadataValue(existingValue: unknown, incomingValue: 
     return incomingValue;
   }
 
+  if (existingValue === null) {
+    return incomingValue;
+  }
+
+  if (incomingValue === null) {
+    return existingValue;
+  }
+
   if (isRecord(existingValue) && isRecord(incomingValue)) {
-    return mergePreferredToolMetadata(existingValue, incomingValue);
+    return mergeMetadataPreferRicher(existingValue, incomingValue);
   }
 
   if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
-    const mergedValues = [...existingValue, ...incomingValue];
-    const dedupedValues: unknown[] = [];
-    const seen = new Set<string>();
-
-    for (const value of mergedValues) {
-      const dedupeKey = JSON.stringify(value);
-      if (seen.has(dedupeKey)) {
-        continue;
-      }
-
-      seen.add(dedupeKey);
-      dedupedValues.push(value);
-    }
-
-    return dedupedValues;
+    return mergeArrayPreferComplete(existingValue, incomingValue);
   }
 
-  const existingScore = scoreToolMetadataRichness(existingValue);
-  const incomingScore = scoreToolMetadataRichness(incomingValue);
+  if (typeof existingValue === "string" && typeof incomingValue === "string") {
+    const normalizedExisting = existingValue.trim();
+    const normalizedIncoming = incomingValue.trim();
 
-  return incomingScore >= existingScore ? incomingValue : existingValue;
+    if (!normalizedIncoming) {
+      return existingValue;
+    }
+
+    if (!normalizedExisting) {
+      return incomingValue;
+    }
+
+    const existingThin = isThinToolResultText(normalizedExisting);
+    const incomingThin = isThinToolResultText(normalizedIncoming);
+    if (existingThin !== incomingThin) {
+      return existingThin ? incomingValue : existingValue;
+    }
+
+    if (normalizedIncoming.length > normalizedExisting.length) {
+      return incomingValue;
+    }
+
+    if (normalizedExisting.length > normalizedIncoming.length) {
+      return existingValue;
+    }
+
+    return incomingValue;
+  }
+
+  if (typeof existingValue === "number" && typeof incomingValue === "number") {
+    if (!Number.isFinite(existingValue)) {
+      return incomingValue;
+    }
+
+    if (!Number.isFinite(incomingValue)) {
+      return existingValue;
+    }
+
+    return incomingValue;
+  }
+
+  if (typeof existingValue === "boolean" && typeof incomingValue === "boolean") {
+    return incomingValue;
+  }
+
+  const existingScore = scoreMetadataValueCompleteness(existingValue);
+  const incomingScore = scoreMetadataValueCompleteness(incomingValue);
+  if (incomingScore > existingScore) {
+    return incomingValue;
+  }
+
+  if (existingScore > incomingScore) {
+    return existingValue;
+  }
+
+  return incomingValue;
 }
 
-function mergePreferredToolMetadata(
+function mergeMetadataPreferRicher(
   existingMetadata: Record<string, unknown> | undefined,
   incomingMetadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
+  if (!existingMetadata && !incomingMetadata) {
+    return undefined;
+  }
+
   if (!existingMetadata) {
-    return incomingMetadata;
+    return incomingMetadata ? { ...incomingMetadata } : undefined;
   }
 
   if (!incomingMetadata) {
-    return existingMetadata;
+    return { ...existingMetadata };
   }
 
-  const mergedMetadata: Record<string, unknown> = { ...existingMetadata };
-  for (const [key, incomingValue] of Object.entries(incomingMetadata)) {
-    mergedMetadata[key] = mergePreferredToolMetadataValue(mergedMetadata[key], incomingValue);
+  const mergedMetadata: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(existingMetadata), ...Object.keys(incomingMetadata)]);
+  for (const key of keys) {
+    const existingValue = existingMetadata[key];
+    const incomingValue = incomingMetadata[key];
+
+    if (isRecord(existingValue) && isRecord(incomingValue)) {
+      const mergedRecord = mergeMetadataPreferRicher(existingValue, incomingValue);
+      if (mergedRecord !== undefined) {
+        mergedMetadata[key] = mergedRecord;
+      }
+      continue;
+    }
+
+    if (Array.isArray(existingValue) && Array.isArray(incomingValue)) {
+      const mergedArray = mergeArrayPreferComplete(existingValue, incomingValue);
+      if (mergedArray !== undefined) {
+        mergedMetadata[key] = mergedArray;
+      }
+      continue;
+    }
+
+    const mergedValue = mergeScalarPreferRicher(existingValue, incomingValue);
+    if (mergedValue !== undefined) {
+      mergedMetadata[key] = mergedValue;
+    }
   }
 
-  return mergedMetadata;
+  return Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
 }
 
 function mergeGenerationStepList(
@@ -1375,10 +1743,7 @@ function mergeGenerationStepList(
   }
 
   const existingStep = steps[existingIndex];
-  const nextMetadata =
-    existingStep.kind === "tool" && incomingStep.kind === "tool"
-      ? mergePreferredToolMetadata(existingStep.metadata, incomingStep.metadata)
-      : incomingStep.metadata ?? existingStep.metadata;
+  const nextMetadata = mergeMetadataPreferRicher(existingStep.metadata, incomingStep.metadata);
   const nextDeltaText =
     incomingStep.kind === "output"
       ? incomingStep.status === "completed" &&
@@ -1393,7 +1758,15 @@ function mergeGenerationStepList(
     ...existingStep,
     ...incomingStep,
     delta_text: nextDeltaText,
-    safe_summary: incomingStep.safe_summary ?? existingStep.safe_summary,
+    safe_summary: (mergeScalarPreferRicher(
+      existingStep.safe_summary,
+      incomingStep.safe_summary,
+    ) as string | undefined) ?? existingStep.safe_summary,
+    command: (mergeScalarPreferRicher(existingStep.command, incomingStep.command) as
+      | string
+      | null
+      | undefined) ??
+      existingStep.command,
     metadata: nextMetadata,
     ended_at: incomingStep.ended_at ?? existingStep.ended_at,
   };
