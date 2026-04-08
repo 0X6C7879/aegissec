@@ -15,11 +15,6 @@ from pytest import MonkeyPatch
 from sqlmodel import Session as DBSession
 from starlette.testclient import WebSocketDenialResponse
 
-from app.api.routes_chat import (
-    _hidden_stream_tag_names,
-    _project_visible_stream_content,
-    _sanitize_persisted_assistant_text,
-)
 from app.compat.mcp.service import get_mcp_service
 from app.compat.skills.models import SkillScanRoot
 from app.compat.skills.service import SkillContentReadError, SkillService
@@ -37,6 +32,12 @@ from app.db.models import (
 )
 from app.db.repositories import SessionRepository
 from app.db.session import get_websocket_db_session
+from app.harness import session_runner as harness_session_runner
+from app.harness.transcript import (
+    hidden_stream_tag_names,
+    project_visible_stream_content,
+    sanitize_persisted_assistant_text,
+)
 from app.main import app
 from app.services.chat_runtime import (
     ChatRuntimeError,
@@ -57,7 +58,7 @@ def _yield_control() -> Coroutine[object, object, None]:
 
 
 def test_chat_hidden_stream_tag_names_always_keep_think_visible() -> None:
-    assert _hidden_stream_tag_names() == {"invoke", "tool_call"}
+    assert hidden_stream_tag_names() == {"invoke", "tool_call"}
 
 
 def test_chat_sanitize_persisted_assistant_text_keeps_think_and_strips_protocol() -> None:
@@ -66,7 +67,7 @@ def test_chat_sanitize_persisted_assistant_text_keeps_think_and_strips_protocol(
         "</invoke></minimax:tool_call><think>private</think>最终答复"
     )
 
-    sanitized = _sanitize_persisted_assistant_text(content)
+    sanitized = sanitize_persisted_assistant_text(content)
 
     assert sanitized == "<think>private</think>最终答复"
     assert "invoke" not in sanitized
@@ -80,7 +81,7 @@ def test_chat_project_visible_stream_content_keeps_think_and_hides_tool_protocol
         "</invoke></minimax:tool_call>最终"
     )
 
-    projected = _project_visible_stream_content(raw_streamed_content)
+    projected = project_visible_stream_content(raw_streamed_content)
 
     assert projected == "<think>hidden</think>最终"
     assert "invoke" not in projected
@@ -1510,8 +1511,15 @@ def test_startup_recovery_requeues_abandoned_generations(client: TestClient) -> 
         assert recovered_generation.lease_expires_at is None
 
 
+def test_session_runner_source_has_no_routes_chat_fallback_import() -> None:
+    session_runner_source = Path(harness_session_runner.__file__).read_text(encoding="utf-8")
+    assert 'importlib.import_module("app.api.routes_chat")' not in session_runner_source
+    assert "app.api.routes_chat" not in session_runner_source
+
+
 def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
     client: TestClient,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     class ApprovalPauseRuntime:
         async def generate_reply(
@@ -1604,6 +1612,19 @@ def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
         )
         assert stale_resolve_response.status_code == 409
         assert stale_resolve_response.json()["detail"]["error"] == "already_aborted"
+
+        original_import_module = harness_session_runner.importlib.import_module
+
+        def guarded_import_module(name: str, package: str | None = None) -> object:
+            if name == "app.api.routes_chat":
+                raise AssertionError(
+                    "session_runner should not import routes_chat during worker start"
+                )
+            return original_import_module(name, package)
+
+        monkeypatch.setattr(
+            harness_session_runner.importlib, "import_module", guarded_import_module
+        )
 
         resume_response = client.post(f"/api/sessions/{session_id}/resume")
         assert resume_response.status_code == 200

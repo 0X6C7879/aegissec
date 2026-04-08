@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from app.db.models import GenerationStep, Message, utc_now
+from app.core.events import SessionEvent, SessionEventBroker, SessionEventType
+from app.db.models import AssistantTranscriptSegmentKind, GenerationStep, Message, utc_now
 from app.db.repositories import SessionRepository
+from app.harness import events as harness_events
+
+from .generation_events import publish_attack_graph_updated, publish_message_event
+from .transcript import (
+    THINK_BLOCK_RE,
+    append_transcript_segment,
+    is_visible_transcript_noise,
+    sanitize_persisted_assistant_text,
+)
 
 
 def message_trace_entries(message: Message) -> list[dict[str, object]]:
@@ -204,3 +215,155 @@ def infer_trace_summary(entry: dict[str, object]) -> str | None:
             return f"自动预载技能失败：{error_value}"
         return "自动预载技能失败"
     return None
+
+
+async def publish_assistant_summary(
+    repository: SessionRepository,
+    event_broker: SessionEventBroker,
+    *,
+    session_id: str,
+    assistant_message: Message,
+    summary: str,
+    semantic_snapshot: dict[str, Any] | None = None,
+) -> None:
+    sanitized_summary = sanitize_persisted_assistant_text(summary)
+    if not sanitized_summary or is_visible_transcript_noise(sanitized_summary):
+        return
+    repository.update_message_summary(assistant_message, sanitized_summary)
+    append_transcript_segment(
+        repository,
+        assistant_message=assistant_message,
+        kind=AssistantTranscriptSegmentKind.REASONING,
+        status="completed",
+        title=None,
+        text=sanitized_summary,
+        metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
+    )
+    if assistant_message.generation_id is not None:
+        generation = repository.get_generation(assistant_message.generation_id)
+        if generation is not None:
+            repository.update_generation(generation, reasoning_summary=sanitized_summary)
+    record_generation_step(
+        repository,
+        assistant_message=assistant_message,
+        kind="reasoning",
+        phase="planning",
+        status="completed",
+        state="summary.updated",
+        label="推理摘要",
+        safe_summary=sanitized_summary,
+        metadata_json={"event": SessionEventType.ASSISTANT_SUMMARY.value},
+    )
+    persist_reasoning_trace_entry(
+        repository,
+        assistant_message=assistant_message,
+        entry={
+            "event": SessionEventType.ASSISTANT_SUMMARY.value,
+            "state": "summary.updated",
+            "summary": sanitized_summary,
+            **(
+                {"semantic_state": semantic_snapshot}
+                if isinstance(semantic_snapshot, dict) and semantic_snapshot
+                else {}
+            ),
+        },
+    )
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.ASSISTANT_SUMMARY,
+            session_id=session_id,
+            payload={
+                "message_id": assistant_message.id,
+                "summary": sanitized_summary,
+                **harness_events.semantic_event_payload(semantic_snapshot),
+            },
+        )
+    )
+    await publish_message_event(
+        event_broker,
+        event_type=SessionEventType.MESSAGE_UPDATED,
+        session_id=session_id,
+        message=assistant_message,
+    )
+    await publish_attack_graph_updated(
+        event_broker,
+        session_id=session_id,
+        assistant_message=assistant_message,
+        semantic_snapshot=semantic_snapshot,
+    )
+
+
+async def publish_assistant_trace(
+    repository: SessionRepository,
+    event_broker: SessionEventBroker,
+    *,
+    session_id: str,
+    assistant_message: Message,
+    entry: dict[str, object],
+) -> None:
+    sanitized_entry: dict[str, object] = {}
+    for key, value in entry.items():
+        if isinstance(value, str):
+            sanitized_value = sanitize_persisted_assistant_text(value)
+            if THINK_BLOCK_RE.search(value) and not sanitized_value:
+                continue
+            sanitized_entry[key] = sanitized_value
+        else:
+            sanitized_entry[key] = value
+
+    persisted_entry = persist_reasoning_trace_entry(
+        repository,
+        assistant_message=assistant_message,
+        entry={"event": SessionEventType.ASSISTANT_TRACE.value, **sanitized_entry},
+    )
+    record_generation_step(
+        repository,
+        assistant_message=assistant_message,
+        kind="status",
+        phase=infer_trace_phase(sanitized_entry),
+        status=infer_trace_status(sanitized_entry),
+        state=(
+            str(sanitized_entry.get("state"))
+            if sanitized_entry.get("state") is not None
+            else "trace"
+        ),
+        label="过程更新",
+        safe_summary=infer_trace_summary(sanitized_entry),
+        metadata_json={key: value for key, value in persisted_entry.items() if key != "summary"},
+    )
+    trace_state = str(sanitized_entry.get("state") or "")
+    visible_trace_summary = infer_trace_summary(sanitized_entry)
+    should_append_trace_segment = (
+        trace_state.startswith("generation.") or trace_state.startswith("skill.autoroute.")
+    ) and bool(visible_trace_summary)
+    if should_append_trace_segment:
+        from app.db.models import AssistantTranscriptSegmentKind
+
+        transcript_kind = (
+            AssistantTranscriptSegmentKind.ERROR
+            if trace_state in {"generation.failed", "skill.autoroute.failed"}
+            else AssistantTranscriptSegmentKind.STATUS
+        )
+        append_transcript_segment(
+            repository,
+            assistant_message=assistant_message,
+            kind=transcript_kind,
+            status=infer_trace_status(sanitized_entry),
+            title=None,
+            text=visible_trace_summary,
+            metadata_json={key: value for key, value in persisted_entry.items()},
+        )
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.ASSISTANT_TRACE,
+            session_id=session_id,
+            payload={"message_id": assistant_message.id, **persisted_entry},
+        )
+    )
+    if should_append_trace_segment:
+        await publish_message_event(
+            event_broker,
+            event_type=SessionEventType.MESSAGE_UPDATED,
+            session_id=session_id,
+            message=assistant_message,
+        )

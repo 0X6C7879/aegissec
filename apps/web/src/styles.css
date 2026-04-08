@@ -1377,7 +1377,7 @@ textarea::placeholder {
 .assistant-tool-block {
   padding: 0;
   overflow: hidden;
-  background: rgba(11, 18, 30, 0.92);
+  background: linear-gradient(180deg, rgba(11, 18, 30, 0.96), rgba(6, 10, 18, 0.98));
 }
 
 .assistant-shell-block-error {
@@ -1392,6 +1392,7 @@ textarea::placeholder {
   padding: 12px 14px;
   cursor: pointer;
   list-style: none;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .assistant-tool-summary::-webkit-details-marker {
@@ -1444,12 +1445,16 @@ textarea::placeholder {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  background: rgba(4, 7, 12, 0.9);
+  background: linear-gradient(180deg, rgba(4, 7, 12, 0.98), rgba(2, 5, 10, 0.96));
   color: var(--text-strong);
   line-height: 1.55;
   font-size: 0.82rem;
+}
+
+.assistant-terminal-output-fallback {
+  color: var(--text-primary);
 }
 
 .assistant-terminal-output-error {

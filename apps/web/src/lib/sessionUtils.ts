@@ -52,6 +52,37 @@ function isOptimisticUserMessage(message: SessionMessage): boolean {
   return message.role === "user" && message.id.startsWith("optimistic-user-");
 }
 
+function normalizeMessageContentForStrengthCheck(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+function pickPreferredAssistantContent(existingContent: string, incomingContent: string): string {
+  const normalizedExistingContent = normalizeMessageContentForStrengthCheck(existingContent);
+  const normalizedIncomingContent = normalizeMessageContentForStrengthCheck(incomingContent);
+
+  if (!normalizedIncomingContent) {
+    return existingContent;
+  }
+
+  if (!normalizedExistingContent) {
+    return incomingContent;
+  }
+
+  if (normalizedIncomingContent === normalizedExistingContent) {
+    return incomingContent;
+  }
+
+  if (normalizedExistingContent.startsWith(normalizedIncomingContent)) {
+    return existingContent;
+  }
+
+  if (normalizedIncomingContent.startsWith(normalizedExistingContent)) {
+    return incomingContent;
+  }
+
+  return incomingContent;
+}
+
 export function sortSessions(sessions: SessionSummary[]): SessionSummary[] {
   return [...sessions].sort(
     (left, right) => toTimestamp(right.updated_at) - toTimestamp(left.updated_at),
@@ -80,6 +111,10 @@ export function mergeSessionMessage(
     ? {
         ...existingMessage,
         ...message,
+        content:
+          existingMessage.role === "assistant" && message.role === "assistant"
+            ? pickPreferredAssistantContent(existingMessage.content, message.content)
+            : message.content,
         metadata: message.metadata ?? existingMessage.metadata,
         attachments:
           message.attachments.length > 0 || existingMessage.attachments.length === 0

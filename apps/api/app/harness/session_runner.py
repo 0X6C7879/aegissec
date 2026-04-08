@@ -3,18 +3,19 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from collections.abc import Callable
+import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import or_
 from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 from sqlmodel import col, select
 
-from app.compat.mcp.service import MCPService
-from app.compat.skills.service import SkillService
+from app.compat.mcp.service import MCPDisabledServerError, MCPInvalidToolError, MCPService
+from app.compat.skills.service import SkillContentReadError, SkillLookupError, SkillService
 from app.core.events import SessionEventBroker, SessionEventType
 from app.db.models import (
     AssistantTranscriptSegmentKind,
@@ -35,8 +36,15 @@ from app.services.chat_runtime import (
     ChatRuntimeConfigurationError,
     ChatRuntimeError,
     GenerationCallbacks,
+    ToolCallRequest,
+    ToolCallResult,
 )
-from app.services.runtime import RuntimeService
+from app.services.runtime import (
+    RuntimeArtifactPathError,
+    RuntimeOperationError,
+    RuntimePolicyViolationError,
+    RuntimeService,
+)
 from app.services.session_generation import (
     GenerationCancelledError,
     SessionGenerationManager,
@@ -46,6 +54,31 @@ from . import generation_events as harness_generation_events
 from . import semantic as harness_semantic
 from . import trace as harness_trace
 from . import transcript as harness_transcript
+from .continuations import pause_tool_for_governance
+from .tool_runtime_runner import ToolRuntimeLifecycleRunner
+
+_SKILL_AUTOROUTE_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", re.IGNORECASE)
+_SKILL_AUTOROUTE_SEPARATOR_RE = re.compile(r"[\s_\-./\\]+")
+_SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "helper",
+    "into",
+    "of",
+    "or",
+    "skill",
+    "the",
+    "to",
+    "tool",
+    "use",
+    "when",
+    "with",
+}
+_SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE = 70
+_SKILL_AUTOROUTE_MARGIN = 10
 
 
 @dataclass(slots=True)
@@ -55,60 +88,6 @@ class HarnessGenerationPreparation:
     mcp_tool_inventory: list[dict[str, Any]]
     swarm_coordinator: Any
     prompt_assembly: Any
-
-
-class ToolExecutorBuilder(Protocol):
-    def __call__(
-        self,
-        *,
-        session: Session,
-        assistant_message: Message,
-        repository: SessionRepository,
-        event_broker: SessionEventBroker,
-        generation_manager: SessionGenerationManager,
-        runtime_service: RuntimeService,
-        skill_service: SkillService,
-        mcp_service: MCPService,
-        mcp_tool_inventory: list[dict[str, Any]],
-        session_state: Any,
-        swarm_coordinator: Any,
-    ) -> Any: ...
-
-
-class AutoroutedSkillContextBuilder(Protocol):
-    async def __call__(
-        self,
-        *,
-        available_skills: list[Any],
-        latest_message_text: str,
-        recent_context_text: str,
-        execute_tool: Any,
-    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]: ...
-
-
-class AssistantTracePublisher(Protocol):
-    async def __call__(
-        self,
-        repository: SessionRepository,
-        event_broker: SessionEventBroker,
-        *,
-        session_id: str,
-        assistant_message: Message,
-        entry: dict[str, object],
-    ) -> None: ...
-
-
-class AssistantSummaryPublisher(Protocol):
-    async def __call__(
-        self,
-        repository: SessionRepository,
-        event_broker: SessionEventBroker,
-        *,
-        session_id: str,
-        assistant_message: Message,
-        summary: str,
-        semantic_snapshot: dict[str, Any] | None,
-    ) -> None: ...
 
 
 def chat_runtime_supports_mcp_tools(chat_runtime: ChatRuntime) -> bool:
@@ -181,6 +160,634 @@ def build_generate_reply_kwargs(
     if chat_runtime_supports_harness_state(chat_runtime):
         generate_reply_kwargs["harness_state"] = prompt_assembly.session_state
     return generate_reply_kwargs
+
+
+def _normalize_skill_autoroute_text(content: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        _SKILL_AUTOROUTE_SEPARATOR_RE.sub(" ", content.casefold()),
+    ).strip()
+
+
+def _extract_skill_autoroute_tokens(
+    content: str,
+    *,
+    filter_description_stop_tokens: bool,
+) -> list[str]:
+    tokens: list[str] = []
+    for token in _SKILL_AUTOROUTE_TOKEN_RE.findall(_normalize_skill_autoroute_text(content)):
+        normalized_token = token.casefold()
+        if normalized_token.isascii() and len(normalized_token) < 2:
+            continue
+        if (
+            filter_description_stop_tokens
+            and normalized_token in _SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS
+        ):
+            continue
+        tokens.append(normalized_token)
+    return tokens
+
+
+def _skill_autoroute_display_name(skill: Any) -> str:
+    directory_name = getattr(skill, "directory_name", None)
+    if isinstance(directory_name, str) and directory_name.strip():
+        return directory_name.strip()
+    name = getattr(skill, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return "unknown-skill"
+
+
+def _skill_autoroute_aliases(skill: Any) -> list[str]:
+    aliases: list[str] = []
+    for raw_value in (getattr(skill, "directory_name", None), getattr(skill, "name", None)):
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            continue
+        normalized_value = _normalize_skill_autoroute_text(raw_value)
+        if normalized_value and normalized_value not in aliases:
+            aliases.append(normalized_value)
+    return aliases
+
+
+def _skill_autoroute_identifier(skill: Any) -> str:
+    directory_name = getattr(skill, "directory_name", None)
+    if isinstance(directory_name, str) and directory_name.strip():
+        return directory_name.strip()
+    return _skill_autoroute_display_name(skill)
+
+
+def _score_skill_for_autoroute(
+    *,
+    skill: Any,
+    normalized_context: str,
+    context_tokens: set[str],
+) -> tuple[int, str]:
+    family = getattr(skill, "family", None)
+    domain = getattr(skill, "domain", None)
+    task_mode = getattr(skill, "task_mode", None)
+    is_ctf_context = any(
+        token in context_tokens
+        for token in {"ctf", "flag", "buuoj", "xss", "sqli", "sql", "ssrf", "web"}
+    )
+    is_http_context = (
+        any(
+            token in context_tokens
+            for token in {"http", "https", "web", "api", "xss", "sqli", "sql", "ssrf", "login"}
+        )
+        or "http://" in normalized_context
+        or "https://" in normalized_context
+    )
+    specialized_focus = any(
+        token in context_tokens
+        for token in {
+            "focus",
+            "specific",
+            "specialized",
+            "analysis",
+            "analyze",
+            "audit",
+            "漏洞",
+            "分析",
+            "专注",
+        }
+    )
+
+    if family == "ctf" and domain == "web" and is_http_context:
+        web_score = 78 if specialized_focus else 74
+        return web_score, "ctf web prior from remote/http context"
+
+    if family == "ctf" and task_mode == "dispatcher" and is_ctf_context:
+        dispatcher_score = 72 if specialized_focus else (76 if is_http_context else 74)
+        return dispatcher_score, "ctf dispatcher prior from challenge/web context"
+
+    aliases = _skill_autoroute_aliases(skill)
+    exact_alias_matches = [
+        alias for alias in aliases if alias and f" {alias} " in f" {normalized_context} "
+    ]
+    if exact_alias_matches:
+        return 100, f"matched explicit skill alias '{exact_alias_matches[0]}'"
+
+    alias_token_matches: list[tuple[str, list[str]]] = []
+    for alias in aliases:
+        alias_tokens = _extract_skill_autoroute_tokens(
+            alias,
+            filter_description_stop_tokens=False,
+        )
+        if alias_tokens and all(token in context_tokens for token in alias_tokens):
+            alias_token_matches.append((alias, alias_tokens))
+    if alias_token_matches:
+        alias, alias_tokens = max(alias_token_matches, key=lambda item: len(item[1]))
+        return 70 + len(alias_tokens), f"matched alias tokens '{alias}'"
+
+    description = getattr(skill, "description", None)
+    if isinstance(description, str) and description.strip():
+        description_tokens = _extract_skill_autoroute_tokens(
+            description,
+            filter_description_stop_tokens=True,
+        )
+        overlap = [token for token in description_tokens if token in context_tokens]
+        if len(overlap) >= 2:
+            overlap_preview = ", ".join(overlap[:3])
+            return min(95, 60 + len(overlap) * 5), f"description overlap: {overlap_preview}"
+
+    return 0, ""
+
+
+def _resolve_autorouted_skill_candidate(
+    *,
+    available_skills: list[Any],
+    latest_message_text: str,
+    recent_context_text: str,
+) -> tuple[Any | None, dict[str, object]]:
+    if not available_skills:
+        return None, {
+            "decision": "skipped",
+            "reason": "当前没有可用技能",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
+
+    combined_context = "\n".join(
+        part for part in [latest_message_text, recent_context_text] if part.strip()
+    )
+    normalized_context = _normalize_skill_autoroute_text(combined_context)
+    context_tokens = set(
+        _extract_skill_autoroute_tokens(
+            combined_context,
+            filter_description_stop_tokens=False,
+        )
+    )
+    if not normalized_context and not context_tokens:
+        return None, {
+            "decision": "skipped",
+            "reason": "当前消息没有可用于技能路由的上下文",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
+
+    scored_candidates: list[tuple[int, str, Any, str]] = []
+    for skill in available_skills:
+        score, reason = _score_skill_for_autoroute(
+            skill=skill,
+            normalized_context=normalized_context,
+            context_tokens=context_tokens,
+        )
+        if score <= 0:
+            continue
+        scored_candidates.append((score, _skill_autoroute_display_name(skill), skill, reason))
+
+    if not scored_candidates:
+        return None, {
+            "decision": "skipped",
+            "reason": "没有高置信技能匹配",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
+
+    scored_candidates.sort(key=lambda item: (-item[0], item[1]))
+    top_score, top_name, top_skill, top_reason = scored_candidates[0]
+    runner_up = scored_candidates[1] if len(scored_candidates) > 1 else None
+    candidate_preview = [
+        {
+            "skill": display_name,
+            "confidence": score,
+            "reason": reason,
+        }
+        for score, display_name, _skill, reason in scored_candidates[:3]
+    ]
+
+    if top_score < _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE:
+        return None, {
+            "decision": "skipped",
+            "reason": "没有高置信技能匹配",
+            "confidence": top_score,
+            "top_candidate": top_name,
+            "candidates": candidate_preview,
+        }
+
+    if runner_up is not None:
+        runner_up_score, runner_up_name, _, _ = runner_up
+        if runner_up_score >= _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE and (
+            top_score - runner_up_score < _SKILL_AUTOROUTE_MARGIN
+        ):
+            return None, {
+                "decision": "skipped",
+                "reason": f"存在多个高置信技能候选（{top_name}, {runner_up_name}）",
+                "confidence": top_score,
+                "top_candidate": top_name,
+                "candidates": candidate_preview,
+            }
+
+    return top_skill, {
+        "decision": "selected",
+        "reason": top_reason,
+        "confidence": top_score,
+        "top_candidate": top_name,
+        "candidates": candidate_preview,
+    }
+
+
+async def build_autorouted_skill_context(
+    *,
+    available_skills: list[Any],
+    latest_message_text: str,
+    recent_context_text: str,
+    execute_tool: Any,
+) -> tuple[str | None, list[dict[str, object]], dict[str, object]]:
+    selected_skill, route_report = _resolve_autorouted_skill_candidate(
+        available_skills=available_skills,
+        latest_message_text=latest_message_text,
+        recent_context_text=recent_context_text,
+    )
+    route_reason = str(route_report.get("reason") or "")
+    raw_route_confidence = route_report.get("confidence")
+    route_confidence = (
+        int(raw_route_confidence) if isinstance(raw_route_confidence, int | float | str) else 0
+    )
+    route_candidates = route_report.get("candidates")
+    candidate_list = route_candidates if isinstance(route_candidates, list) else []
+    if selected_skill is None:
+        skipped_entry = {
+            "state": "skill.autoroute.skipped",
+            "reason": route_reason,
+            "confidence": route_confidence,
+            "top_candidate": route_report.get("top_candidate"),
+            "candidates": candidate_list,
+        }
+        return None, [skipped_entry], skipped_entry
+
+    skill_identifier = _skill_autoroute_identifier(selected_skill)
+    skill_display_name = _skill_autoroute_display_name(selected_skill)
+    selected_entry = {
+        "state": "skill.autoroute.selected",
+        "summary": f"自动选择 {skill_display_name}",
+        "skill": skill_display_name,
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+    }
+    executing_entry = {
+        "state": "skill.autoroute.executing",
+        "skill": skill_display_name,
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+    }
+    try:
+        tool_result = await execute_tool(
+            ToolCallRequest(
+                tool_call_id=f"autoroute-skill-{uuid4()}",
+                tool_name="execute_skill",
+                arguments={
+                    "skill_name_or_id": skill_identifier,
+                    "current_prompt": latest_message_text,
+                    "user_goal": latest_message_text,
+                    "use_selected_skill_set": True,
+                },
+            )
+        )
+    except ChatRuntimeError as exc:
+        failed_entry = {
+            "state": "skill.autoroute.failed",
+            "summary": f"自动预载技能失败：{skill_display_name}（{exc}）",
+            "skill": skill_display_name,
+            "reason": route_reason,
+            "confidence": route_confidence,
+            "top_candidate": route_report.get("top_candidate"),
+            "candidates": candidate_list,
+            "error": str(exc),
+        }
+        return None, [selected_entry, executing_entry, failed_entry], failed_entry
+
+    skill_payload = tool_result.payload.get("skill")
+    prepared_primary_payload = tool_result.payload.get("prepared_primary_skill")
+    execution_payload = tool_result.payload.get("execution")
+    resolved_skill_payload = (
+        prepared_primary_payload
+        if isinstance(prepared_primary_payload, dict)
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
+    )
+    if isinstance(resolved_skill_payload, dict):
+        resolved_skill_name = str(
+            resolved_skill_payload.get("directory_name")
+            or resolved_skill_payload.get("name")
+            or skill_display_name
+        )
+        selected_entry["summary"] = f"自动选择 {resolved_skill_name}"
+        selected_entry["skill"] = resolved_skill_name
+        executing_entry["skill"] = resolved_skill_name
+    finished_entry = {
+        "state": "skill.autoroute.finished",
+        "skill": selected_entry.get("skill", skill_display_name),
+        "reason": route_reason,
+        "confidence": route_confidence,
+        "top_candidate": route_report.get("top_candidate"),
+        "candidates": candidate_list,
+        "execution": execution_payload if isinstance(execution_payload, dict) else {},
+    }
+    prepared_context_prompt = tool_result.payload.get("prepared_context_prompt")
+    if isinstance(prepared_context_prompt, str) and prepared_context_prompt.strip():
+        return (
+            prepared_context_prompt.strip(),
+            [selected_entry, executing_entry, finished_entry],
+            {**finished_entry, "context_injected": True},
+        )
+
+    if not isinstance(skill_payload, dict):
+        return (
+            f"## Auto-selected skill: {skill_display_name}",
+            [selected_entry, executing_entry, finished_entry],
+            finished_entry,
+        )
+
+    prepared_prompt = (
+        execution_payload.get("prepared_prompt") if isinstance(execution_payload, dict) else None
+    )
+    if isinstance(prepared_prompt, str) and prepared_prompt.strip():
+        finished_entry["skill"] = skill_display_name
+        return (
+            prepared_prompt.strip(),
+            [selected_entry, executing_entry, finished_entry],
+            {**finished_entry, "context_injected": True},
+        )
+
+    directory_name = skill_payload.get("directory_name")
+    resolved_skill_name = (
+        str(directory_name).strip()
+        if isinstance(directory_name, str) and directory_name.strip()
+        else skill_display_name
+    )
+    description = skill_payload.get("description")
+    content = skill_payload.get("content")
+    truncated_content = content.strip() if isinstance(content, str) else ""
+    if len(truncated_content) > 4000:
+        truncated_content = truncated_content[:4000].rstrip() + "\n...[truncated]"
+
+    context_lines = [
+        f"## Auto-selected skill: {resolved_skill_name}",
+        f"Confidence: {route_confidence}",
+        f"Reason: {route_reason}",
+        (
+            "Prompt provenance: this preloaded skill fragment was injected by the "
+            "server-side skill router before the first model turn."
+        ),
+        "Use this preloaded skill guidance proactively before deciding on the next tool or answer.",
+    ]
+    if isinstance(description, str) and description.strip():
+        context_lines.append(f"Description: {description.strip()}")
+    if truncated_content:
+        context_lines.extend(["", truncated_content])
+
+    finished_entry["skill"] = resolved_skill_name
+    return (
+        "\n".join(context_lines),
+        [selected_entry, executing_entry, finished_entry],
+        {**finished_entry, "context_injected": True},
+    )
+
+
+def build_tool_executor(
+    *,
+    session: Session,
+    assistant_message: Message,
+    repository: SessionRepository,
+    event_broker: SessionEventBroker,
+    generation_manager: SessionGenerationManager,
+    runtime_service: RuntimeService,
+    skill_service: SkillService,
+    mcp_service: MCPService,
+    mcp_tool_inventory: list[dict[str, Any]] | None = None,
+    session_state: Any | None = None,
+    swarm_coordinator: Any | None = None,
+) -> Any:
+    executor_runtime = importlib.import_module("app.harness.executor").build_tool_runtime(
+        skill_service=skill_service,
+        session_id=session.id,
+        mcp_tool_inventory=mcp_tool_inventory,
+        include_swarm_tools=swarm_coordinator is not None,
+    )
+    harness_executor = importlib.import_module("app.harness.executor")
+    harness_tool_scheduling = importlib.import_module("app.harness.tool_scheduling")
+    lifecycle = ToolRuntimeLifecycleRunner(
+        session=session,
+        assistant_message=assistant_message,
+        repository=repository,
+        event_broker=event_broker,
+        session_state=session_state,
+        publish_assistant_trace=harness_trace.publish_assistant_trace,
+    )
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        prepared = harness_executor.prepare_tool_execution(
+            runtime=executor_runtime,
+            tool_request=tool_request,
+            session=session,
+            assistant_message=assistant_message,
+            runtime_service=runtime_service,
+            skill_service=skill_service,
+            mcp_service=mcp_service,
+            session_state=session_state,
+            swarm_coordinator=swarm_coordinator,
+        )
+        prepared = await harness_executor.apply_pre_tool_hooks(
+            runtime=executor_runtime,
+            prepared=prepared,
+            tool_request=tool_request,
+        )
+        tool = prepared.tool
+        decision = prepared.decision
+        governance_metadata = prepared.governance_metadata
+        tool_call_metadata = prepared.tool_call_metadata
+        started_payload = prepared.started_payload
+
+        await lifecycle.publish_tool_started(
+            tool_request,
+            tool_call_metadata=tool_call_metadata,
+            governance_metadata=governance_metadata,
+            started_payload=started_payload,
+            trace_entry=prepared.trace_entry,
+        )
+
+        async def pause_for_governance() -> dict[str, object]:
+            if decision is None:
+                raise ChatRuntimeError("Missing governance decision for tool execution.")
+            if assistant_message.generation_id is None:
+                raise ChatRuntimeError("Tool pause requires an active generation.")
+            try:
+                return await pause_tool_for_governance(
+                    repository=repository,
+                    session=session,
+                    assistant_message=assistant_message,
+                    tool_request=tool_request,
+                    decision=decision,
+                    governance_metadata=governance_metadata,
+                    tool_call_metadata=tool_call_metadata,
+                    started_payload=started_payload,
+                    event_broker=event_broker,
+                    generation_manager=generation_manager,
+                    publish_assistant_trace=harness_trace.publish_assistant_trace,
+                )
+            except RuntimeError as exc:
+                raise ChatRuntimeError(str(exc)) from exc
+
+        async def _run_registry_tool() -> Any:
+            if tool is None:
+                raise ChatRuntimeError(f"Unsupported tool requested: {tool_request.tool_name}.")
+            if decision is None:
+                raise ChatRuntimeError("Missing governance decision for tool execution.")
+            return await harness_executor.run_tool_with_hooks(
+                runtime=executor_runtime,
+                prepared=prepared,
+                tool_request=tool_request,
+            )
+
+        if tool is None:
+            error_message = f"Unsupported tool requested: {tool_request.tool_name}."
+            await lifecycle.publish_tool_failed(
+                tool_request,
+                started_payload=started_payload,
+                error_message=error_message,
+            )
+            raise ChatRuntimeError(error_message)
+
+        if decision is not None and not decision.allowed:
+            if decision.action in {"require_approval", "require_scope_confirmation"}:
+                resolution_payload = await pause_for_governance()
+                approved = bool(resolution_payload.get("approved"))
+                resolution_data = resolution_payload.get("resolution_payload")
+                scope_confirmed = False
+                if isinstance(resolution_data, dict):
+                    scope_confirmed = bool(resolution_data.get("scope_confirmed"))
+                scope_confirmed = scope_confirmed or bool(resolution_payload.get("scope_confirmed"))
+                if decision.action == "require_approval" and not approved:
+                    error_message = decision.reason or "Tool approval was not granted."
+                    await lifecycle.publish_tool_failed(
+                        tool_request,
+                        started_payload=started_payload,
+                        error_message=error_message,
+                    )
+                    raise ChatRuntimeError(error_message)
+                if decision.action == "require_scope_confirmation" and not scope_confirmed:
+                    error_message = decision.reason or "Scope confirmation was not granted."
+                    await lifecycle.publish_tool_failed(
+                        tool_request,
+                        started_payload=started_payload,
+                        error_message=error_message,
+                    )
+                    raise ChatRuntimeError(error_message)
+            else:
+                error_message = decision.reason or "Tool use denied by governance."
+                await lifecycle.publish_tool_failed(
+                    tool_request,
+                    started_payload=started_payload,
+                    error_message=error_message,
+                )
+                raise ChatRuntimeError(error_message)
+
+        try:
+            tool_result = await _run_registry_tool()
+        except (
+            MCPDisabledServerError,
+            MCPInvalidToolError,
+            RuntimeArtifactPathError,
+            RuntimeOperationError,
+            RuntimePolicyViolationError,
+            SkillLookupError,
+            SkillContentReadError,
+            ValidationError,
+        ) as exc:
+            error_artifacts = (
+                await harness_executor.notify_tool_execution_error(
+                    runtime=executor_runtime,
+                    prepared=prepared,
+                    tool_request=tool_request,
+                    error=exc,
+                )
+                if decision is not None
+                else None
+            )
+            await lifecycle.publish_tool_failed(
+                tool_request,
+                started_payload=started_payload,
+                error_message=str(exc),
+                error_artifacts=error_artifacts,
+            )
+            raise ChatRuntimeError(str(exc)) from exc
+        except Exception as exc:
+            error_artifacts = (
+                await harness_executor.notify_tool_execution_error(
+                    runtime=executor_runtime,
+                    prepared=prepared,
+                    tool_request=tool_request,
+                    error=exc,
+                )
+                if decision is not None
+                else None
+            )
+            await lifecycle.publish_tool_failed(
+                tool_request,
+                started_payload=started_payload,
+                error_message=str(exc),
+                error_artifacts=error_artifacts,
+            )
+            raise ChatRuntimeError(str(exc)) from exc
+
+        try:
+            return await lifecycle.persist_tool_success(
+                tool_request,
+                tool_result=tool_result,
+                started_payload=started_payload,
+            )
+        except Exception as exc:
+            await lifecycle.publish_tool_failed(
+                tool_request,
+                started_payload=started_payload,
+                error_message=str(exc),
+            )
+            raise ChatRuntimeError(str(exc)) from exc
+
+    async def batch_execute(tool_requests: list[ToolCallRequest]) -> list[ToolCallResult]:
+        prepared_executions = [
+            harness_executor.prepare_tool_execution(
+                runtime=executor_runtime,
+                tool_request=tool_request,
+                session=session,
+                assistant_message=assistant_message,
+                runtime_service=runtime_service,
+                skill_service=skill_service,
+                mcp_service=mcp_service,
+                session_state=session_state,
+                swarm_coordinator=swarm_coordinator,
+            )
+            for tool_request in tool_requests
+        ]
+        phases = harness_tool_scheduling.build_tool_schedule(tool_requests, prepared_executions)
+        results: list[ToolCallResult | None] = [None] * len(tool_requests)
+
+        for phase in phases:
+            if phase.lane != "readonly_parallel" or len(phase.items) <= 1:
+                for scheduled in phase.items:
+                    results[scheduled.order] = await execute_tool(scheduled.tool_request)
+                continue
+            for order, result in await lifecycle.execute_readonly_parallel_phase(
+                phase=phase,
+                runtime=executor_runtime,
+                executor_module=harness_executor,
+            ):
+                results[order] = result
+
+        return [result for result in results if result is not None]
+
+    setattr(execute_tool, "__batch_execute__", batch_execute)
+    return execute_tool
 
 
 def recover_abandoned_generations(db_engine: Engine) -> int:
@@ -274,12 +881,6 @@ async def process_generation(
     runtime_service: RuntimeService,
     skill_service: SkillService,
     mcp_service: MCPService,
-    build_tool_executor: ToolExecutorBuilder,
-    build_autorouted_skill_context: AutoroutedSkillContextBuilder,
-    publish_assistant_trace: AssistantTracePublisher,
-    publish_assistant_summary: AssistantSummaryPublisher,
-    sanitize_persisted_assistant_text: Callable[[str], str],
-    project_visible_stream_content: Callable[[str], str],
 ) -> str:
     active_session_state: Any | None = None
     with DBSession(db_engine) as worker_db_session:
@@ -391,7 +992,7 @@ async def process_generation(
                 safe_summary=None,
                 metadata_json={"generation_id": generation.id},
             )
-            await publish_assistant_trace(
+            await harness_trace.publish_assistant_trace(
                 repository,
                 event_broker,
                 session_id=session.id,
@@ -399,7 +1000,7 @@ async def process_generation(
                 entry={"state": "generation.started", "generation_id": generation.id},
             )
 
-            await publish_assistant_trace(
+            await harness_trace.publish_assistant_trace(
                 repository,
                 event_broker,
                 session_id=session.id,
@@ -421,7 +1022,7 @@ async def process_generation(
                 execute_tool=execute_tool,
             )
             for trace_entry in autoroute_trace_entries:
-                await publish_assistant_trace(
+                await harness_trace.publish_assistant_trace(
                     repository,
                     event_broker,
                     session_id=session.id,
@@ -456,14 +1057,18 @@ async def process_generation(
             repository.update_generation(generation, metadata_json=generation_metadata)
 
             raw_streamed_content = loaded_assistant_message.content
-            streamed_content = project_visible_stream_content(raw_streamed_content)
+            streamed_content = harness_transcript.project_visible_stream_content(
+                raw_streamed_content
+            )
 
             async def on_text_delta(delta: str) -> None:
                 nonlocal raw_streamed_content, streamed_content
                 if cancel_event.is_set():
                     raise asyncio.CancelledError
                 raw_streamed_content += delta
-                next_streamed_content = project_visible_stream_content(raw_streamed_content)
+                next_streamed_content = harness_transcript.project_visible_stream_content(
+                    raw_streamed_content
+                )
                 if next_streamed_content == streamed_content:
                     return
 
@@ -513,7 +1118,7 @@ async def process_generation(
                         assistant_message=loaded_assistant_message,
                         session_state=prompt_assembly.session_state,
                     )
-                    await publish_assistant_summary(
+                    await harness_trace.publish_assistant_summary(
                         repository,
                         event_broker,
                         session_id=session.id,
@@ -544,7 +1149,7 @@ async def process_generation(
                 else attachments_from_storage(user_message.attachments_json),
                 **generate_reply_kwargs,
             )
-            final_content = sanitize_persisted_assistant_text(final_content) or (
+            final_content = harness_transcript.sanitize_persisted_assistant_text(final_content) or (
                 "模型已完成分析，但没有返回可展示的最终答复。"
             )
 
@@ -611,7 +1216,7 @@ async def process_generation(
                 assistant_message=loaded_assistant_message,
                 semantic_snapshot=semantic_snapshot,
             )
-            await publish_assistant_trace(
+            await harness_trace.publish_assistant_trace(
                 repository,
                 event_broker,
                 session_id=session.id,
@@ -687,7 +1292,7 @@ async def process_generation(
                     assistant_message=assistant_message,
                     session_state=active_session_state,
                 )
-                await publish_assistant_trace(
+                await harness_trace.publish_assistant_trace(
                     repository,
                     event_broker,
                     session_id=session_id,
@@ -768,7 +1373,7 @@ async def process_generation(
                     assistant_message=assistant_message,
                     session_state=active_session_state,
                 )
-                await publish_assistant_trace(
+                await harness_trace.publish_assistant_trace(
                     repository,
                     event_broker,
                     session_id=session_id,
@@ -825,12 +1430,6 @@ async def run_session_worker(
     runtime_service: RuntimeService,
     skill_service: SkillService,
     mcp_service: MCPService,
-    build_tool_executor: ToolExecutorBuilder,
-    build_autorouted_skill_context: AutoroutedSkillContextBuilder,
-    publish_assistant_trace: AssistantTracePublisher,
-    publish_assistant_summary: AssistantSummaryPublisher,
-    sanitize_persisted_assistant_text: Callable[[str], str],
-    project_visible_stream_content: Callable[[str], str],
 ) -> None:
     current_task = asyncio.current_task()
     if current_task is None:
@@ -859,12 +1458,6 @@ async def run_session_worker(
                     runtime_service=runtime_service,
                     skill_service=skill_service,
                     mcp_service=mcp_service,
-                    build_tool_executor=build_tool_executor,
-                    build_autorouted_skill_context=build_autorouted_skill_context,
-                    publish_assistant_trace=publish_assistant_trace,
-                    publish_assistant_summary=publish_assistant_summary,
-                    sanitize_persisted_assistant_text=sanitize_persisted_assistant_text,
-                    project_visible_stream_content=project_visible_stream_content,
                 )
                 await generation_manager.resolve_future(
                     session_id,
@@ -942,45 +1535,9 @@ async def start_worker_if_needed(
     runtime_service: RuntimeService,
     skill_service: SkillService,
     mcp_service: MCPService,
-    build_tool_executor: ToolExecutorBuilder | None = None,
-    build_autorouted_skill_context: AutoroutedSkillContextBuilder | None = None,
-    publish_assistant_trace: AssistantTracePublisher | None = None,
-    publish_assistant_summary: AssistantSummaryPublisher | None = None,
-    sanitize_persisted_assistant_text: Callable[[str], str] | None = None,
-    project_visible_stream_content: Callable[[str], str] | None = None,
 ) -> None:
     if not await generation_manager.should_start_worker(session_id):
         return
-    if any(
-        callback is None
-        for callback in (
-            build_tool_executor,
-            build_autorouted_skill_context,
-            publish_assistant_trace,
-            publish_assistant_summary,
-            sanitize_persisted_assistant_text,
-            project_visible_stream_content,
-        )
-    ):
-        routes_chat = importlib.import_module("app.api.routes_chat")
-        if build_tool_executor is None:
-            build_tool_executor = routes_chat._build_tool_executor
-        if build_autorouted_skill_context is None:
-            build_autorouted_skill_context = routes_chat._build_autorouted_skill_context
-        if publish_assistant_trace is None:
-            publish_assistant_trace = routes_chat._publish_assistant_trace
-        if publish_assistant_summary is None:
-            publish_assistant_summary = routes_chat._publish_assistant_summary
-        if sanitize_persisted_assistant_text is None:
-            sanitize_persisted_assistant_text = routes_chat._sanitize_persisted_assistant_text
-        if project_visible_stream_content is None:
-            project_visible_stream_content = routes_chat._project_visible_stream_content
-    assert build_tool_executor is not None
-    assert build_autorouted_skill_context is not None
-    assert publish_assistant_trace is not None
-    assert publish_assistant_summary is not None
-    assert sanitize_persisted_assistant_text is not None
-    assert project_visible_stream_content is not None
     db_engine = db_session.get_bind()
     if not isinstance(db_engine, Engine):
         raise RuntimeError("Database engine is unavailable.")
@@ -994,12 +1551,6 @@ async def start_worker_if_needed(
             runtime_service=runtime_service,
             skill_service=skill_service,
             mcp_service=mcp_service,
-            build_tool_executor=build_tool_executor,
-            build_autorouted_skill_context=build_autorouted_skill_context,
-            publish_assistant_trace=publish_assistant_trace,
-            publish_assistant_summary=publish_assistant_summary,
-            sanitize_persisted_assistant_text=sanitize_persisted_assistant_text,
-            project_visible_stream_content=project_visible_stream_content,
         )
     )
     await generation_manager.attach_worker(session_id, worker_task)

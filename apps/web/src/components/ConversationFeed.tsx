@@ -160,6 +160,33 @@ function normalizeMarkdownSpacing(content: string | null | undefined): string | 
   return normalized.length > 0 ? normalized : null;
 }
 
+function normalizeAssistantPrimaryText(content: string | null | undefined): string | null {
+  return normalizeMarkdownSpacing(content) ?? normalizeForBoilerplateCheck(content);
+}
+
+function hasAuthoritativeAssistantPrimarySegment(
+  segments: AssistantTranscriptSegment[],
+  assistantContent: string | null | undefined,
+): boolean {
+  const normalizedAssistantContent = normalizeAssistantPrimaryText(assistantContent);
+  if (!normalizedAssistantContent) {
+    return false;
+  }
+
+  return segments.some((segment) => {
+    if (segment.kind !== "output" && segment.kind !== "error") {
+      return false;
+    }
+
+    const normalizedSegmentText = normalizeAssistantPrimaryText(segment.text);
+    return (
+      normalizedSegmentText !== null &&
+      (normalizedSegmentText === normalizedAssistantContent ||
+        normalizedSegmentText.endsWith(normalizedAssistantContent))
+    );
+  });
+}
+
 const markdownComponents = {
   think: ({ children }: { children?: ReactNode }) => (
     <div className="assistant-inline-think">{children}</div>
@@ -484,6 +511,39 @@ function readShellExitCode(segment: AssistantTranscriptSegment | null): string |
   return typeof value === "number" || typeof value === "string" ? String(value) : null;
 }
 
+function readShellOutputFallback(
+  segment: AssistantTranscriptSegment | null,
+  command: string,
+  excludedText: string | null = null,
+): string | null {
+  if (!segment) {
+    return null;
+  }
+
+  const candidate =
+    readFirstString(readShellResultRecord(segment), ["text", "safe_summary", "summary", "message"]) ??
+    readFirstString(readShellRecord(segment), ["text", "safe_summary", "summary", "message"]) ??
+    (segment.text?.trim() ? segment.text.trim() : null);
+
+  if (!candidate) {
+    return null;
+  }
+
+  const normalizedCandidate = candidate.trim();
+  const normalizedCommand = command.trim();
+  const normalizedExcludedText = excludedText?.trim() ?? null;
+
+  if (
+    normalizedCandidate.length === 0 ||
+    normalizedCandidate === normalizedCommand ||
+    (normalizedExcludedText !== null && normalizedCandidate === normalizedExcludedText)
+  ) {
+    return null;
+  }
+
+  return normalizedCandidate;
+}
+
 function buildTranscriptBlocks(
   segments: AssistantTranscriptSegment[],
 ): TranscriptRenderableBlock[] {
@@ -681,17 +741,9 @@ function buildTranscriptFromGeneration(
   }
 
   const assistantContent = assistantMessage?.content.trim() ?? "";
-  const hasPrimaryAssistantSegment = segments.some(
-    (segment) => segment.kind === "output" || segment.kind === "error",
-  );
   if (
     assistantContent &&
-    !hasPrimaryAssistantSegment &&
-    !segments.some(
-      (segment) =>
-        (segment.kind === "output" || segment.kind === "error") &&
-        (segment.text ?? "").trim() === assistantContent,
-    )
+    !hasAuthoritativeAssistantPrimarySegment(segments, assistantContent)
   ) {
     segments.push({
       id: `${generation.id}:assistant-output`,
@@ -750,19 +802,7 @@ function buildAssistantTranscript(
   const transcript = [...message.assistant_transcript].sort(compareTranscriptSegments);
   const content = message.content.trim();
 
-  const hasPrimaryAssistantSegment = transcript.some(
-    (segment) => segment.kind === "output" || segment.kind === "error",
-  );
-
-  if (
-    content &&
-    !hasPrimaryAssistantSegment &&
-    !transcript.some(
-      (segment) =>
-        (segment.kind === "output" || segment.kind === "error") &&
-        (segment.text ?? "").trim() === content,
-    )
-  ) {
+  if (content && !hasAuthoritativeAssistantPrimarySegment(transcript, content)) {
     transcript.push({
       id: `${message.id}:content`,
       sequence: (transcript[transcript.length - 1]?.sequence ?? 0) + 1,
@@ -859,6 +899,10 @@ function AssistantShellBlock({
   const command = readSegmentCommand(call ?? reference) ?? "Shell";
   const stdout = readShellTextValue(result ?? reference, ["stdout"]);
   const stderr = readShellTextValue(error ?? result ?? reference, ["stderr", "error", "message"]);
+  const outputFallback =
+    stdout === null && stderr === null
+      ? readShellOutputFallback(result ?? reference, command, error?.text?.trim() ?? null)
+      : null;
   const exitCode = readShellExitCode(result ?? reference);
   const artifacts = [
     ...readArtifactLabels(readShellRecord(result ?? reference)?.artifacts),
@@ -885,29 +929,37 @@ function AssistantShellBlock({
       </summary>
       <div className="assistant-tool-body">
         <div className="assistant-tool-detail-group">
-          <span className="assistant-tool-detail-label">command</span>
+          <span className="assistant-tool-detail-label">命令</span>
           <pre className="assistant-terminal-output">{command}</pre>
         </div>
         {stdout !== null ? (
           <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">stdout</span>
+            <span className="assistant-tool-detail-label">标准输出</span>
             <pre className="assistant-terminal-output">{stdout || "(empty)"}</pre>
           </div>
         ) : null}
         {stderr !== null ? (
           <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">stderr</span>
+            <span className="assistant-tool-detail-label">标准错误</span>
             <pre className="assistant-terminal-output assistant-terminal-output-error">
               {stderr || "(empty)"}
             </pre>
           </div>
         ) : null}
+        {outputFallback !== null ? (
+          <div className="assistant-tool-detail-group">
+            <span className="assistant-tool-detail-label">输出</span>
+            <pre className="assistant-terminal-output assistant-terminal-output-fallback">
+              {outputFallback}
+            </pre>
+          </div>
+        ) : null}
         {exitCode !== null ? (
-          <p className="assistant-tool-inline-meta">exit_code: {exitCode}</p>
+          <p className="assistant-tool-inline-meta">退出码：{exitCode}</p>
         ) : null}
         {artifacts.length > 0 ? (
           <div className="assistant-tool-detail-group">
-            <span className="assistant-tool-detail-label">artifacts</span>
+            <span className="assistant-tool-detail-label">产物</span>
             <div className="chat-bubble-artifacts assistant-transcript-artifacts">
               {artifacts.map((artifact) => (
                 <span key={`${reference.id}:${artifact}`} className="chat-artifact-chip">

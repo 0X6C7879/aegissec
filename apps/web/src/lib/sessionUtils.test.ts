@@ -5,6 +5,7 @@ import {
   mergeConversationReasoningEvent,
   mergeQueueState,
   mergeSessionEventEntries,
+  mergeSessionMessage,
   shouldStoreRealtimeEvent,
   toSessionMessageEvent,
 } from "./sessionUtils";
@@ -312,6 +313,51 @@ describe("sessionUtils realtime summaries", () => {
         kind: "status",
         status: "completed",
         state: "generation.completed",
+      },
+    ]);
+  });
+
+  it("keeps the stronger assistant body when a later update only carries partial content", () => {
+    const merged = mergeSessionMessage(
+      {
+        id: "session-1",
+        title: "当前对话",
+        status: "running",
+        project_id: null,
+        goal: null,
+        scenario_type: null,
+        current_phase: null,
+        runtime_policy_json: null,
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+        deleted_at: null,
+        messages: [
+          {
+            id: "assistant-message-1",
+            session_id: "session-1",
+            role: "assistant",
+            content: "最终答复包含完整结论",
+            assistant_transcript: [],
+            attachments: [],
+            created_at: "2026-04-01T10:00:01.000Z",
+          },
+        ],
+      },
+      {
+        id: "assistant-message-1",
+        session_id: "session-1",
+        role: "assistant",
+        content: "最终答复",
+        assistant_transcript: [],
+        attachments: [],
+        created_at: "2026-04-01T10:00:02.000Z",
+      },
+    );
+
+    expect(merged?.messages).toMatchObject([
+      {
+        id: "assistant-message-1",
+        content: "最终答复包含完整结论",
       },
     ]);
   });

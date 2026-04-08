@@ -408,6 +408,61 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("最终结论")).toBeInTheDocument();
   });
 
+  it("keeps the final assistant answer visible when live output only contains a partial transcript", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "最终答复已经完整返回。",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-partial",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-call-partial",
+                text: "printf 'partial output'",
+                metadata: {
+                  command: "printf 'partial output'",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-tool-result-partial",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-call-partial",
+                text: "partial output",
+                metadata: {
+                  result: {
+                    command: "printf 'partial output'",
+                    status: "completed",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-output-partial",
+                kind: "output",
+                sequence: 3,
+                text: "最终答复",
+              }),
+            ],
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("partial output")).toBeInTheDocument();
+    expect(screen.getByText("最终答复已经完整返回。")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-output-block")).toHaveLength(2);
+    expect(container.querySelectorAll(".assistant-output-block-final")).toHaveLength(1);
+  });
+
   it("uses a single icon-only inline edit control for user messages", () => {
     const onEditMessage = vi.fn(async () => undefined);
 
