@@ -21,6 +21,7 @@ import {
   sendChatMessage,
 } from "../lib/api";
 import { useSessionEvents } from "../hooks/useSessionEvents";
+import { useWorkspaceSplitPane } from "../hooks/useWorkspaceSplitPane";
 import {
   mergeConversationGeneration,
   mergeSessionMessages,
@@ -184,6 +185,9 @@ export function SessionWorkspaceWorkbench() {
   const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
   const [invalidSessionState, setInvalidSessionState] = useState<InvalidSessionState | null>(null);
   const suppressRouteAutonavigateRef = useRef(false);
+  const workspaceSplitPane = useWorkspaceSplitPane({
+    controlledPaneId: "workspace-chat-panel",
+  });
 
   const lastVisitedSessionId = useUiStore((state) => state.lastVisitedSessionId);
   const setLastVisitedSessionId = useUiStore((state) => state.setLastVisitedSessionId);
@@ -1158,7 +1162,11 @@ export function SessionWorkspaceWorkbench() {
               </section>
             ) : null}
 
-            <section className="workspace-session-grid workspace-session-grid-attack-main">
+            <section
+              ref={workspaceSplitPane.containerRef}
+              className={`workspace-session-grid workspace-session-grid-attack-main${workspaceSplitPane.isEnabled ? " workspace-session-grid-resizable" : ""}${workspaceSplitPane.isDragging ? " workspace-session-grid-resizing" : ""}`}
+              style={workspaceSplitPane.gridStyle}
+            >
               <section className="workspace-graph-main-column workspace-stage-panel">
                 <AttackGraphWorkbench
                   graph={attackGraph}
@@ -1172,7 +1180,18 @@ export function SessionWorkspaceWorkbench() {
                 />
               </section>
 
-              <section className="workspace-session-side-column workspace-session-side-column-transcript">
+              {workspaceSplitPane.isEnabled ? (
+                <div
+                  className={`workspace-split-pane-separator${workspaceSplitPane.isDragging ? " workspace-split-pane-separator-active" : ""}`}
+                  data-testid="workspace-split-pane-separator"
+                  {...workspaceSplitPane.separatorProps}
+                />
+              ) : null}
+
+              <section
+                className="workspace-session-side-column workspace-session-side-column-transcript"
+                id="workspace-chat-panel"
+              >
                 <section className="workspace-message-panel workspace-terminal-panel">
                   <ConversationFeed
                     messages={activeConversation.messages}

@@ -317,6 +317,160 @@ describe("sessionUtils realtime summaries", () => {
     ]);
   });
 
+  it("preserves top-level output containers from live tool completion events", () => {
+    const baseConversation = {
+      session: {
+        id: "session-1",
+        title: "当前对话",
+        status: "running",
+        project_id: null,
+        goal: null,
+        scenario_type: null,
+        current_phase: null,
+        runtime_policy_json: null,
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+        deleted_at: null,
+      },
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [
+        {
+          id: "generation-1",
+          session_id: "session-1",
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "running",
+          reasoning_trace: [],
+          steps: [],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 0,
+    };
+
+    const merged = mergeConversationGenerationEvent(
+      baseConversation,
+      "tool.call.finished",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-output-1",
+        command: "nmap 127.0.0.1",
+        status: "completed",
+        output: {
+          stdout: "scan done",
+          stderr: "",
+        },
+      },
+      "2026-04-01T10:00:02.000Z",
+      15,
+    );
+
+    expect(merged?.generations[0]?.steps).toMatchObject([
+      {
+        kind: "tool",
+        tool_call_id: "tool-output-1",
+        status: "completed",
+        phase: "tool_result",
+        metadata: {
+          output: {
+            stdout: "scan done",
+            stderr: "",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("preserves sibling live tool completion containers used by shell rendering", () => {
+    const baseConversation = {
+      session: {
+        id: "session-1",
+        title: "当前对话",
+        status: "running",
+        project_id: null,
+        goal: null,
+        scenario_type: null,
+        current_phase: null,
+        runtime_policy_json: null,
+        created_at: "2026-04-01T10:00:00.000Z",
+        updated_at: "2026-04-01T10:00:00.000Z",
+        deleted_at: null,
+      },
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [
+        {
+          id: "generation-1",
+          session_id: "session-1",
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "running",
+          reasoning_trace: [],
+          steps: [],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      active_generation_id: "generation-1",
+      queued_generation_count: 0,
+    };
+
+    const merged = mergeConversationGenerationEvent(
+      baseConversation,
+      "tool.call.finished",
+      {
+        generation_id: "generation-1",
+        message_id: "assistant-message-1",
+        tool: "execute_kali_command",
+        tool_call_id: "tool-output-2",
+        command: "dirb http://target",
+        status: "completed",
+        execution: {
+          stdout: "execution stdout",
+          stderr: "",
+        },
+        payload: {
+          text: "payload output",
+        },
+        data: {
+          stdout: "data stdout",
+        },
+      },
+      "2026-04-01T10:00:03.000Z",
+      16,
+    );
+
+    expect(merged?.generations[0]?.steps).toMatchObject([
+      {
+        kind: "tool",
+        tool_call_id: "tool-output-2",
+        status: "completed",
+        phase: "tool_result",
+        metadata: {
+          execution: {
+            stdout: "execution stdout",
+            stderr: "",
+          },
+          payload: {
+            text: "payload output",
+          },
+          data: {
+            stdout: "data stdout",
+          },
+        },
+      },
+    ]);
+  });
+
   it("keeps the stronger assistant body when a later update only carries partial content", () => {
     const merged = mergeSessionMessage(
       {

@@ -232,6 +232,20 @@ function createQueryClient(): QueryClient {
   });
 }
 
+function createMatchMedia(matches: boolean): (query: string) => MediaQueryList {
+  return (query: string) =>
+    ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }) as unknown as MediaQueryList;
+}
+
 function LocationDisplay() {
   const location = useLocation();
   return <div data-testid="location-display">{location.pathname}</div>;
@@ -273,6 +287,12 @@ function renderWorkbench(initialPath: string) {
 describe("SessionWorkspaceWorkbench", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("matchMedia", createMatchMedia(false));
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1440,
+      writable: true,
+    });
 
     useUiStore.setState({
       draftsBySession: {},
@@ -484,6 +504,60 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.queryByText("任务树")).not.toBeInTheDocument();
     expect(screen.queryByText("任务与图谱")).not.toBeInTheDocument();
     expect(screen.queryByText("计划与推进")).not.toBeInTheDocument();
+  });
+
+  it("persists split pane sizing and supports keyboard resizing on desktop", async () => {
+    const user = userEvent.setup();
+
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+
+    const { unmount } = renderWorkbench("/sessions/session-1/chat");
+
+    const separator = await screen.findByRole("separator", { name: "调整图谱与聊天面板宽度" });
+    const initialValueNow = Number(separator.getAttribute("aria-valuenow"));
+
+    separator.focus();
+    expect(separator).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+
+    await waitFor(() => {
+      expect(Number(separator.getAttribute("aria-valuenow"))).toBeGreaterThan(initialValueNow);
+    });
+
+    const persistedRatio = window.localStorage.getItem("aegissec.workspace.chat-pane.ratio.v1");
+    const resizedValueNow = separator.getAttribute("aria-valuenow");
+
+    expect(persistedRatio).not.toBeNull();
+
+    unmount();
+    renderWorkbench("/sessions/session-1/chat");
+
+    const restoredSeparator = await screen.findByRole("separator", {
+      name: "调整图谱与聊天面板宽度",
+    });
+
+    await waitFor(() => {
+      expect(restoredSeparator).toHaveAttribute("aria-valuenow", resizedValueNow ?? "");
+    });
+  });
+
+  it("keeps the separator hidden when the workspace falls back to stacked layout", async () => {
+    vi.stubGlobal("matchMedia", createMatchMedia(true));
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+      writable: true,
+    });
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("separator", { name: "调整图谱与聊天面板宽度" })).not.toBeInTheDocument();
   });
 
   it("renders the session attack graph data directly", async () => {

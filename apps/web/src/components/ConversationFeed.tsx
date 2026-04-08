@@ -51,6 +51,18 @@ type TranscriptRenderableBlock =
   | TranscriptErrorBlock
   | TranscriptCueBlock;
 
+type PresentShellTextValue = {
+  present: true;
+  text: string;
+};
+
+type TranscriptToolPair = {
+  anchorId: string;
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+};
+
 type ConversationFeedProps = {
   messages: SessionMessage[];
   generations: ChatGeneration[];
@@ -461,6 +473,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 function readFirstString(
   value: Record<string, unknown> | undefined,
   keys: readonly string[],
@@ -487,6 +503,61 @@ function readNestedRecord(
   return isRecord(candidate) ? candidate : undefined;
 }
 
+function readPathValue(
+  value: Record<string, unknown> | undefined,
+  path: readonly string[],
+): { found: boolean; value: unknown } {
+  if (!value || path.length === 0) {
+    return { found: false, value: undefined };
+  }
+
+  let current: unknown = value;
+  for (const key of path) {
+    if (!isRecord(current) || !hasOwnKey(current, key)) {
+      return { found: false, value: undefined };
+    }
+    current = current[key];
+  }
+
+  return { found: true, value: current };
+}
+
+function stringifyShellValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "";
+    }
+
+    return value.map((entry) => stringifyShellValue(entry)).join("\n");
+  }
+
+  if (isRecord(value)) {
+    if (Object.keys(value).length === 0) {
+      return "";
+    }
+
+    return JSON.stringify(value, null, 2) ?? "";
+  }
+
+  return String(value);
+}
+
 function humanizeIdentifier(value: string): string {
   return value
     .split(/[/_\-\s.]+/)
@@ -499,19 +570,97 @@ function truncateCommand(value: string, maxLength = 64): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
 }
 
+const SHELL_STDOUT_PATHS = [
+  ["stdout"],
+  ["result", "stdout"],
+  ["output", "stdout"],
+  ["result", "output", "stdout"],
+  ["execution", "stdout"],
+  ["result", "execution", "stdout"],
+  ["payload", "stdout"],
+  ["result", "payload", "stdout"],
+  ["data", "stdout"],
+] as const;
+
+const SHELL_STDERR_PATHS = [
+  ["stderr"],
+  ["result", "stderr"],
+  ["output", "stderr"],
+  ["result", "output", "stderr"],
+  ["execution", "stderr"],
+  ["result", "execution", "stderr"],
+  ["payload", "stderr"],
+  ["result", "payload", "stderr"],
+  ["data", "stderr"],
+] as const;
+
+const SHELL_EXIT_CODE_PATHS = [["exit_code"], ["result", "exit_code"]] as const;
+
+const SHELL_COMMAND_PATHS = [
+  ["command"],
+  ["arguments", "command"],
+  ["result", "command"],
+  ["output", "command"],
+  ["result", "output", "command"],
+  ["execution", "command"],
+  ["result", "execution", "command"],
+  ["payload", "command"],
+  ["result", "payload", "command"],
+  ["data", "command"],
+] as const;
+
+const SHELL_OUTPUT_FALLBACK_PATHS = [
+  ["result", "text"],
+  ["result", "message"],
+  ["result", "summary"],
+  ["result", "safe_summary"],
+  ["output", "text"],
+  ["result", "output", "text"],
+  ["execution", "text"],
+  ["result", "execution", "text"],
+  ["payload", "text"],
+  ["result", "payload", "text"],
+  ["data", "text"],
+  ["text"],
+  ["message"],
+  ["summary"],
+  ["safe_summary"],
+] as const;
+
+function readPresentShellText(
+  segment: AssistantTranscriptSegment | null,
+  paths: readonly (readonly string[])[],
+): PresentShellTextValue | null {
+  const metadata = segment?.metadata;
+  if (!metadata) {
+    return null;
+  }
+
+  for (const path of paths) {
+    const candidate = readPathValue(metadata, path);
+    if (!candidate.found) {
+      continue;
+    }
+
+    return {
+      present: true,
+      text: stringifyShellValue(candidate.value),
+    };
+  }
+
+  return null;
+}
+
 function readSegmentCommand(segment: AssistantTranscriptSegment): string | null {
-  const metadata = segment.metadata;
-  const argumentsRecord = readNestedRecord(metadata, "arguments");
-  const resultRecord = readNestedRecord(metadata, "result");
   const shellLikeTool =
     segment.tool_name === "execute_kali_command" ||
     segment.tool_name === "bash" ||
     segment.tool_name === "sh" ||
     segment.tool_name === "zsh";
+  const command = readPresentShellText(segment, SHELL_COMMAND_PATHS)?.text.trim() ?? null;
+
   return (
-    readFirstString(metadata, ["command"]) ??
-    readFirstString(argumentsRecord, ["command"]) ??
-    readFirstString(resultRecord, ["command"]) ??
+    (command && command.length > 0 ? command : null) ??
     (shellLikeTool && segment.kind === "tool_call" && segment.text?.trim()
       ? segment.text.trim()
       : null)
@@ -549,35 +698,54 @@ function readShellResultRecord(
 
 function readShellTextValue(
   segment: AssistantTranscriptSegment | null,
-  keys: readonly string[],
-): string | null {
-  return (
-    readFirstString(readShellRecord(segment), keys) ??
-    readFirstString(readShellResultRecord(segment), keys)
-  );
+  paths: readonly (readonly string[])[],
+): PresentShellTextValue | null {
+  return readPresentShellText(segment, paths);
 }
 
 function readShellExitCode(segment: AssistantTranscriptSegment | null): string | null {
-  const value =
-    readShellRecord(segment)?.exit_code ?? readShellResultRecord(segment)?.exit_code ?? null;
-  return typeof value === "number" || typeof value === "string" ? String(value) : null;
+  const metadata = segment?.metadata;
+  if (!metadata) {
+    return null;
+  }
+
+  for (const path of SHELL_EXIT_CODE_PATHS) {
+    const candidate = readPathValue(metadata, path);
+    if (!candidate.found) {
+      continue;
+    }
+
+    const value = candidate.value;
+    if (
+      typeof value === "number" ||
+      typeof value === "string" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      const text = String(value).trim();
+      return text.length > 0 ? text : null;
+    }
+  }
+
+  return null;
 }
 
 function readShellOutputFallback(
   segment: AssistantTranscriptSegment | null,
   command: string,
   excludedText: string | null = null,
-): string | null {
+): PresentShellTextValue | null {
   if (!segment) {
     return null;
   }
 
-  const candidate =
-    readFirstString(readShellResultRecord(segment), ["text", "safe_summary", "summary", "message"]) ??
-    readFirstString(readShellRecord(segment), ["text", "safe_summary", "summary", "message"]) ??
-    (segment.text?.trim() ? segment.text.trim() : null);
+  const metadataFallback = readPresentShellText(segment, SHELL_OUTPUT_FALLBACK_PATHS);
+  if (metadataFallback) {
+    return metadataFallback;
+  }
 
-  if (!candidate) {
+  const candidate = segment.text;
+  if (typeof candidate !== "string" || candidate.trim().length === 0) {
     return null;
   }
 
@@ -593,7 +761,44 @@ function readShellOutputFallback(
     return null;
   }
 
-  return normalizedCandidate;
+  return { present: true, text: candidate };
+}
+
+function buildToolPairs(
+  segments: AssistantTranscriptSegment[],
+): Map<string, TranscriptToolPair> {
+  const pairs = new Map<string, TranscriptToolPair>();
+
+  for (const segment of segments) {
+    if (
+      !segment.tool_call_id ||
+      (segment.kind !== "tool_call" && segment.kind !== "tool_result" && segment.kind !== "error")
+    ) {
+      continue;
+    }
+
+    const existing = pairs.get(segment.tool_call_id);
+    const pair: TranscriptToolPair = existing ?? {
+      anchorId: segment.id,
+      call: null,
+      result: null,
+      error: null,
+    };
+
+    if (segment.kind === "tool_call" && pair.call === null) {
+      pair.call = segment;
+    }
+    if (segment.kind === "tool_result") {
+      pair.result = segment;
+    }
+    if (segment.kind === "error") {
+      pair.error = segment;
+    }
+
+    pairs.set(segment.tool_call_id, pair);
+  }
+
+  return pairs;
 }
 
 function buildTranscriptBlocks(
@@ -602,8 +807,10 @@ function buildTranscriptBlocks(
   const ordered = [...segments].sort(compareTranscriptSegments);
   const blocks: TranscriptRenderableBlock[] = [];
   const seenPrimaryOutputTexts = new Set<string>();
-  for (let index = 0; index < ordered.length; index += 1) {
-    const segment = ordered[index]!;
+  const toolPairs = buildToolPairs(ordered);
+  const renderedToolPairIds = new Set<string>();
+
+  for (const segment of ordered) {
 
     if (segment.kind === "reasoning") {
       if (shouldRenderReasoningSegment(segment)) {
@@ -629,44 +836,30 @@ function buildTranscriptBlocks(
       continue;
     }
 
-    if (segment.kind === "tool_call") {
-      let result: AssistantTranscriptSegment | null = null;
-      let error: AssistantTranscriptSegment | null = null;
-      let cursor = index + 1;
-
-      while (cursor < ordered.length) {
-        const nextSegment = ordered[cursor]!;
-        if (nextSegment.tool_call_id !== segment.tool_call_id) {
-          break;
-        }
-        if (nextSegment.kind === "tool_result" && result === null) {
-          result = nextSegment;
-          cursor += 1;
-          continue;
-        }
-        if (nextSegment.kind === "error" && error === null) {
-          error = nextSegment;
-          cursor += 1;
-          continue;
-        }
-        break;
+    if (
+      segment.tool_call_id &&
+      (segment.kind === "tool_call" || segment.kind === "tool_result" || segment.kind === "error")
+    ) {
+      const pair = toolPairs.get(segment.tool_call_id);
+      if (!pair || pair.anchorId !== segment.id || renderedToolPairIds.has(segment.tool_call_id)) {
+        continue;
       }
 
+      renderedToolPairIds.add(segment.tool_call_id);
       blocks.push({
         type: "tool",
-        key: `tool:${segment.tool_call_id ?? segment.id}`,
-        call: segment,
-        result,
-        error,
+        key: `tool:${segment.tool_call_id}`,
+        call: pair.call,
+        result: pair.result,
+        error: pair.error,
       });
-      index = cursor - 1;
       continue;
     }
 
     if (segment.kind === "tool_result") {
       blocks.push({
         type: "tool",
-        key: `tool-result:${segment.tool_call_id ?? segment.id}`,
+        key: `tool-result:${segment.id}`,
         call: null,
         result: segment,
         error: null,
@@ -677,7 +870,7 @@ function buildTranscriptBlocks(
     if (segment.kind === "error" && segment.tool_call_id) {
       blocks.push({
         type: "tool",
-        key: `tool-error:${segment.tool_call_id}`,
+        key: `tool-error:${segment.id}`,
         call: null,
         result: null,
         error: segment,
@@ -952,8 +1145,8 @@ function AssistantShellBlock({
   }
 
   const command = readSegmentCommand(call ?? reference) ?? "Shell";
-  const stdout = readShellTextValue(result ?? reference, ["stdout"]);
-  const stderr = readShellTextValue(error ?? result ?? reference, ["stderr", "error", "message"]);
+  const stdout = readShellTextValue(result ?? reference, SHELL_STDOUT_PATHS);
+  const stderr = readShellTextValue(error ?? result ?? reference, SHELL_STDERR_PATHS);
   const outputFallback =
     stdout === null && stderr === null
       ? readShellOutputFallback(result ?? reference, command, error?.text?.trim() ?? null)
@@ -990,14 +1183,14 @@ function AssistantShellBlock({
         {stdout !== null ? (
           <div className="assistant-tool-detail-group">
             <span className="assistant-tool-detail-label">标准输出</span>
-            <pre className="assistant-terminal-output">{stdout || "(empty)"}</pre>
+            <pre className="assistant-terminal-output">{stdout.text || "(empty)"}</pre>
           </div>
         ) : null}
         {stderr !== null ? (
           <div className="assistant-tool-detail-group">
             <span className="assistant-tool-detail-label">标准错误</span>
             <pre className="assistant-terminal-output assistant-terminal-output-error">
-              {stderr || "(empty)"}
+              {stderr.text || "(empty)"}
             </pre>
           </div>
         ) : null}
@@ -1005,7 +1198,7 @@ function AssistantShellBlock({
           <div className="assistant-tool-detail-group">
             <span className="assistant-tool-detail-label">输出</span>
             <pre className="assistant-terminal-output assistant-terminal-output-fallback">
-              {outputFallback}
+              {outputFallback.text || "(empty)"}
             </pre>
           </div>
         ) : null}
@@ -1142,7 +1335,12 @@ function AssistantToolInvocationBlock({
   }
 
   const command = call ? readSegmentCommand(call) : readSegmentCommand(reference);
-  if (reference.tool_name === "execute_kali_command" || command) {
+  const shellLikeTool =
+    reference.tool_name === "execute_kali_command" ||
+    reference.tool_name === "bash" ||
+    reference.tool_name === "sh" ||
+    reference.tool_name === "zsh";
+  if (shellLikeTool || command) {
     return <AssistantShellBlock call={call} result={result} error={error} />;
   }
 

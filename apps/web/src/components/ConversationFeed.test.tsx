@@ -273,6 +273,376 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText(/"status": "success"/)).not.toBeInTheDocument();
   });
 
+  it("reads shell stdout and stderr from metadata.result without surfacing raw JSON", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-result-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-result-direct",
+                text: "准备执行 python verify.py",
+                metadata: {
+                  command: "python verify.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-direct",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-result-direct",
+                text: "命令执行结束。",
+                metadata: {
+                  result: {
+                    command: "python verify.py",
+                    stdout: "verification complete",
+                    stderr: "minor warning",
+                    exit_code: 2,
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-output",
+                kind: "output",
+                sequence: 3,
+                text: "结果已经整理完成。",
+              }),
+            ],
+            content: "结果已经整理完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("verification complete")).toBeInTheDocument();
+    expect(screen.getByText("minor warning")).toBeInTheDocument();
+    expect(screen.getByText("退出码：2")).toBeInTheDocument();
+    expect(screen.queryByText(/"stdout":/)).not.toBeInTheDocument();
+  });
+
+  it("reads metadata.output stdout and stderr while preserving present-empty stdout", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-output-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-output-paths",
+                text: "准备执行 whoami",
+                metadata: {
+                  command: "whoami",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-output-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-output-paths",
+                text: "命令执行结束。",
+                metadata: {
+                  output: {
+                    stdout: "",
+                    stderr: ["warn one", "warn two"],
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-output-final",
+                kind: "output",
+                sequence: 3,
+                text: "输出路径校验完成。",
+              }),
+            ],
+            content: "输出路径校验完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("(empty)")).toBeInTheDocument();
+    expect(screen.getByText(/warn one\s+warn two/)).toBeInTheDocument();
+  });
+
+  it("renders result-only shell blocks and reads metadata.result.output.text", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-result-only",
+                kind: "tool_result",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-result-only",
+                text: "结果已返回。",
+                metadata: {
+                  result: {
+                    command: "ls -la",
+                    exit_code: 0,
+                    output: {
+                      text: "directory listing ready",
+                    },
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-only-final",
+                kind: "output",
+                sequence: 2,
+                text: "孤立结果也已展示。",
+              }),
+            ],
+            content: "孤立结果也已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getAllByText("ls -la")).toHaveLength(2);
+    expect(screen.getByText("directory listing ready")).toBeInTheDocument();
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+  });
+
+  it("renders result-only shell output even when the backend omits command metadata", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-result-only-no-command",
+                kind: "tool_result",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-result-only-no-command",
+                text: "命令执行结束。",
+                metadata: {
+                  result: {
+                    stdout: "fallback stdout still visible",
+                    stderr: "",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-only-no-command-output",
+                kind: "output",
+                sequence: 2,
+                text: "无命令元数据的结果也已展示。",
+              }),
+            ],
+            content: "无命令元数据的结果也已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("fallback stdout still visible")).toBeInTheDocument();
+    expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
+  });
+
+  it("globally pairs non-adjacent tool segments by tool_call_id and falls back to message and summary text", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-pair-call-1",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-pair-1",
+                text: "准备执行 echo first",
+                metadata: {
+                  command: "echo first",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-pair-reasoning",
+                kind: "reasoning",
+                sequence: 2,
+                text: "中间插入的思考不应打断配对。",
+              }),
+              buildTranscriptSegment({
+                id: "segment-pair-result-1",
+                kind: "tool_result",
+                sequence: 3,
+                tool_name: "bash",
+                tool_call_id: "tool-pair-1",
+                text: "首个结果已完成。",
+                metadata: {
+                  result: {
+                    message: "message fallback rendered",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-pair-call-2",
+                kind: "tool_call",
+                sequence: 4,
+                tool_name: "bash",
+                tool_call_id: "tool-pair-2",
+                text: "准备执行 echo second",
+                metadata: {
+                  command: "echo second",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-pair-result-2",
+                kind: "tool_result",
+                sequence: 5,
+                tool_name: "bash",
+                tool_call_id: "tool-pair-2",
+                text: "第二个结果已完成。",
+                metadata: {
+                  result: {
+                    summary: "summary fallback rendered",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-pair-output",
+                kind: "output",
+                sequence: 6,
+                text: "最终输出保持不变。",
+              }),
+            ],
+            content: "最终输出保持不变。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    const transcriptOrder = [...container.querySelectorAll(".assistant-transcript > *")].map(
+      (element) => {
+        if (element.classList.contains("assistant-tool-block")) {
+          return "tool";
+        }
+        if (element.classList.contains("assistant-reasoning-block")) {
+          return "reasoning";
+        }
+        if (element.classList.contains("assistant-output-block")) {
+          return "output";
+        }
+        return "unknown";
+      },
+    );
+
+    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(2);
+    expect(transcriptOrder).toEqual(["tool", "reasoning", "tool", "output"]);
+
+    const summaries = container.querySelectorAll(".assistant-tool-summary");
+    fireEvent.click(summaries[0]!);
+    fireEvent.click(summaries[1]!);
+
+    expect(screen.getByText("message fallback rendered")).toBeInTheDocument();
+    expect(screen.getByText("summary fallback rendered")).toBeInTheDocument();
+    expect(screen.getByText("中间插入的思考不应打断配对。")) .toBeInTheDocument();
+  });
+
+  it("prefers the latest tool result for a repeated tool_call_id", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-repeat-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-repeat-1",
+                text: "准备执行 echo refresh",
+                metadata: {
+                  command: "echo refresh",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-repeat-result-1",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-repeat-1",
+                text: "早期结果。",
+                metadata: {
+                  result: {
+                    stdout: "stale output",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-repeat-result-2",
+                kind: "tool_result",
+                sequence: 3,
+                tool_name: "bash",
+                tool_call_id: "tool-repeat-1",
+                text: "最终结果。",
+                metadata: {
+                  result: {
+                    stdout: "latest output",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-repeat-output",
+                kind: "output",
+                sequence: 4,
+                text: "重复结果校验完成。",
+              }),
+            ],
+            content: "重复结果校验完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("latest output")).toBeInTheDocument();
+    expect(screen.queryByText("stale output")).not.toBeInTheDocument();
+  });
+
   it("renders skill calls as lightweight inline names and keeps errors inline", () => {
     render(
       <ConversationFeed
@@ -521,6 +891,120 @@ describe("ConversationFeed", () => {
 
     expect(screen.getByText(/test session starts\s+collected 16 items/)).toBeInTheDocument();
   });
+
+  it("renders live shell output when the generation step stores results under metadata.output", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-live-output",
+                kind: "tool_call",
+                sequence: 1,
+                status: "running",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-output-1",
+                text: "dirb http://target",
+                metadata: {
+                  command: "dirb http://target",
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            status: "running",
+            steps: [
+              buildStep({
+                id: "step-tool-result-live-output",
+                kind: "tool",
+                phase: "tool_result",
+                status: "completed",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-output-1",
+                command: "dirb http://target",
+                safe_summary: "命令已完成，状态：success。",
+                metadata: {
+                  output: {
+                    stdout: "==> /admin",
+                    stderr: "",
+                  },
+                },
+              }),
+            ],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("==> /admin")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["execution", { execution: { stdout: "execution stdout", stderr: "" } }, "execution stdout"],
+    ["payload", { payload: { text: "payload output" } }, "payload output"],
+    ["data", { data: { stdout: "data stdout", stderr: "" } }, "data stdout"],
+  ])(
+    "renders live shell output when the generation step stores results under metadata.%s",
+    (_label, metadata, expectedOutput) => {
+      const { container } = render(
+        <ConversationFeed
+          messages={buildMessages({
+            assistant: {
+              content: "",
+              assistant_transcript: [
+                buildTranscriptSegment({
+                  id: "segment-tool-call-live-container",
+                  kind: "tool_call",
+                  sequence: 1,
+                  status: "running",
+                  tool_name: "execute_kali_command",
+                  tool_call_id: "tool-live-container-1",
+                  text: "gobuster dir -u http://target",
+                  metadata: {
+                    command: "gobuster dir -u http://target",
+                  },
+                }),
+              ],
+            },
+          })}
+          generations={[
+            buildGeneration({
+              status: "running",
+              steps: [
+                buildStep({
+                  id: "step-tool-result-live-container",
+                  kind: "tool",
+                  phase: "tool_result",
+                  status: "completed",
+                  sequence: 2,
+                  tool_name: "execute_kali_command",
+                  tool_call_id: "tool-live-container-1",
+                  command: "gobuster dir -u http://target",
+                  safe_summary: "命令已完成，状态：success。",
+                  metadata,
+                }),
+              ],
+            }),
+          ]}
+          events={[]}
+          runtimeRuns={[]}
+        />,
+      );
+
+      fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+      expect(screen.getByText(expectedOutput)).toBeInTheDocument();
+    },
+  );
 
   it("keeps long inline code and autolink content wrap-enabled inside assistant markdown bubbles", () => {
     const longCode =
