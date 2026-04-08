@@ -129,6 +129,7 @@ def execute_skill_orchestration_plan(
                 timed_out_steps = _collect_timed_out_steps(
                     running,
                     stage_payload=stage_payload,
+                    attempts=attempts,
                 )
                 if timed_out_steps:
                     for future, result in timed_out_steps:
@@ -760,9 +761,9 @@ def _next_wait_timeout(
     orchestration_deadline: float | None,
 ) -> float | None:
     timeouts = [
-        _worker_timeout_ms(step, stage_payload)
+        timeout_ms
         for step, _started_at in running.values()
-        if _worker_timeout_ms(step, stage_payload) is not None
+        if (timeout_ms := _worker_timeout_ms(step, stage_payload)) is not None
     ]
     wait_timeout = None if not timeouts else max(0.01, min(timeout / 1000 for timeout in timeouts))
     if orchestration_deadline is None:
@@ -775,6 +776,7 @@ def _collect_timed_out_steps(
     running: dict[Future[SkillWorkerExecutionResult], tuple[dict[str, object], float]],
     *,
     stage_payload: dict[str, object],
+    attempts: dict[str, int],
 ) -> list[tuple[Future[SkillWorkerExecutionResult], SkillWorkerExecutionResult]]:
     now = perf_counter()
     timed_out_results: list[
@@ -810,11 +812,17 @@ def _collect_timed_out_steps(
                     model_hint=cast(str | None, step.get("model_hint")),
                     prepared_for_context=bool(step.get("prepared_for_context")),
                     prepared_for_execution=bool(step.get("prepared_for_execution")),
+                    attempt_count=attempts.get(str(step.get("step_id") or "timed-out"), 1),
+                    retry_count=max(
+                        0,
+                        attempts.get(str(step.get("step_id") or "timed-out"), 1) - 1,
+                    ),
                     timeout_ms=timeout_ms,
                     timed_out=True,
                     failure_reason=f"Worker exceeded timeout of {timeout_ms}ms.",
                     summary_for_prompt=(
-                        f"{step.get('name') or step.get('skill_id')}: timed out after {timeout_ms}ms"
+                        f"{step.get('name') or step.get('skill_id')}: timed out after "
+                        f"{timeout_ms}ms"
                     ),
                 ),
             )

@@ -21,8 +21,8 @@ from app.compat.skills.executor import (
 from app.compat.skills.orchestration_planner import (
     build_skill_orchestration_plan as build_skill_orchestration_preview,
 )
-from app.compat.skills.preflight import SkillPreflightCheck, can_auto_run_preflight
 from app.compat.skills.parser import parse_skill_file, read_skill_markdown
+from app.compat.skills.preflight import SkillPreflightCheck, can_auto_run_preflight
 from app.compat.skills.scanner import (
     compatibility_skill_scan_placeholders,
     default_skill_scan_roots,
@@ -538,6 +538,11 @@ class SkillService:
         self,
         **kwargs: object,
     ) -> str:
+        include_reference_only = (
+            cast(bool, kwargs.get("include_reference_only"))
+            if isinstance(kwargs.get("include_reference_only"), bool)
+            else True
+        )
         preview_payload = self.build_skill_orchestration_preview_payload(
             touched_paths=cast(list[str] | None, kwargs.get("touched_paths")),
             workspace_path=cast(str | None, kwargs.get("workspace_path")),
@@ -550,9 +555,7 @@ class SkillService:
             workflow_stage=cast(str | None, kwargs.get("workflow_stage")),
             available_tools=cast(list[str] | None, kwargs.get("available_tools")),
             invocation_arguments=cast(dict[str, object] | None, kwargs.get("invocation_arguments")),
-            include_reference_only=cast(bool | None, kwargs.get("include_reference_only"))
-            if isinstance(kwargs.get("include_reference_only"), bool)
-            else True,
+            include_reference_only=include_reference_only,
         )
         lines = ["Skill orchestration preview:"]
         selected_skills = preview_payload.get("selected_skills")

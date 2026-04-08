@@ -21,6 +21,7 @@ from app.compat.skills.models import (
     SkillSourceIdentity,
     SkillSourceKind,
 )
+from app.compat.skills.orchestration_models import SkillExecutionPolicy
 from app.compat.skills.parser import parse_skill_file
 from app.compat.skills.preflight import SkillPreflightCheck
 from app.compat.skills.scanner import (
@@ -627,6 +628,41 @@ Body.
     assert "Argument hint: --target" in compiled.prepared_prompt
 
 
+def test_compiler_propagates_version_and_model_hint_into_prepared_prompt(tmp_path: Path) -> None:
+    skills_root = tmp_path / "service-skills"
+    entry_file = skills_root / "demo" / "SKILL.md"
+    _write_skill(
+        entry_file,
+        """---
+name: demo
+description: Demo skill
+version: 3.4.5
+model_hint: gpt-5.4-mini
+---
+# Demo
+
+Body.
+""",
+    )
+
+    compiler_module = import_module("app.compat.skills.compiler")
+    compiled = compiler_module.compile_skill_record(
+        _build_skill_record(
+            root_dir=skills_root,
+            directory_name="demo",
+            entry_file=entry_file,
+            name="demo",
+            description="Demo skill",
+        ),
+        entry_file.read_text(encoding="utf-8"),
+    )
+
+    assert compiled.version == "3.4.5"
+    assert compiled.model_hint == "gpt-5.4-mini"
+    assert "Version: 3.4.5" in compiled.prepared_prompt
+    assert "Model hint: gpt-5.4-mini" in compiled.prepared_prompt
+
+
 def test_compiler_prepares_substitutions_and_shell_expansion_requests(tmp_path: Path) -> None:
     skills_root = tmp_path / "service-skills"
     entry_file = skills_root / "demo" / "SKILL.md"
@@ -976,6 +1012,8 @@ Use the prepared phase metadata only.
     assert selected_hints["keep_facade"] == "execute_skill"
     assert selected_execution_policy["shell_allowed"] is False
     assert any(action["action_type"] == "preflight_check" for action in pending_actions)
+    assert "Version: 2.1.0" in cast(str, api_data(context_response)["prompt_fragment"])
+    assert "Model hint: claude-sonnet" in cast(str, api_data(context_response)["prompt_fragment"])
 
     content_response = client.get(f"/api/skills/{phase_demo_id}/content")
     assert content_response.status_code == 200
@@ -1209,6 +1247,119 @@ def test_skill_service_executes_orchestration_workers_in_parallel_and_reduces_re
     assert verified["passed"] is True
 
 
+def test_skill_service_fail_fast_cancels_outstanding_workers(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "failfast.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        supports = [
+            _build_compiled_skill(skill_id=f"support-{index}", directory_name=f"support-{index}")
+            for index in range(4)
+        ]
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="execution"),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    skill, role=SkillCandidateRole.SUPPORTING, rank=index + 2, reasons=[skill.name]
+                )
+                for index, skill in enumerate(supports)
+            ],
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_service.build_skill_set_plan(
+                resolution_result,
+                workflow_stage="execution",
+                agent_role=None,
+            ),
+            resolution_result=resolution_result,
+        )
+
+        def _facade(name_or_slug: str, **_kwargs: object) -> dict[str, object]:
+            if name_or_slug == "support-0":
+                raise RuntimeError("temporary failure")
+            sleep(0.2)
+            return _execution_payload(name_or_slug)
+
+        monkeypatch.setattr(skill_service, "execute_skill_by_name_or_directory_name", _facade)
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-failfast",
+        )
+
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    assert execution["failure_policy"] == "fail_fast"
+    assert execution["status"] in {"failed", "cancelled"}
+    assert any(result.get("status") == "cancelled" for result in worker_results)
+
+
+def test_skill_service_best_effort_keeps_other_workers_running_after_failure(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "besteffort.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        support_a = _build_compiled_skill(skill_id="support-a", directory_name="support-a")
+        support_b = _build_compiled_skill(skill_id="support-b", directory_name="support-b")
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="deep-analysis"),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill,
+                role=SkillCandidateRole.PRIMARY,
+                rank=1,
+                reasons=["Primary match"],
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    support_a, role=SkillCandidateRole.SUPPORTING, rank=2, reasons=["A"]
+                ),
+                _build_resolved_candidate(
+                    support_b, role=SkillCandidateRole.SUPPORTING, rank=3, reasons=["B"]
+                ),
+            ],
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_service.build_skill_set_plan(
+                resolution_result,
+                workflow_stage="deep-analysis",
+                agent_role=None,
+            ),
+            resolution_result=resolution_result,
+        )
+
+        def _facade(name_or_slug: str, **_kwargs: object) -> dict[str, object]:
+            if name_or_slug == "support-a":
+                raise RuntimeError("temporary failure")
+            return _execution_payload(name_or_slug)
+
+        monkeypatch.setattr(skill_service, "execute_skill_by_name_or_directory_name", _facade)
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-best-effort",
+        )
+
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    assert execution["failure_policy"] == "best_effort"
+    assert any(
+        result.get("skill_id") == "support-a" and result.get("status") == "failed"
+        for result in worker_results
+    )
+    assert any(
+        result.get("skill_id") == "support-b" and result.get("status") == "succeeded"
+        for result in worker_results
+    )
+
+
 def test_skill_service_auto_runs_trusted_readonly_preflight_only(
     tmp_path: Path,
     test_settings: Settings,
@@ -1346,6 +1497,55 @@ def test_skill_service_does_not_advance_stage_when_required_approval_is_pending(
     assert stage_transition["replan_required"] is False
 
 
+def test_skill_service_applies_timeout_and_retry_metadata_to_worker_results(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    with _create_service_session(test_settings, tmp_path / "retry.db") as (_, skill_service):
+        primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+        support_skill = _build_compiled_skill(skill_id="support-id", directory_name="support-skill")
+        support_skill.execution_policy = SkillExecutionPolicy({"timeout_ms": 1, "retry_limit": 1})
+        resolution_result = SkillResolutionResult(
+            request=SkillResolutionRequest(workflow_stage="deep-analysis"),
+            primary_candidate=_build_resolved_candidate(
+                primary_skill, role=SkillCandidateRole.PRIMARY, rank=1, reasons=["Primary"]
+            ),
+            supporting_candidates=[
+                _build_resolved_candidate(
+                    support_skill, role=SkillCandidateRole.SUPPORTING, rank=2, reasons=["Support"]
+                )
+            ],
+        )
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_service.build_skill_set_plan(
+                resolution_result,
+                workflow_stage="deep-analysis",
+                agent_role=None,
+            ),
+            resolution_result=resolution_result,
+        )
+        monkeypatch.setattr(
+            skill_service,
+            "execute_skill_by_name_or_directory_name",
+            lambda name_or_slug, **_kwargs: _sleeping_execution_payload(name_or_slug, delay=0.05),
+        )
+        execution = skill_service.execute_skill_orchestration_plan(
+            orchestration_plan,
+            workspace_path=str(tmp_path),
+            session_id="session-retry",
+        )
+
+    worker_results = cast(list[dict[str, object]], execution["worker_results"])
+    support_result = next(
+        result for result in worker_results if result.get("skill_id") == "support-id"
+    )
+    assert support_result["status"] == "timed_out"
+    assert support_result["retry_count"] == 1
+    assert support_result["attempt_count"] == 2
+    assert support_result["timeout_ms"] == 1
+
+
 def test_build_skill_stage_policy_handles_verify_stage_without_worker_promotion() -> None:
     policy = build_skill_stage_policy(
         workflow_stage="verify",
@@ -1358,6 +1558,94 @@ def test_build_skill_stage_policy_handles_verify_stage_without_worker_promotion(
     assert policy.allow_supporting_worker_promotion is False
     assert policy.include_verifier is True
     assert policy.max_parallel_workers == 1
+
+
+def test_skill_orchestration_plan_exposes_internal_reducer_and_verifier_nodes(
+    tmp_path: Path,
+    test_settings: Settings,
+) -> None:
+    primary_skill = _build_compiled_skill(skill_id="primary-id", directory_name="primary-skill")
+    support_a = _build_compiled_skill(skill_id="support-a", directory_name="support-a")
+    support_b = _build_compiled_skill(skill_id="support-b", directory_name="support-b")
+    resolution_result = SkillResolutionResult(
+        request=SkillResolutionRequest(workflow_stage="execution"),
+        primary_candidate=_build_resolved_candidate(
+            primary_skill, role=SkillCandidateRole.PRIMARY, rank=1, reasons=["Primary"]
+        ),
+        supporting_candidates=[
+            _build_resolved_candidate(
+                support_a, role=SkillCandidateRole.SUPPORTING, rank=2, reasons=["A"]
+            ),
+            _build_resolved_candidate(
+                support_b, role=SkillCandidateRole.SUPPORTING, rank=3, reasons=["B"]
+            ),
+        ],
+    )
+    with _create_service_session(test_settings, tmp_path / "plan-nodes.db") as (_, skill_service):
+        orchestration_plan = skill_service.build_skill_orchestration_plan(
+            skill_service.build_skill_set_plan(
+                resolution_result, workflow_stage="execution", agent_role=None
+            ),
+            resolution_result=resolution_result,
+        )
+    steps = cast(
+        list[dict[str, object]],
+        cast(list[dict[str, object]], orchestration_plan["stages"])[0]["steps"],
+    )
+    reducer = next(step for step in steps if step.get("role") == "reducer")
+    verifier = next(step for step in steps if step.get("role") == "verifier")
+    assert str(reducer["skill_id"]).startswith("internal:reducer:")
+    assert reducer["internal_node"] is True
+    assert reducer["trust_level"] == "internal_system"
+    assert str(verifier["skill_id"]).startswith("internal:verifier:")
+    assert verifier["internal_node"] is True
+
+
+def test_orchestration_plan_preview_endpoint_returns_additive_debug_payload(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "preview-demo": """---
+name: preview-demo
+description: Preview demo
+version: 1.2.3
+model_hint: gpt-5.4
+preflight_checks:
+  - name: repo-state
+    kind: git_status
+orchestration_role: supporting
+preferred_stage: execution
+---
+# preview-demo
+""",
+        },
+    )
+
+    response = client.post(
+        "/api/skills/orchestration-plan",
+        json={
+            "current_prompt": "review the runtime",
+            "workflow_stage": "execution",
+            "agent_role": "security-review",
+            "available_tools": ["execute_skill", "read_skill_content"],
+        },
+    )
+
+    assert response.status_code == 200
+    data = cast(dict[str, object], api_data(response))
+    payload = cast(dict[str, object], data["payload"])
+    assert "skill_orchestration_plan" in payload
+    assert "stage_policy" in payload
+    assert "worker_promotion_candidates" in payload
+    assert "preflight_summary" in payload
+    assert isinstance(payload["suppression_reasons"], dict)
+    assert "Skill orchestration preview:" in cast(str, data["prompt_fragment"])
 
 
 def test_skill_service_replans_when_stage_transition_requests_next_stage(
