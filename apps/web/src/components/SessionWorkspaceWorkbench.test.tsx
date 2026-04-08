@@ -6,7 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraph } from "../types/graphs";
-import type { SessionConversation, SessionQueue, SessionSummary } from "../types/sessions";
+import type {
+  ChatGeneration,
+  SessionConversation,
+  SessionQueue,
+  SessionSummary,
+} from "../types/sessions";
 import { SessionWorkspaceWorkbench } from "./SessionWorkspaceWorkbench";
 
 const {
@@ -19,6 +24,7 @@ const {
   mockGetRuntimeStatus,
   mockGetSessionConversation,
   mockGetSessionQueue,
+  mockInjectActiveGenerationContext,
   mockForkSessionMessage,
   mockListSessions,
   mockRegenerateSessionMessage,
@@ -31,15 +37,16 @@ const {
   mockCancelGeneration: vi.fn(),
   mockCancelSession: vi.fn(),
   mockCreateSession: vi.fn(),
-  mockDeleteSession: vi.fn(),
-  mockEditSessionMessage: vi.fn(),
-  mockGetRuntimeStatus: vi.fn(),
-  mockGetSessionConversation: vi.fn(),
-  mockGetSessionQueue: vi.fn(),
-  mockForkSessionMessage: vi.fn(),
-  mockListSessions: vi.fn(),
-  mockRegenerateSessionMessage: vi.fn(),
-  mockRollbackSessionMessage: vi.fn(),
+    mockDeleteSession: vi.fn(),
+    mockEditSessionMessage: vi.fn(),
+    mockGetRuntimeStatus: vi.fn(),
+    mockGetSessionConversation: vi.fn(),
+    mockGetSessionQueue: vi.fn(),
+    mockInjectActiveGenerationContext: vi.fn(),
+    mockForkSessionMessage: vi.fn(),
+    mockListSessions: vi.fn(),
+    mockRegenerateSessionMessage: vi.fn(),
+    mockRollbackSessionMessage: vi.fn(),
   mockUpdateSession: vi.fn(),
   mockSendChatMessage: vi.fn(),
   mockUseSessionEvents: vi.fn(),
@@ -59,6 +66,7 @@ vi.mock("../lib/api", async () => {
     getRuntimeStatus: mockGetRuntimeStatus,
     getSessionConversation: mockGetSessionConversation,
     getSessionQueue: mockGetSessionQueue,
+    injectActiveGenerationContext: mockInjectActiveGenerationContext,
     forkSessionMessage: mockForkSessionMessage,
     listSessions: mockListSessions,
     regenerateSessionMessage: mockRegenerateSessionMessage,
@@ -81,7 +89,31 @@ vi.mock("./ConversationFeed", () => ({
 }));
 
 vi.mock("./WorkbenchComposer", () => ({
-  WorkbenchComposer: () => <div data-testid="workbench-composer" />,
+  WorkbenchComposer: ({
+    isActiveGeneration,
+    isPausedGeneration,
+    queuedCount,
+    onQueueSend,
+    onInject,
+  }: {
+    isActiveGeneration: boolean;
+    isPausedGeneration: boolean;
+    queuedCount: number;
+    onQueueSend: (content: string) => Promise<void>;
+    onInject: (content: string) => Promise<void>;
+  }) => (
+    <div data-testid="workbench-composer">
+      <span data-testid="composer-active-state">{String(isActiveGeneration)}</span>
+      <span data-testid="composer-paused-state">{String(isPausedGeneration)}</span>
+      <span data-testid="composer-queued-count">{queuedCount}</span>
+      <button type="button" onClick={() => void onQueueSend("排队消息")}> 
+        mock-queue-send
+      </button>
+      <button type="button" onClick={() => void onInject("注入消息")}>
+        mock-inject-send
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./AttackGraphCanvas", () => ({
@@ -126,6 +158,23 @@ function createQueue(sessionId: string): SessionQueue {
     queued_generations: [],
     active_generation_id: null,
     queued_generation_count: 0,
+  };
+}
+
+function createActiveGeneration(sessionId: string, overrides: Partial<ChatGeneration> = {}): ChatGeneration {
+  return {
+    id: `${sessionId}-generation-1`,
+    session_id: sessionId,
+    branch_id: "branch-1",
+    action: "reply",
+    user_message_id: `${sessionId}-user-1`,
+    assistant_message_id: `${sessionId}-assistant-1`,
+    status: "running",
+    steps: [],
+    created_at: "2026-04-01T10:00:00.000Z",
+    updated_at: "2026-04-01T10:00:01.000Z",
+    queue_position: null,
+    ...overrides,
   };
 }
 
@@ -191,7 +240,7 @@ function LocationDisplay() {
 function renderWorkbench(initialPath: string) {
   const queryClient = createQueryClient();
 
-  return render(
+  const renderResult = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialPath]}>
         <Routes>
@@ -217,6 +266,8 @@ function renderWorkbench(initialPath: string) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+
+  return { ...renderResult, queryClient };
 }
 
 describe("SessionWorkspaceWorkbench", () => {
@@ -315,6 +366,100 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(mockUseSessionEvents).not.toHaveBeenLastCalledWith(null);
   });
 
+  it("keeps explicit queue-send on the existing optimistic queue path while generation is active", async () => {
+    const user = userEvent.setup();
+    const activeGeneration = createActiveGeneration("session-1");
+    const conversation = createConversation("session-1");
+    const queue = createQueue("session-1");
+
+    conversation.active_generation_id = activeGeneration.id;
+    queue.active_generation = activeGeneration;
+    queue.active_generation_id = activeGeneration.id;
+
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetSessionConversation.mockResolvedValue(conversation);
+    mockGetSessionQueue.mockResolvedValue(queue);
+    mockSendChatMessage.mockImplementation(() => new Promise(() => {}));
+
+    const { queryClient } = renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
+      expect(screen.getByTestId("composer-active-state").textContent).toBe("true");
+    });
+
+    await user.click(screen.getByRole("button", { name: "mock-queue-send" }));
+
+    await waitFor(() => {
+      expect(mockSendChatMessage).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({
+          content: "排队消息",
+          attachments: [],
+          branch_id: null,
+        }),
+      );
+    });
+
+    const queuedConversation = queryClient.getQueryData<SessionConversation>([
+      "conversation",
+      "session-1",
+    ]);
+    const queuedState = queryClient.getQueryData<SessionQueue>(["session-queue", "session-1"]);
+
+    expect(mockInjectActiveGenerationContext).not.toHaveBeenCalled();
+    expect(queuedConversation?.generations).toHaveLength(1);
+    expect(queuedConversation?.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(queuedState?.queued_generations).toHaveLength(1);
+    expect(queuedState?.queued_generation_count).toBe(1);
+  });
+
+  it("routes inject/continue through the dedicated endpoint without creating optimistic queued generations", async () => {
+    const user = userEvent.setup();
+    const activeGeneration = createActiveGeneration("session-1");
+    const conversation = createConversation("session-1");
+    const queue = createQueue("session-1");
+
+    conversation.active_generation_id = activeGeneration.id;
+    queue.active_generation = activeGeneration;
+    queue.active_generation_id = activeGeneration.id;
+
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetSessionConversation.mockResolvedValue(conversation);
+    mockGetSessionQueue.mockResolvedValue(queue);
+    mockInjectActiveGenerationContext.mockImplementation(() => new Promise(() => {}));
+
+    const { queryClient } = renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
+      expect(screen.getByTestId("composer-active-state").textContent).toBe("true");
+    });
+
+    await user.click(screen.getByRole("button", { name: "mock-inject-send" }));
+
+    await waitFor(() => {
+      expect(mockInjectActiveGenerationContext).toHaveBeenCalledWith("session-1", {
+        content: "注入消息",
+      });
+    });
+
+    const injectedConversation = queryClient.getQueryData<SessionConversation>([
+      "conversation",
+      "session-1",
+    ]);
+    const injectedState = queryClient.getQueryData<SessionQueue>(["session-queue", "session-1"]);
+
+    expect(mockSendChatMessage).not.toHaveBeenCalled();
+    expect(injectedConversation?.messages).toHaveLength(0);
+    expect(injectedConversation?.generations).toHaveLength(0);
+    expect(injectedState?.queued_generations).toHaveLength(0);
+    expect(injectedState?.queued_generation_count).toBe(0);
+  });
+
   it("shows only the attack graph surface for active sessions", async () => {
     mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
     mockGetAttackGraph.mockResolvedValue(
@@ -381,7 +526,7 @@ describe("SessionWorkspaceWorkbench", () => {
     await user.click(screen.getByRole("button", { name: "可操作攻击节点" }));
     expect(screen.getByRole("dialog", { name: "可操作攻击节点 详情" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "编辑" }));
-    await user.click(screen.getByRole("button", { name: "重生成" }));
+    await user.click(screen.getByRole("button", { name: "重新生成" }));
     await user.click(screen.getByRole("button", { name: "分叉" }));
     await user.click(screen.getByRole("button", { name: "回滚" }));
 

@@ -103,6 +103,22 @@ class BaseQueryEngine(ABC):
     def render_compact_message(self, compact_fragment: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def append_context_injections(self, injections: Sequence[str]) -> None:
+        for injection in injections:
+            normalized_injection = injection.strip()
+            if not normalized_injection:
+                continue
+            self.messages.append(
+                self.render_compact_message(
+                    "Additional operator context injected during the active run:\n"
+                    f"{normalized_injection}"
+                )
+            )
+
+    @abstractmethod
+    def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
+        raise NotImplementedError
+
 
 class OpenAIQueryEngine(BaseQueryEngine):
     def __init__(
@@ -193,7 +209,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
         tool_calls: Sequence[ToolCallRequest],
         tool_results: Sequence[ToolCallResult],
     ) -> None:
-        self.messages.append(self._provider._assistant_message_for_history(assistant_payload))
+        self.append_assistant_response_to_history(assistant_payload)
         for tool_call, tool_result in zip(tool_calls, tool_results, strict=False):
             self.messages.append(
                 {
@@ -205,6 +221,9 @@ class OpenAIQueryEngine(BaseQueryEngine):
                     ),
                 }
             )
+
+    def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
+        self.messages.append(self._provider._assistant_message_for_history(assistant_payload))
 
     async def generate_tool_budget_reply(
         self,
@@ -317,10 +336,7 @@ class AnthropicQueryEngine(BaseQueryEngine):
         tool_calls: Sequence[ToolCallRequest],
         tool_results: Sequence[ToolCallResult],
     ) -> None:
-        assistant_content = assistant_payload.get("content")
-        if not isinstance(assistant_content, list):
-            raise ChatRuntimeError("Anthropic response content must be a list.")
-        self.messages.append({"role": "assistant", "content": assistant_content})
+        self.append_assistant_response_to_history(assistant_payload)
         user_content = []
         for tool_call, tool_result in zip(tool_calls, tool_results, strict=False):
             user_content.append(
@@ -334,6 +350,12 @@ class AnthropicQueryEngine(BaseQueryEngine):
                 }
             )
         self.messages.append({"role": "user", "content": user_content})
+
+    def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
+        assistant_content = assistant_payload.get("content")
+        if not isinstance(assistant_content, list):
+            raise ChatRuntimeError("Anthropic response content must be a list.")
+        self.messages.append({"role": "assistant", "content": assistant_content})
 
     async def generate_tool_budget_reply(
         self,

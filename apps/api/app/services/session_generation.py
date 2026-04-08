@@ -20,6 +20,8 @@ class SessionGenerationState:
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     response_futures: dict[str, asyncio.Future[str]] = field(default_factory=dict)
     continuation_futures: dict[str, asyncio.Future[dict[str, object]]] = field(default_factory=dict)
+    pending_injections: list[str] = field(default_factory=list)
+    checkpoint_requested: bool = False
 
 
 class SessionGenerationManager:
@@ -150,6 +152,8 @@ class SessionGenerationManager:
             state.current_assistant_message_id = assistant_message_id
             state.cancel_requested = False
             state.cancel_event.clear()
+            state.pending_injections = []
+            state.checkpoint_requested = False
 
     async def clear_current_generation(self, session_id: str, generation_id: str) -> None:
         async with self._lock:
@@ -160,6 +164,43 @@ class SessionGenerationManager:
             state.current_assistant_message_id = None
             state.cancel_requested = False
             state.cancel_event.clear()
+            state.pending_injections = []
+            state.checkpoint_requested = False
+
+    async def enqueue_injection(
+        self,
+        session_id: str,
+        *,
+        generation_id: str,
+        content: str,
+    ) -> int | None:
+        normalized_content = content.strip()
+        if not normalized_content:
+            return None
+        async with self._lock:
+            state = self._states.get(session_id)
+            if state is None or state.current_generation_id != generation_id:
+                return None
+            state.pending_injections.append(normalized_content)
+            state.checkpoint_requested = True
+            return len(state.pending_injections)
+
+    async def drain_injections(self, session_id: str, *, generation_id: str) -> list[str]:
+        async with self._lock:
+            state = self._states.get(session_id)
+            if state is None or state.current_generation_id != generation_id:
+                return []
+            injections = list(state.pending_injections)
+            state.pending_injections = []
+            state.checkpoint_requested = False
+            return injections
+
+    async def pending_injection_count(self, session_id: str, *, generation_id: str) -> int:
+        async with self._lock:
+            state = self._states.get(session_id)
+            if state is None or state.current_generation_id != generation_id:
+                return 0
+            return len(state.pending_injections)
 
     async def is_cancel_requested(self, session_id: str, generation_id: str) -> bool:
         async with self._lock:
@@ -186,6 +227,8 @@ class SessionGenerationManager:
             state.cancel_event.set()
             worker_task = state.worker_task
             assistant_message_id = state.current_assistant_message_id
+            state.pending_injections = []
+            state.checkpoint_requested = False
 
         if worker_task is not None:
             worker_task.cancel()

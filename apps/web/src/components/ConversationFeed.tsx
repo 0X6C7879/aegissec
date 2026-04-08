@@ -187,6 +187,58 @@ function hasAuthoritativeAssistantPrimarySegment(
   });
 }
 
+function hasEquivalentToolSegment(
+  segments: AssistantTranscriptSegment[],
+  candidate: AssistantTranscriptSegment,
+): boolean {
+  if (
+    !candidate.tool_call_id ||
+    (candidate.kind !== "tool_call" && candidate.kind !== "tool_result" && candidate.kind !== "error")
+  ) {
+    return false;
+  }
+
+  return segments.some(
+    (segment) =>
+      segment.kind === candidate.kind && segment.tool_call_id === candidate.tool_call_id,
+  );
+}
+
+function mergeMissingGenerationToolSegments(
+  transcript: AssistantTranscriptSegment[],
+  generation: ChatGeneration | null,
+): AssistantTranscriptSegment[] {
+  if (!generation?.steps?.length) {
+    return transcript;
+  }
+
+  const merged = [...transcript];
+  let nextSequence = merged[merged.length - 1]?.sequence ?? 0;
+  const generationSegments = generation.steps
+    .map((step) => mapGenerationStepToTranscriptSegment(step))
+    .filter(
+      (segment) =>
+        segment.kind === "tool_call" ||
+        segment.kind === "tool_result" ||
+        (segment.kind === "error" && segment.tool_call_id),
+    )
+    .sort(compareTranscriptSegments);
+
+  for (const segment of generationSegments) {
+    if (hasEquivalentToolSegment(merged, segment)) {
+      continue;
+    }
+
+    nextSequence += 1;
+    merged.push({
+      ...segment,
+      sequence: nextSequence,
+    });
+  }
+
+  return merged;
+}
+
 const markdownComponents = {
   think: ({ children }: { children?: ReactNode }) => (
     <div className="assistant-inline-think">{children}</div>
@@ -799,7 +851,10 @@ function buildAssistantTranscript(
   message: SessionMessage,
   generation: ChatGeneration | null,
 ): AssistantTranscriptSegment[] {
-  const transcript = [...message.assistant_transcript].sort(compareTranscriptSegments);
+  const transcript = mergeMissingGenerationToolSegments(
+    [...message.assistant_transcript].sort(compareTranscriptSegments),
+    generation,
+  );
   const content = message.content.trim();
 
   if (content && !hasAuthoritativeAssistantPrimarySegment(transcript, content)) {

@@ -1,4 +1,5 @@
 import type {
+  ActiveGenerationInjectResponse,
   AttachmentMetadata,
   ChatGeneration,
   ChatResponse,
@@ -88,6 +89,10 @@ type ChatRequestPayload = {
   parent_message_id?: string | null;
   token_budget?: number | null;
   wait_for_completion?: boolean;
+};
+
+type ActiveGenerationInjectRequest = {
+  content: string;
 };
 
 type MessageEditPayload = {
@@ -374,6 +379,19 @@ export async function sendChatMessage(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function injectActiveGenerationContext(
+  sessionId: string,
+  payload: ActiveGenerationInjectRequest,
+): Promise<ActiveGenerationInjectResponse> {
+  return apiRequest<ActiveGenerationInjectResponse>(
+    `/api/sessions/${sessionId}/generations/active/inject`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export async function editSessionMessage(

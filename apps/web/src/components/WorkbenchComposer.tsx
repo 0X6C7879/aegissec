@@ -1,50 +1,58 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useUiStore } from "../store/uiStore";
 
+type ComposerSubmitAction = "send" | "inject" | "queue";
+
 type WorkbenchComposerProps = {
   sessionId: string;
   disabled: boolean;
-  isGenerating: boolean;
+  isActiveGeneration: boolean;
+  isPausedGeneration: boolean;
   isInterrupting: boolean;
   queuedCount: number;
-  onSend: (content: string) => Promise<void>;
+  onQueueSend: (content: string) => Promise<void>;
+  onInject: (content: string) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
 
 export function WorkbenchComposer({
   sessionId,
   disabled,
-  isGenerating,
+  isActiveGeneration,
+  isPausedGeneration,
   isInterrupting,
   queuedCount,
-  onSend,
+  onQueueSend,
+  onInject,
   onInterrupt,
 }: WorkbenchComposerProps) {
   const draft = useUiStore((state) => state.draftsBySession[sessionId]);
   const setDraftContent = useUiStore((state) => state.setDraftContent);
   const sendLockRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [isLocallySending, setIsLocallySending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<ComposerSubmitAction | null>(null);
 
   const draftContent = draft?.content ?? "";
   const isEmptyDraft = draftContent.length === 0;
   const trimmedDraftContent = draftContent.trim();
-  const isPrimaryDisabled =
-    disabled || (isLocallySending && !isGenerating) || trimmedDraftContent.length === 0;
+  const isPrimaryDisabled = disabled || pendingAction !== null || trimmedDraftContent.length === 0;
+  const isPendingPrimaryAction = pendingAction !== null;
 
-  async function handleSendMessage(): Promise<void> {
+  async function handleDispatch(action: ComposerSubmitAction): Promise<void> {
     const trimmed = draftContent.trim();
 
-    if (!trimmed || disabled || sendLockRef.current || (isLocallySending && !isGenerating)) {
+    if (!trimmed || disabled || sendLockRef.current || pendingAction !== null) {
       return;
     }
 
+    const submit = action === "inject" ? onInject : onQueueSend;
+
     sendLockRef.current = true;
-    setIsLocallySending(true);
+    setPendingAction(action);
     setDraftContent(sessionId, "");
 
     try {
-      await onSend(trimmed);
+      await submit(trimmed);
     } catch (error) {
       const latestDraftContent = useUiStore.getState().draftsBySession[sessionId]?.content ?? "";
 
@@ -55,13 +63,21 @@ export function WorkbenchComposer({
       throw error;
     } finally {
       sendLockRef.current = false;
-      setIsLocallySending(false);
+      setPendingAction(null);
     }
+  }
+
+  async function handlePrimaryAction(): Promise<void> {
+    await handleDispatch(isActiveGeneration ? "inject" : "send");
+  }
+
+  async function handleQueueAction(): Promise<void> {
+    await handleDispatch("queue");
   }
 
   async function handleSubmitMessage(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    await handleSendMessage();
+    await handlePrimaryAction();
   }
 
   function handleInputKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
@@ -70,20 +86,23 @@ export function WorkbenchComposer({
       event.shiftKey ||
       disabled ||
       trimmedDraftContent.length === 0 ||
-      (isLocallySending && !isGenerating)
+      pendingAction !== null
     ) {
       return;
     }
 
     event.preventDefault();
-    void handleSendMessage();
+    void handlePrimaryAction();
   }
 
-  const primaryActionLabel = isGenerating ? "加入队列" : isLocallySending ? "发送中" : "发送";
-  const composerHint = isGenerating
-    ? queuedCount > 0
-      ? `助手正在回复；新消息会排入队列，当前已有 ${queuedCount} 条等待。`
-      : "助手正在回复；现在发送的新消息会自动进入队列。"
+  const inlineInjectLabel = isPausedGeneration ? "继续" : "注入";
+  const primaryActionLabel = isActiveGeneration ? inlineInjectLabel : "发送";
+  const composerHint = isActiveGeneration
+    ? isPausedGeneration
+      ? "当前回复已暂停；补充说明后可继续，也可改为加入队列。"
+      : queuedCount > 0
+        ? `助手正在回复；可直接注入补充上下文，当前还有 ${queuedCount} 条排队消息。`
+        : "助手正在回复；可直接注入补充上下文，或单独加入队列。"
     : "可直接发送，Shift + Enter 换行。";
 
   useLayoutEffect(() => {
@@ -118,6 +137,27 @@ export function WorkbenchComposer({
 
       <form className="workbench-chat-form" onSubmit={handleSubmitMessage}>
         <div className="workbench-chat-input-shell">
+          {isActiveGeneration ? (
+            <button
+              className="workbench-inline-inject-affordance"
+              type="button"
+              onClick={() => {
+                if (trimmedDraftContent.length === 0) {
+                  textareaRef.current?.focus();
+                  return;
+                }
+
+                void handlePrimaryAction();
+              }}
+              disabled={disabled || pendingAction !== null}
+              aria-label={`${inlineInjectLabel}当前回复`}
+            >
+              <span className="workbench-inline-inject-plus" aria-hidden="true">
+                +
+              </span>
+              <span>{inlineInjectLabel}</span>
+            </button>
+          ) : null}
           <span className="workbench-chat-prompt" aria-hidden="true">
             operator $
           </span>
@@ -136,7 +176,7 @@ export function WorkbenchComposer({
         </div>
 
         <div className="workbench-composer-footer">
-          {(isGenerating || isInterrupting) && !disabled ? (
+          {(isActiveGeneration || isInterrupting) && !disabled ? (
             <button
               className="workbench-ghost-action workbench-interrupt-action"
               type="button"
@@ -146,13 +186,23 @@ export function WorkbenchComposer({
               {isInterrupting ? "停止中" : "中断"}
             </button>
           ) : null}
+          {isActiveGeneration ? (
+            <button
+              className="workbench-ghost-action workbench-queue-action"
+              type="button"
+              onClick={() => void handleQueueAction()}
+              disabled={disabled || pendingAction !== null || trimmedDraftContent.length === 0}
+            >
+              加入队列
+            </button>
+          ) : null}
           <button
-            className={`workbench-primary-action${isLocallySending ? " workbench-primary-action-running" : ""}`}
+            className={`workbench-primary-action${isPendingPrimaryAction ? " workbench-primary-action-running" : ""}`}
             type="submit"
             disabled={isPrimaryDisabled}
             aria-label={primaryActionLabel}
           >
-            {isLocallySending ? (
+            {isPendingPrimaryAction ? (
               <span className="workbench-primary-action-indicator" aria-hidden="true">
                 <span className="workbench-primary-action-indicator-core" />
               </span>

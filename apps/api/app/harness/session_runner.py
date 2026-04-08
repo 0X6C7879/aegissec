@@ -471,9 +471,7 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload
-        if isinstance(skill_payload, dict)
-        else None
+        else skill_payload if isinstance(skill_payload, dict) else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(
@@ -1060,9 +1058,41 @@ async def process_generation(
             streamed_content = harness_transcript.project_visible_stream_content(
                 raw_streamed_content
             )
+            current_generation_id = generation.id
+            force_new_output_segment = False
+            applied_injection_count = 0
+
+            async def consume_context_injections() -> list[str]:
+                return await generation_manager.drain_injections(
+                    session.id,
+                    generation_id=current_generation_id,
+                )
+
+            async def on_context_injection_applied(injections: list[str]) -> None:
+                nonlocal force_new_output_segment, applied_injection_count
+                if not injections:
+                    return
+                force_new_output_segment = True
+                applied_injection_count += len(injections)
+                harness_transcript.append_transcript_segment(
+                    repository,
+                    assistant_message=loaded_assistant_message,
+                    kind=AssistantTranscriptSegmentKind.STATUS,
+                    status="running",
+                    text=(
+                        f"已注入 {len(injections)} 条人工上下文，当前生成将在安全检查点后继续推理。"
+                    ),
+                    metadata_json={"kind": "context_injection", "count": len(injections)},
+                )
+                await harness_generation_events.publish_message_event(
+                    event_broker,
+                    event_type=SessionEventType.MESSAGE_UPDATED,
+                    session_id=session.id,
+                    message=loaded_assistant_message,
+                )
 
             async def on_text_delta(delta: str) -> None:
-                nonlocal raw_streamed_content, streamed_content
+                nonlocal raw_streamed_content, streamed_content, force_new_output_segment
                 if cancel_event.is_set():
                     raise asyncio.CancelledError
                 raw_streamed_content += delta
@@ -1078,6 +1108,7 @@ async def process_generation(
                     else next_streamed_content
                 )
                 is_incremental_output = next_streamed_content.startswith(streamed_content)
+                append_to_current = is_incremental_output and not force_new_output_segment
                 streamed_content = next_streamed_content
                 repository.update_message(
                     loaded_assistant_message,
@@ -1089,8 +1120,9 @@ async def process_generation(
                     assistant_message=loaded_assistant_message,
                     delta_text=sanitized_delta,
                     status="running",
-                    append_to_current=is_incremental_output,
+                    append_to_current=append_to_current,
                 )
+                force_new_output_segment = False
                 output_step = harness_trace.get_or_create_output_step(
                     repository,
                     assistant_message=loaded_assistant_message,
@@ -1137,16 +1169,22 @@ async def process_generation(
                     on_text_delta=on_text_delta,
                     on_summary=on_summary,
                     is_cancelled=cancel_event.is_set,
+                    consume_context_injections=consume_context_injections,
+                    on_context_injection_applied=on_context_injection_applied,
                 ),
             )
 
             final_content = await chat_runtime.generate_reply(
-                user_message.content
-                if user_message is not None
-                else loaded_assistant_message.content,
-                []
-                if user_message is None
-                else attachments_from_storage(user_message.attachments_json),
+                (
+                    user_message.content
+                    if user_message is not None
+                    else loaded_assistant_message.content
+                ),
+                (
+                    []
+                    if user_message is None
+                    else attachments_from_storage(user_message.attachments_json)
+                ),
                 **generate_reply_kwargs,
             )
             final_content = harness_transcript.sanitize_persisted_assistant_text(final_content) or (
@@ -1156,9 +1194,17 @@ async def process_generation(
             if cancel_event.is_set():
                 raise asyncio.CancelledError
 
+            aggregated_final_content = final_content
+            if applied_injection_count > 0 and streamed_content:
+                aggregated_final_content = (
+                    streamed_content
+                    if streamed_content.endswith(final_content)
+                    else f"{streamed_content}{final_content}"
+                )
+
             repository.update_message(
                 loaded_assistant_message,
-                content=final_content,
+                content=aggregated_final_content,
                 status=MessageStatus.COMPLETED,
                 error_message="",
             )
@@ -1168,11 +1214,14 @@ async def process_generation(
                 session_state=prompt_assembly.session_state,
             )
             final_delta = (
-                final_content[len(streamed_content) :]
-                if final_content.startswith(streamed_content)
-                else final_content
+                aggregated_final_content[len(streamed_content) :]
+                if aggregated_final_content.startswith(streamed_content)
+                else aggregated_final_content
             )
-            final_is_incremental = final_content.startswith(streamed_content)
+            final_is_incremental = (
+                aggregated_final_content.startswith(streamed_content)
+                and not force_new_output_segment
+            )
             harness_transcript.append_output_transcript_delta(
                 repository,
                 assistant_message=loaded_assistant_message,
@@ -1180,8 +1229,9 @@ async def process_generation(
                 status="completed",
                 append_to_current=final_is_incremental,
             )
+            force_new_output_segment = False
             repository.mark_generation_completed(generation)
-            if final_content != streamed_content:
+            if aggregated_final_content != streamed_content:
                 if final_delta:
                     await harness_generation_events.publish_message_event(
                         event_broker,
@@ -1201,8 +1251,11 @@ async def process_generation(
                 assistant_message=loaded_assistant_message,
             )
             if output_step is not None:
-                if final_content != output_step.delta_text:
-                    repository.update_generation_step(output_step, delta_text=final_content)
+                if aggregated_final_content != output_step.delta_text:
+                    repository.update_generation_step(
+                        output_step,
+                        delta_text=aggregated_final_content,
+                    )
                 repository.update_generation_step(
                     output_step,
                     phase="synthesis",

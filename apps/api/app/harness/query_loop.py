@@ -18,6 +18,12 @@ class QueryLoop:
         callbacks: GenerationCallbacks | None,
     ) -> str:
         for _ in range(self._max_turns):
+            pending_injections = await self._drain_context_injections(callbacks)
+            if pending_injections:
+                engine.append_context_injections(pending_injections)
+                engine.pending_continuation = True
+                await self._notify_context_injections_applied(callbacks, pending_injections)
+
             engine.usage.model_turns += 1
             turn_result = await engine.request_turn(
                 allow_tools=execute_tool is not None,
@@ -48,6 +54,15 @@ class QueryLoop:
                 engine.maybe_auto_compact()
                 continue
 
+            post_turn_injections = await self._drain_context_injections(callbacks)
+            if post_turn_injections:
+                engine.append_assistant_response_to_history(turn_result.assistant_payload)
+                engine.append_context_injections(post_turn_injections)
+                engine.pending_continuation = True
+                engine.maybe_auto_compact()
+                await self._notify_context_injections_applied(callbacks, post_turn_injections)
+                continue
+
             engine.pending_continuation = False
             if turn_result.text_content:
                 return turn_result.text_content
@@ -56,6 +71,24 @@ class QueryLoop:
 
         engine.pending_continuation = False
         return await engine.generate_tool_budget_reply(callbacks=callbacks)
+
+    async def _drain_context_injections(
+        self,
+        callbacks: GenerationCallbacks | None,
+    ) -> list[str]:
+        if callbacks is None or callbacks.consume_context_injections is None:
+            return []
+        injections = await callbacks.consume_context_injections()
+        return [injection for injection in injections if injection.strip()]
+
+    async def _notify_context_injections_applied(
+        self,
+        callbacks: GenerationCallbacks | None,
+        injections: list[str],
+    ) -> None:
+        if not injections or callbacks is None or callbacks.on_context_injection_applied is None:
+            return
+        await callbacks.on_context_injection_applied(injections)
 
 
 from .query_engine import BaseQueryEngine  # noqa: E402  # isort: skip

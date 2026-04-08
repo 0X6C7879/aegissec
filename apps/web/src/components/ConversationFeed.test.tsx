@@ -6,6 +6,7 @@ import type {
   GenerationStep,
   SessionMessage,
 } from "../types/sessions";
+import "../styles.css";
 import { ConversationFeed } from "./ConversationFeed";
 
 function buildTranscriptSegment(
@@ -461,6 +462,95 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("最终答复已经完整返回。")).toBeInTheDocument();
     expect(container.querySelectorAll(".assistant-output-block")).toHaveLength(2);
     expect(container.querySelectorAll(".assistant-output-block-final")).toHaveLength(1);
+  });
+
+  it("fills in missing shell results from live generation steps when the message transcript only has the tool call", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            content: "",
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-tool-call-live",
+                kind: "tool_call",
+                sequence: 1,
+                status: "running",
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-1",
+                text: "pytest -q",
+                metadata: {
+                  command: "pytest -q",
+                },
+              }),
+            ],
+          },
+        })}
+        generations={[
+          buildGeneration({
+            status: "running",
+            steps: [
+              buildStep({
+                id: "step-tool-result-live",
+                kind: "tool",
+                phase: "tool_result",
+                status: "completed",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-live-1",
+                command: "pytest -q",
+                safe_summary: "命令已完成，状态：success。",
+                metadata: {
+                  result: {
+                    command: "pytest -q",
+                    stdout: "test session starts\ncollected 16 items",
+                    stderr: "",
+                    status: "success",
+                  },
+                },
+              }),
+            ],
+          }),
+        ]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText(/test session starts\s+collected 16 items/)).toBeInTheDocument();
+  });
+
+  it("keeps long inline code and autolink content wrap-enabled inside assistant markdown bubbles", () => {
+    const longCode =
+      "php://filter/convert.base64-encode/resource=/var/www/html/storage/logs/very-long-example-trace-file.php";
+    const longUrl =
+      "https://target.example/internal/really/long/path/with/no-natural-breakpoints/and/a/payload/that/should/stay/inside/the/bubble";
+
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [],
+            content: `- 利用链入口：\`${longCode}\`\n- 参考地址：${longUrl}`,
+          },
+        })}
+        generations={[buildGeneration({ steps: [] })]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    const codeElement = screen.getByText(longCode);
+    const linkElement = screen.getByRole("link", { name: longUrl });
+    const markdownContainer = codeElement.closest(".chat-bubble-markdown");
+
+    expect(codeElement.tagName).toBe("CODE");
+    expect(markdownContainer).not.toBeNull();
+    expect(getComputedStyle(markdownContainer!).overflowWrap).toBe("anywhere");
+    expect(getComputedStyle(codeElement).overflowWrap).toBe("anywhere");
+    expect(getComputedStyle(linkElement).overflowWrap).toBe("anywhere");
   });
 
   it("uses a single icon-only inline edit control for user messages", () => {

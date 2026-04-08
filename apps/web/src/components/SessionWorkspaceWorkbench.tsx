@@ -13,6 +13,7 @@ import {
   getRuntimeStatus,
   getSessionConversation,
   getSessionQueue,
+  injectActiveGenerationContext,
   listSessions,
   regenerateSessionMessage,
   rollbackSessionMessage,
@@ -747,6 +748,31 @@ export function SessionWorkspaceWorkbench() {
     },
   });
 
+  const injectActiveGenerationMutation = useMutation({
+    mutationFn: ({ id, content }: { id: string; content: string }) =>
+      injectActiveGenerationContext(id, { content }),
+    onSuccess: async (_response, variables) => {
+      await Promise.all([
+        invalidatePrimaryViews(variables.id),
+        queryClient.invalidateQueries({ queryKey: ["runtime-status"] }),
+      ]);
+    },
+    onError: (error, variables) => {
+      appendEvent(variables.id, {
+        id: crypto.randomUUID(),
+        sessionId: variables.id,
+        type: "assistant.trace",
+        createdAt: new Date().toISOString(),
+        summary: "补充上下文失败。",
+        payload: { status: "error", error: error instanceof Error ? error.message : "未知错误" },
+      });
+
+      void queryClient.invalidateQueries({ queryKey: ["conversation", variables.id] });
+      void queryClient.invalidateQueries({ queryKey: ["session-queue", variables.id] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
   const cancelGenerationMutation = useMutation({
     mutationFn: ({
       sessionId: targetSessionId,
@@ -889,17 +915,16 @@ export function SessionWorkspaceWorkbench() {
   const attackGraph = sessionAttackGraphQuery.data;
   const activeConversation = conversationQuery.data ?? null;
   const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
+  const activeGenerationId =
+    sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id ?? null;
   const queuedGenerationCount =
     sessionQueueQuery.data?.queued_generation_count ??
     sessionQueueQuery.data?.queued_generations.length ??
     activeConversation?.queued_generation_count ??
     0;
-  const isGenerationActive =
-    activeGeneration !== null ||
-    Boolean(
-      sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id,
-    ) ||
-    queuedGenerationCount > 0;
+  const isPausedGeneration =
+    activeConversation?.session.status === "paused" || sessionQueueQuery.data?.session.status === "paused";
+  const isInjectableGenerationActive = activeGeneration !== null || Boolean(activeGenerationId);
 
   function handleToggleSidebarCollapsed(): void {
     setIsSidebarCollapsed((currentValue) => !currentValue);
@@ -1182,13 +1207,20 @@ export function SessionWorkspaceWorkbench() {
                   <WorkbenchComposer
                     sessionId={activeSession.id}
                     disabled={activeSession.deleted_at !== null}
-                    isGenerating={isGenerationActive}
+                    isActiveGeneration={isInjectableGenerationActive || isPausedGeneration}
+                    isPausedGeneration={isPausedGeneration}
                     isInterrupting={
                       cancelGenerationMutation.isPending || cancelSessionMutation.isPending
                     }
                     queuedCount={queuedGenerationCount}
-                    onSend={async (content) => {
+                    onQueueSend={async (content) => {
                       await sendChatMutation.mutateAsync({ id: activeSession.id, content });
+                    }}
+                    onInject={async (content) => {
+                      await injectActiveGenerationMutation.mutateAsync({
+                        id: activeSession.id,
+                        content,
+                      });
                     }}
                     onInterrupt={async () => {
                       if (activeGeneration) {

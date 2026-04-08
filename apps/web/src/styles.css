@@ -1230,6 +1230,18 @@ textarea::placeholder {
   white-space: pre-wrap;
 }
 
+.chat-bubble-plain,
+.chat-bubble-markdown,
+.chat-bubble-markdown p,
+.chat-bubble-markdown li,
+.chat-bubble-markdown blockquote,
+.chat-bubble-markdown th,
+.chat-bubble-markdown td,
+.chat-bubble-markdown a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .chat-bubble-markdown > :first-child {
   margin-top: 0;
 }
@@ -1266,6 +1278,8 @@ textarea::placeholder {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-strong);
   font-size: 0.82em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-bubble-markdown pre {
@@ -1280,6 +1294,8 @@ textarea::placeholder {
   padding: 0;
   border-radius: 0;
   background: transparent;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .chat-bubble-markdown table {
@@ -2236,6 +2252,35 @@ textarea::placeholder {
   gap: 8px;
 }
 
+.workbench-inline-inject-affordance {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(0, 217, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(0, 217, 255, 0.08);
+  color: var(--accent-strong);
+  font: 600 0.72rem/1 var(--font-code);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workbench-inline-inject-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(0, 217, 255, 0.14);
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  line-height: 1;
+}
+
 .workbench-chat-prompt {
   color: var(--accent-strong);
   font: 600 0.72rem/1 var(--font-code);
@@ -2287,6 +2332,10 @@ textarea::placeholder {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-primary);
+}
+
+.workbench-queue-action {
+  min-width: 96px;
 }
 
 .workbench-primary-action-indicator {

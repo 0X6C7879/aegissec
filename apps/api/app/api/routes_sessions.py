@@ -11,9 +11,10 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from sqlmodel import Field, SQLModel
 from sqlmodel import Session as DBSession
-from sqlmodel import SQLModel
 
+from app.agent.continuation_store import ContinuationStore
 from app.compat.mcp.service import MCPService, get_mcp_service
 from app.compat.skills.service import SkillService, get_skill_service
 from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
@@ -74,6 +75,17 @@ class ContinuationResolveRequest(SQLModel):
     scope_confirmed: bool | None = None
     user_input: str | None = None
     resolution_payload: dict[str, object] | None = None
+
+
+class ActiveGenerationInjectRequest(SQLModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class ActiveGenerationInjectResponse(SQLModel):
+    session_id: str
+    generation_id: str
+    delivery: Literal["running_checkpoint", "paused_continuation"]
+    queued_injection_count: int = 0
 
 
 def _get_existing_session(
@@ -408,6 +420,112 @@ async def resolve_continuation(
             "status": "resolved",
             "resolution": resolved.resolution.to_state(),
         }
+    )
+
+
+@router.post(
+    "/{session_id}/generations/active/inject",
+    response_model=ActiveGenerationInjectResponse,
+)
+async def inject_active_generation_context(
+    session_id: str,
+    payload: ActiveGenerationInjectRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+    generation_manager: SessionGenerationManager = Depends(get_generation_manager),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    active_generation = repository.get_active_generation(session_id)
+    if active_generation is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "no_active_generation", "message": "当前没有可注入的活跃生成。"},
+        )
+
+    normalized_content = payload.content.strip()
+    if not normalized_content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "empty_injection", "message": "注入内容不能为空。"},
+        )
+
+    if session.status == SessionStatus.PAUSED:
+        continuation_store = ContinuationStore()
+        pause_state = active_generation.metadata_json.get("pause_state")
+        if not isinstance(pause_state, dict):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "no_pending_continuation",
+                    "message": "当前暂停态没有可继续的交互式续传。",
+                },
+            )
+        active_contract = continuation_store.active_contract(dict(pause_state))
+        if active_contract is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "no_pending_continuation",
+                    "message": "当前暂停态没有可继续的交互式续传。",
+                },
+            )
+        if active_contract.protocol_kind != "interaction":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "approval_required",
+                    "message": "当前暂停需要显式审批，不能直接注入自由文本上下文。",
+                },
+            )
+        request = normalize_continuation_resolution_input(
+            approve=None,
+            approved=None,
+            scope_confirmed=True,
+            user_input=normalized_content,
+            resolution_payload=None,
+        )
+        try:
+            await resolve_session_continuation(
+                repository=repository,
+                session=session,
+                continuation_token=active_contract.continuation_token,
+                request=request,
+                event_broker=event_broker,
+                generation_manager=generation_manager,
+            )
+        except ContinuationResolutionError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return ok_response(
+            ActiveGenerationInjectResponse(
+                session_id=session_id,
+                generation_id=active_generation.id,
+                delivery="paused_continuation",
+                queued_injection_count=0,
+            ).model_dump(mode="json")
+        )
+
+    queued_injection_count = await generation_manager.enqueue_injection(
+        session_id,
+        generation_id=active_generation.id,
+        content=normalized_content,
+    )
+    if queued_injection_count is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "active_generation_unavailable",
+                "message": "当前活跃生成尚未准备好接收注入，请稍后重试。",
+            },
+        )
+
+    return ok_response(
+        ActiveGenerationInjectResponse(
+            session_id=session_id,
+            generation_id=active_generation.id,
+            delivery="running_checkpoint",
+            queued_injection_count=queued_injection_count,
+        ).model_dump(mode="json")
     )
 
 

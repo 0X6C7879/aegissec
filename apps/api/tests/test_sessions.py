@@ -401,6 +401,110 @@ def test_chat_defaults_to_non_blocking_enqueue_and_persists_timeline(client: Tes
         app.dependency_overrides[get_chat_runtime] = original_override
 
 
+def test_active_generation_injects_running_context_without_queueing_new_generation(
+    client: TestClient,
+) -> None:
+    class InjectAwareChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+            assert callbacks.consume_context_injections is not None
+            assert callbacks.on_context_injection_applied is not None
+
+            await callbacks.on_text_delta("初始分析")
+
+            injections: list[str] = []
+            deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+            while time.time() < deadline:
+                injections = await callbacks.consume_context_injections()
+                if injections:
+                    break
+                await _yield_control()
+
+            if injections:
+                await callbacks.on_context_injection_applied(injections)
+                await callbacks.on_text_delta("后续结论")
+                return "初始分析后续结论"
+
+            return "初始分析"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: InjectAwareChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Running Injection Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response_box, worker = _post_chat_in_thread(
+            client,
+            session_id,
+            {"content": "先分析这个目标", "attachments": [], "wait_for_completion": True},
+        )
+
+        inject_response = None
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            inject_response = client.post(
+                f"/api/sessions/{session_id}/generations/active/inject",
+                json={"content": "请额外关注 host-b 的横向移动迹象"},
+            )
+            if inject_response.status_code == 200:
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("running injection endpoint never accepted the request")
+
+        worker.join(timeout=5)
+        assert chat_response_box["value"] is not None
+        assert chat_response_box["value"].status_code == 200
+        assert inject_response is not None
+        inject_payload = api_data(inject_response)
+        assert inject_payload["delivery"] == "running_checkpoint"
+        assert inject_payload["queued_injection_count"] == 1
+
+        conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+        assert conversation_response.status_code == 200
+        conversation_payload = api_data(conversation_response)
+        assert conversation_payload["queued_generation_count"] == 0
+        assert len(conversation_payload["generations"]) == 1
+        assert [message["role"] for message in conversation_payload["messages"]] == [
+            "user",
+            "assistant",
+        ]
+
+        assistant_message = next(
+            message
+            for message in reversed(conversation_payload["messages"])
+            if message["role"] == "assistant"
+        )
+        output_segments = [
+            segment
+            for segment in assistant_message["assistant_transcript"]
+            if segment["kind"] == "output"
+        ]
+        assert assistant_message["content"] == "初始分析后续结论"
+        assert [segment["text"] for segment in output_segments] == ["初始分析", "后续结论"]
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
 def test_chat_builds_multi_turn_context_and_exposes_conversation_reads(client: TestClient) -> None:
     class RecordingChatRuntime:
         def __init__(self) -> None:
@@ -1613,7 +1717,8 @@ def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
         assert stale_resolve_response.status_code == 409
         assert stale_resolve_response.json()["detail"]["error"] == "already_aborted"
 
-        original_import_module = harness_session_runner.importlib.import_module
+        session_runner_importlib = harness_session_runner.__dict__["importlib"]
+        original_import_module = session_runner_importlib.import_module
 
         def guarded_import_module(name: str, package: str | None = None) -> object:
             if name == "app.api.routes_chat":
@@ -1622,9 +1727,7 @@ def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
                 )
             return original_import_module(name, package)
 
-        monkeypatch.setattr(
-            harness_session_runner.importlib, "import_module", guarded_import_module
-        )
+        monkeypatch.setattr(session_runner_importlib, "import_module", guarded_import_module)
 
         resume_response = client.post(f"/api/sessions/{session_id}/resume")
         assert resume_response.status_code == 200
@@ -3049,6 +3152,171 @@ def test_chat_pauses_and_resumes_scope_confirmation_tool(
             time.sleep(TEST_POLL_INTERVAL_SECONDS)
         else:
             pytest.fail("assistant message did not complete after scope confirmation")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_active_generation_inject_resolves_interaction_continuation(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    checker_module = importlib.import_module("app.harness.governance.checker")
+    original_evaluate = checker_module.DefaultHarnessToolDecisionChecker.evaluate
+
+    def patched_evaluate(self: object, request: object) -> object:
+        tool_request = getattr(request, "tool_request")
+        if getattr(tool_request, "tool_name", None) == "list_available_skills":
+            return checker_module.HarnessToolDecision(
+                action="require_scope_confirmation",
+                reason="Scope confirmation required.",
+                metadata={"scope_miss": True},
+            )
+        return original_evaluate(self, request)
+
+    monkeypatch.setattr(
+        checker_module.DefaultHarnessToolDecisionChecker,
+        "evaluate",
+        patched_evaluate,
+    )
+
+    class ScopeConfirmationRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            listed_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="scope-call-inject",
+                    tool_name="list_available_skills",
+                    arguments={},
+                )
+            )
+            return f"listed:{len(cast(list[object], listed_result.payload['skills']))}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ScopeConfirmationRuntime()
+
+    try:
+        session_response = client.post(
+            "/api/sessions", json={"title": "Interaction Inject Session"}
+        )
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "list skills", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 409
+        assert chat_response.json()["detail"]["action"] == "require_scope_confirmation"
+
+        inject_response = client.post(
+            f"/api/sessions/{session_id}/generations/active/inject",
+            json={"content": "范围已确认，请继续执行。"},
+        )
+        assert inject_response.status_code == 200
+        inject_payload = api_data(inject_response)
+        assert inject_payload["delivery"] == "paused_continuation"
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            assistant_message = next(
+                (
+                    message
+                    for message in reversed(conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ),
+                None,
+            )
+            if assistant_message and assistant_message["status"] == "completed":
+                assert assistant_message["content"].startswith("listed:")
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+        else:
+            pytest.fail("assistant message did not complete after interaction injection")
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_active_generation_inject_rejects_approval_continuation(client: TestClient) -> None:
+    class ApprovalPauseRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                callbacks,
+            )
+            assert execute_tool is not None
+            spawn_result = await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="spawn-call-approval-inject",
+                    tool_name="spawn_subagent",
+                    arguments={
+                        "profile_name": "planner_agent",
+                        "objective": "Plan the next attack path.",
+                    },
+                )
+            )
+            agent_id = cast(str, spawn_result.payload["agent"]["agent_id"])
+            await execute_tool(
+                ToolCallRequest(
+                    tool_call_id="stop-call-approval-inject",
+                    tool_name="stop_subagent",
+                    arguments={"agent_id": agent_id, "reason": "Need operator approval."},
+                )
+            )
+            return "unreachable"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: ApprovalPauseRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Approval Inject Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "stop planner", "attachments": [], "wait_for_completion": True},
+        )
+        assert chat_response.status_code == 409
+
+        inject_response = client.post(
+            f"/api/sessions/{session_id}/generations/active/inject",
+            json={"content": "直接继续，不需要审批。"},
+        )
+        assert inject_response.status_code == 409
+        detail = inject_response.json()["detail"]
+        assert detail["error"] == "approval_required"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

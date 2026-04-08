@@ -24,10 +24,13 @@ export type MessageKind = "message" | "summary" | "trace" | "event_note" | (stri
 export type GenerationStatus =
   | "queued"
   | "running"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled"
   | (string & {});
+
+export type ActiveGenerationInjectDelivery = "running_checkpoint" | "paused_continuation";
 
 export type GenerationStepKind = "reasoning" | "tool" | "output" | "status" | (string & {});
 
@@ -246,6 +249,13 @@ export type ChatResponse = {
   queue_position?: number | null;
   active_generation_id?: string | null;
   queued_generation_count?: number;
+};
+
+export type ActiveGenerationInjectResponse = {
+  session_id: string;
+  generation_id: string;
+  delivery: ActiveGenerationInjectDelivery;
+  queued_injection_count: number;
 };
 
 export type SessionEventEnvelope = {

@@ -50,6 +50,8 @@ class ConversationMessage:
 TextDeltaHandler = Callable[[str], Awaitable[None]]
 SummaryHandler = Callable[[str], Awaitable[None]]
 CancelledChecker = Callable[[], bool]
+ContextInjectionConsumer = Callable[[], Awaitable[list[str]]]
+ContextInjectionHandler = Callable[[list[str]], Awaitable[None]]
 ToolExecutor = Callable[[ToolCallRequest], Awaitable[ToolCallResult]]
 
 
@@ -58,6 +60,8 @@ class GenerationCallbacks:
     on_text_delta: TextDeltaHandler | None = None
     on_summary: SummaryHandler | None = None
     is_cancelled: CancelledChecker | None = None
+    consume_context_injections: ContextInjectionConsumer | None = None
+    on_context_injection_applied: ContextInjectionHandler | None = None
 
 
 class ChatRuntime(Protocol):

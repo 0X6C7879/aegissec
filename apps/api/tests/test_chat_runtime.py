@@ -6,6 +6,10 @@ from pytest import MonkeyPatch
 
 from app.core.settings import Settings
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
+from app.harness.messages import GenerationCallbacks as HarnessGenerationCallbacks
+from app.harness.messages import ProviderTurnResult
+from app.harness.query_engine import BaseQueryEngine
+from app.harness.query_loop import QueryLoop
 from app.services.chat_runtime import (
     MAX_TOOL_STEPS,
     AnthropicChatRuntime,
@@ -425,6 +429,103 @@ def test_anthropic_extract_response_content_handles_tool_use_blocks() -> None:
     tool_input = tool_uses[0]["input"]
     assert isinstance(tool_input, dict)
     assert tool_input["command"] == "whoami"
+
+
+def test_query_loop_consumes_pending_context_injections_before_follow_up_turn() -> None:
+    class InjectionAwareEngine(BaseQueryEngine):
+        def __init__(self) -> None:
+            super().__init__(
+                messages=[],
+                model_name="demo-model",
+                system_prompt=None,
+                max_turns=4,
+            )
+            self.turns = 0
+
+        async def request_turn(
+            self,
+            *,
+            allow_tools: bool,
+            callbacks: object | None,
+        ) -> ProviderTurnResult:
+            del allow_tools, callbacks
+            self.turns += 1
+            if self.turns == 1:
+                return ProviderTurnResult(
+                    assistant_payload={"content": "first answer"},
+                    text_content="first answer",
+                )
+            return ProviderTurnResult(
+                assistant_payload={"content": "second answer"},
+                text_content="second answer",
+            )
+
+        def append_tool_results(self, **_: object) -> None:
+            raise AssertionError("tool execution should not run in this test")
+
+        async def generate_tool_budget_reply(
+            self,
+            *,
+            callbacks: object | None,
+        ) -> str:
+            del callbacks
+            raise AssertionError("tool budget fallback should not be used in this test")
+
+        def render_compact_message(self, compact_fragment: str) -> dict[str, object]:
+            return {"role": "user", "content": compact_fragment}
+
+        def append_assistant_response_to_history(
+            self, assistant_payload: dict[str, object]
+        ) -> None:
+            self.messages.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_payload["content"],
+                }
+            )
+
+    engine = InjectionAwareEngine()
+    pending_batches = [[], ["extra scope", "focus on host B"]]
+    applied_batches: list[list[str]] = []
+
+    async def consume_context_injections() -> list[str]:
+        if pending_batches:
+            return pending_batches.pop(0)
+        return []
+
+    async def on_context_injection_applied(injections: list[str]) -> None:
+        applied_batches.append(list(injections))
+
+    result = asyncio.run(
+        QueryLoop(max_turns=4).run(
+            engine,
+            execute_tool=None,
+            callbacks=cast(
+                HarnessGenerationCallbacks,
+                GenerationCallbacks(
+                    consume_context_injections=consume_context_injections,
+                    on_context_injection_applied=on_context_injection_applied,
+                ),
+            ),
+        )
+    )
+
+    assert result == "second answer"
+    assert engine.turns == 2
+    assert applied_batches == [["extra scope", "focus on host B"]]
+    assert engine.messages == [
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": "Additional operator context injected during the active run:\nextra scope",
+        },
+        {
+            "role": "user",
+            "content": (
+                "Additional operator context injected during the active run:\nfocus on host B"
+            ),
+        },
+    ]
 
 
 def test_anthropic_extract_response_content_multiple_text_blocks() -> None:

@@ -159,7 +159,7 @@ class ContinuationStore:
             approve=approve,
             normalized_payload=normalized_payload,
         )
-        normalized_resolution = {
+        normalized_resolution: dict[str, object] = {
             "approved": approve,
             "scope_confirmed": scope_confirmed,
             "outcome": outcome,
