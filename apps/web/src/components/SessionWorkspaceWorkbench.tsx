@@ -13,6 +13,7 @@ import {
   getRuntimeStatus,
   getSessionConversation,
   getSessionQueue,
+  getSessionSlashCatalog,
   injectActiveGenerationContext,
   listSessions,
   regenerateSessionMessage,
@@ -38,6 +39,7 @@ import type {
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
+import type { SlashAction } from "../types/slash";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
@@ -80,12 +82,21 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function buildOptimisticUserMessage(sessionId: string, content: string): SessionMessage {
+function buildOptimisticUserMessage(
+  sessionId: string,
+  content: string,
+  slashAction: SlashAction | null = null,
+): SessionMessage {
   return {
     id: `optimistic-user-${crypto.randomUUID()}`,
     session_id: sessionId,
     role: "user" as const,
     content,
+    metadata: slashAction
+      ? {
+          slash_action: slashAction,
+        }
+      : undefined,
     assistant_transcript: [],
     attachments: [],
     created_at: new Date().toISOString(),
@@ -278,6 +289,13 @@ export function SessionWorkspaceWorkbench() {
     () => sortedSessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sortedSessions],
   );
+
+  const slashCatalogQuery = useQuery({
+    enabled: activeSessionId !== null,
+    queryKey: ["session", activeSessionId, "slash-catalog"],
+    queryFn: ({ signal }) => getSessionSlashCatalog(activeSessionId!, signal),
+    placeholderData: (previousValue) => previousValue,
+  });
 
   const sidebarSessions = useMemo(
     () => visibleSessionsForSidebar(sortedSessions, activeSessionId),
@@ -479,13 +497,22 @@ export function SessionWorkspaceWorkbench() {
   });
 
   const sendChatMutation = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) =>
+    mutationFn: ({
+      id,
+      content,
+      slashAction,
+    }: {
+      id: string;
+      content: string;
+      slashAction?: SlashAction | null;
+    }) =>
       sendChatMessage(id, {
         content,
+        slash_action: slashAction ?? undefined,
         attachments: [],
         branch_id: activeConversation?.active_branch?.id ?? null,
       }),
-    onMutate: async ({ id, content }) => {
+    onMutate: async ({ id, content, slashAction }) => {
       await queryClient.cancelQueries({ queryKey: ["conversation", id] });
       const previousDetail = queryClient.getQueryData<SessionConversation | undefined>([
         "conversation",
@@ -495,7 +522,7 @@ export function SessionWorkspaceWorkbench() {
         "session-queue",
         id,
       ]);
-      const optimisticMessage = buildOptimisticUserMessage(id, content);
+      const optimisticMessage = buildOptimisticUserMessage(id, content, slashAction ?? null);
       const createdAt = optimisticMessage.created_at;
       const branchId = previousDetail?.active_branch?.id ?? null;
       const activeGenerationId =
@@ -1225,6 +1252,7 @@ export function SessionWorkspaceWorkbench() {
                   />
                   <WorkbenchComposer
                     sessionId={activeSession.id}
+                    slashCatalog={slashCatalogQuery.data ?? []}
                     disabled={activeSession.deleted_at !== null}
                     isActiveGeneration={isInjectableGenerationActive || isPausedGeneration}
                     isPausedGeneration={isPausedGeneration}
@@ -1232,8 +1260,12 @@ export function SessionWorkspaceWorkbench() {
                       cancelGenerationMutation.isPending || cancelSessionMutation.isPending
                     }
                     queuedCount={queuedGenerationCount}
-                    onQueueSend={async (content) => {
-                      await sendChatMutation.mutateAsync({ id: activeSession.id, content });
+                    onQueueSend={async ({ content, slashAction }) => {
+                      await sendChatMutation.mutateAsync({
+                        id: activeSession.id,
+                        content,
+                        slashAction,
+                      });
                     }}
                     onInject={async (content) => {
                       await injectActiveGenerationMutation.mutateAsync({

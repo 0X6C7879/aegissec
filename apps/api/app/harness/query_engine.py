@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
@@ -119,6 +120,39 @@ class BaseQueryEngine(ABC):
     def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
         raise NotImplementedError
 
+    def dequeue_synthetic_tool_call(self) -> ToolCallRequest | None:
+        if self.session_state is None:
+            return None
+        if getattr(self.session_state, "slash_action_consumed", False):
+            return None
+        raw_slash_action = getattr(self.session_state, "slash_action", None)
+        if not isinstance(raw_slash_action, Mapping):
+            return None
+        raw_invocation = raw_slash_action.get("invocation")
+        if not isinstance(raw_invocation, Mapping):
+            return None
+        action_id = raw_slash_action.get("id")
+        if not isinstance(action_id, str) or not action_id.strip():
+            return None
+
+        normalized_invocation = dict(raw_invocation)
+        normalized_invocation["tool_call_id"] = self._synthetic_tool_call_id(action_id)
+        tool_call = ToolCallRequest.model_validate(normalized_invocation)
+        self.session_state.slash_action_consumed = True
+        return tool_call
+
+    @staticmethod
+    def _synthetic_tool_call_id(action_id: str) -> str:
+        normalized = re.sub(r"[^a-zA-Z0-9_.:-]+", "-", action_id).strip("-")
+        return f"slash-{normalized or 'action'}"
+
+    @abstractmethod
+    def build_synthetic_assistant_payload(
+        self,
+        tool_calls: Sequence[ToolCallRequest],
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class OpenAIQueryEngine(BaseQueryEngine):
     def __init__(
@@ -224,6 +258,26 @@ class OpenAIQueryEngine(BaseQueryEngine):
 
     def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
         self.messages.append(self._provider._assistant_message_for_history(assistant_payload))
+
+    def build_synthetic_assistant_payload(
+        self,
+        tool_calls: Sequence[ToolCallRequest],
+    ) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": tool_call.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.tool_name,
+                        "arguments": json.dumps(tool_call.arguments, ensure_ascii=False),
+                    },
+                }
+                for tool_call in tool_calls
+            ],
+        }
 
     async def generate_tool_budget_reply(
         self,
@@ -356,6 +410,22 @@ class AnthropicQueryEngine(BaseQueryEngine):
         if not isinstance(assistant_content, list):
             raise ChatRuntimeError("Anthropic response content must be a list.")
         self.messages.append({"role": "assistant", "content": assistant_content})
+
+    def build_synthetic_assistant_payload(
+        self,
+        tool_calls: Sequence[ToolCallRequest],
+    ) -> dict[str, Any]:
+        return {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_call.tool_call_id,
+                    "name": tool_call.tool_name,
+                    "input": dict(tool_call.arguments),
+                }
+                for tool_call in tool_calls
+            ]
+        }
 
     async def generate_tool_budget_reply(
         self,

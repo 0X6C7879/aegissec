@@ -265,7 +265,7 @@ const markdownComponents = {
 } as Components;
 
 function readSegmentState(segment: AssistantTranscriptSegment): string | null {
-  const state = segment.metadata?.state;
+  const state = readSegmentMetadata(segment)?.state;
   return typeof state === "string" && state.trim().length > 0 ? state : null;
 }
 
@@ -484,6 +484,21 @@ function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+function readSegmentMetadata(
+  segment: AssistantTranscriptSegment | null,
+): Record<string, unknown> | undefined {
+  if (!segment) {
+    return undefined;
+  }
+
+  if (isRecord(segment.metadata)) {
+    return segment.metadata;
+  }
+
+  const legacySegment = segment as unknown as Record<string, unknown>;
+  return isRecord(legacySegment.metadata_payload) ? legacySegment.metadata_payload : undefined;
+}
+
 function readFirstString(
   value: Record<string, unknown> | undefined,
   keys: readonly string[],
@@ -568,7 +583,7 @@ const SHELL_ARTIFACT_FIELD_NAMES = ["artifacts", "artifact_paths"] as const;
 function collectShellCandidateRecords(
   segment: AssistantTranscriptSegment | null,
 ): Record<string, unknown>[] {
-  const metadata = segment?.metadata;
+  const metadata = readSegmentMetadata(segment);
   if (!metadata) {
     return [];
   }
@@ -622,20 +637,30 @@ function readShellDisplayField(
   segment: AssistantTranscriptSegment | null,
   fieldNames: readonly string[],
 ): PresentShellTextValue | null {
+  let firstPresentValue: PresentShellTextValue | null = null;
+
   for (const record of collectShellCandidateRecords(segment)) {
     for (const fieldName of fieldNames) {
       if (!hasOwnKey(record, fieldName)) {
         continue;
       }
 
-      return {
+      const candidateValue = {
         present: true,
         text: coerceShellDisplayValue(record[fieldName]),
-      };
+      } satisfies PresentShellTextValue;
+
+      if (firstPresentValue === null) {
+        firstPresentValue = candidateValue;
+      }
+
+      if (candidateValue.text.trim().length > 0) {
+        return candidateValue;
+      }
     }
   }
 
-  return null;
+  return firstPresentValue;
 }
 
 function readPrioritizedShellDisplayField(
@@ -705,7 +730,7 @@ function readSegmentCommand(segment: AssistantTranscriptSegment): string | null 
 }
 
 function readSkillPayload(segment: AssistantTranscriptSegment): Record<string, unknown> | null {
-  const metadata = segment.metadata;
+  const metadata = readSegmentMetadata(segment);
   const result = readNestedRecord(metadata, "result");
   const skill = readNestedRecord(result, "skill");
   return skill ?? null;
@@ -713,7 +738,7 @@ function readSkillPayload(segment: AssistantTranscriptSegment): Record<string, u
 
 function inferSkillTitle(segment: AssistantTranscriptSegment): string | null {
   const skill = readSkillPayload(segment);
-  const metadata = segment.metadata;
+  const metadata = readSegmentMetadata(segment);
   const argumentsRecord = readNestedRecord(metadata, "arguments");
   const rawName =
     readFirstString(skill ?? undefined, ["title", "name", "directory_name", "id"]) ??
@@ -773,19 +798,6 @@ function isShellFailureStatus(status: string | null | undefined): boolean {
   return ["failed", "error", "cancelled", "canceled", "timed_out", "timeout", "denied", "killed"].includes(
     normalized,
   );
-}
-
-function isShellCompletedStatus(status: string | null | undefined): boolean {
-  if (!status) {
-    return false;
-  }
-
-  const normalized = status.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return false;
-  }
-
-  return ["completed", "done", "success", "succeeded", "finished"].includes(normalized);
 }
 
 function hasVisibleShellText(value: PresentShellTextValue | null): boolean {
@@ -1438,14 +1450,11 @@ function AssistantShellBlock({
     status,
   });
   const outputFallback =
-    stdout === null && stderr === null
+    !hasVisibleShellText(stdout) && !hasVisibleShellText(stderr)
       ? readShellFallbackOutput(result, command, shellErrorText) ??
         readShellFallbackOutput(call, command, shellErrorText) ??
         readShellFallbackOutput(error, command, shellErrorText)
       : null;
-  const hasVisibleOutput =
-    hasVisibleShellText(stdout) || hasVisibleShellText(stderr) || hasVisibleShellText(outputFallback);
-  const hasShellError = Boolean(error || shellErrorText || isShellFailureStatus(status));
   const artifacts = [...readShellArtifacts(result), ...readShellArtifacts(call), ...readShellArtifacts(error)].filter(
     (artifact, index, allArtifacts) => allArtifacts.indexOf(artifact) === index,
   );
@@ -1454,7 +1463,6 @@ function AssistantShellBlock({
     <details
       className={`assistant-tool-block assistant-shell-block${error ? " assistant-shell-block-error" : ""}`}
       data-status={status ?? undefined}
-      open={hasShellError || (hasVisibleOutput && isShellCompletedStatus(status))}
     >
       <summary className="assistant-tool-summary">
         <div className="assistant-tool-summary-copy">
@@ -1522,7 +1530,7 @@ function AssistantReasoningBlock({
 }
 
 function readAutoroutedSkillName(segment: AssistantTranscriptSegment): string | null {
-  const skill = segment.metadata?.skill;
+  const skill = readSegmentMetadata(segment)?.skill;
   if (typeof skill === "string" && skill.trim().length > 0) {
     return skill.trim();
   }
@@ -1568,7 +1576,7 @@ function renderInlineSkillLabel(
 function AssistantErrorBlock({ segment }: { segment: AssistantTranscriptSegment }) {
   const detail =
     normalizeMarkdownSpacing(segment.text) ??
-    readFirstString(segment.metadata, ["detail", "error", "message"]);
+    readFirstString(readSegmentMetadata(segment), ["detail", "error", "message"]);
 
   return (
     <div className="assistant-error-block" role="status">

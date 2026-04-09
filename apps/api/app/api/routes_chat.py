@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from collections.abc import Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session as DBSession
@@ -35,6 +36,9 @@ from app.db.models import (
     Session,
     SessionConversationRead,
     SessionStatus,
+    SlashActionInvocation,
+    SlashActionSelection,
+    SlashCatalogItem,
     attachments_to_storage,
     to_chat_generation_read,
     to_conversation_branch_read,
@@ -48,6 +52,7 @@ from app.db.session import get_db_session
 from app.harness.continuations import (
     clear_generation_continuation_state as harness_clear_generation_continuation_state,
 )
+from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import (
     ChatRuntime,
     ChatRuntimeConfigurationError,
@@ -299,6 +304,237 @@ def _ensure_running_session(repository: SessionRepository, session: Session) -> 
     return repository.update_session(session, status=SessionStatus.RUNNING)
 
 
+def _catalog_item_trigger(name: str) -> str:
+    return name.replace(" ", "-").replace("_", "-")
+
+
+def _tool_has_required_arguments(input_schema: Mapping[str, object] | None) -> bool:
+    if not isinstance(input_schema, Mapping):
+        return False
+    raw_required = input_schema.get("required")
+    if not isinstance(raw_required, list):
+        return False
+    return any(isinstance(item, str) and item.strip() for item in raw_required)
+
+
+def _build_builtin_slash_catalog_items() -> list[SlashCatalogItem]:
+    build_default_tool_registry = importlib.import_module(
+        "app.harness.tools.defaults"
+    ).build_default_tool_registry
+    registry = build_default_tool_registry(mcp_tools=None, include_swarm_tools=False)
+    items: list[SlashCatalogItem] = []
+    for tool in registry.list_tools():
+        trigger = _catalog_item_trigger(tool.name)
+        disabled = _tool_has_required_arguments(tool.input_schema())
+        action = SlashActionSelection(
+            id=f"builtin:{tool.name}",
+            trigger=trigger,
+            type="builtin",
+            source="builtin",
+            display_text=f"/{trigger}",
+            invocation=SlashActionInvocation(tool_name=tool.name, arguments={}),
+        )
+        items.append(
+            SlashCatalogItem(
+                id=action.id,
+                trigger=trigger,
+                title=tool.name,
+                description=tool.description,
+                type="builtin",
+                source="builtin",
+                badge="Builtin",
+                disabled=disabled or None,
+                action=action,
+            )
+        )
+    return items
+
+
+def _build_skill_slash_catalog_items(
+    skill_service: SkillService,
+    *,
+    session_id: str,
+) -> list[SlashCatalogItem]:
+    items: list[SlashCatalogItem] = []
+    for skill in skill_service.list_loaded_skills_for_agent(
+        session_id=session_id,
+        scenario_type="chat_turn",
+    ):
+        if not skill.invocable:
+            continue
+        if skill.user_invocable is False:
+            continue
+        if skill.source_kind == "mcp":
+            continue
+        trigger_name = skill.directory_name or skill.name
+        if not trigger_name:
+            continue
+        trigger = _catalog_item_trigger(trigger_name)
+        description = skill.description.strip() if skill.description.strip() else trigger_name
+        action = SlashActionSelection(
+            id=f"skill:{trigger_name}",
+            trigger=trigger,
+            type="skill",
+            source="skill",
+            display_text=f"/{trigger}",
+            invocation=SlashActionInvocation(
+                tool_name="execute_skill",
+                arguments={"skill_name_or_id": skill.directory_name or skill.name or skill.id},
+            ),
+        )
+        items.append(
+            SlashCatalogItem(
+                id=action.id,
+                trigger=trigger,
+                title=skill.name or skill.directory_name,
+                description=description,
+                type="skill",
+                source="skill",
+                badge="Skill",
+                disabled=None,
+                action=action,
+            )
+        )
+    return items
+
+
+def _build_mcp_slash_catalog_items(capability_facade: CapabilityFacade) -> list[SlashCatalogItem]:
+    servers = {
+        server.id: server for server in capability_facade.list_mcp_servers() if server.enabled
+    }
+    items: list[SlashCatalogItem] = []
+    for binding in capability_facade.build_mcp_tool_inventory():
+        raw_server_id = binding.get("server_id")
+        raw_tool_alias = binding.get("tool_alias")
+        raw_tool_name = binding.get("tool_name")
+        if not all(
+            isinstance(value, str) and value
+            for value in (raw_server_id, raw_tool_alias, raw_tool_name)
+        ):
+            continue
+        server_id = str(raw_server_id)
+        tool_alias = str(raw_tool_alias)
+        tool_name = str(raw_tool_name)
+        server = servers.get(server_id)
+        if server is None:
+            continue
+        input_schema = binding.get("input_schema")
+        disabled = server.status.value != "connected" or _tool_has_required_arguments(
+            input_schema if isinstance(input_schema, Mapping) else None
+        )
+        trigger = _catalog_item_trigger(tool_alias)
+        title = (
+            binding.get("tool_title")
+            if isinstance(binding.get("tool_title"), str) and str(binding.get("tool_title")).strip()
+            else tool_name
+        )
+        description = (
+            binding.get("tool_description")
+            if isinstance(binding.get("tool_description"), str)
+            and str(binding.get("tool_description")).strip()
+            else f"Call MCP tool {server.name} / {tool_name}."
+        )
+        action = SlashActionSelection(
+            id=f"mcp:{server_id}:{tool_name}",
+            trigger=trigger,
+            type="mcp",
+            source="mcp",
+            display_text=f"/{trigger}",
+            invocation=SlashActionInvocation(
+                tool_name=tool_alias,
+                arguments={},
+                mcp_server_id=server_id,
+                mcp_tool_name=tool_name,
+            ),
+        )
+        items.append(
+            SlashCatalogItem(
+                id=action.id,
+                trigger=trigger,
+                title=str(title),
+                description=str(description),
+                type="mcp",
+                source="mcp",
+                badge=server.name,
+                disabled=disabled or None,
+                action=action,
+            )
+        )
+    return items
+
+
+def _build_session_slash_catalog(
+    *,
+    session_id: str,
+    skill_service: SkillService,
+    mcp_service: MCPService,
+) -> list[SlashCatalogItem]:
+    capability_facade = CapabilityFacade(skill_service=skill_service, mcp_service=mcp_service)
+    ordered_items = [
+        *_build_builtin_slash_catalog_items(),
+        *_build_skill_slash_catalog_items(skill_service, session_id=session_id),
+        *_build_mcp_slash_catalog_items(capability_facade),
+    ]
+    deduped: list[SlashCatalogItem] = []
+    seen_triggers: set[str] = set()
+    for item in ordered_items:
+        if item.trigger in seen_triggers:
+            continue
+        seen_triggers.add(item.trigger)
+        deduped.append(item)
+    return deduped
+
+
+def _resolve_slash_action_or_422(
+    catalog: list[SlashCatalogItem],
+    slash_action: SlashActionSelection,
+) -> dict[str, object]:
+    matching_item = next((item for item in catalog if item.id == slash_action.id), None)
+    if matching_item is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid or stale slash_action: '{slash_action.id}'.",
+        )
+    if matching_item.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Slash action '{slash_action.id}' is currently disabled.",
+        )
+
+    expected_action = matching_item.action
+    if (
+        slash_action.trigger != expected_action.trigger
+        or slash_action.type != expected_action.type
+        or slash_action.source != expected_action.source
+        or slash_action.invocation.tool_name != expected_action.invocation.tool_name
+        or slash_action.invocation.arguments != expected_action.invocation.arguments
+        or slash_action.invocation.mcp_server_id != expected_action.invocation.mcp_server_id
+        or slash_action.invocation.mcp_tool_name != expected_action.invocation.mcp_tool_name
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid or stale slash_action payload for '{slash_action.id}'.",
+        )
+
+    return expected_action.model_dump(mode="json")
+
+
+@router.get("/{session_id}/slash-catalog", response_model=list[SlashCatalogItem])
+async def get_session_slash_catalog(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    skill_service: SkillService = Depends(get_skill_service),
+    mcp_service: MCPService = Depends(get_mcp_service),
+) -> list[SlashCatalogItem]:
+    repository = SessionRepository(db_session)
+    _get_session_or_404(repository, session_id)
+    return _build_session_slash_catalog(
+        session_id=session_id,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+    )
+
+
 @router.post("/{session_id}/chat", response_model=ChatResponse)
 async def create_chat_message(
     session_id: str,
@@ -320,6 +556,17 @@ async def create_chat_message(
         session = repository.activate_branch(session, branch)
     else:
         branch = repository.ensure_active_branch(session)
+
+    normalized_slash_action = None
+    if payload.slash_action is not None:
+        normalized_slash_action = _resolve_slash_action_or_422(
+            _build_session_slash_catalog(
+                session_id=session.id,
+                skill_service=skill_service,
+                mcp_service=mcp_service,
+            ),
+            payload.slash_action,
+        )
 
     running_session = _ensure_running_session(repository, session)
     if running_session is not None:
@@ -347,6 +594,13 @@ async def create_chat_message(
         message_kind=MessageKind.MESSAGE,
         sequence=next_sequence,
         turn_index=next_turn_index,
+        metadata_json={
+            **(
+                {"slash_action": normalized_slash_action}
+                if normalized_slash_action is not None
+                else {}
+            ),
+        },
     )
     assistant_message = repository.create_message(
         session=session,
@@ -370,6 +624,11 @@ async def create_chat_message(
             "operation": "chat",
             "token_budget": payload.token_budget,
             "parent_message_id": payload.parent_message_id,
+            **(
+                {"slash_action": normalized_slash_action}
+                if normalized_slash_action is not None
+                else {}
+            ),
         },
     )
     repository.update_message(assistant_message, generation_id=generation.id)

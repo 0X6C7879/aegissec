@@ -233,13 +233,21 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
                   return currentValue;
                 }
 
+                const detailWithGenerationContext = {
+                  ...currentValue.session,
+                  messages: currentValue.messages,
+                  generations: currentValue.generations,
+                } as SessionDetail & {
+                  generations: SessionConversation["generations"];
+                };
+
+                const mergedMessages =
+                  mergeSessionMessage(detailWithGenerationContext, createdMessage)?.messages ??
+                  currentValue.messages;
+
                 return {
                   ...currentValue,
-                  messages:
-                    mergeSessionMessage(
-                      { ...currentValue.session, messages: currentValue.messages },
-                      createdMessage,
-                    )?.messages ?? currentValue.messages,
+                  messages: mergedMessages,
                 };
               },
             );

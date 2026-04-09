@@ -273,6 +273,27 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText(/"status": "success"/)).not.toBeInTheDocument();
   });
 
+  it("renders shell cards collapsed by default and allows manual expansion", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages()}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    const shellBlock = container.querySelector(".assistant-tool-block") as HTMLDetailsElement | null;
+
+    expect(shellBlock).not.toBeNull();
+    expect(shellBlock?.open).toBe(false);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(shellBlock?.open).toBe(true);
+    expect(screen.getByText("runtime command completed")).toBeInTheDocument();
+  });
+
   it("reads shell stdout and stderr from metadata.result without surfacing raw JSON", () => {
     const { container } = render(
       <ConversationFeed
@@ -330,6 +351,185 @@ describe("ConversationFeed", () => {
     expect(terminalOutput).toContain("minor warning");
     expect(screen.getByText("退出码：2")).toBeInTheDocument();
     expect(screen.queryByText(/"stdout":/)).not.toBeInTheDocument();
+  });
+
+  it("reads shell output from legacy transcript metadata_payload fields", () => {
+    const legacyToolCall = {
+      id: "segment-legacy-call",
+      sequence: 1,
+      kind: "tool_call",
+      status: "completed",
+      title: "开始调用工具",
+      text: "curl -s http://legacy-target",
+      tool_name: "execute_kali_command",
+      tool_call_id: "tool-legacy-1",
+      recorded_at: "2026-04-01T10:00:01.000Z",
+      updated_at: "2026-04-01T10:00:02.000Z",
+      metadata_payload: {
+        command: "curl -s http://legacy-target",
+      },
+    } as unknown as AssistantTranscriptSegment;
+
+    const legacyToolResult = {
+      id: "segment-legacy-result",
+      sequence: 2,
+      kind: "tool_result",
+      status: "completed",
+      title: "工具执行结果",
+      text: "命令执行结束。",
+      tool_name: "execute_kali_command",
+      tool_call_id: "tool-legacy-1",
+      recorded_at: "2026-04-01T10:00:03.000Z",
+      updated_at: "2026-04-01T10:00:04.000Z",
+      metadata_payload: {
+        result: {
+          command: "curl -s http://legacy-target",
+          stdout: "legacy stdout survives",
+          stderr: "legacy stderr survives",
+          exit_code: 0,
+        },
+      },
+    } as unknown as AssistantTranscriptSegment;
+
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [legacyToolCall, legacyToolResult],
+            content: "legacy payload 测试通过。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("legacy stdout survives");
+    expect(terminalOutput).toContain("legacy stderr survives");
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+  });
+
+  it("prefers nested result.output.stdout when top-level result stdout is present but empty", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-result-empty-stdout-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-result-empty-stdout",
+                text: "python collect.py",
+                metadata: {
+                  command: "python collect.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-empty-stdout-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-result-empty-stdout",
+                text: "命令执行结束。",
+                metadata: {
+                  result: {
+                    command: "python collect.py",
+                    stdout: "",
+                    stderr: "",
+                    output: {
+                      stdout: "nested stdout should be visible",
+                    },
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-empty-stdout-output",
+                kind: "output",
+                sequence: 3,
+                text: "已完成输出。",
+              }),
+            ],
+            content: "已完成输出。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("nested stdout should be visible");
+    expect(screen.queryByText("命令执行结束。")).not.toBeInTheDocument();
+  });
+
+  it("falls back to nested result.output.text when stdout and stderr are present-but-empty", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-result-empty-stream-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-result-empty-stream",
+                text: "python final.py",
+                metadata: {
+                  command: "python final.py",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-empty-stream-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "bash",
+                tool_call_id: "tool-result-empty-stream",
+                text: "命令执行结束。",
+                metadata: {
+                  result: {
+                    command: "python final.py",
+                    stdout: "",
+                    stderr: "",
+                    output: {
+                      text: "nested output text should be visible",
+                    },
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-result-empty-stream-output",
+                kind: "output",
+                sequence: 3,
+                text: "最终结果。",
+              }),
+            ],
+            content: "最终结果。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
+
+    expect(terminalOutput).toContain("nested output text should be visible");
+    expect(screen.queryByText("命令执行结束。")).not.toBeInTheDocument();
   });
 
   it("reads shell stdout and stderr from top-level metadata fields", () => {
@@ -1584,6 +1784,8 @@ describe("ConversationFeed", () => {
       />,
     );
 
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
     const initialTerminalOutput =
       container.querySelector(".assistant-terminal-output")?.textContent ?? "";
 
@@ -1637,6 +1839,11 @@ describe("ConversationFeed", () => {
         runtimeRuns={[]}
       />,
     );
+
+    const shellBlock = container.querySelector(".assistant-tool-block") as HTMLDetailsElement | null;
+    if (shellBlock && !shellBlock.open) {
+      fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+    }
 
     const terminalOutput = container.querySelector(".assistant-terminal-output")?.textContent ?? "";
 

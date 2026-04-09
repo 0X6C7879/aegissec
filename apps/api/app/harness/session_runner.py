@@ -471,7 +471,9 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload if isinstance(skill_payload, dict) else None
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(
@@ -940,6 +942,9 @@ async def process_generation(
                 branch_id=generation.branch_id,
                 total_token_budget=total_token_budget,
             )
+            raw_slash_action = generation.metadata_json.get("slash_action")
+            if isinstance(raw_slash_action, dict):
+                prompt_assembly.session_state.slash_action = dict(raw_slash_action)
             active_session_state = prompt_assembly.session_state
             latest_message_text = prompt_assembly.latest_message_text
             available_skills = prompt_assembly.available_skills

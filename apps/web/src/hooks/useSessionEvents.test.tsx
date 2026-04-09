@@ -557,6 +557,147 @@ describe("useSessionEvents", () => {
     unmount();
   });
 
+  it("enriches conversation message transcript using existing generation steps on websocket updates", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const session = createSessionSummary();
+    const sessionConversation: SessionConversation = {
+      session,
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [
+        {
+          id: "generation-1",
+          session_id: session.id,
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "completed",
+          reasoning_trace: [],
+          steps: [
+            {
+              id: "generation-step-tool-rich",
+              generation_id: "generation-1",
+              session_id: session.id,
+              message_id: "assistant-message-1",
+              sequence: 1,
+              kind: "tool",
+              phase: "tool_result",
+              status: "completed",
+              state: "finished",
+              label: "命令执行结果",
+              safe_summary: "命令已完成。",
+              delta_text: "",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-rich-1",
+              command: "curl -s http://target",
+              metadata: {
+                result: {
+                  output: {
+                    stdout: "rich stdout from generation",
+                    stderr: "",
+                    exit_code: 0,
+                  },
+                },
+              },
+              started_at: "2026-04-01T10:00:01.000Z",
+              ended_at: "2026-04-01T10:00:02.000Z",
+            },
+          ],
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:02.000Z",
+        },
+      ],
+    };
+
+    queryClient.setQueryData(["conversation", session.id], sessionConversation);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const socket = MockWebSocket.instances[0]!;
+    act(() => {
+      socket.emitOpen();
+      socket.emitMessage({
+        type: "message.updated",
+        cursor: 31,
+        created_at: "2026-04-01T10:00:03.000Z",
+        data: {
+          id: "assistant-message-1",
+          session_id: session.id,
+          generation_id: "generation-1",
+          role: "assistant",
+          content: "最终答复",
+          attachments: [],
+          assistant_transcript: [
+            {
+              id: "segment-thin-result",
+              sequence: 1,
+              kind: "tool_result",
+              status: "completed",
+              title: "命令执行结果",
+              text: "命令已完成。",
+              tool_name: "execute_kali_command",
+              tool_call_id: "tool-rich-1",
+              recorded_at: "2026-04-01T10:00:03.000Z",
+              updated_at: "2026-04-01T10:00:03.000Z",
+              metadata: {
+                result: {
+                  status: "completed",
+                },
+              },
+            },
+          ],
+        },
+      });
+    });
+
+    const mergedConversation = queryClient.getQueryData<SessionConversation>([
+      "conversation",
+      session.id,
+    ]);
+    const mergedMessage = mergedConversation?.messages[0];
+    const mergedMetadata = mergedMessage?.assistant_transcript[0]?.metadata;
+    const metadataResult =
+      mergedMetadata && typeof mergedMetadata.result === "object" && mergedMetadata.result !== null
+        ? (mergedMetadata.result as Record<string, unknown>)
+        : null;
+    const metadataOutput =
+      mergedMetadata && typeof mergedMetadata.output === "object" && mergedMetadata.output !== null
+        ? (mergedMetadata.output as Record<string, unknown>)
+        : null;
+    const resultOutput =
+      metadataResult &&
+      typeof metadataResult.output === "object" &&
+      metadataResult.output !== null
+        ? (metadataResult.output as Record<string, unknown>)
+        : null;
+
+    const enrichedStdout =
+      (typeof resultOutput?.stdout === "string" ? resultOutput.stdout : null) ??
+      (typeof metadataResult?.stdout === "string" ? metadataResult.stdout : null) ??
+      (typeof metadataOutput?.stdout === "string" ? metadataOutput.stdout : null) ??
+      (typeof mergedMetadata?.stdout === "string" ? mergedMetadata.stdout : null);
+
+    expect(mergedMessage).toMatchObject({
+      id: "assistant-message-1",
+      generation_id: "generation-1",
+      assistant_transcript: [{ tool_call_id: "tool-rich-1" }],
+    });
+    expect(enrichedStdout).toBe("rich stdout from generation");
+    expect(mergedMessage?.assistant_transcript[0]?.metadata?.command).toBe("curl -s http://target");
+    expect(mergedMessage?.assistant_transcript[0]?.metadata?.result).toMatchObject({
+      status: "completed",
+    });
+
+    unmount();
+  });
+
   it("keeps queued generations stable through completion and next-start websocket events", () => {
     const queryClient = new QueryClient({
       defaultOptions: {

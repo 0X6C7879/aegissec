@@ -267,6 +267,7 @@ function mergeTranscriptSegmentPreferRicher(
     !existingSemanticKey.startsWith("id:") &&
     existingSemanticKey === incomingSemanticKey;
   const shouldPreserveStableIdentity = existing.id === incoming.id || semanticEquivalentByToolCall;
+  const mergedMetadata = mergeMetadataPreferRicher(existing.metadata, incoming.metadata);
 
   return {
     ...fallback,
@@ -297,7 +298,7 @@ function mergeTranscriptSegmentPreferRicher(
         | undefined,
       preferred.tool_call_id ?? fallback.tool_call_id,
     ),
-    metadata: mergeMetadataPreferRicher(existing.metadata, incoming.metadata),
+    metadata: mergedMetadata,
   };
 }
 
@@ -481,7 +482,10 @@ export function mergeSessionMessage(
             : existingMessage.attachments,
         assistant_transcript: mergedTranscript,
       }
-    : message;
+    : {
+        ...message,
+        assistant_transcript: mergedTranscript,
+      };
 
   const remainingMessages = detail.messages.filter((item) => item.id !== message.id);
   const reconciledMessages =

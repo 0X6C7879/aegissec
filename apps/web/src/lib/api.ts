@@ -30,6 +30,7 @@ import type {
   ManualMCPServerRegisterRequest,
 } from "../types/mcp";
 import type { ModelApiSettings, ModelApiSettingsUpdate } from "../types/settings";
+import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import type { SkillContent, SkillContext, SkillRecord } from "../types/skills";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(
@@ -84,6 +85,7 @@ export function isApiError(error: unknown): error is ApiError {
 
 type ChatRequestPayload = {
   content: string;
+  slash_action?: SlashAction | null;
   attachments?: AttachmentMetadata[];
   branch_id?: string | null;
   parent_message_id?: string | null;
@@ -289,6 +291,13 @@ export async function getSessionQueue(
   signal?: AbortSignal,
 ): Promise<SessionQueue> {
   return apiRequest<SessionQueue>(`/api/sessions/${sessionId}/queue`, { signal });
+}
+
+export async function getSessionSlashCatalog(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SlashCatalogItem[]> {
+  return apiRequest<SlashCatalogItem[]>(`/api/sessions/${sessionId}/slash-catalog`, { signal });
 }
 
 export async function getSessionReplay(

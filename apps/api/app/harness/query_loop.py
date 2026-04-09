@@ -18,6 +18,28 @@ class QueryLoop:
         callbacks: GenerationCallbacks | None,
     ) -> str:
         for _ in range(self._max_turns):
+            synthetic_tool_call = engine.dequeue_synthetic_tool_call()
+            if synthetic_tool_call is not None:
+                if execute_tool is None:
+                    raise ChatRuntimeError(
+                        "Slash action requested a tool but no executor is available."
+                    )
+                engine.pending_continuation = True
+                synthetic_tool_result = cast(
+                    ToolCallResult, await execute_tool(synthetic_tool_call)
+                )
+                engine.usage.tool_rounds += 1
+                engine.usage.tool_calls += 1
+                engine.append_tool_results(
+                    assistant_payload=engine.build_synthetic_assistant_payload(
+                        [synthetic_tool_call]
+                    ),
+                    tool_calls=[synthetic_tool_call],
+                    tool_results=[synthetic_tool_result],
+                )
+                engine.maybe_auto_compact()
+                continue
+
             pending_injections = await self._drain_context_injections(callbacks)
             if pending_injections:
                 engine.append_context_injections(pending_injections)

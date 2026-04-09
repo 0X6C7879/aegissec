@@ -56,6 +56,8 @@ class HarnessSessionState:
     current_phase: str | None = None
     goal: str | None = None
     scenario_type: str | None = None
+    slash_action: dict[str, object] | None = None
+    slash_action_consumed: bool = False
     retrieval_manifest: HarnessRetrievalManifest = field(default_factory=HarnessRetrievalManifest)
     compaction: HarnessCompactionState = field(default_factory=HarnessCompactionState)
     semantic: HarnessSemanticState = field(default_factory=HarnessSemanticState)

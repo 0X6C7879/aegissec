@@ -775,6 +775,35 @@ class GenerationCancelRequest(SQLModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class SlashActionInvocation(SQLModel):
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, object] = Field(default_factory=dict)
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
+
+
+class SlashActionSelection(SQLModel):
+    id: str = Field(min_length=1)
+    trigger: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    display_text: str = Field(min_length=1)
+    invocation: SlashActionInvocation
+
+
+class SlashCatalogItem(SQLModel):
+    id: str
+    trigger: str
+    title: str
+    description: str
+    type: str
+    source: str
+    badge: str
+    keybind: str | None = None
+    disabled: bool | None = None
+    action: SlashActionSelection
+
+
 class ChatRequest(SQLModel):
     content: str = Field(min_length=1)
     attachments: list[AttachmentMetadata] = Field(default_factory=list)
@@ -782,6 +811,7 @@ class ChatRequest(SQLModel):
     parent_message_id: str | None = None
     token_budget: int | None = Field(default=None, gt=0)
     wait_for_completion: bool = False
+    slash_action: SlashActionSelection | None = None
 
 
 class ChatResponse(SQLModel):

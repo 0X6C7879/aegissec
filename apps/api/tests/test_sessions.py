@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import threading
 import time
 from collections.abc import Coroutine
@@ -40,8 +41,10 @@ from app.harness.transcript import (
 )
 from app.main import app
 from app.services.chat_runtime import (
+    AnthropicChatRuntime,
     ChatRuntimeError,
     GenerationCallbacks,
+    OpenAICompatibleChatRuntime,
     ToolCallRequest,
     ToolExecutor,
     get_chat_runtime,
@@ -1361,6 +1364,350 @@ def test_chat_can_auto_call_runtime_tools(client: TestClient) -> None:
         assert output_segment["text"] == "工具执行完成，状态：success。"
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_session_slash_catalog_uses_governed_builtin_skill_and_mcp_sources(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "adscan": """---
+name: adscan
+description: Active Directory 枚举 skill
+user-invocable: true
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration.
+""",
+        },
+    )
+
+    class FakeMCPService:
+        def list_servers(self) -> list[MCPServerRead]:
+            return [
+                MCPServerRead(
+                    id="server-1",
+                    name="Burp Suite",
+                    source=CompatibilitySource.LOCAL,
+                    scope=CompatibilityScope.PROJECT,
+                    transport=MCPTransport.STDIO,
+                    enabled=True,
+                    timeout_ms=30_000,
+                    status=MCPServerStatus.CONNECTED,
+                    config_path="mcp.json",
+                    imported_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+                    capabilities=[
+                        MCPCapabilityRead(
+                            kind=MCPCapabilityKind.TOOL,
+                            name="scan-target",
+                            title="Scan Target",
+                            description="Run a focused MCP scan.",
+                            input_schema={
+                                "type": "object",
+                                "properties": {"target": {"type": "string"}},
+                                "required": ["target"],
+                                "additionalProperties": False,
+                            },
+                        )
+                    ],
+                )
+            ]
+
+    original_mcp_override = app.dependency_overrides.get(get_mcp_service)
+    app.dependency_overrides[get_mcp_service] = lambda: FakeMCPService()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Slash Catalog Session"})
+        session_id = api_data(session_response)["id"]
+
+        catalog_response = client.get(f"/api/sessions/{session_id}/slash-catalog")
+
+        assert catalog_response.status_code == 200
+        catalog = api_data(catalog_response)
+        assert any(item["id"] == "builtin:list_available_skills" for item in catalog)
+        assert any(item["id"] == "skill:adscan" for item in catalog)
+        assert any(item["id"] == "mcp:server-1:scan-target" for item in catalog)
+
+        builtin_item = next(
+            item for item in catalog if item["id"] == "builtin:list_available_skills"
+        )
+        assert builtin_item["action"] == {
+            "id": "builtin:list_available_skills",
+            "trigger": "list-available-skills",
+            "type": "builtin",
+            "source": "builtin",
+            "display_text": "/list-available-skills",
+            "invocation": {
+                "tool_name": "list_available_skills",
+                "arguments": {},
+                "mcp_server_id": None,
+                "mcp_tool_name": None,
+            },
+        }
+        disabled_builtin = next(
+            item for item in catalog if item["id"] == "builtin:execute_kali_command"
+        )
+        assert disabled_builtin["disabled"] is True
+
+        skill_item = next(item for item in catalog if item["id"] == "skill:adscan")
+        assert skill_item["action"]["invocation"] == {
+            "tool_name": "execute_skill",
+            "arguments": {"skill_name_or_id": "adscan"},
+            "mcp_server_id": None,
+            "mcp_tool_name": None,
+        }
+
+        mcp_item = next(item for item in catalog if item["id"] == "mcp:server-1:scan-target")
+        assert mcp_item["badge"] == "Burp Suite"
+        assert mcp_item["disabled"] is True
+        assert mcp_item["action"]["invocation"] == {
+            "tool_name": "mcp__burp_suite__scan_target",
+            "arguments": {},
+            "mcp_server_id": "server-1",
+            "mcp_tool_name": "scan-target",
+        }
+    finally:
+        if original_mcp_override is None:
+            app.dependency_overrides.pop(get_mcp_service, None)
+        else:
+            app.dependency_overrides[get_mcp_service] = original_mcp_override
+
+
+def test_chat_rejects_invalid_stale_slash_action_payload(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Stale Slash Session"})
+    session_id = api_data(session_response)["id"]
+    catalog = api_data(client.get(f"/api/sessions/{session_id}/slash-catalog"))
+    builtin_item = next(item for item in catalog if item["id"] == "builtin:list_available_skills")
+    stale_action = dict(builtin_item["action"])
+    stale_action["trigger"] = "stale-trigger"
+
+    chat_response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={
+            "content": builtin_item["action"]["display_text"],
+            "attachments": [],
+            "wait_for_completion": True,
+            "slash_action": stale_action,
+        },
+    )
+
+    assert chat_response.status_code == 422
+    assert "stale slash_action" in chat_response.json()["detail"]
+
+
+def test_chat_structured_slash_action_executes_governed_tool_with_openai_history(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = app.state.settings
+    original_openai_config = (
+        settings.llm_api_key,
+        settings.llm_api_base_url,
+        settings.llm_default_model,
+    )
+    settings.llm_api_key = "test-openai-key"
+    settings.llm_api_base_url = "https://example.test/openai"
+    settings.llm_default_model = "gpt-test"
+
+    runtime = OpenAICompatibleChatRuntime(settings)
+    captured_payloads: list[dict[str, object]] = []
+
+    async def fake_stream_completion(
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+        callbacks: GenerationCallbacks,
+    ) -> dict[str, object]:
+        del endpoint, headers
+        captured_payloads.append(payload)
+        messages = payload["messages"]
+        assert isinstance(messages, list)
+        assistant_index, assistant_message = next(
+            (index, item)
+            for index, item in enumerate(messages)
+            if isinstance(item, dict) and item.get("role") == "assistant" and item.get("tool_calls")
+        )
+        tool_index, tool_message = next(
+            (index, item)
+            for index, item in enumerate(messages)
+            if isinstance(item, dict) and item.get("role") == "tool"
+        )
+        assert assistant_index < tool_index
+        tool_call = assistant_message["tool_calls"][0]
+        assert tool_call["function"]["name"] == "list_available_skills"
+        assert json.loads(tool_call["function"]["arguments"]) == {}
+        assert tool_message["tool_call_id"] == tool_call["id"]
+        assert tool_message["content"]
+        assert callbacks.on_text_delta is not None
+        await callbacks.on_text_delta("slash openai ok")
+        return {"choices": [{"message": {"role": "assistant", "content": "slash openai ok"}}]}
+
+    monkeypatch.setattr(runtime, "_stream_completion", fake_stream_completion)
+    original_runtime_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: runtime
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "OpenAI Slash Session"})
+        session_id = api_data(session_response)["id"]
+        catalog = api_data(client.get(f"/api/sessions/{session_id}/slash-catalog"))
+        builtin_item = next(
+            item for item in catalog if item["id"] == "builtin:list_available_skills"
+        )
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": builtin_item["action"]["display_text"],
+                    "attachments": [],
+                    "wait_for_completion": True,
+                    "slash_action": builtin_item["action"],
+                },
+            )
+
+            assert chat_response.status_code == 200
+            events = []
+            while True:
+                event = websocket.receive_json()
+                events.append(event)
+                if event["type"] == "session.updated" and event["payload"].get("status") == "done":
+                    break
+
+        chat_payload = api_data(chat_response)
+        assert chat_payload["assistant_message"]["content"] == "slash openai ok"
+        assert (
+            chat_payload["user_message"]["metadata"]["slash_action"]["id"]
+            == "builtin:list_available_skills"
+        )
+        assert chat_payload["generation"]["metadata"]["slash_action"]["source"] == "builtin"
+        transcript = chat_payload["assistant_message"]["assistant_transcript"]
+        tool_call_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_call" and segment["tool_name"] == "list_available_skills"
+        )
+        tool_result_segment = next(
+            segment
+            for segment in transcript
+            if segment["kind"] == "tool_result"
+            and segment["tool_call_id"] == tool_call_segment["tool_call_id"]
+        )
+        assert isinstance(tool_result_segment["metadata"]["result"]["skills"], list)
+        event_types = [event["type"] for event in events]
+        assert "tool.call.started" in event_types
+        assert "tool.call.finished" in event_types
+        assert captured_payloads
+    finally:
+        settings.llm_api_key, settings.llm_api_base_url, settings.llm_default_model = (
+            original_openai_config
+        )
+        app.dependency_overrides[get_chat_runtime] = original_runtime_override
+
+
+def test_chat_structured_slash_action_keeps_anthropic_tool_history_valid(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = app.state.settings
+    original_anthropic_config = (
+        settings.anthropic_api_key,
+        settings.anthropic_api_base_url,
+        settings.anthropic_model,
+    )
+    settings.anthropic_api_key = "test-anthropic-key"
+    settings.anthropic_api_base_url = "https://example.test/anthropic"
+    settings.anthropic_model = "claude-test"
+
+    runtime = AnthropicChatRuntime(settings)
+    captured_payloads: list[dict[str, object]] = []
+
+    async def fake_stream_completion(
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+        callbacks: GenerationCallbacks,
+    ) -> dict[str, object]:
+        del endpoint, headers
+        captured_payloads.append(payload)
+        messages = payload["messages"]
+        assert isinstance(messages, list)
+        assistant_index, assistant_message = next(
+            (index, item)
+            for index, item in enumerate(messages)
+            if isinstance(item, dict)
+            and item.get("role") == "assistant"
+            and isinstance(item.get("content"), list)
+            and any(
+                block.get("type") == "tool_use"
+                for block in item["content"]
+                if isinstance(block, dict)
+            )
+        )
+        user_index, user_message = next(
+            (index, item)
+            for index, item in enumerate(messages)
+            if isinstance(item, dict)
+            and item.get("role") == "user"
+            and isinstance(item.get("content"), list)
+            and any(
+                block.get("type") == "tool_result"
+                for block in item["content"]
+                if isinstance(block, dict)
+            )
+        )
+        assert assistant_index < user_index
+        tool_use_block = next(
+            block for block in assistant_message["content"] if block["type"] == "tool_use"
+        )
+        tool_result_block = next(
+            block for block in user_message["content"] if block["type"] == "tool_result"
+        )
+        assert tool_use_block["name"] == "list_available_skills"
+        assert tool_use_block["input"] == {}
+        assert tool_result_block["tool_use_id"] == tool_use_block["id"]
+        assert callbacks.on_text_delta is not None
+        await callbacks.on_text_delta("slash anthropic ok")
+        return {"content": [{"type": "text", "text": "slash anthropic ok"}]}
+
+    monkeypatch.setattr(runtime, "_stream_completion", fake_stream_completion)
+    original_runtime_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: runtime
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Anthropic Slash Session"})
+        session_id = api_data(session_response)["id"]
+        catalog = api_data(client.get(f"/api/sessions/{session_id}/slash-catalog"))
+        builtin_item = next(
+            item for item in catalog if item["id"] == "builtin:list_available_skills"
+        )
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={
+                "content": builtin_item["action"]["display_text"],
+                "attachments": [],
+                "wait_for_completion": True,
+                "slash_action": builtin_item["action"],
+            },
+        )
+
+        assert chat_response.status_code == 200
+        assert api_data(chat_response)["assistant_message"]["content"] == "slash anthropic ok"
+        assert captured_payloads
+    finally:
+        (
+            settings.anthropic_api_key,
+            settings.anthropic_api_base_url,
+            settings.anthropic_model,
+        ) = original_anthropic_config
+        app.dependency_overrides[get_chat_runtime] = original_runtime_override
 
 
 def test_chat_readonly_parallel_batch_execution_preserves_order(client: TestClient) -> None:

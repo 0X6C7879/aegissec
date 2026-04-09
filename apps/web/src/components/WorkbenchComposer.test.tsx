@@ -2,7 +2,150 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../store/uiStore";
+import type { SlashCatalogItem } from "../types/slash";
 import { WorkbenchComposer } from "./WorkbenchComposer";
+
+const slashCatalog: SlashCatalogItem[] = [
+  {
+    id: "slash-skill-recon",
+    trigger: "recon",
+    title: "Recon",
+    type: "skill",
+    source: "skill",
+    description: "运行侦察技能。",
+    badge: "Skill",
+    action: {
+      id: "skill:recon",
+      trigger: "recon",
+      type: "skill",
+      source: "skill",
+      display_text: "/recon",
+      invocation: {
+        tool_name: "execute_skill",
+        arguments: { skill_name_or_id: "recon" },
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  },
+  {
+    id: "slash-mcp-pivot",
+    trigger: "pivot",
+    title: "Pivot Tool",
+    type: "mcp",
+    source: "mcp",
+    description: "调用 MCP pivot 工具。",
+    badge: "Pivot MCP",
+    keybind: "Tab",
+    action: {
+      id: "mcp:server-1:pivot",
+      trigger: "pivot",
+      type: "mcp",
+      source: "mcp",
+      display_text: "/pivot",
+      invocation: {
+        tool_name: "call_mcp_tool",
+        arguments: { target: "pivot" },
+        mcp_server_id: "server-1",
+        mcp_tool_name: "pivot",
+      },
+    },
+  },
+  {
+    id: "slash-builtin-note",
+    trigger: "note",
+    title: "Quick Note",
+    type: "builtin",
+    source: "ui",
+    description: "写入笔记。",
+    badge: "Builtin",
+    action: {
+      id: "builtin:note",
+      trigger: "note",
+      type: "builtin",
+      source: "ui",
+      display_text: "/note",
+      invocation: {
+        tool_name: "session_note",
+        arguments: {},
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  },
+  {
+    id: "slash-mcp-locked",
+    trigger: "locked",
+    title: "Locked MCP Tool",
+    type: "mcp",
+    source: "mcp",
+    description: "需要额外参数，v1 不允许直接执行。",
+    badge: "Locked MCP",
+    disabled: true,
+    action: {
+      id: "mcp:server-2:locked",
+      trigger: "locked",
+      type: "mcp",
+      source: "mcp",
+      display_text: "/locked",
+      invocation: {
+        tool_name: "call_mcp_tool",
+        arguments: {},
+        mcp_server_id: "server-2",
+        mcp_tool_name: "locked",
+      },
+    },
+  },
+];
+
+type RenderComposerOptions = {
+  sessionId?: string;
+  slashItems?: SlashCatalogItem[];
+  disabled?: boolean;
+  isActiveGeneration?: boolean;
+  isPausedGeneration?: boolean;
+  isInterrupting?: boolean;
+  queuedCount?: number;
+  onQueueSend?: ReturnType<typeof vi.fn>;
+  onInject?: ReturnType<typeof vi.fn>;
+  onInterrupt?: ReturnType<typeof vi.fn>;
+};
+
+function renderComposer({
+  sessionId = "session-default",
+  slashItems = [],
+  disabled = false,
+  isActiveGeneration = false,
+  isPausedGeneration = false,
+  isInterrupting = false,
+  queuedCount = 0,
+  onQueueSend = vi.fn().mockResolvedValue(undefined),
+  onInject = vi.fn().mockResolvedValue(undefined),
+  onInterrupt = vi.fn().mockResolvedValue(undefined),
+}: RenderComposerOptions = {}) {
+  const renderResult = render(
+    <WorkbenchComposer
+      sessionId={sessionId}
+      slashCatalog={slashItems}
+      disabled={disabled}
+      isActiveGeneration={isActiveGeneration}
+      isPausedGeneration={isPausedGeneration}
+      isInterrupting={isInterrupting}
+      queuedCount={queuedCount}
+      onQueueSend={onQueueSend}
+      onInject={onInject}
+      onInterrupt={onInterrupt}
+    />,
+  );
+
+  return {
+    ...renderResult,
+    onQueueSend,
+    onInject,
+    onInterrupt,
+    textbox: screen.getByRole("textbox") as HTMLTextAreaElement,
+  };
+}
 
 describe("WorkbenchComposer", () => {
   beforeEach(() => {
@@ -16,23 +159,20 @@ describe("WorkbenchComposer", () => {
 
     useUiStore.getState().setDraftContent("session-send", "继续分析当前结果");
 
-    render(
-        <WorkbenchComposer
-          sessionId="session-send"
-          disabled={false}
-          isActiveGeneration={false}
-          isPausedGeneration={false}
-          isInterrupting={false}
-          queuedCount={0}
-          onQueueSend={onQueueSend}
-          onInject={onInject}
-          onInterrupt={vi.fn().mockResolvedValue(undefined)}
-        />,
-      );
+    renderComposer({
+      sessionId: "session-send",
+      onQueueSend,
+      onInject,
+    });
 
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => expect(onQueueSend).toHaveBeenCalledWith("继续分析当前结果"));
+    await waitFor(() =>
+      expect(onQueueSend).toHaveBeenCalledWith({
+        content: "继续分析当前结果",
+        slashAction: null,
+      }),
+    );
     expect(onInject).not.toHaveBeenCalled();
     expect(useUiStore.getState().draftsBySession["session-send"]?.content ?? "").toBe("");
   });
@@ -43,21 +183,16 @@ describe("WorkbenchComposer", () => {
     const onQueueSend = vi.fn().mockResolvedValue(undefined);
     const onInject = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <WorkbenchComposer
-        sessionId="session-running"
-        disabled={false}
-        isActiveGeneration={true}
-        isPausedGeneration={false}
-        isInterrupting={false}
-        queuedCount={1}
-        onQueueSend={onQueueSend}
-        onInject={onInject}
-        onInterrupt={onInterrupt}
-      />,
-    );
+    const { textbox } = renderComposer({
+      sessionId: "session-running",
+      isActiveGeneration: true,
+      queuedCount: 1,
+      onQueueSend,
+      onInject,
+      onInterrupt,
+    });
 
-    await user.type(screen.getByRole("textbox"), "生成结束后继续验证入口");
+    await user.type(textbox, "生成结束后继续验证入口");
 
     expect(screen.getByRole("button", { name: "注入当前回复" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "注入" })).toBeEnabled();
@@ -72,28 +207,25 @@ describe("WorkbenchComposer", () => {
     await user.click(screen.getByRole("button", { name: "注入" }));
     await waitFor(() => expect(onInject).toHaveBeenCalledWith("生成结束后继续验证入口"));
 
-    await user.type(screen.getByRole("textbox"), "生成结束后继续验证入口");
+    await user.type(textbox, "生成结束后继续验证入口");
     await user.click(screen.getByRole("button", { name: "加入队列" }));
-    await waitFor(() => expect(onQueueSend).toHaveBeenCalledWith("生成结束后继续验证入口"));
+    await waitFor(() =>
+      expect(onQueueSend).toHaveBeenCalledWith({
+        content: "生成结束后继续验证入口",
+        slashAction: null,
+      }),
+    );
 
     await user.click(screen.getByRole("button", { name: "中断" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
-  it("shows continue semantics for paused active generations", async () => {
-    render(
-      <WorkbenchComposer
-        sessionId="session-paused"
-        disabled={false}
-        isActiveGeneration={true}
-        isPausedGeneration={true}
-        isInterrupting={false}
-        queuedCount={0}
-        onQueueSend={vi.fn().mockResolvedValue(undefined)}
-        onInject={vi.fn().mockResolvedValue(undefined)}
-        onInterrupt={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
+  it("shows continue semantics for paused active generations", () => {
+    renderComposer({
+      sessionId: "session-paused",
+      isActiveGeneration: true,
+      isPausedGeneration: true,
+    });
 
     expect(screen.getByRole("button", { name: "继续当前回复" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
@@ -109,35 +241,34 @@ describe("WorkbenchComposer", () => {
       resolveFirstSend = resolve;
     });
     const onQueueSend = vi
-      .fn<(content: string) => Promise<void>>()
+      .fn<({ content }: { content: string }) => Promise<void>>()
       .mockImplementationOnce(() => firstSend)
       .mockResolvedValueOnce(undefined);
     const onInject = vi.fn().mockResolvedValue(undefined);
     const onInterrupt = vi.fn().mockResolvedValue(undefined);
 
-    const { rerender } = render(
-      <WorkbenchComposer
-        sessionId="session-pending"
-        disabled={false}
-        isActiveGeneration={false}
-        isPausedGeneration={false}
-        isInterrupting={false}
-        queuedCount={0}
-        onQueueSend={onQueueSend}
-        onInject={onInject}
-        onInterrupt={onInterrupt}
-      />,
-    );
+    const renderResult = renderComposer({
+      sessionId: "session-pending",
+      onQueueSend,
+      onInject,
+      onInterrupt,
+    });
+    const { textbox, rerender } = renderResult;
 
-    await user.type(screen.getByRole("textbox"), "第一条消息");
+    await user.type(textbox, "第一条消息");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => expect(onQueueSend).toHaveBeenNthCalledWith(1, "第一条消息"));
-    expect(screen.getByRole("textbox")).toBeEnabled();
+    await waitFor(() =>
+      expect(onQueueSend).toHaveBeenNthCalledWith(1, {
+        content: "第一条消息",
+        slashAction: null,
+      }),
+    );
+    expect(textbox).toBeEnabled();
 
-    await user.type(screen.getByRole("textbox"), "第二条跟进");
+    await user.type(textbox, "第二条跟进");
 
-    expect(screen.getByRole("textbox")).toHaveValue("第二条跟进");
+    expect(textbox).toHaveValue("第二条跟进");
     expect(useUiStore.getState().draftsBySession["session-pending"]?.content).toBe("第二条跟进");
 
     resolveFirstSend();
@@ -146,6 +277,7 @@ describe("WorkbenchComposer", () => {
     rerender(
       <WorkbenchComposer
         sessionId="session-pending"
+        slashCatalog={[]}
         disabled={false}
         isActiveGeneration={true}
         isPausedGeneration={false}
@@ -165,29 +297,25 @@ describe("WorkbenchComposer", () => {
     const user = userEvent.setup();
     const onQueueSend = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <WorkbenchComposer
-        sessionId="session-enter"
-        disabled={false}
-        isActiveGeneration={false}
-        isPausedGeneration={false}
-        isInterrupting={false}
-        queuedCount={0}
-        onQueueSend={onQueueSend}
-        onInject={vi.fn().mockResolvedValue(undefined)}
-        onInterrupt={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
+    const { textbox } = renderComposer({
+      sessionId: "session-enter",
+      onQueueSend,
+    });
 
-    await user.type(screen.getByRole("textbox"), "第一行");
+    await user.type(textbox, "第一行");
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    await user.type(screen.getByRole("textbox"), "第二行");
+    await user.type(textbox, "第二行");
 
-    expect(screen.getByRole("textbox")).toHaveValue("第一行\n第二行");
+    expect(textbox).toHaveValue("第一行\n第二行");
 
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(onQueueSend).toHaveBeenCalledWith("第一行\n第二行"));
+    await waitFor(() =>
+      expect(onQueueSend).toHaveBeenCalledWith({
+        content: "第一行\n第二行",
+        slashAction: null,
+      }),
+    );
     expect(useUiStore.getState().draftsBySession["session-enter"]?.content ?? "").toBe("");
   });
 
@@ -195,24 +323,153 @@ describe("WorkbenchComposer", () => {
     const user = userEvent.setup();
     const onInject = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <WorkbenchComposer
-        sessionId="session-enter-inject"
-        disabled={false}
-        isActiveGeneration={true}
-        isPausedGeneration={false}
-        isInterrupting={false}
-        queuedCount={0}
-        onQueueSend={vi.fn().mockResolvedValue(undefined)}
-        onInject={onInject}
-        onInterrupt={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
+    const { textbox } = renderComposer({
+      sessionId: "session-enter-inject",
+      isActiveGeneration: true,
+      onInject,
+    });
 
-    await user.type(screen.getByRole("textbox"), "补充新的判断依据");
+    await user.type(textbox, "补充新的判断依据");
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(onInject).toHaveBeenCalledWith("补充新的判断依据"));
+  });
+
+  it("opens the slash picker for slash-only input and closes after deleting the slash", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-open",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/");
+
+    expect(screen.getByRole("listbox", { name: "斜杠指令" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/recon/i })).toBeInTheDocument();
+
+    await user.keyboard("{Backspace}");
+
+    expect(textbox).toHaveValue("");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("filters slash candidates for whole-input /prefix only", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-filter",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/pi");
+
+    expect(screen.getByRole("option", { name: /\/pivot/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/recon/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/note/i })).not.toBeInTheDocument();
+  });
+
+  it("supports arrow navigation and Enter selection for slash items", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-enter",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/");
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(textbox).toHaveValue("/pivot ");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("supports Tab selection for slash items", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-tab",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/re");
+    await user.keyboard("{Tab}");
+
+    expect(textbox).toHaveValue("/recon ");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("closes the slash picker with Escape without clearing the draft", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-escape",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/");
+    expect(screen.getByRole("listbox", { name: "斜杠指令" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(textbox).toHaveValue("/");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("updates the active slash item on hover and selects with mouse click", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-mouse",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/");
+
+    const pivotOption = screen.getByRole("option", { name: /\/pivot/i });
+    await user.hover(pivotOption);
+
+    expect(pivotOption).toHaveAttribute("aria-selected", "true");
+
+    await user.click(pivotOption);
+
+    expect(textbox).toHaveValue("/pivot ");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("submits a selected governed slash as structured payload while preserving visible slash text", async () => {
+    const user = userEvent.setup();
+    const governedSlash = slashCatalog[0];
+    const onQueueSend = vi.fn().mockResolvedValue(undefined);
+
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-submit",
+      slashItems: slashCatalog,
+      onQueueSend,
+    });
+
+    await user.type(textbox, "/re");
+    await user.keyboard("{Tab}");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() =>
+      expect(onQueueSend).toHaveBeenCalledWith({
+        content: "/recon",
+        slashAction: governedSlash.action,
+      }),
+    );
+  });
+
+  it("does not select disabled slash items with keyboard", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-disabled",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/locked");
+
+    const lockedOption = screen.getByRole("option", { name: /\/locked/i });
+    expect(lockedOption).toBeDisabled();
+
+    await user.keyboard("{Enter}");
+
+    expect(textbox).toHaveValue("/locked");
+    expect(screen.getByRole("listbox", { name: "斜杠指令" })).toBeInTheDocument();
   });
 
   it("auto-resizes with draft content and resets after send clears the draft", async () => {
@@ -233,30 +490,24 @@ describe("WorkbenchComposer", () => {
     useUiStore.getState().setDraftContent("session-autosize", "恢复后的草稿内容");
 
     try {
-      render(
-        <WorkbenchComposer
-          sessionId="session-autosize"
-          disabled={false}
-          isActiveGeneration={false}
-          isPausedGeneration={false}
-          isInterrupting={false}
-          queuedCount={0}
-          onQueueSend={onQueueSend}
-          onInject={vi.fn().mockResolvedValue(undefined)}
-          onInterrupt={vi.fn().mockResolvedValue(undefined)}
-        />,
-      );
+      const { textbox } = renderComposer({
+        sessionId: "session-autosize",
+        onQueueSend,
+      });
 
-      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
-
-      await waitFor(() => expect(textarea.style.height).toBe("132px"));
-      expect(textarea.style.overflowY).toBe("hidden");
+      await waitFor(() => expect(textbox.style.height).toBe("132px"));
+      expect(textbox.style.overflowY).toBe("hidden");
 
       await user.click(screen.getByRole("button", { name: "发送" }));
 
-      await waitFor(() => expect(onQueueSend).toHaveBeenCalledWith("恢复后的草稿内容"));
-      await waitFor(() => expect(textarea.style.height).toBe("44px"));
-      expect(textarea.style.overflowY).toBe("hidden");
+      await waitFor(() =>
+        expect(onQueueSend).toHaveBeenCalledWith({
+          content: "恢复后的草稿内容",
+          slashAction: null,
+        }),
+      );
+      await waitFor(() => expect(textbox.style.height).toBe("44px"));
+      expect(textbox.style.overflowY).toBe("hidden");
     } finally {
       if (originalScrollHeightDescriptor) {
         Object.defineProperty(
@@ -291,24 +542,13 @@ describe("WorkbenchComposer", () => {
     useUiStore.getState().setDraftContent("session-autosize-cap", "超长草稿内容");
 
     try {
-      render(
-        <WorkbenchComposer
-          sessionId="session-autosize-cap"
-          disabled={false}
-          isActiveGeneration={false}
-          isPausedGeneration={false}
-          isInterrupting={false}
-          queuedCount={0}
-          onQueueSend={onQueueSend}
-          onInject={vi.fn().mockResolvedValue(undefined)}
-          onInterrupt={vi.fn().mockResolvedValue(undefined)}
-        />,
-      );
+      const { textbox } = renderComposer({
+        sessionId: "session-autosize-cap",
+        onQueueSend,
+      });
 
-      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
-
-      await waitFor(() => expect(textarea.style.height).toBe("180px"));
-      expect(textarea.style.overflowY).toBe("auto");
+      await waitFor(() => expect(textbox.style.height).toBe("180px"));
+      expect(textbox.style.overflowY).toBe("auto");
     } finally {
       vi.restoreAllMocks();
 

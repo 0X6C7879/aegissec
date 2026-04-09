@@ -1,22 +1,55 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useUiStore } from "../store/uiStore";
+import { SlashPopover } from "./SlashPopover";
+import { isUiOnlySlashAction, type SlashAction, type SlashCatalogItem } from "../types/slash";
 
 type ComposerSubmitAction = "send" | "inject" | "queue";
 
+export type WorkbenchComposerQueuePayload = {
+  content: string;
+  slashAction?: SlashAction | null;
+};
+
+const WHOLE_INPUT_SLASH_PATTERN = /^\/[^\s]*$/;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function readWholeInputSlashQuery(value: string): string | null {
+  if (!WHOLE_INPUT_SLASH_PATTERN.test(value)) {
+    return null;
+  }
+
+  return value.slice(1).toLowerCase();
+}
+
+function matchesSelectedSlashDraft(value: string, action: SlashAction): boolean {
+  const selectionPattern = new RegExp(`^/${escapeRegExp(action.trigger)}\\s*$`, "i");
+  return selectionPattern.test(value);
+}
+
+function canSelectSlashCatalogItem(item: SlashCatalogItem | null): item is SlashCatalogItem {
+  return item !== null && item.disabled !== true;
+}
+
 type WorkbenchComposerProps = {
   sessionId: string;
+  slashCatalog: SlashCatalogItem[];
   disabled: boolean;
   isActiveGeneration: boolean;
   isPausedGeneration: boolean;
   isInterrupting: boolean;
   queuedCount: number;
-  onQueueSend: (content: string) => Promise<void>;
+  onQueueSend: (payload: WorkbenchComposerQueuePayload) => Promise<void>;
   onInject: (content: string) => Promise<void>;
   onInterrupt: () => Promise<void>;
+  onLocalSlashAction?: (action: SlashAction) => Promise<boolean> | boolean;
 };
 
 export function WorkbenchComposer({
   sessionId,
+  slashCatalog,
   disabled,
   isActiveGeneration,
   isPausedGeneration,
@@ -25,39 +58,140 @@ export function WorkbenchComposer({
   onQueueSend,
   onInject,
   onInterrupt,
+  onLocalSlashAction,
 }: WorkbenchComposerProps) {
   const draft = useUiStore((state) => state.draftsBySession[sessionId]);
   const setDraftContent = useUiStore((state) => state.setDraftContent);
   const sendLockRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [pendingAction, setPendingAction] = useState<ComposerSubmitAction | null>(null);
+  const [selectedSlashAction, setSelectedSlashAction] = useState<SlashCatalogItem | null>(null);
+  const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [dismissedSlashValue, setDismissedSlashValue] = useState<string | null>(null);
 
   const draftContent = draft?.content ?? "";
   const isEmptyDraft = draftContent.length === 0;
   const trimmedDraftContent = draftContent.trim();
+  const slashQuery = readWholeInputSlashQuery(draftContent);
+  const filteredSlashCatalog = useMemo(() => {
+    if (slashQuery === null) {
+      return [];
+    }
+
+    const normalizedQuery = slashQuery.trim().toLowerCase();
+
+    return slashCatalog.filter((item) => item.trigger.toLowerCase().startsWith(normalizedQuery));
+  }, [slashCatalog, slashQuery]);
+  const isSlashPickerOpen =
+    slashQuery !== null && filteredSlashCatalog.length > 0 && dismissedSlashValue !== draftContent;
+  const activeSlashItem = filteredSlashCatalog[Math.min(activeSlashIndex, filteredSlashCatalog.length - 1)] ?? null;
   const isPrimaryDisabled = disabled || pendingAction !== null || trimmedDraftContent.length === 0;
   const isPendingPrimaryAction = pendingAction !== null;
+  const slashPopoverId = `slash-popover-${sessionId}`;
+
+  useEffect(() => {
+    if (!selectedSlashAction) {
+      return;
+    }
+
+    if (!matchesSelectedSlashDraft(draftContent, selectedSlashAction.action)) {
+      setSelectedSlashAction(null);
+    }
+  }, [draftContent, selectedSlashAction]);
+
+  useEffect(() => {
+    if (dismissedSlashValue !== null && dismissedSlashValue !== draftContent) {
+      setDismissedSlashValue(null);
+    }
+  }, [dismissedSlashValue, draftContent]);
+
+  useEffect(() => {
+    if (!isSlashPickerOpen) {
+      setActiveSlashIndex(0);
+      return;
+    }
+
+    setActiveSlashIndex((currentValue) =>
+      currentValue < filteredSlashCatalog.length ? currentValue : 0,
+    );
+  }, [filteredSlashCatalog.length, isSlashPickerOpen]);
+
+  function applySlashSelection(action: SlashCatalogItem): void {
+    if (action.disabled === true) {
+      return;
+    }
+
+    const nextValue = `/${action.trigger} `;
+    setSelectedSlashAction(action);
+    setActiveSlashIndex(0);
+    setDismissedSlashValue(null);
+    setDraftContent(sessionId, nextValue);
+
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        return;
+      }
+
+      textarea.focus();
+      textarea.setSelectionRange(nextValue.length, nextValue.length);
+    });
+  }
 
   async function handleDispatch(action: ComposerSubmitAction): Promise<void> {
     const trimmed = draftContent.trim();
+    const slashCatalogItem = action === "inject" ? null : selectedSlashAction;
+    const slashAction =
+      action === "inject" || !slashCatalogItem || !matchesSelectedSlashDraft(draftContent, slashCatalogItem.action)
+        ? null
+        : slashCatalogItem.action;
 
     if (!trimmed || disabled || sendLockRef.current || pendingAction !== null) {
       return;
     }
 
-    const submit = action === "inject" ? onInject : onQueueSend;
+    if (slashAction && isUiOnlySlashAction(slashAction) && !onLocalSlashAction) {
+      return;
+    }
 
     sendLockRef.current = true;
     setPendingAction(action);
     setDraftContent(sessionId, "");
+    setSelectedSlashAction(null);
+    setDismissedSlashValue(null);
 
     try {
-      await submit(trimmed);
+      if (action === "inject") {
+        await onInject(trimmed);
+        return;
+      }
+
+      if (slashAction && isUiOnlySlashAction(slashAction)) {
+        const handled = (await onLocalSlashAction?.(slashAction)) ?? false;
+
+        if (!handled) {
+          setDraftContent(sessionId, draftContent);
+          if (slashCatalogItem) {
+            setSelectedSlashAction(slashCatalogItem);
+          }
+        }
+
+        return;
+      }
+
+      await onQueueSend({
+        content: trimmed,
+        slashAction,
+      });
     } catch (error) {
       const latestDraftContent = useUiStore.getState().draftsBySession[sessionId]?.content ?? "";
 
       if (latestDraftContent.trim().length === 0) {
         setDraftContent(sessionId, trimmed);
+
+        if (slashCatalogItem) {
+          setSelectedSlashAction(slashCatalogItem);
+        }
       }
 
       throw error;
@@ -81,6 +215,42 @@ export function WorkbenchComposer({
   }
 
   function handleInputKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if (isSlashPickerOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveSlashIndex((currentValue) =>
+          filteredSlashCatalog.length === 0 ? 0 : (currentValue + 1) % filteredSlashCatalog.length,
+        );
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveSlashIndex((currentValue) =>
+          filteredSlashCatalog.length === 0
+            ? 0
+            : (currentValue - 1 + filteredSlashCatalog.length) % filteredSlashCatalog.length,
+        );
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+
+        if (canSelectSlashCatalogItem(activeSlashItem)) {
+          applySlashSelection(activeSlashItem);
+        }
+
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissedSlashValue(draftContent);
+        return;
+      }
+    }
+
     if (
       event.key !== "Enter" ||
       event.shiftKey ||
@@ -158,21 +328,32 @@ export function WorkbenchComposer({
               <span>{inlineInjectLabel}</span>
             </button>
           ) : null}
-          <span className="workbench-chat-prompt" aria-hidden="true">
-            operator $
-          </span>
-          <textarea
-            ref={textareaRef}
-            className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
-            rows={1}
-            value={draftContent}
-            onChange={(event) => {
-              setDraftContent(sessionId, event.target.value);
-            }}
-            onKeyDown={handleInputKeyDown}
-            placeholder="输入目标、上下文或要验证的问题"
-            disabled={disabled}
-          />
+          <div className="workbench-chat-entry-shell">
+            {isSlashPickerOpen ? (
+              <SlashPopover
+                id={slashPopoverId}
+                items={filteredSlashCatalog}
+                activeIndex={activeSlashIndex}
+                onHoverItem={setActiveSlashIndex}
+                onSelectItem={applySlashSelection}
+              />
+            ) : null}
+            <span className="workbench-chat-prompt" aria-hidden="true">
+              operator $
+            </span>
+            <textarea
+              ref={textareaRef}
+              className={`workbench-chat-input${isEmptyDraft ? " workbench-chat-input-empty" : ""}`}
+              rows={1}
+              value={draftContent}
+              onChange={(event) => {
+                setDraftContent(sessionId, event.target.value);
+              }}
+              onKeyDown={handleInputKeyDown}
+              placeholder="输入目标、上下文或要验证的问题"
+              disabled={disabled}
+            />
+          </div>
         </div>
 
         <div className="workbench-composer-footer">
