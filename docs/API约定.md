@@ -164,6 +164,20 @@ Skills 相关返回体在保留历史字段的前提下，已增加一组兼容 
 - `POST /api/mcp/servers/{server_id}/health`
 - `POST /api/mcp/servers/{server_id}/tools/{tool_name}/invoke`
 
+### 4.7 Slash 快捷调用（Workspace）
+
+- Slash 仅在输入框全文匹配 whole-input 模式时启用：`/` 或 `/prefix`；一旦出现前缀文本、空格或删除 `/`，popover 立即关闭。
+- Slash catalog 统一汇聚 `builtin` / `skill` / `mcp`，其中 governed 项仍通过 `POST /api/sessions/{session_id}/chat` 的 `slash_action` 进入既有 runtime / approval / tool / transcript 链路。
+- `type="builtin" && source="ui"` 的本地项只允许触发前端页面动作，不会生成聊天消息，也不会绕过后端去执行 skill / mcp。
+- `trigger` 使用 bare token（例如 `goto-skills`），用户可见文本放在 `display_text`（例如 `/goto-skills`）。
+- 新增 slash 项时，需要同步：前端类型、catalog 来源、以及对应前后端测试。
+
+当前主要测试入口：
+
+- 前端：`apps/web/src/components/WorkbenchComposer.test.tsx`
+- 前端回归：`apps/web/src/components/ConversationFeed.test.tsx`、`apps/web/src/hooks/useSessionEvents.test.tsx`
+- 后端：`apps/api/tests/test_sessions.py -k slash`
+
 ## 5. 事件流
 
 Session WebSocket 当前已使用下列事件：

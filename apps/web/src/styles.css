@@ -2585,6 +2585,7 @@ textarea::placeholder {
   color: var(--text-secondary);
   font-size: 0.74rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .workbench-inline-inject-affordance {
