@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../store/uiStore";
-import type { SlashCatalogItem } from "../types/slash";
+import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import { WorkbenchComposer } from "./WorkbenchComposer";
 
 const slashCatalog: SlashCatalogItem[] = [
@@ -109,6 +109,7 @@ type RenderComposerOptions = {
   onQueueSend?: ReturnType<typeof vi.fn>;
   onInject?: ReturnType<typeof vi.fn>;
   onInterrupt?: ReturnType<typeof vi.fn>;
+  onLocalSlashAction?: ((action: SlashAction) => Promise<boolean> | boolean) | undefined;
 };
 
 function renderComposer({
@@ -122,6 +123,7 @@ function renderComposer({
   onQueueSend = vi.fn().mockResolvedValue(undefined),
   onInject = vi.fn().mockResolvedValue(undefined),
   onInterrupt = vi.fn().mockResolvedValue(undefined),
+  onLocalSlashAction,
 }: RenderComposerOptions = {}) {
   const renderResult = render(
     <WorkbenchComposer
@@ -135,6 +137,7 @@ function renderComposer({
       onQueueSend={onQueueSend}
       onInject={onInject}
       onInterrupt={onInterrupt}
+      onLocalSlashAction={onLocalSlashAction}
     />,
   );
 
@@ -353,6 +356,21 @@ describe("WorkbenchComposer", () => {
     expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
   });
 
+  it("renders stable data attributes for slash options", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-data-id",
+      slashItems: slashCatalog,
+    });
+
+    await user.type(textbox, "/re");
+
+    const reconOption = screen.getByRole("option", { name: /\/recon/i });
+    expect(reconOption).toHaveAttribute("data-slash-id", "slash-skill-recon");
+    expect(reconOption).toHaveAttribute("data-slash-trigger", "recon");
+    expect(reconOption).toHaveAttribute("data-slash-type", "skill");
+  });
+
   it("filters slash candidates for whole-input /prefix only", async () => {
     const user = userEvent.setup();
     const { textbox } = renderComposer({
@@ -379,6 +397,37 @@ describe("WorkbenchComposer", () => {
 
     expect(textbox).toHaveValue("/pivot ");
     expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the active slash item scrolled into view for keyboard and hover changes", async () => {
+    const user = userEvent.setup();
+    const scrollIntoViewMock = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    try {
+      const { textbox } = renderComposer({
+        sessionId: "session-slash-scroll",
+        slashItems: slashCatalog,
+      });
+
+      await user.type(textbox, "/");
+      scrollIntoViewMock.mockClear();
+
+      await user.keyboard("{ArrowDown}");
+      await waitFor(() =>
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }),
+      );
+
+      scrollIntoViewMock.mockClear();
+      await user.hover(screen.getByRole("option", { name: /\/recon/i }));
+      await waitFor(() =>
+        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }),
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it("supports Tab selection for slash items", async () => {
@@ -452,6 +501,55 @@ describe("WorkbenchComposer", () => {
         slashAction: governedSlash.action,
       }),
     );
+  });
+
+  it("routes ui-only builtin slash actions through the local handler without queueing chat", async () => {
+    const user = userEvent.setup();
+    const uiOnlySlash = slashCatalog[2];
+    const onQueueSend = vi.fn().mockResolvedValue(undefined);
+    const onLocalSlashAction = vi.fn().mockResolvedValue(true);
+
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-ui-only",
+      slashItems: slashCatalog,
+      onQueueSend,
+      onLocalSlashAction,
+    });
+
+    await user.type(textbox, "/no");
+    await user.keyboard("{Tab}");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onLocalSlashAction).toHaveBeenCalledWith(uiOnlySlash.action));
+    expect(onQueueSend).not.toHaveBeenCalled();
+    expect(textbox).toHaveValue("");
+  });
+
+  it("restores input and slash selection state when the local slash handler reports failure", async () => {
+    const user = userEvent.setup();
+    const onQueueSend = vi.fn().mockResolvedValue(undefined);
+    const onLocalSlashAction = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-ui-failure",
+      slashItems: slashCatalog,
+      onQueueSend,
+      onLocalSlashAction,
+    });
+
+    await user.type(textbox, "/no");
+    await user.keyboard("{Tab}");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onLocalSlashAction).toHaveBeenCalledTimes(1));
+    expect(onQueueSend).not.toHaveBeenCalled();
+    expect(textbox).toHaveValue("/note ");
+
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onLocalSlashAction).toHaveBeenCalledTimes(2));
+    expect(onQueueSend).not.toHaveBeenCalled();
+    expect(textbox).toHaveValue("");
   });
 
   it("does not select disabled slash items with keyboard", async () => {

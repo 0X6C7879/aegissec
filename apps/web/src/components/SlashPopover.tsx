@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { SlashCatalogItem } from "../types/slash";
 
 type SlashPopoverProps = {
@@ -31,6 +32,15 @@ export function SlashPopover({
   onHoverItem,
   onSelectItem,
 }: SlashPopoverProps) {
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const activeItem = itemRefs.current[activeIndex] ?? null;
+    if (activeItem && typeof activeItem.scrollIntoView === "function") {
+      activeItem.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex]);
+
   return (
     <div id={id} className="slash-popover" role="listbox" aria-label="斜杠指令">
       {items.map((item, index) => {
@@ -41,11 +51,17 @@ export function SlashPopover({
         return (
           <button
             key={item.id}
+            ref={(node) => {
+              itemRefs.current[index] = node;
+            }}
             type="button"
             role="option"
             aria-selected={isActive}
             aria-disabled={isDisabled}
             disabled={isDisabled}
+            data-slash-id={item.id}
+            data-slash-trigger={item.trigger}
+            data-slash-type={item.type}
             className={`slash-popover-item${isActive ? " slash-popover-item-active" : ""}${isDisabled ? " slash-popover-item-disabled" : ""}`}
             onMouseEnter={() => {
               if (!isDisabled) {

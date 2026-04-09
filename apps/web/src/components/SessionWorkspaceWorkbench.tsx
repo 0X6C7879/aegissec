@@ -39,7 +39,7 @@ import type {
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
-import type { SlashAction } from "../types/slash";
+import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
@@ -52,6 +52,61 @@ type InvalidSessionState = {
 
 const EMPTY_SESSION_EVENTS: ReturnType<typeof useUiStore.getState>["eventsBySession"][string] = [];
 const WORKSPACE_SIDEBAR_STORAGE_KEY = "aegissec.workspace.sidebar.collapsed.v1";
+
+function buildUiNavigationSlashItem(
+  id: string,
+  trigger: string,
+  title: string,
+  description: string,
+  to: string,
+): SlashCatalogItem {
+  return {
+    id,
+    trigger,
+    title,
+    type: "builtin",
+    source: "ui",
+    description,
+    badge: "UI",
+    action: {
+      id,
+      trigger,
+      type: "builtin",
+      source: "ui",
+      display_text: `/${trigger}`,
+      invocation: {
+        tool_name: "ui.navigate",
+        arguments: { to },
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  };
+}
+
+const LOCAL_UI_SLASH_ITEMS: SlashCatalogItem[] = [
+  buildUiNavigationSlashItem(
+    "builtin:goto-skills",
+    "goto-skills",
+    "Skills",
+    "打开技能工作区。",
+    "/skills",
+  ),
+  buildUiNavigationSlashItem(
+    "builtin:goto-mcp",
+    "goto-mcp",
+    "MCP",
+    "打开 MCP 工作区。",
+    "/mcp",
+  ),
+  buildUiNavigationSlashItem(
+    "builtin:goto-runtime",
+    "goto-runtime",
+    "Runtime",
+    "打开运行时工作区。",
+    "/runtime",
+  ),
+];
 
 function getStoredWorkspaceSidebarState(): boolean {
   if (typeof window === "undefined") {
@@ -296,6 +351,22 @@ export function SessionWorkspaceWorkbench() {
     queryFn: ({ signal }) => getSessionSlashCatalog(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
+  const slashCatalog = useMemo(() => {
+    const mergedItems = [...LOCAL_UI_SLASH_ITEMS, ...(slashCatalogQuery.data ?? [])];
+    const seenIds = new Set<string>();
+    const seenTriggers = new Set<string>();
+
+    return mergedItems.filter((item) => {
+      const normalizedTrigger = item.trigger.trim().toLowerCase();
+      if (seenIds.has(item.id) || seenTriggers.has(normalizedTrigger)) {
+        return false;
+      }
+
+      seenIds.add(item.id);
+      seenTriggers.add(normalizedTrigger);
+      return true;
+    });
+  }, [slashCatalogQuery.data]);
 
   const sidebarSessions = useMemo(
     () => visibleSessionsForSidebar(sortedSessions, activeSessionId),
@@ -967,6 +1038,25 @@ export function SessionWorkspaceWorkbench() {
     navigate(`/sessions/${nextSessionId}/chat`);
   }
 
+  const handleLocalSlashAction = useCallback(
+    async (action: SlashAction): Promise<boolean> => {
+      switch (action.id) {
+        case "builtin:goto-skills":
+          navigate("/skills");
+          return true;
+        case "builtin:goto-mcp":
+          navigate("/mcp");
+          return true;
+        case "builtin:goto-runtime":
+          navigate("/runtime");
+          return true;
+        default:
+          return false;
+      }
+    },
+    [navigate],
+  );
+
   async function handleRenameSession(targetSessionId: string): Promise<void> {
     const targetSession = sortedSessions.find((session) => session.id === targetSessionId);
     if (!targetSession) {
@@ -1252,7 +1342,7 @@ export function SessionWorkspaceWorkbench() {
                   />
                   <WorkbenchComposer
                     sessionId={activeSession.id}
-                    slashCatalog={slashCatalogQuery.data ?? []}
+                    slashCatalog={slashCatalog}
                     disabled={activeSession.deleted_at !== null}
                     isActiveGeneration={isInjectableGenerationActive || isPausedGeneration}
                     isPausedGeneration={isPausedGeneration}
@@ -1273,6 +1363,7 @@ export function SessionWorkspaceWorkbench() {
                         content,
                       });
                     }}
+                    onLocalSlashAction={handleLocalSlashAction}
                     onInterrupt={async () => {
                       if (activeGeneration) {
                         await cancelGenerationMutation.mutateAsync({
