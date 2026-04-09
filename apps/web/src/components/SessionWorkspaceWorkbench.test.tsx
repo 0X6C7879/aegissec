@@ -37,16 +37,16 @@ const {
   mockCancelGeneration: vi.fn(),
   mockCancelSession: vi.fn(),
   mockCreateSession: vi.fn(),
-    mockDeleteSession: vi.fn(),
-    mockEditSessionMessage: vi.fn(),
-    mockGetRuntimeStatus: vi.fn(),
-    mockGetSessionConversation: vi.fn(),
-    mockGetSessionQueue: vi.fn(),
-    mockInjectActiveGenerationContext: vi.fn(),
-    mockForkSessionMessage: vi.fn(),
-    mockListSessions: vi.fn(),
-    mockRegenerateSessionMessage: vi.fn(),
-    mockRollbackSessionMessage: vi.fn(),
+  mockDeleteSession: vi.fn(),
+  mockEditSessionMessage: vi.fn(),
+  mockGetRuntimeStatus: vi.fn(),
+  mockGetSessionConversation: vi.fn(),
+  mockGetSessionQueue: vi.fn(),
+  mockInjectActiveGenerationContext: vi.fn(),
+  mockForkSessionMessage: vi.fn(),
+  mockListSessions: vi.fn(),
+  mockRegenerateSessionMessage: vi.fn(),
+  mockRollbackSessionMessage: vi.fn(),
   mockUpdateSession: vi.fn(),
   mockSendChatMessage: vi.fn(),
   mockUseSessionEvents: vi.fn(),
@@ -99,14 +99,14 @@ vi.mock("./WorkbenchComposer", () => ({
     isActiveGeneration: boolean;
     isPausedGeneration: boolean;
     queuedCount: number;
-    onQueueSend: (content: string) => Promise<void>;
+    onQueueSend: (payload: { content: string; slashAction?: unknown | null }) => Promise<void>;
     onInject: (content: string) => Promise<void>;
   }) => (
     <div data-testid="workbench-composer">
       <span data-testid="composer-active-state">{String(isActiveGeneration)}</span>
       <span data-testid="composer-paused-state">{String(isPausedGeneration)}</span>
       <span data-testid="composer-queued-count">{queuedCount}</span>
-      <button type="button" onClick={() => void onQueueSend("排队消息")}> 
+      <button type="button" onClick={() => void onQueueSend({ content: "排队消息" })}>
         mock-queue-send
       </button>
       <button type="button" onClick={() => void onInject("注入消息")}>
@@ -161,7 +161,10 @@ function createQueue(sessionId: string): SessionQueue {
   };
 }
 
-function createActiveGeneration(sessionId: string, overrides: Partial<ChatGeneration> = {}): ChatGeneration {
+function createActiveGeneration(
+  sessionId: string,
+  overrides: Partial<ChatGeneration> = {},
+): ChatGeneration {
   return {
     id: `${sessionId}-generation-1`,
     session_id: sessionId,
@@ -557,7 +560,9 @@ describe("SessionWorkspaceWorkbench", () => {
       expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole("separator", { name: "调整图谱与聊天面板宽度" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("separator", { name: "调整图谱与聊天面板宽度" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the session attack graph data directly", async () => {

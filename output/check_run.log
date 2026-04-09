@@ -1,0 +1,186 @@
+Wrote requirements.txt with 10 dependencies
+Resolved 83 packages in 2ms
+Audited 82 packages in 10ms
+All checks passed!
+All done! \u2728 \U0001f370 \u2728
+196 files would be left unchanged.
+Success: no issues found in 190 source files
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.4.2, pluggy-1.6.0
+rootdir: D:\AI\aegissec\apps\api
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.13.0, langsmith-0.7.22
+collected 304 items
+
+tests\test_alembic.py .                                                  [  0%]
+tests\test_assistant_wave_runtime.py ...                                 [  1%]
+tests\test_auth.py ..                                                    [  1%]
+tests\test_chat_runtime.py ..............................                [ 11%]
+tests\test_compact_runtime.py ....                                       [ 13%]
+tests\test_continuation_store.py ....                                    [ 14%]
+tests\test_db_bootstrap.py ...                                           [ 15%]
+tests\test_db_session.py .                                               [ 15%]
+tests\test_graph_builders.py ............                                [ 19%]
+tests\test_graph_service.py ....                                         [ 21%]
+tests\test_graphs.py ..........                                          [ 24%]
+tests\test_harness_executor.py ..                                        [ 25%]
+tests\test_harness_governance.py ...                                     [ 25%]
+tests\test_harness_phase3.py ..                                          [ 26%]
+tests\test_harness_scheduling.py .                                       [ 26%]
+tests\test_harness_swarm.py ..                                           [ 27%]
+tests\test_health.py ....                                                [ 28%]
+tests\test_logging_middleware.py .                                       [ 29%]
+tests\test_mcp.py .................                                      [ 34%]
+tests\test_mcp_client_manager.py ...........                             [ 38%]
+tests\test_memory_service.py ......                                      [ 40%]
+tests\test_module_e_integration.py ..                                    [ 41%]
+tests\test_p2_reserves.py ...                                            [ 42%]
+tests\test_projects.py ..                                                [ 42%]
+tests\test_prompting.py ..............                                   [ 47%]
+tests\test_runtime.py ........                                           [ 50%]
+tests\test_sessions.py ................................................. [ 66%]
+...F                                                                     [ 67%]
+tests\test_settings.py .....                                             [ 69%]
+tests\test_settings_api.py ....                                          [ 70%]
+tests\test_skill_resolution.py ....................                      [ 76%]
+tests\test_skill_service_resolution.py .........                         [ 79%]
+tests\test_skills.py ........................................            [ 93%]
+tests\test_token_budget.py ..                                            [ 93%]
+tests\test_tool_pipeline.py ........                                     [ 96%]
+tests\test_workbench_runtime.py ...                                      [ 97%]
+tests\test_workflow_graph_slice.py ..                                    [ 98%]
+tests\test_workflow_repository.py ......                                 [100%]
+
+================================== FAILURES ===================================
+____ test_chat_reports_autoroute_preload_failure_and_continues_generation _____
+
+client = <starlette.testclient.TestClient object at 0x0000023114F8DD90>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000023114D491F0>
+tmp_path = WindowsPath('C:/Users/ASUS/AppData/Local/Temp/pytest-of-ASUS/pytest-712/test_chat_reports_autoroute_pr0')
+
+    def test_chat_reports_autoroute_preload_failure_and_continues_generation(
+        client: TestClient,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        _seed_skills(
+            client,
+            monkeypatch,
+            tmp_path,
+            {
+                "docx": """---
+    name: docx
+    description: Word document editing helper
+    ---
+    # docx
+    
+    Create and edit Word documents.
+    """,
+            },
+        )
+    
+        monkeypatch.setattr(
+            "app.compat.skills.service.SkillService.execute_skill_by_name_or_directory_name",
+            lambda self, name_or_slug, **kwargs: (_ for _ in ()).throw(
+                SkillContentReadError(f"无法读取 {name_or_slug} 内容")
+            ),
+        )
+    
+        class FailedAutoRouteRuntime:
+            async def generate_reply(
+                self,
+                content: str,
+                attachments: list[object],
+                conversation_messages: list[object] | None = None,
+                available_skills: list[object] | None = None,
+                skill_context_prompt: str | None = None,
+                execute_tool: ToolExecutor | None = None,
+                callbacks: GenerationCallbacks | None = None,
+            ) -> str:
+                del (
+                    content,
+                    attachments,
+                    conversation_messages,
+                    available_skills,
+                    execute_tool,
+                    callbacks,
+                )
+                if skill_context_prompt is not None:
+                    assert "Prepared primary skill: docx" not in skill_context_prompt
+                    assert "Primary skill:" not in skill_context_prompt
+                return "继续普通流程"
+    
+        original_override = app.dependency_overrides[get_chat_runtime]
+        app.dependency_overrides[get_chat_runtime] = lambda: FailedAutoRouteRuntime()
+    
+        try:
+            session_response = client.post("/api/sessions", json={"title": "Autoroute Failure"})
+            session_id = api_data(session_response)["id"]
+            wait_timeout_seconds = max(TEST_EVENTUAL_TIMEOUT_SECONDS * 3, 3.0)
+    
+            chat_response = client.post(
+                f"/api/sessions/{session_id}/chat",
+                json={
+                    "content": "请处理这个 docx 文件",
+                    "attachments": [],
+                },
+            )
+            assert chat_response.status_code == 200
+            chat_payload = api_data(chat_response)
+            assert chat_payload["generation"]["status"] == "queued"
+    
+            conversation_payload: dict[str, object] | None = None
+            assistant_message: dict[str, object] | None = None
+            generation_status: str | None = None
+            for _ in range(int(wait_timeout_seconds / TEST_POLL_INTERVAL_SECONDS)):
+                conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+                assert conversation_response.status_code == 200
+                conversation_payload = api_data(conversation_response)
+    
+                generations = cast(list[dict[str, object]], conversation_payload["generations"])
+                if generations:
+                    generation_status = cast(str, generations[0]["status"])
+    
+                assistant_messages = [
+                    message
+                    for message in cast(list[dict[str, object]], conversation_payload["messages"])
+                    if message["role"] == "assistant"
+                ]
+                if assistant_messages:
+                    assistant_message = assistant_messages[-1]
+    
+                if generation_status in {"completed", "failed", "cancelled"} and assistant_message:
+                    break
+    
+                time.sleep(TEST_POLL_INTERVAL_SECONDS)
+    
+            assert conversation_payload is not None
+>           assert generation_status == "completed", conversation_payload
+E           AssertionError: {'active_branch': {'created_at': '2026-04-09T06:32:05.348556', 'forked_from_message_id': None, 'id': '0de73f2a-a365-45...-4cd6-b65c-5fea170a0202', 'branch_id': '0de73f2a-a365-4504-a91e-40996ee977d1', 'cancel_requested_at': None, ...}], ...}
+E           assert 'running' == 'completed'
+E             
+E             - completed
+E             + running
+
+tests\test_sessions.py:4090: AssertionError
+============================== warnings summary ===============================
+tests/test_alembic.py::test_alembic_upgrade_head_creates_module_a_tables
+  D:\AI\aegissec\apps\api\.venv\Lib\site-packages\alembic\config.py:612: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_sessions.py::test_chat_reports_autoroute_preload_failure_and_continues_generation
+============ 1 failed, 303 passed, 1 warning in 157.24s (0:02:37) =============
+Traceback (most recent call last):
+  File "d:\AI\aegissec\scripts\check.py", line 40, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "d:\AI\aegissec\scripts\check.py", line 24, in main
+    run(["uv", "run", "pytest"], API_DIR)
+  File "d:\AI\aegissec\scripts\check.py", line 15, in run
+    subprocess.run(command, cwd=workdir, check=True)
+  File "C:\ProgramData\anaconda3\Lib\subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['uv', 'run', 'pytest']' returned non-zero exit status 1.

@@ -84,7 +84,8 @@ export function WorkbenchComposer({
   }, [slashCatalog, slashQuery]);
   const isSlashPickerOpen =
     slashQuery !== null && filteredSlashCatalog.length > 0 && dismissedSlashValue !== draftContent;
-  const activeSlashItem = filteredSlashCatalog[Math.min(activeSlashIndex, filteredSlashCatalog.length - 1)] ?? null;
+  const activeSlashItem =
+    filteredSlashCatalog[Math.min(activeSlashIndex, filteredSlashCatalog.length - 1)] ?? null;
   const isPrimaryDisabled = disabled || pendingAction !== null || trimmedDraftContent.length === 0;
   const isPendingPrimaryAction = pendingAction !== null;
   const slashPopoverId = `slash-popover-${sessionId}`;
@@ -142,7 +143,9 @@ export function WorkbenchComposer({
     const trimmed = draftContent.trim();
     const slashCatalogItem = action === "inject" ? null : selectedSlashAction;
     const slashAction =
-      action === "inject" || !slashCatalogItem || !matchesSelectedSlashDraft(draftContent, slashCatalogItem.action)
+      action === "inject" ||
+      !slashCatalogItem ||
+      !matchesSelectedSlashDraft(draftContent, slashCatalogItem.action)
         ? null
         : slashCatalogItem.action;
 

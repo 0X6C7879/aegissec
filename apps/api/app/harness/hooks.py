@@ -41,18 +41,24 @@ def _error_classification(error: Exception) -> str:
 
 def _evidence_summary(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        "evidence_count": len(payload.get("evidence_ids", []))
-        if isinstance(payload.get("evidence_ids"), list)
-        else 0,
-        "hypothesis_count": len(payload.get("hypothesis_ids", []))
-        if isinstance(payload.get("hypothesis_ids"), list)
-        else 0,
-        "graph_update_count": len(payload.get("graph_updates", []))
-        if isinstance(payload.get("graph_updates"), list)
-        else 0,
-        "artifact_count": len(payload.get("artifacts", []))
-        if isinstance(payload.get("artifacts"), list)
-        else 0,
+        "evidence_count": (
+            len(payload.get("evidence_ids", []))
+            if isinstance(payload.get("evidence_ids"), list)
+            else 0
+        ),
+        "hypothesis_count": (
+            len(payload.get("hypothesis_ids", []))
+            if isinstance(payload.get("hypothesis_ids"), list)
+            else 0
+        ),
+        "graph_update_count": (
+            len(payload.get("graph_updates", []))
+            if isinstance(payload.get("graph_updates"), list)
+            else 0
+        ),
+        "artifact_count": (
+            len(payload.get("artifacts", [])) if isinstance(payload.get("artifacts"), list) else 0
+        ),
         "reason": payload.get("reason") if isinstance(payload.get("reason"), str) else None,
     }
 

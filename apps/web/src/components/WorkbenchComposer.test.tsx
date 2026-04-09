@@ -416,15 +416,11 @@ describe("WorkbenchComposer", () => {
       scrollIntoViewMock.mockClear();
 
       await user.keyboard("{ArrowDown}");
-      await waitFor(() =>
-        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }),
-      );
+      await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }));
 
       scrollIntoViewMock.mockClear();
       await user.hover(screen.getByRole("option", { name: /\/recon/i }));
-      await waitFor(() =>
-        expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }),
-      );
+      await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" }));
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }

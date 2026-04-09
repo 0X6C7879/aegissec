@@ -271,11 +271,11 @@ export function AttackGraphWorkbench({
   const generationId = selectedNode ? readString(selectedNode.data.generation_id) : null;
   const isEditable = Boolean(sourceMessageId);
   const relationContext = selectedNode
-    ? readString(selectedNode.data.relation_context) ??
+    ? (readString(selectedNode.data.relation_context) ??
       (() => {
         const context = buildRelationContext(selectedEdges, selectedNode.id);
         return context === "暂无关联上下文。" ? null : context;
-      })()
+      })())
     : null;
   const provenanceText = selectedNode
     ? readStringArray(selectedNode.data.source_graphs).join(" / ") ||
@@ -351,10 +351,16 @@ export function AttackGraphWorkbench({
               ) : (
                 <div className="workspace-node-detail-modal-copy">
                   <strong className="management-list-title">{selectedNode.label}</strong>
-                  <p className="management-empty-copy">{formatAttackNodeType(selectedNode.node_type)}</p>
+                  <p className="management-empty-copy">
+                    {formatAttackNodeType(selectedNode.node_type)}
+                  </p>
                 </div>
               )}
-              <button className="button button-secondary" type="button" onClick={() => onSelectNode(null)}>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onSelectNode(null)}
+              >
                 关闭
               </button>
             </div>
@@ -375,7 +381,9 @@ export function AttackGraphWorkbench({
                       {formatAttackNodeStatus(getNodeStatus(selectedNode))}
                     </span>
                   </div>
-                  {overviewSummary ? <p className="session-graph-body-copy">{overviewSummary}</p> : null}
+                  {overviewSummary ? (
+                    <p className="session-graph-body-copy">{overviewSummary}</p>
+                  ) : null}
                 </div>
               )}
 
@@ -435,13 +443,17 @@ export function AttackGraphWorkbench({
                       <div className="workspace-node-detail-section">
                         <div className="management-list-card-header">
                           <strong className="management-list-title">节点时间线</strong>
-                          <span className="management-status-badge tone-neutral">{timeline.length}</span>
+                          <span className="management-status-badge tone-neutral">
+                            {timeline.length}
+                          </span>
                         </div>
                         <ul className="workspace-node-timeline-list">
                           {timeline.map((item) => (
                             <li key={item.id} className="workspace-node-timeline-item">
                               <span className="workspace-node-timeline-label">{item.label}</span>
-                              <strong className="workspace-node-timeline-value">{item.value}</strong>
+                              <strong className="workspace-node-timeline-value">
+                                {item.value}
+                              </strong>
                             </li>
                           ))}
                         </ul>
@@ -452,11 +464,16 @@ export function AttackGraphWorkbench({
                       <div className="workspace-node-detail-section">
                         <div className="management-list-card-header">
                           <strong className="management-list-title">关联边</strong>
-                          <span className="management-status-badge tone-neutral">{selectedEdges.length}</span>
+                          <span className="management-status-badge tone-neutral">
+                            {selectedEdges.length}
+                          </span>
                         </div>
                         <ul className="management-list">
                           {selectedEdges.map((edge) => (
-                            <li key={edge.id} className="management-subcard workspace-graph-edge-card">
+                            <li
+                              key={edge.id}
+                              className="management-subcard workspace-graph-edge-card"
+                            >
                               <strong className="management-list-title">
                                 {edge.source} → {edge.target}
                               </strong>
@@ -506,7 +523,10 @@ export function AttackGraphWorkbench({
                     </div>
                   </details>
 
-                  {(debugMetadataItems.length > 0 || timeline.length > 0 || selectedEdges.length > 0 || otherFieldEntries.length > 0) ? (
+                  {debugMetadataItems.length > 0 ||
+                  timeline.length > 0 ||
+                  selectedEdges.length > 0 ||
+                  otherFieldEntries.length > 0 ? (
                     <details className="management-subcard workspace-node-advanced-disclosure">
                       <summary className="workspace-node-advanced-summary">高级信息</summary>
                       <div className="workspace-node-advanced-body">
@@ -530,13 +550,19 @@ export function AttackGraphWorkbench({
                           <div className="workspace-node-detail-section">
                             <div className="management-list-card-header">
                               <strong className="management-list-title">节点时间线</strong>
-                              <span className="management-status-badge tone-neutral">{timeline.length}</span>
+                              <span className="management-status-badge tone-neutral">
+                                {timeline.length}
+                              </span>
                             </div>
                             <ul className="workspace-node-timeline-list">
                               {timeline.map((item) => (
                                 <li key={item.id} className="workspace-node-timeline-item">
-                                  <span className="workspace-node-timeline-label">{item.label}</span>
-                                  <strong className="workspace-node-timeline-value">{item.value}</strong>
+                                  <span className="workspace-node-timeline-label">
+                                    {item.label}
+                                  </span>
+                                  <strong className="workspace-node-timeline-value">
+                                    {item.value}
+                                  </strong>
                                 </li>
                               ))}
                             </ul>
@@ -547,11 +573,16 @@ export function AttackGraphWorkbench({
                           <div className="workspace-node-detail-section">
                             <div className="management-list-card-header">
                               <strong className="management-list-title">关联边</strong>
-                              <span className="management-status-badge tone-neutral">{selectedEdges.length}</span>
+                              <span className="management-status-badge tone-neutral">
+                                {selectedEdges.length}
+                              </span>
                             </div>
                             <ul className="management-list">
                               {selectedEdges.map((edge) => (
-                                <li key={edge.id} className="management-subcard workspace-graph-edge-card">
+                                <li
+                                  key={edge.id}
+                                  className="management-subcard workspace-graph-edge-card"
+                                >
                                   <strong className="management-list-title">
                                     {edge.source} → {edge.target}
                                   </strong>

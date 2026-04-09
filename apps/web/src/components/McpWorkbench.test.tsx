@@ -239,8 +239,8 @@ describe("McpWorkbench", () => {
 
     const alphaWithin = within(alphaCard!);
     expect(alphaWithin.getByText("工具 2")).toBeInTheDocument();
-    expect(alphaWithin.getByText("资源 1")).toBeInTheDocument();
-    expect(alphaWithin.getByText("Prompts 1")).toBeInTheDocument();
+    expect(alphaWithin.queryByText("资源 1")).not.toBeInTheDocument();
+    expect(alphaWithin.queryByText("Prompts 1")).not.toBeInTheDocument();
     expect(alphaWithin.getByText("健康 ok")).toBeInTheDocument();
 
     const betaCard = screen.getByText("beta-server").closest("article");
@@ -307,9 +307,10 @@ describe("McpWorkbench", () => {
     expect(within(dialog).queryByText("输入 Schema")).not.toBeInTheDocument();
     expect(within(dialog).queryByText("Metadata")).not.toBeInTheDocument();
     expect(within(dialog).queryByText("原始 Payload")).not.toBeInTheDocument();
-    expect(within(dialog).queryByText("发送报告到目标系统")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("发送报告到目标系统")).toBeInTheDocument();
     expect(within(dialog).queryByText("报告模板")).not.toBeInTheDocument();
-    expect(dialog.querySelector(".management-info-grid")).toBeNull();
+    expect(within(dialog).getByText("连接状态")).toBeInTheDocument();
+    expect(within(dialog).getByText("配置路径")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "执行工具" })).toBeInTheDocument();
   });
 

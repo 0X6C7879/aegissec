@@ -205,14 +205,15 @@ function findEquivalentToolSegmentIndex(
 ): number {
   if (
     !candidate.tool_call_id ||
-    (candidate.kind !== "tool_call" && candidate.kind !== "tool_result" && candidate.kind !== "error")
+    (candidate.kind !== "tool_call" &&
+      candidate.kind !== "tool_result" &&
+      candidate.kind !== "error")
   ) {
     return -1;
   }
 
   return segments.findIndex(
-    (segment) =>
-      segment.kind === candidate.kind && segment.tool_call_id === candidate.tool_call_id,
+    (segment) => segment.kind === candidate.kind && segment.tool_call_id === candidate.tool_call_id,
   );
 }
 
@@ -570,13 +571,7 @@ const SHELL_CANDIDATE_RECORD_PATHS = [
   ["result", "arguments"],
 ] as const;
 
-const SHELL_FALLBACK_FIELD_NAMES = [
-  "text",
-  "safe_summary",
-  "summary",
-  "message",
-  "error",
-] as const;
+const SHELL_FALLBACK_FIELD_NAMES = ["text", "safe_summary", "summary", "message", "error"] as const;
 
 const SHELL_ARTIFACT_FIELD_NAMES = ["artifacts", "artifact_paths"] as const;
 
@@ -614,11 +609,7 @@ function coerceShellDisplayValue(value: unknown): string {
     return value;
   }
 
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
 
@@ -795,9 +786,16 @@ function isShellFailureStatus(status: string | null | undefined): boolean {
     return false;
   }
 
-  return ["failed", "error", "cancelled", "canceled", "timed_out", "timeout", "denied", "killed"].includes(
-    normalized,
-  );
+  return [
+    "failed",
+    "error",
+    "cancelled",
+    "canceled",
+    "timed_out",
+    "timeout",
+    "denied",
+    "killed",
+  ].includes(normalized);
 }
 
 function hasVisibleShellText(value: PresentShellTextValue | null): boolean {
@@ -908,7 +906,9 @@ function readToolSegmentRichness(segment: AssistantTranscriptSegment | null): To
   const textScore = scoreStandaloneToolText(segment.text, command);
   const fallbackScore =
     fallbackOutput && fallbackOutput.text.trim().length > 0
-      ? isGenericShellSummary(fallbackOutput.text) ? 1 : 8
+      ? isGenericShellSummary(fallbackOutput.text)
+        ? 1
+        : 8
       : 0;
   const score =
     (command ? 1 : 0) +
@@ -960,7 +960,7 @@ function mergePreferredValue(preferred: unknown, fallback: unknown): unknown {
   }
 
   if (typeof preferred === "string") {
-    return preferred.trim().length > 0 ? preferred : fallback ?? preferred;
+    return preferred.trim().length > 0 ? preferred : (fallback ?? preferred);
   }
 
   if (preferred !== undefined && preferred !== null) {
@@ -1043,7 +1043,8 @@ function mergeOrPickToolSegment(
         : (fallback.text ?? preferred.text),
     tool_name: preferPopulatedString(preferred.tool_name, fallback.tool_name),
     tool_call_id: preferPopulatedString(preferred.tool_call_id, fallback.tool_call_id),
-    updated_at: preferPopulatedString(preferred.updated_at, fallback.updated_at) ?? preferred.updated_at,
+    updated_at:
+      preferPopulatedString(preferred.updated_at, fallback.updated_at) ?? preferred.updated_at,
     metadata: mergeToolSegmentMetadata(preferred.metadata, fallback.metadata),
   };
 
@@ -1056,9 +1057,7 @@ function mergeOrPickToolSegment(
   return merged;
 }
 
-function buildToolPairs(
-  segments: AssistantTranscriptSegment[],
-): Map<string, TranscriptToolPair> {
+function buildToolPairs(segments: AssistantTranscriptSegment[]): Map<string, TranscriptToolPair> {
   const pairs = new Map<string, TranscriptToolPair>();
 
   for (const segment of segments) {
@@ -1105,7 +1104,6 @@ function buildTranscriptBlocks(
   const renderedToolPairIds = new Set<string>();
 
   for (const segment of ordered) {
-
     if (segment.kind === "reasoning") {
       if (shouldRenderReasoningSegment(segment)) {
         const normalizedText = normalizeMarkdownSpacing(segment.text);
@@ -1280,10 +1278,7 @@ function buildTranscriptFromGeneration(
   }
 
   const assistantContent = assistantMessage?.content.trim() ?? "";
-  if (
-    assistantContent &&
-    !hasAuthoritativeAssistantPrimarySegment(segments, assistantContent)
-  ) {
+  if (assistantContent && !hasAuthoritativeAssistantPrimarySegment(segments, assistantContent)) {
     segments.push({
       id: `${generation.id}:assistant-output`,
       sequence: (segments[segments.length - 1]?.sequence ?? 0) + 1,
@@ -1451,13 +1446,15 @@ function AssistantShellBlock({
   });
   const outputFallback =
     !hasVisibleShellText(stdout) && !hasVisibleShellText(stderr)
-      ? readShellFallbackOutput(result, command, shellErrorText) ??
+      ? (readShellFallbackOutput(result, command, shellErrorText) ??
         readShellFallbackOutput(call, command, shellErrorText) ??
-        readShellFallbackOutput(error, command, shellErrorText)
+        readShellFallbackOutput(error, command, shellErrorText))
       : null;
-  const artifacts = [...readShellArtifacts(result), ...readShellArtifacts(call), ...readShellArtifacts(error)].filter(
-    (artifact, index, allArtifacts) => allArtifacts.indexOf(artifact) === index,
-  );
+  const artifacts = [
+    ...readShellArtifacts(result),
+    ...readShellArtifacts(call),
+    ...readShellArtifacts(error),
+  ].filter((artifact, index, allArtifacts) => allArtifacts.indexOf(artifact) === index);
 
   return (
     <details
@@ -1499,9 +1496,7 @@ function AssistantShellBlock({
             </div>
           </div>
         ) : null}
-        {shellErrorText ? (
-          <p className="assistant-tool-error-copy">{shellErrorText}</p>
-        ) : null}
+        {shellErrorText ? <p className="assistant-tool-error-copy">{shellErrorText}</p> : null}
       </div>
     </details>
   );
@@ -2038,4 +2033,3 @@ export function ConversationFeed(props: ConversationFeedProps) {
     </section>
   );
 }
-

@@ -466,12 +466,16 @@ class ExecutionGraphBuilder:
                         latest_milestone.data.get("best_observation_summary"),
                         latest_milestone.data.get("observation_summary"),
                     ),
-                    "blocker": latest_milestone.data.get("blocked_reason")
-                    if str(latest_milestone.data.get("status") or "") in {"blocked", "failed"}
-                    else None,
-                    "next_step": latest_milestone.label
-                    if task.status in {TaskNodeStatus.IN_PROGRESS, TaskNodeStatus.READY}
-                    else None,
+                    "blocker": (
+                        latest_milestone.data.get("blocked_reason")
+                        if str(latest_milestone.data.get("status") or "") in {"blocked", "failed"}
+                        else None
+                    ),
+                    "next_step": (
+                        latest_milestone.label
+                        if task.status in {TaskNodeStatus.IN_PROGRESS, TaskNodeStatus.READY}
+                        else None
+                    ),
                 },
             )
 
@@ -1398,10 +1402,12 @@ class ExecutionGraphBuilder:
         prioritized = sorted(
             eligible,
             key=lambda existing: (
-                1
-                if str(existing.payload.get("status") or "")
-                in {"in_progress", "blocked", "failed", "completed", "done"}
-                else 0,
+                (
+                    1
+                    if str(existing.payload.get("status") or "")
+                    in {"in_progress", "blocked", "failed", "completed", "done"}
+                    else 0
+                ),
                 1 if self._has_action_summary_signal(existing.payload) else 0,
                 1 if self._has_meaningful_execution_observation_data(existing.payload) else 0,
                 existing.order,
@@ -1818,9 +1824,11 @@ class ExecutionGraphBuilder:
         preferred_statuses = (
             {"completed", "done"}
             if run_status is WorkflowRunStatus.DONE
-            else {"blocked", "failed"}
-            if run_status in {WorkflowRunStatus.BLOCKED, WorkflowRunStatus.ERROR}
-            else {"in_progress", "blocked", "failed", "completed", "done"}
+            else (
+                {"blocked", "failed"}
+                if run_status in {WorkflowRunStatus.BLOCKED, WorkflowRunStatus.ERROR}
+                else {"in_progress", "blocked", "failed", "completed", "done"}
+            )
         )
         candidates = [
             milestone
@@ -2311,11 +2319,11 @@ class ExecutionGraphBuilder:
             add_edge(
                 source=outcome_anchor_id,
                 target=outcome_node_id,
-                relation="blocks"
-                if outcome_status in {"failed", "cancelled"}
-                else "confirms"
-                if conversation_status is WorkflowRunStatus.DONE
-                else "attempts",
+                relation=(
+                    "blocks"
+                    if outcome_status in {"failed", "cancelled"}
+                    else "confirms" if conversation_status is WorkflowRunStatus.DONE else "attempts"
+                ),
                 data={"source_graphs": ["conversation"]},
             )
 
@@ -2642,9 +2650,11 @@ class ExecutionGraphBuilder:
                         source_graphs=payload_source_graphs.get(
                             payload_key, ["conversation", "generation"]
                         ),
-                        relation_hint="blocks"
-                        if str(payload.get("status") or "") in {"failed", "cancelled"}
-                        else "attempts",
+                        relation_hint=(
+                            "blocks"
+                            if str(payload.get("status") or "") in {"failed", "cancelled"}
+                            else "attempts"
+                        ),
                         candidate_id=f"conversation:{payload_key}",
                         order=order,
                         task_ids=set(),
@@ -2912,12 +2922,16 @@ class ExecutionGraphBuilder:
             "branch_id": payload.get("branch_id"),
             "generation_id": payload.get("generation_id"),
             "message_id": payload.get("message_id"),
-            "related_findings": payload.get("related_findings")
-            if isinstance(payload.get("related_findings"), list)
-            else [],
-            "related_hypotheses": payload.get("related_hypotheses")
-            if isinstance(payload.get("related_hypotheses"), list)
-            else [],
+            "related_findings": (
+                payload.get("related_findings")
+                if isinstance(payload.get("related_findings"), list)
+                else []
+            ),
+            "related_hypotheses": (
+                payload.get("related_hypotheses")
+                if isinstance(payload.get("related_hypotheses"), list)
+                else []
+            ),
             "source_graphs": source_graphs,
             "merged_from": list(source_graphs),
         }

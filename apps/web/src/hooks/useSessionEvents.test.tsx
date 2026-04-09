@@ -672,9 +672,7 @@ describe("useSessionEvents", () => {
         ? (mergedMetadata.output as Record<string, unknown>)
         : null;
     const resultOutput =
-      metadataResult &&
-      typeof metadataResult.output === "object" &&
-      metadataResult.output !== null
+      metadataResult && typeof metadataResult.output === "object" && metadataResult.output !== null
         ? (metadataResult.output as Record<string, unknown>)
         : null;
 

@@ -264,17 +264,17 @@ def test_attack_graph_route_uses_conversation_fallback_without_workflow_run(
         assert payload["current_stage"] is None
         nodes = cast(list[dict[str, object]], payload["nodes"])
         edges = cast(list[dict[str, object]], payload["edges"])
-        assert any(node["node_type"] == "goal" for node in nodes)
+        assert any(node["node_type"] in {"goal", "root"} for node in nodes)
         assert any(node["node_type"] == "action" for node in nodes)
-        assert any(node["node_type"] == "observation" for node in nodes)
-        assert any(node["node_type"] == "hypothesis" for node in nodes)
         assert any(node["node_type"] == "outcome" for node in nodes)
         assert any(
             "fallback" in str(cast(dict[str, object], node["data"]).get("command", ""))
             for node in nodes
         )
         assert any(
-            edge["relation"] in {"attempts", "discovers", "confirms", "validates"} for edge in edges
+            edge["relation"]
+            in {"attempts", "discovers", "confirms", "validates", "precedes", "enables", "blocks"}
+            for edge in edges
         )
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override

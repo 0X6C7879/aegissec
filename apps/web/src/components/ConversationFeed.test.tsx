@@ -283,7 +283,9 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    const shellBlock = container.querySelector(".assistant-tool-block") as HTMLDetailsElement | null;
+    const shellBlock = container.querySelector(
+      ".assistant-tool-block",
+    ) as HTMLDetailsElement | null;
 
     expect(shellBlock).not.toBeNull();
     expect(shellBlock?.open).toBe(false);
@@ -1061,29 +1063,29 @@ describe("ConversationFeed", () => {
                 id: "segment-skill-call",
                 kind: "tool_call",
                 sequence: 1,
-                  tool_name: "execute_skill",
-                  tool_call_id: "tool-skill-1",
-                  text: "movement_tmux",
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-1",
+                text: "movement_tmux",
                 metadata: {
                   arguments: {
                     skill_name_or_id: "movement_tmux",
                   },
                 },
               }),
-                buildTranscriptSegment({
-                  id: "segment-skill-result",
-                  kind: "tool_result",
-                  sequence: 2,
-                    tool_name: "execute_skill",
-                    tool_call_id: "tool-skill-1",
-                    text: "已准备 movement_tmux 技能上下文。",
-                    metadata: {
-                      result: {
-                        execution: {
-                          status: "prepared",
-                        },
-                        skill: {
-                          title: "movement_tmux",
+              buildTranscriptSegment({
+                id: "segment-skill-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-1",
+                text: "已准备 movement_tmux 技能上下文。",
+                metadata: {
+                  result: {
+                    execution: {
+                      status: "prepared",
+                    },
+                    skill: {
+                      title: "movement_tmux",
                       description: "Use tmux to move laterally.",
                       content: "# movement_tmux\nDetailed instructions",
                     },
@@ -1840,7 +1842,9 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    const shellBlock = container.querySelector(".assistant-tool-block") as HTMLDetailsElement | null;
+    const shellBlock = container.querySelector(
+      ".assistant-tool-block",
+    ) as HTMLDetailsElement | null;
     if (shellBlock && !shellBlock.open) {
       fireEvent.click(container.querySelector(".assistant-tool-summary")!);
     }

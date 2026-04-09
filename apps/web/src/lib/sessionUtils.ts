@@ -238,9 +238,11 @@ function mergeTranscriptTextPreferRicher(
     return existing.text ?? incoming.text;
   }
 
-  return (mergeScalarPreferRicher(existing.text, incoming.text) as string | null | undefined) ??
+  return (
+    (mergeScalarPreferRicher(existing.text, incoming.text) as string | null | undefined) ??
     existing.text ??
-    incoming.text;
+    incoming.text
+  );
 }
 
 function pickEarlierTimestamp(existing: string, incoming: string): string {
@@ -1440,8 +1442,10 @@ function scoreMetadataValueCompleteness(value: unknown): number {
       return 0;
     }
 
-    return Math.min(40, Math.max(2, Math.ceil(normalized.length / 12))) +
-      (normalized.includes("\n") ? 8 : 0);
+    return (
+      Math.min(40, Math.max(2, Math.ceil(normalized.length / 12))) +
+      (normalized.includes("\n") ? 8 : 0)
+    );
   }
 
   if (typeof value === "number") {
@@ -1574,8 +1578,7 @@ function mergeArrayPreferComplete(
 
     const currentEntry = merged[existingIndex];
     if (isRecord(currentEntry) && isRecord(entry)) {
-      merged[existingIndex] =
-        mergeMetadataPreferRicher(currentEntry, entry) ?? currentEntry;
+      merged[existingIndex] = mergeMetadataPreferRicher(currentEntry, entry) ?? currentEntry;
       continue;
     }
 
@@ -1762,15 +1765,15 @@ function mergeGenerationStepList(
     ...existingStep,
     ...incomingStep,
     delta_text: nextDeltaText,
-    safe_summary: (mergeScalarPreferRicher(
-      existingStep.safe_summary,
-      incomingStep.safe_summary,
-    ) as string | undefined) ?? existingStep.safe_summary,
-    command: (mergeScalarPreferRicher(existingStep.command, incomingStep.command) as
-      | string
-      | null
-      | undefined) ??
-      existingStep.command,
+    safe_summary:
+      (mergeScalarPreferRicher(existingStep.safe_summary, incomingStep.safe_summary) as
+        | string
+        | undefined) ?? existingStep.safe_summary,
+    command:
+      (mergeScalarPreferRicher(existingStep.command, incomingStep.command) as
+        | string
+        | null
+        | undefined) ?? existingStep.command,
     metadata: nextMetadata,
     ended_at: incomingStep.ended_at ?? existingStep.ended_at,
   };

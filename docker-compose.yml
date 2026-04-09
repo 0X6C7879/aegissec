@@ -9,7 +9,7 @@ services:
       AEGISSEC_API_PORT: 8000
       AEGISSEC_FRONTEND_ORIGIN: http://127.0.0.1:5173
       AEGISSEC_DATABASE_URL: sqlite:////workspace/apps/api/data/aegissec.db
-      AEGISSEC_KALI_IMAGE: aegissec-kali:latest
+      AEGISSEC_KALI_IMAGE: ${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}
       AEGISSEC_RUNTIME_CONTAINER_NAME: aegissec-kali-runtime
       AEGISSEC_RUNTIME_WORKSPACE_DIR: /workspace/apps/api/data/runtime-workspace
       AEGISSEC_RUNTIME_WORKSPACE_CONTAINER_PATH: /workspace
@@ -43,8 +43,14 @@ services:
 
   kali-runtime:
     build:
-      context: ./docker/kali
-    image: aegissec-kali:latest
+      context: .
+      dockerfile: docker/kali/Dockerfile
+      args:
+        INSTALL_CTF_TOOLS: ${AEGISSEC_KALI_INSTALL_CTF_TOOLS:-1}
+        CTF_INSTALL_MODE: ${AEGISSEC_KALI_CTF_INSTALL_MODE:-all}
+        INSTALL_SKILL_TOOLS: ${AEGISSEC_KALI_INSTALL_SKILL_TOOLS:-1}
+        SKILL_TOOL_PROFILE: ${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-core}
+    image: ${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}
     container_name: aegissec-kali-runtime
     working_dir: /workspace
     command: ["/bin/zsh", "-lc", "while true; do sleep 3600; done"]

@@ -58,6 +58,13 @@ class _FakeEngine:
     def maybe_auto_compact(self) -> None:
         self.compact_calls += 1
 
+    def dequeue_synthetic_tool_call(self) -> object | None:
+        return None
+
+    def build_synthetic_assistant_payload(self, tool_calls: list[object]) -> dict[str, object]:
+        del tool_calls
+        return {}
+
     async def generate_tool_budget_reply(self, callbacks: Any | None = None) -> str:
         del callbacks
         return "budget"

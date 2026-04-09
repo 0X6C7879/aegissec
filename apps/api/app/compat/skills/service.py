@@ -129,9 +129,11 @@ class SkillSetPlan:
         touched_paths: list[str] | None,
     ) -> dict[str, object]:
         return {
-            "primary_skill": None
-            if self.primary_candidate is None
-            else payload_builder(self.primary_candidate, touched_paths=touched_paths),
+            "primary_skill": (
+                None
+                if self.primary_candidate is None
+                else payload_builder(self.primary_candidate, touched_paths=touched_paths)
+            ),
             "supporting_skills": [
                 payload_builder(candidate, touched_paths=touched_paths)
                 for candidate in self.supporting_candidates
@@ -1417,9 +1419,11 @@ class SkillService:
             "worker_timeout_ms": selected_stage.get("worker_timeout_ms"),
             "orchestration_timeout_ms": selected_stage.get("orchestration_timeout_ms"),
             "retry_limit": selected_stage.get("retry_limit"),
-            "notes": list(selected_stage.get("notes", []))
-            if isinstance(selected_stage.get("notes"), list)
-            else [],
+            "notes": (
+                list(selected_stage.get("notes", []))
+                if isinstance(selected_stage.get("notes"), list)
+                else []
+            ),
         }
 
     @staticmethod

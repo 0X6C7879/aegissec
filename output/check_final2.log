@@ -1,0 +1,145 @@
+Wrote requirements.txt with 10 dependencies
+Resolved 83 packages in 2ms
+Audited 82 packages in 11ms
+All checks passed!
+All done! \u2728 \U0001f370 \u2728
+196 files would be left unchanged.
+Success: no issues found in 190 source files
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.4.2, pluggy-1.6.0
+rootdir: D:\AI\aegissec\apps\api
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.13.0, langsmith-0.7.22
+collected 304 items
+
+tests\test_alembic.py .                                                  [  0%]
+tests\test_assistant_wave_runtime.py ...                                 [  1%]
+tests\test_auth.py ..                                                    [  1%]
+tests\test_chat_runtime.py ..............................                [ 11%]
+tests\test_compact_runtime.py ....                                       [ 13%]
+tests\test_continuation_store.py ....                                    [ 14%]
+tests\test_db_bootstrap.py ...                                           [ 15%]
+tests\test_db_session.py .                                               [ 15%]
+tests\test_graph_builders.py ............                                [ 19%]
+tests\test_graph_service.py ....                                         [ 21%]
+tests\test_graphs.py ..........                                          [ 24%]
+tests\test_harness_executor.py ..                                        [ 25%]
+tests\test_harness_governance.py ...                                     [ 25%]
+tests\test_harness_phase3.py ..                                          [ 26%]
+tests\test_harness_scheduling.py .                                       [ 26%]
+tests\test_harness_swarm.py ..                                           [ 27%]
+tests\test_health.py ....                                                [ 28%]
+tests\test_logging_middleware.py .                                       [ 29%]
+tests\test_mcp.py .................                                      [ 34%]
+tests\test_mcp_client_manager.py ...........                             [ 38%]
+tests\test_memory_service.py ......                                      [ 40%]
+tests\test_module_e_integration.py ..                                    [ 41%]
+tests\test_p2_reserves.py ...                                            [ 42%]
+tests\test_projects.py ..                                                [ 42%]
+tests\test_prompting.py ..............                                   [ 47%]
+tests\test_runtime.py ........                                           [ 50%]
+tests\test_sessions.py ................................................. [ 66%]
+....                                                                     [ 67%]
+tests\test_settings.py .....                                             [ 69%]
+tests\test_settings_api.py ....                                          [ 70%]
+tests\test_skill_resolution.py ....................                      [ 76%]
+tests\test_skill_service_resolution.py .........                         [ 79%]
+tests\test_skills.py ........................................            [ 93%]
+tests\test_token_budget.py ..                                            [ 93%]
+tests\test_tool_pipeline.py ........                                     [ 96%]
+tests\test_workbench_runtime.py ...                                      [ 97%]
+tests\test_workflow_graph_slice.py ..                                    [ 98%]
+tests\test_workflow_repository.py ......                                 [100%]
+
+============================== warnings summary ===============================
+tests/test_alembic.py::test_alembic_upgrade_head_creates_module_a_tables
+  D:\AI\aegissec\apps\api\.venv\Lib\site-packages\alembic\config.py:612: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+    util.warn_deprecated(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 304 passed, 1 warning in 169.35s (0:02:49) ==================
+D:\AI\aegissec\apps\web\src\generated\api-schema.json
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: esbuild.                                            │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Done in 1.1s using pnpm v10.15.1
+
+> aegissec-web@0.1.0 lint D:\AI\aegissec\apps\web
+> eslint .
+
+
+> aegissec-web@0.1.0 format:check D:\AI\aegissec\apps\web
+> prettier --check . --ignore-path ../../.prettierignore
+
+Checking formatting...
+All matched files use Prettier code style!
+
+> aegissec-web@0.1.0 test D:\AI\aegissec\apps\web
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90mD:/AI/aegissec/apps/web[39m
+
+ [32m✓[39m src/lib/sessionUtils.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/hooks/useSessionEvents.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 212[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchShell.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 393[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchRail.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 400[2mms[22m[39m
+ [32m✓[39m src/components/AttackGraphCanvas.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 170[2mms[22m[39m
+ [32m✓[39m src/components/AttackGraphWorkbench.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 2038[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22mcommand action detail defaults to command and observation summary only [33m 526[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22mcommand action advanced disclosure reveals hidden session, timeline, and raw details [33m 457[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22mnon-command nodes render concise milestone summaries instead of field dumps [33m 595[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22manchorless command actions keep controls hidden until advanced disclosure is expanded [33m 379[2mms[22m[39m
+ [32m✓[39m src/components/McpWorkbench.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 2711[2mms[22m[39m
+   [33m[2m✓[22m[39m McpWorkbench[2m > [22mshows a lean flattened all-tools view and still filters by hidden server fields [33m 1131[2mms[22m[39m
+   [33m[2m✓[22m[39m McpWorkbench[2m > [22mjumps from the flat tool list into the existing route-driven detail modal [33m 761[2mms[22m[39m
+ [32m✓[39m src/components/SessionWorkspaceWorkbench.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 2475[2mms[22m[39m
+   [33m[2m✓[22m[39m SessionWorkspaceWorkbench[2m > [22mkeeps explicit queue-send on the existing optimistic queue path while generation is active [33m 327[2mms[22m[39m
+   [33m[2m✓[22m[39m SessionWorkspaceWorkbench[2m > [22mwires edit/regenerate/fork/rollback through the main workbench path [33m 687[2mms[22m[39m
+   [33m[2m✓[22m[39m SessionWorkspaceWorkbench[2m > [22mrefreshes attack graphs when a message.delta event arrives [33m 307[2mms[22m[39m
+ [32m✓[39m src/components/ConversationFeed.test.tsx [2m([22m[2m39 tests[22m[2m)[22m[33m 2263[2mms[22m[39m
+   [33m[2m✓[22m[39m ConversationFeed[2m > [22mrenders chronological reasoning, status, tool, and final output blocks together [33m 534[2mms[22m[39m
+   [33m[2m✓[22m[39m ConversationFeed[2m > [22mkeeps long inline code and autolink content wrap-enabled inside assistant markdown bubbles [33m 447[2mms[22m[39m
+   [33m[2m✓[22m[39m ConversationFeed[2m > [22muses a single icon-only inline edit control for user messages [33m 312[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchComposer.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 5555[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22msends the active draft when generation is idle [33m 325[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22mdefaults to inject/continue while keeping queue-send explicit during active generation [33m 1207[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22mkeeps the textarea editable while the first send is still pending and preserves the follow-up draft [33m 844[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22msubmits on Enter and preserves Shift + Enter for new lines [33m 439[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22muses Enter as inject/continue while active generation is in progress [33m 345[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m10 passed[39m[22m[90m (10)[39m
+[2m      Tests [22m [1m[32m116 passed[39m[22m[90m (116)[39m
+[2m   Start at [22m 14:55:59
+[2m   Duration [22m 16.40s[2m (transform 2.83s, setup 21.22s, collect 12.60s, tests 16.25s, environment 51.59s, prepare 7.80s)[22m
+
+
+> aegissec-web@0.1.0 build D:\AI\aegissec\apps\web
+> tsc -b && vite build
+
+[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+[32m✓[39m 874 modules transformed.
+[33m[plugin vite:reporter] 
+(!) D:/AI/aegissec/apps/web/src/lib/api.ts is dynamically imported by D:/AI/aegissec/apps/web/src/components/SessionWorkspaceWorkbench.tsx but also statically imported by D:/AI/aegissec/apps/web/src/components/McpWorkbench.tsx, D:/AI/aegissec/apps/web/src/components/RuntimeWorkspace.tsx, D:/AI/aegissec/apps/web/src/components/SessionWorkspaceWorkbench.tsx, D:/AI/aegissec/apps/web/src/components/SettingsWorkbench.tsx, D:/AI/aegissec/apps/web/src/components/SkillsWorkbench.tsx, D:/AI/aegissec/apps/web/src/hooks/useSessionEvents.ts, dynamic import will not move module into another chunk.
+[39m
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                 [39m[1m[2m    0.46 kB[22m[1m[22m[2m │ gzip:   0.29 kB[22m
+[2mdist/[22m[35massets/index-Cmsg4vTW.css  [39m[1m[2m   57.11 kB[22m[1m[22m[2m │ gzip:  10.53 kB[22m
+[2mdist/[22m[36massets/index-Ckq7kwJk.js   [39m[1m[33m1,047.14 kB[39m[22m[2m │ gzip: 321.88 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 4.92s[39m

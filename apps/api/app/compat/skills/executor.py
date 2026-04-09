@@ -622,9 +622,9 @@ def _build_verification_result(
         prepared_for_context=bool(verifier_step.get("prepared_for_context")),
         prepared_for_execution=bool(verifier_step.get("prepared_for_execution")),
         warnings=list(verification_result.warnings),
-        failure_reason=None
-        if verification_result.passed
-        else "; ".join(verification_result.reasons),
+        failure_reason=(
+            None if verification_result.passed else "; ".join(verification_result.reasons)
+        ),
         summary_for_prompt=(
             f"{verifier_step.get('name') or 'verifier'}: passed={verification_result.passed}"
         ),

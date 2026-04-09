@@ -15,6 +15,14 @@ API_HOST="${AEGISSEC_API_HOST:-127.0.0.1}"
 API_PORT="${AEGISSEC_API_PORT:-8000}"
 WEB_HOST="${AEGISSEC_WEB_HOST:-127.0.0.1}"
 WEB_PORT="${AEGISSEC_WEB_PORT:-5173}"
+KALI_IMAGE_TAG="${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}"
+KALI_INSTALL_CTF_TOOLS="${AEGISSEC_KALI_INSTALL_CTF_TOOLS:-1}"
+KALI_CTF_INSTALL_MODE="${AEGISSEC_KALI_CTF_INSTALL_MODE:-all}"
+KALI_INSTALL_SKILL_TOOLS="${AEGISSEC_KALI_INSTALL_SKILL_TOOLS:-1}"
+KALI_SKILL_TOOL_PROFILE="${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-core}"
+KALI_FORCE_REBUILD="${AEGISSEC_KALI_FORCE_REBUILD:-0}"
+KALI_DOCKERFILE_PATH="$REPO_ROOT/docker/kali/Dockerfile"
+KALI_INSTALL_SCRIPT_PATH="$REPO_ROOT/scripts/install_ctf_tools.sh"
 
 readonly SCRIPT_DIR
 readonly REPO_ROOT
@@ -22,6 +30,8 @@ readonly STATE_DIR
 readonly LOG_DIR
 readonly API_PID_FILE
 readonly WEB_PID_FILE
+readonly KALI_DOCKERFILE_PATH
+readonly KALI_INSTALL_SCRIPT_PATH
 
 log() {
   printf '[aegissec-bootstrap] %s\n' "$*"
@@ -50,6 +60,12 @@ Environment overrides:
   AEGISSEC_API_PORT   API bind port (default: 8000)
   AEGISSEC_WEB_HOST   Web bind host (default: 127.0.0.1)
   AEGISSEC_WEB_PORT   Web bind port (default: 5173)
+  AEGISSEC_KALI_IMAGE                 Kali image tag (default: aegissec-kali:latest)
+  AEGISSEC_KALI_INSTALL_CTF_TOOLS     Install scripts/install_ctf_tools.sh in image build (default: 1)
+  AEGISSEC_KALI_CTF_INSTALL_MODE      install_ctf_tools mode (default: all)
+  AEGISSEC_KALI_INSTALL_SKILL_TOOLS   Install additional tools for existing skills (default: 1)
+  AEGISSEC_KALI_SKILL_TOOL_PROFILE    Skill tool profile: core|full (default: core)
+  AEGISSEC_KALI_FORCE_REBUILD         Always rebuild Kali image (default: 0)
 EOF
 }
 
@@ -159,6 +175,54 @@ ensure_docker() {
   sudo usermod -aG docker "$USER" >/dev/null 2>&1 || true
 }
 
+sha256_file() {
+  local file="$1"
+  sha256sum "$file" | awk '{print $1}'
+}
+
+docker_label_or_empty() {
+  local image="$1"
+  local label="$2"
+  local value
+
+  value="$(sudo docker image inspect --format "{{ index .Config.Labels \"${label}\" }}" "$image" 2>/dev/null || true)"
+  if [[ "$value" == "<no value>" ]]; then
+    value=""
+  fi
+  printf '%s\n' "$value"
+}
+
+kali_image_matches_requested_profile() {
+  local desired_installer_sha="$1"
+
+  if ! sudo docker image inspect "$KALI_IMAGE_TAG" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local image_ctf_tools
+  local image_ctf_mode
+  local image_skill_tools
+  local image_skill_profile
+  local image_installer_sha
+
+  image_ctf_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_ctf_tools")"
+  image_ctf_mode="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.ctf_install_mode")"
+  image_skill_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_skill_tools")"
+  image_skill_profile="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.skill_tool_profile")"
+  image_installer_sha="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.ctf_installer_sha")"
+
+  [[ "$image_ctf_tools" == "$KALI_INSTALL_CTF_TOOLS" ]] || return 1
+  [[ "$image_ctf_mode" == "$KALI_CTF_INSTALL_MODE" ]] || return 1
+  [[ "$image_skill_tools" == "$KALI_INSTALL_SKILL_TOOLS" ]] || return 1
+  [[ "$image_skill_profile" == "$KALI_SKILL_TOOL_PROFILE" ]] || return 1
+
+  if [[ "$KALI_INSTALL_CTF_TOOLS" == "1" ]]; then
+    [[ "$image_installer_sha" == "$desired_installer_sha" ]] || return 1
+  fi
+
+  return 0
+}
+
 ensure_env_file() {
   if [[ ! -f "$REPO_ROOT/.env" ]]; then
     log "Creating .env from .env.example"
@@ -183,15 +247,37 @@ install_project_dependencies() {
 }
 
 ensure_kali_image() {
-  if sudo docker image inspect aegissec-kali:latest >/dev/null 2>&1; then
-    log "Kali image aegissec-kali:latest already exists"
+  local installer_sha=""
+
+  if [[ "$KALI_INSTALL_CTF_TOOLS" == "1" ]]; then
+    [[ -f "$KALI_INSTALL_SCRIPT_PATH" ]] || die "Missing $KALI_INSTALL_SCRIPT_PATH required for Kali preinstall"
+    installer_sha="$(sha256_file "$KALI_INSTALL_SCRIPT_PATH")"
+  fi
+
+  if [[ "$KALI_FORCE_REBUILD" != "1" ]] && kali_image_matches_requested_profile "$installer_sha"; then
+    log "Kali image $KALI_IMAGE_TAG already exists and matches requested tool profile"
     return
   fi
 
-  log "Building Kali image aegissec-kali:latest"
+  if [[ "$KALI_FORCE_REBUILD" == "1" ]]; then
+    log "Forcing Kali image rebuild because AEGISSEC_KALI_FORCE_REBUILD=1"
+  elif sudo docker image inspect "$KALI_IMAGE_TAG" >/dev/null 2>&1; then
+    log "Existing Kali image does not match requested tool profile; rebuilding"
+  fi
+
+  log "Building Kali image $KALI_IMAGE_TAG"
+  log "Kali preinstall config: ctf_tools=$KALI_INSTALL_CTF_TOOLS, ctf_mode=$KALI_CTF_INSTALL_MODE, skill_tools=$KALI_INSTALL_SKILL_TOOLS, skill_profile=$KALI_SKILL_TOOL_PROFILE"
   (
     cd "$REPO_ROOT"
-    sudo docker build -t aegissec-kali:latest ./docker/kali
+    sudo docker build \
+      --build-arg INSTALL_CTF_TOOLS="$KALI_INSTALL_CTF_TOOLS" \
+      --build-arg CTF_INSTALL_MODE="$KALI_CTF_INSTALL_MODE" \
+      --build-arg INSTALL_SKILL_TOOLS="$KALI_INSTALL_SKILL_TOOLS" \
+      --build-arg SKILL_TOOL_PROFILE="$KALI_SKILL_TOOL_PROFILE" \
+      --build-arg CTF_INSTALLER_SHA="$installer_sha" \
+      -t "$KALI_IMAGE_TAG" \
+      -f "$KALI_DOCKERFILE_PATH" \
+      .
   )
 }
 

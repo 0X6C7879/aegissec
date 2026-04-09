@@ -1,0 +1,31 @@
+
+> aegissec-web@0.1.0 test D:\AI\aegissec\apps\web
+> vitest run "--" "src/components/McpWorkbench.test.tsx" "src/components/SessionWorkspaceWorkbench.test.tsx"
+
+
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90mD:/AI/aegissec/apps/web[39m
+
+ [32m✓[39m src/lib/sessionUtils.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/hooks/useSessionEvents.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 203[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchShell.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 360[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchRail.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 391[2mms[22m[39m
+ [32m✓[39m src/components/AttackGraphCanvas.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/components/AttackGraphWorkbench.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 1089[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22mcommand action detail defaults to command and observation summary only [33m 300[2mms[22m[39m
+   [33m[2m✓[22m[39m AttackGraphWorkbench[2m > [22mnon-command nodes render concise milestone summaries instead of field dumps [33m 351[2mms[22m[39m
+ [32m✓[39m src/components/ConversationFeed.test.tsx [2m([22m[2m39 tests[22m[2m)[22m[33m 661[2mms[22m[39m
+ [32m✓[39m src/components/McpWorkbench.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 1289[2mms[22m[39m
+   [33m[2m✓[22m[39m McpWorkbench[2m > [22mshows a lean flattened all-tools view and still filters by hidden server fields [33m 614[2mms[22m[39m
+ [32m✓[39m src/components/SessionWorkspaceWorkbench.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 1215[2mms[22m[39m
+   [33m[2m✓[22m[39m SessionWorkspaceWorkbench[2m > [22mwires edit/regenerate/fork/rollback through the main workbench path [33m 327[2mms[22m[39m
+ [32m✓[39m src/components/WorkbenchComposer.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 3827[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22msends the active draft when generation is idle [33m 321[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22mdefaults to inject/continue while keeping queue-send explicit during active generation [33m 703[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22mkeeps the textarea editable while the first send is still pending and preserves the follow-up draft [33m 360[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkbenchComposer[2m > [22msubmits on Enter and preserves Shift + Enter for new lines [33m 309[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m10 passed[39m[22m[90m (10)[39m
+[2m      Tests [22m [1m[32m116 passed[39m[22m[90m (116)[39m
+[2m   Start at [22m 14:49:41
+[2m   Duration [22m 10.38s[2m (transform 2.22s, setup 14.36s, collect 8.51s, tests 9.12s, environment 28.05s, prepare 5.44s)[22m
+

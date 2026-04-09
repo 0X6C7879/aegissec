@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import cast
 
 from pytest import MonkeyPatch
@@ -483,6 +484,17 @@ def test_query_loop_consumes_pending_context_injections_before_follow_up_turn() 
                     "content": assistant_payload["content"],
                 }
             )
+
+        def build_synthetic_assistant_payload(
+            self,
+            tool_calls: Sequence[object],
+        ) -> dict[str, object]:
+            del tool_calls
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [],
+            }
 
     engine = InjectionAwareEngine()
     pending_batches = [[], ["extra scope", "focus on host B"]]

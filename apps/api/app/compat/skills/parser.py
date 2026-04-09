@@ -503,9 +503,11 @@ def _extract_preflight_checks(frontmatter: dict[str, object]) -> list[SkillPrefl
                 kind=(kind.strip() if isinstance(kind, str) and kind.strip() else "generic"),
                 required=required if isinstance(required, bool) else True,
                 read_only=read_only,
-                description=description.strip()
-                if isinstance(description, str) and description.strip()
-                else None,
+                description=(
+                    description.strip()
+                    if isinstance(description, str) and description.strip()
+                    else None
+                ),
                 metadata=metadata,
             )
         )

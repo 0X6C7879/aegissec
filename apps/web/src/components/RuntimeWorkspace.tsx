@@ -49,7 +49,10 @@ function addRecentRun(
 
   return {
     ...currentValue,
-    recent_runs: [run, ...currentValue.recent_runs.filter((currentRun) => currentRun.id !== run.id)],
+    recent_runs: [
+      run,
+      ...currentValue.recent_runs.filter((currentRun) => currentRun.id !== run.id),
+    ],
     recent_artifacts: [
       ...run.artifacts,
       ...currentValue.recent_artifacts.filter(
@@ -258,7 +261,9 @@ export function RuntimeWorkspace() {
           <div className="management-detail-copy">
             <span className="panel-kicker">Execution Plane</span>
             <h2 className="panel-title">Runtime</h2>
-            <p className="management-unified-description">仅保留核心控制：启动、停止、执行命令和查看最近执行。</p>
+            <p className="management-unified-description">
+              仅保留核心控制：启动、停止、执行命令和查看最近执行。
+            </p>
           </div>
 
           <div className="management-action-row">
@@ -293,13 +298,17 @@ export function RuntimeWorkspace() {
             </div>
             <div className="management-info-card">
               <span className="management-info-label">健康检查</span>
-              <strong className={`management-status-badge ${runtimeHealth?.status === "ok" ? "tone-success" : runtimeHealth?.status === "degraded" ? "tone-warning" : "tone-neutral"}`}>
+              <strong
+                className={`management-status-badge ${runtimeHealth?.status === "ok" ? "tone-success" : runtimeHealth?.status === "degraded" ? "tone-warning" : "tone-neutral"}`}
+              >
                 {runtimeHealth?.status ?? "未检测"}
               </strong>
             </div>
             <div className="management-info-card">
               <span className="management-info-label">启动时间</span>
-              <strong className="management-info-value">{formatOptionalDateTime(runtime.started_at)}</strong>
+              <strong className="management-info-value">
+                {formatOptionalDateTime(runtime.started_at)}
+              </strong>
             </div>
           </div>
 
@@ -307,10 +316,13 @@ export function RuntimeWorkspace() {
           {runtimeHealthQuery.isError ? (
             <div className="management-error-banner">{runtimeHealthQuery.error.message}</div>
           ) : null}
-          {mutationErrorMessage ? <div className="management-error-banner">{mutationErrorMessage}</div> : null}
+          {mutationErrorMessage ? (
+            <div className="management-error-banner">{mutationErrorMessage}</div>
+          ) : null}
           {clearRuntimeRunsMutation.isSuccess ? (
             <div className="management-inline-notice">
-              已清除 {clearRuntimeRunsMutation.data.deleted_runs} 条执行记录，连带移除 {clearRuntimeRunsMutation.data.deleted_artifacts} 条工件登记。
+              已清除 {clearRuntimeRunsMutation.data.deleted_runs} 条执行记录，连带移除{" "}
+              {clearRuntimeRunsMutation.data.deleted_artifacts} 条工件登记。
             </div>
           ) : null}
 
@@ -349,7 +361,11 @@ export function RuntimeWorkspace() {
               </label>
 
               <div className="management-action-row">
-                <button className="button button-primary" type="submit" disabled={isExecuteDisabled}>
+                <button
+                  className="button button-primary"
+                  type="submit"
+                  disabled={isExecuteDisabled}
+                >
                   {executeRuntimeMutation.isPending ? "执行中" : "执行命令"}
                 </button>
               </div>
@@ -386,9 +402,14 @@ export function RuntimeWorkspace() {
             ) : (
               <ul className="management-list">
                 {recentRuns.map((run) => (
-                  <li key={run.id} className="management-section-card management-section-card-compact">
+                  <li
+                    key={run.id}
+                    className="management-section-card management-section-card-compact"
+                  >
                     <div className="management-list-card-header">
-                      <strong className="management-list-title">{formatDateTime(run.started_at)}</strong>
+                      <strong className="management-list-title">
+                        {formatDateTime(run.started_at)}
+                      </strong>
                       <StatusBadge status={run.status} />
                     </div>
 

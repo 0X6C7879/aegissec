@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 
 export const WORKSPACE_SPLIT_PANE_STORAGE_KEY = "aegissec.workspace.chat-pane.ratio.v1";
 
@@ -60,7 +64,11 @@ function getMaxRightWidth(availableWidth: number): number {
 }
 
 function getDefaultRightWidth(availableWidth: number): number {
-  return clamp(availableWidth * DEFAULT_RIGHT_RATIO, MIN_RIGHT_PANE_WIDTH, getMaxRightWidth(availableWidth));
+  return clamp(
+    availableWidth * DEFAULT_RIGHT_RATIO,
+    MIN_RIGHT_PANE_WIDTH,
+    getMaxRightWidth(availableWidth),
+  );
 }
 
 export function useWorkspaceSplitPane({ controlledPaneId }: UseWorkspaceSplitPaneOptions) {
@@ -155,7 +163,12 @@ export function useWorkspaceSplitPane({ controlledPaneId }: UseWorkspaceSplitPan
   const maxRightWidth = getMaxRightWidth(availableWidth);
   const rightPaneWidth = isEnabled
     ? clamp(availableWidth * storedRatio, MIN_RIGHT_PANE_WIDTH, maxRightWidth)
-    : getDefaultRightWidth(Math.max(MIN_LEFT_PANE_WIDTH + MIN_RIGHT_PANE_WIDTH, availableWidth || MIN_LEFT_PANE_WIDTH + MIN_RIGHT_PANE_WIDTH));
+    : getDefaultRightWidth(
+        Math.max(
+          MIN_LEFT_PANE_WIDTH + MIN_RIGHT_PANE_WIDTH,
+          availableWidth || MIN_LEFT_PANE_WIDTH + MIN_RIGHT_PANE_WIDTH,
+        ),
+      );
   const leftPaneWidth = Math.max(MIN_LEFT_PANE_WIDTH, availableWidth - rightPaneWidth);
 
   const updateRightPaneWidth = useCallback(
@@ -282,7 +295,10 @@ export function useWorkspaceSplitPane({ controlledPaneId }: UseWorkspaceSplitPan
       "aria-controls": controlledPaneId,
       "aria-label": "调整图谱与聊天面板宽度",
       "aria-orientation": "vertical" as const,
-      "aria-valuemax": Math.max(MIN_LEFT_PANE_WIDTH, Math.round(availableWidth - MIN_RIGHT_PANE_WIDTH)),
+      "aria-valuemax": Math.max(
+        MIN_LEFT_PANE_WIDTH,
+        Math.round(availableWidth - MIN_RIGHT_PANE_WIDTH),
+      ),
       "aria-valuemin": MIN_LEFT_PANE_WIDTH,
       "aria-valuenow": Math.round(leftPaneWidth),
       "aria-valuetext": `图谱区域 ${Math.round(leftPaneWidth)} 像素，聊天区域 ${Math.round(rightPaneWidth)} 像素`,

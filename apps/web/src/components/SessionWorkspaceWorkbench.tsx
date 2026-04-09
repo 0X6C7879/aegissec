@@ -92,13 +92,7 @@ const LOCAL_UI_SLASH_ITEMS: SlashCatalogItem[] = [
     "打开技能工作区。",
     "/skills",
   ),
-  buildUiNavigationSlashItem(
-    "builtin:goto-mcp",
-    "goto-mcp",
-    "MCP",
-    "打开 MCP 工作区。",
-    "/mcp",
-  ),
+  buildUiNavigationSlashItem("builtin:goto-mcp", "goto-mcp", "MCP", "打开 MCP 工作区。", "/mcp"),
   buildUiNavigationSlashItem(
     "builtin:goto-runtime",
     "goto-runtime",
@@ -1018,14 +1012,17 @@ export function SessionWorkspaceWorkbench() {
   const activeConversation = conversationQuery.data ?? null;
   const activeGeneration = sessionQueueQuery.data?.active_generation ?? null;
   const activeGenerationId =
-    sessionQueueQuery.data?.active_generation_id ?? activeConversation?.active_generation_id ?? null;
+    sessionQueueQuery.data?.active_generation_id ??
+    activeConversation?.active_generation_id ??
+    null;
   const queuedGenerationCount =
     sessionQueueQuery.data?.queued_generation_count ??
     sessionQueueQuery.data?.queued_generations.length ??
     activeConversation?.queued_generation_count ??
     0;
   const isPausedGeneration =
-    activeConversation?.session.status === "paused" || sessionQueueQuery.data?.session.status === "paused";
+    activeConversation?.session.status === "paused" ||
+    sessionQueueQuery.data?.session.status === "paused";
   const isInjectableGenerationActive = activeGeneration !== null || Boolean(activeGenerationId);
 
   function handleToggleSidebarCollapsed(): void {

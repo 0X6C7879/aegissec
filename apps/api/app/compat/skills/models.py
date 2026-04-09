@@ -443,9 +443,9 @@ class SkillResolutionRequest:
             "invocation_arguments": dict(self.invocation_arguments),
             "top_k": self.top_k,
             "include_reference_only": self.include_reference_only,
-            "intent_profile": None
-            if self.intent_profile is None
-            else self.intent_profile.to_payload(),
+            "intent_profile": (
+                None if self.intent_profile is None else self.intent_profile.to_payload()
+            ),
         }
 
 

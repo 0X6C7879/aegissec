@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -8,6 +9,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_IMAGE = "aegissec-kali:latest"
+DEFAULT_CONTEXT = REPO_ROOT
+DEFAULT_DOCKERFILE = REPO_ROOT / "docker" / "kali" / "Dockerfile"
+INSTALLER_SCRIPT = REPO_ROOT / "scripts" / "install_ctf_tools.sh"
 ENV_FILES = (REPO_ROOT / ".env", REPO_ROOT / ".env.local")
 
 
@@ -40,13 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--context",
-        default=str(REPO_ROOT / "docker" / "kali"),
-        help="Docker build context. Defaults to docker/kali under the repo root.",
+        default=str(DEFAULT_CONTEXT),
+        help="Docker build context. Defaults to repository root.",
     )
     parser.add_argument(
         "--file",
-        default=None,
-        help="Optional Dockerfile path. Defaults to <context>/Dockerfile.",
+        default=str(DEFAULT_DOCKERFILE),
+        help="Dockerfile path. Defaults to docker/kali/Dockerfile under the repo root.",
     )
     parser.add_argument(
         "--pull",
@@ -58,7 +62,50 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not use Docker layer cache while building.",
     )
+    parser.add_argument(
+        "--install-ctf-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable scripts/install_ctf_tools.sh during image build.",
+    )
+    parser.add_argument(
+        "--ctf-install-mode",
+        default=None,
+        help="Mode passed to install_ctf_tools.sh (default: all).",
+    )
+    parser.add_argument(
+        "--install-skill-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable additional skill-oriented tools during image build.",
+    )
+    parser.add_argument(
+        "--skill-tool-profile",
+        choices=["core", "full"],
+        default=None,
+        help="Skill extra tool profile (core or full).",
+    )
     return parser
+
+
+def parse_env_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def sha256_of_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fp:
+        for chunk in iter(lambda: fp.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main() -> int:
@@ -72,9 +119,40 @@ def main() -> int:
         or env_defaults.get("AEGISSEC_KALI_IMAGE", DEFAULT_IMAGE)
     )
     context_path = Path(args.context).resolve()
-    dockerfile_path = (
-        Path(args.file).resolve() if args.file else context_path / "Dockerfile"
+    dockerfile_path = Path(args.file).resolve()
+
+    install_ctf_tools = args.install_ctf_tools
+    if install_ctf_tools is None:
+        install_ctf_tools = parse_env_bool(
+            os.environ.get("AEGISSEC_KALI_INSTALL_CTF_TOOLS")
+            or env_defaults.get("AEGISSEC_KALI_INSTALL_CTF_TOOLS"),
+            default=True,
+        )
+
+    install_skill_tools = args.install_skill_tools
+    if install_skill_tools is None:
+        install_skill_tools = parse_env_bool(
+            os.environ.get("AEGISSEC_KALI_INSTALL_SKILL_TOOLS")
+            or env_defaults.get("AEGISSEC_KALI_INSTALL_SKILL_TOOLS"),
+            default=True,
+        )
+
+    ctf_install_mode = (
+        args.ctf_install_mode
+        or os.environ.get("AEGISSEC_KALI_CTF_INSTALL_MODE")
+        or env_defaults.get("AEGISSEC_KALI_CTF_INSTALL_MODE", "all")
     )
+    skill_tool_profile = (
+        args.skill_tool_profile
+        or os.environ.get("AEGISSEC_KALI_SKILL_TOOL_PROFILE")
+        or env_defaults.get("AEGISSEC_KALI_SKILL_TOOL_PROFILE", "core")
+    )
+
+    installer_sha = "unknown"
+    if install_ctf_tools:
+        if not INSTALLER_SCRIPT.exists():
+            parser.error(f"Required installer script is missing: {INSTALLER_SCRIPT}")
+        installer_sha = sha256_of_file(INSTALLER_SCRIPT)
 
     if not context_path.exists():
         parser.error(f"Docker build context does not exist: {context_path}")
@@ -82,6 +160,11 @@ def main() -> int:
         parser.error(f"Dockerfile does not exist: {dockerfile_path}")
 
     command = ["docker", "build", "-t", image_tag, "-f", str(dockerfile_path)]
+    command.extend(["--build-arg", f"INSTALL_CTF_TOOLS={1 if install_ctf_tools else 0}"])
+    command.extend(["--build-arg", f"CTF_INSTALL_MODE={ctf_install_mode}"])
+    command.extend(["--build-arg", f"INSTALL_SKILL_TOOLS={1 if install_skill_tools else 0}"])
+    command.extend(["--build-arg", f"SKILL_TOOL_PROFILE={skill_tool_profile}"])
+    command.extend(["--build-arg", f"CTF_INSTALLER_SHA={installer_sha}"])
     if args.pull:
         command.append("--pull")
     if args.no_cache:

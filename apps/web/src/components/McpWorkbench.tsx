@@ -635,231 +635,268 @@ export function McpWorkbench() {
             ? importMutation.error.message
             : null;
 
-  const detailContent = !selectedServerId || !activeServer
-    ? null
-    : createPortal(
-        <div className="management-modal-backdrop" role="presentation">
-          <button
-            className="management-modal-dismiss"
-            type="button"
-            aria-label="关闭 MCP 详情"
-            onClick={() => navigate("/mcp")}
-          />
-          <section
-            className="management-modal-card panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`${activeServer.name} 详情`}
-          >
-      <div className="management-modal-header management-sticky-toolbar">
-        <div className="management-detail-copy">
-          <h3 className="panel-title">{activeServer.name}</h3>
-          <p className="management-unified-description">{getPrimaryServerValue(activeServer)}</p>
-        </div>
+  const detailContent =
+    !selectedServerId || !activeServer
+      ? null
+      : createPortal(
+          <div className="management-modal-backdrop" role="presentation">
+            <button
+              className="management-modal-dismiss"
+              type="button"
+              aria-label="关闭 MCP 详情"
+              onClick={() => navigate("/mcp")}
+            />
+            <section
+              className="management-modal-card panel"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${activeServer.name} 详情`}
+            >
+              <div className="management-modal-header management-sticky-toolbar">
+                <div className="management-detail-copy">
+                  <h3 className="panel-title">{activeServer.name}</h3>
+                  <p className="management-unified-description">
+                    {getPrimaryServerValue(activeServer)}
+                  </p>
+                </div>
 
-        <div className="management-action-row">
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={healthMutation.isPending}
-            onClick={() => void healthMutation.mutateAsync(activeServer.id)}
-          >
-            {healthMutation.isPending ? "检测中" : "健康检查"}
-          </button>
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={refreshMutation.isPending || healthMutation.isPending}
-            onClick={() => void refreshMutation.mutateAsync(activeServer.id)}
-          >
-            {refreshMutation.isPending ? "刷新中" : "刷新能力"}
-          </button>
-          <button
-            className={activeServer.enabled ? "button button-secondary" : "button button-primary"}
-            type="button"
-            disabled={enableMutation.isPending || healthMutation.isPending}
-            onClick={() =>
-              void enableMutation.mutateAsync({
-                id: activeServer.id,
-                enabled: !activeServer.enabled,
-              })
-            }
-          >
-            {enableMutation.isPending ? "提交中" : activeServer.enabled ? "禁用" : "启用"}
-          </button>
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={deleteMutation.isPending}
-            onClick={() =>
-              deleteMutation.mutate({
-                id: activeServer.id,
-                name: activeServer.name,
-              })
-            }
-          >
-            {deleteMutation.isPending ? "删除中" : "删除"}
-          </button>
-          <button className="button button-secondary" type="button" onClick={() => navigate("/mcp")}>
-            清空选择
-          </button>
-        </div>
-      </div>
+                <div className="management-action-row">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={healthMutation.isPending}
+                    onClick={() => void healthMutation.mutateAsync(activeServer.id)}
+                  >
+                    {healthMutation.isPending ? "检测中" : "健康检查"}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={refreshMutation.isPending || healthMutation.isPending}
+                    onClick={() => void refreshMutation.mutateAsync(activeServer.id)}
+                  >
+                    {refreshMutation.isPending ? "刷新中" : "刷新能力"}
+                  </button>
+                  <button
+                    className={
+                      activeServer.enabled ? "button button-secondary" : "button button-primary"
+                    }
+                    type="button"
+                    disabled={enableMutation.isPending || healthMutation.isPending}
+                    onClick={() =>
+                      void enableMutation.mutateAsync({
+                        id: activeServer.id,
+                        enabled: !activeServer.enabled,
+                      })
+                    }
+                  >
+                    {enableMutation.isPending ? "提交中" : activeServer.enabled ? "禁用" : "启用"}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={deleteMutation.isPending}
+                    onClick={() =>
+                      deleteMutation.mutate({
+                        id: activeServer.id,
+                        name: activeServer.name,
+                      })
+                    }
+                  >
+                    {deleteMutation.isPending ? "删除中" : "删除"}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => navigate("/mcp")}
+                  >
+                    清空选择
+                  </button>
+                </div>
+              </div>
 
-      <div className="workspace-node-detail-modal-body">
-        {serverDetailQuery.isError ? <div className="management-error-banner">{serverDetailQuery.error.message}</div> : null}
-        {activeServerIsStale ? <div className="management-inline-notice">{MCP_STALE_SERVER_COPY}</div> : null}
-        {activeServer.last_error && !isImportMissingMessage(activeServer.last_error) ? (
-          <div className="management-error-banner">{activeServer.last_error}</div>
-        ) : null}
-        {activeServer.health_error && !isImportMissingMessage(activeServer.health_error) ? (
-          <div className="management-error-banner">{activeServer.health_error}</div>
-        ) : null}
+              <div className="workspace-node-detail-modal-body">
+                {serverDetailQuery.isError ? (
+                  <div className="management-error-banner">{serverDetailQuery.error.message}</div>
+                ) : null}
+                {activeServerIsStale ? (
+                  <div className="management-inline-notice">{MCP_STALE_SERVER_COPY}</div>
+                ) : null}
+                {activeServer.last_error && !isImportMissingMessage(activeServer.last_error) ? (
+                  <div className="management-error-banner">{activeServer.last_error}</div>
+                ) : null}
+                {activeServer.health_error && !isImportMissingMessage(activeServer.health_error) ? (
+                  <div className="management-error-banner">{activeServer.health_error}</div>
+                ) : null}
 
-        <div className="management-info-grid">
-          <div className="management-info-card">
-            <span className="management-info-label">连接状态</span>
-            <strong className={`management-status-badge ${getServerTone(activeServer.status)}`}>
-              {activeServer.status}
-            </strong>
-          </div>
-          <div className="management-info-card">
-            <span className="management-info-label">健康状态</span>
-            <strong className={`management-status-badge ${getHealthTone(activeServer.health_status)}`}>
-              {activeServer.health_status ?? "未检测"}
-            </strong>
-          </div>
-          <div className="management-info-card">
-            <span className="management-info-label">传输方式</span>
-            <strong className="management-info-value">{activeServer.transport}</strong>
-          </div>
-          <div className="management-info-card">
-            <span className="management-info-label">来源 / 范围</span>
-            <strong className="management-info-value">{activeServer.source}/{activeServer.scope}</strong>
-          </div>
-          <div className="management-info-card management-info-card-full">
-            <span className="management-info-label">配置路径</span>
-            <strong className="management-info-value management-info-code">{activeServer.config_path}</strong>
-          </div>
-        </div>
-
-        <section className="management-section-card management-section-card-compact">
-          <div className="management-section-header">
-            <h4 className="management-section-title">
-              {preferredCapabilities.some((capability) => capability.kind === "tool") ? "工具" : "能力"}
-            </h4>
-            <span className="management-status-badge tone-neutral">{preferredCapabilities.length} 项</span>
-          </div>
-
-          {preferredCapabilities.length === 0 ? (
-            <div className="management-inline-notice">当前服务器还没有发现能力，刷新后再看一次。</div>
-          ) : (
-            <ul className="management-capability-list">
-              {preferredCapabilities.map((capability) => {
-                const capabilityKey = getCapabilityKey(capability);
-                const isActive = capabilityKey === selectedCapabilityKey;
-
-                return (
-                  <li key={capabilityKey}>
-                    <button
-                      className={`management-capability-card mcp-capability-button${isActive ? " mcp-capability-button-active" : ""}`}
-                      type="button"
-                      onClick={() => handleSelectCapability(capabilityKey)}
+                <div className="management-info-grid">
+                  <div className="management-info-card">
+                    <span className="management-info-label">连接状态</span>
+                    <strong
+                      className={`management-status-badge ${getServerTone(activeServer.status)}`}
                     >
-                      <strong className="management-list-title">{capability.name}</strong>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        {selectedCapability ? (
-          <section className="management-section-card management-section-card-compact">
-            <div className="management-section-header">
-              <h4 className="management-section-title">当前能力</h4>
-              <span className="management-status-badge tone-neutral">{selectedCapability.kind}</span>
-            </div>
-            <div className="management-info-grid">
-              <div className="management-info-card">
-                <span className="management-info-label">名称</span>
-                <strong className="management-info-value">{selectedCapability.name}</strong>
-              </div>
-              {selectedCapability.title ? (
-                <div className="management-info-card">
-                  <span className="management-info-label">标题</span>
-                  <strong className="management-info-value">{selectedCapability.title}</strong>
+                      {activeServer.status}
+                    </strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">健康状态</span>
+                    <strong
+                      className={`management-status-badge ${getHealthTone(activeServer.health_status)}`}
+                    >
+                      {activeServer.health_status ?? "未检测"}
+                    </strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">传输方式</span>
+                    <strong className="management-info-value">{activeServer.transport}</strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">来源 / 范围</span>
+                    <strong className="management-info-value">
+                      {activeServer.source}/{activeServer.scope}
+                    </strong>
+                  </div>
+                  <div className="management-info-card management-info-card-full">
+                    <span className="management-info-label">配置路径</span>
+                    <strong className="management-info-value management-info-code">
+                      {activeServer.config_path}
+                    </strong>
+                  </div>
                 </div>
-              ) : null}
-              {selectedCapability.uri ? (
-                <div className="management-info-card management-info-card-full">
-                  <span className="management-info-label">URI</span>
-                  <strong className="management-info-value management-info-code">{selectedCapability.uri}</strong>
-                </div>
-              ) : null}
-            </div>
-            {selectedCapability.description ? (
-              <div className="management-subcard">
-                <span className="management-info-label">说明</span>
-                <p className="management-list-copy">{selectedCapability.description}</p>
+
+                <section className="management-section-card management-section-card-compact">
+                  <div className="management-section-header">
+                    <h4 className="management-section-title">
+                      {preferredCapabilities.some((capability) => capability.kind === "tool")
+                        ? "工具"
+                        : "能力"}
+                    </h4>
+                    <span className="management-status-badge tone-neutral">
+                      {preferredCapabilities.length} 项
+                    </span>
+                  </div>
+
+                  {preferredCapabilities.length === 0 ? (
+                    <div className="management-inline-notice">
+                      当前服务器还没有发现能力，刷新后再看一次。
+                    </div>
+                  ) : (
+                    <ul className="management-capability-list">
+                      {preferredCapabilities.map((capability) => {
+                        const capabilityKey = getCapabilityKey(capability);
+                        const isActive = capabilityKey === selectedCapabilityKey;
+
+                        return (
+                          <li key={capabilityKey}>
+                            <button
+                              className={`management-capability-card mcp-capability-button${isActive ? " mcp-capability-button-active" : ""}`}
+                              type="button"
+                              onClick={() => handleSelectCapability(capabilityKey)}
+                            >
+                              <strong className="management-list-title">{capability.name}</strong>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+
+                {selectedCapability ? (
+                  <section className="management-section-card management-section-card-compact">
+                    <div className="management-section-header">
+                      <h4 className="management-section-title">当前能力</h4>
+                      <span className="management-status-badge tone-neutral">
+                        {selectedCapability.kind}
+                      </span>
+                    </div>
+                    <div className="management-info-grid">
+                      <div className="management-info-card">
+                        <span className="management-info-label">名称</span>
+                        <strong className="management-info-value">{selectedCapability.name}</strong>
+                      </div>
+                      {selectedCapability.title ? (
+                        <div className="management-info-card">
+                          <span className="management-info-label">标题</span>
+                          <strong className="management-info-value">
+                            {selectedCapability.title}
+                          </strong>
+                        </div>
+                      ) : null}
+                      {selectedCapability.uri ? (
+                        <div className="management-info-card management-info-card-full">
+                          <span className="management-info-label">URI</span>
+                          <strong className="management-info-value management-info-code">
+                            {selectedCapability.uri}
+                          </strong>
+                        </div>
+                      ) : null}
+                    </div>
+                    {selectedCapability.description ? (
+                      <div className="management-subcard">
+                        <span className="management-info-label">说明</span>
+                        <p className="management-list-copy">{selectedCapability.description}</p>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                {selectedCapability?.kind === "tool" ? (
+                  <section className="management-section-card management-section-card-compact">
+                    <div className="management-section-header">
+                      <h4 className="management-section-title">调用工具</h4>
+                    </div>
+
+                    <label className="field-label">
+                      参数 JSON
+                      <textarea
+                        className="field-textarea"
+                        value={toolArgumentsText}
+                        onChange={(event) => setToolArgumentsText(event.target.value)}
+                        placeholder='{"path": "README.md"}'
+                      />
+                    </label>
+
+                    {toolArgumentsError ? (
+                      <div className="management-error-banner">{toolArgumentsError}</div>
+                    ) : null}
+
+                    <div className="management-action-row">
+                      <button
+                        className="button button-primary"
+                        type="button"
+                        disabled={invokeMutation.isPending}
+                        onClick={() => {
+                          if (!activeServer) {
+                            return;
+                          }
+
+                          setToolArgumentsError(null);
+                          void invokeMutation.mutateAsync({
+                            server: activeServer,
+                            capability: selectedCapability,
+                          });
+                        }}
+                      >
+                        {invokeMutation.isPending ? "调用中" : "执行工具"}
+                      </button>
+                    </div>
+
+                    {invokeResult ? (
+                      <div className="management-subcard">
+                        <span className="management-info-label">调用结果</span>
+                        <pre className="management-code-block">
+                          {stringifyJson(invokeResult.result)}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
               </div>
-            ) : null}
-          </section>
-        ) : null}
-
-        {selectedCapability?.kind === "tool" ? (
-          <section className="management-section-card management-section-card-compact">
-            <div className="management-section-header">
-              <h4 className="management-section-title">调用工具</h4>
-            </div>
-
-            <label className="field-label">
-              参数 JSON
-              <textarea
-                className="field-textarea"
-                value={toolArgumentsText}
-                onChange={(event) => setToolArgumentsText(event.target.value)}
-                placeholder='{"path": "README.md"}'
-              />
-            </label>
-
-            {toolArgumentsError ? <div className="management-error-banner">{toolArgumentsError}</div> : null}
-
-            <div className="management-action-row">
-              <button
-                className="button button-primary"
-                type="button"
-                disabled={invokeMutation.isPending}
-                onClick={() => {
-                  if (!activeServer) {
-                    return;
-                  }
-
-                  setToolArgumentsError(null);
-                  void invokeMutation.mutateAsync({
-                    server: activeServer,
-                    capability: selectedCapability,
-                  });
-                }}
-              >
-                {invokeMutation.isPending ? "调用中" : "执行工具"}
-              </button>
-            </div>
-
-            {invokeResult ? (
-              <div className="management-subcard">
-                <span className="management-info-label">调用结果</span>
-                <pre className="management-code-block">{stringifyJson(invokeResult.result)}</pre>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
-          </section>
-        </div>,
-        document.body,
-      );
+            </section>
+          </div>,
+          document.body,
+        );
 
   return (
     <main className="management-workbench management-workbench-single">
@@ -914,309 +951,327 @@ export function McpWorkbench() {
               <section className="management-section-card management-section-card-compact">
                 <div className="management-section-header">
                   <h3 className="management-section-title">视图</h3>
-                  <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
+                  <span className="management-status-badge tone-neutral">
+                    {currentViewCount} 项
+                  </span>
                 </div>
 
-              <div className="mcp-view-tabs" role="tablist" aria-label="MCP 视图切换">
-                {MCP_VIEW_OPTIONS.map((view) => {
-                  const count =
-                    view.key === "servers"
-                      ? filteredServers.length
-                      : view.key === "tool"
-                        ? filteredTools.length
-                        : view.key === "resource"
-                          ? filteredResources.length
-                          : filteredPrompts.length;
+                <div className="mcp-view-tabs" role="tablist" aria-label="MCP 视图切换">
+                  {MCP_VIEW_OPTIONS.map((view) => {
+                    const count =
+                      view.key === "servers"
+                        ? filteredServers.length
+                        : view.key === "tool"
+                          ? filteredTools.length
+                          : view.key === "resource"
+                            ? filteredResources.length
+                            : filteredPrompts.length;
 
-                  return (
-                    <button
-                      key={view.key}
-                      className={`mcp-view-tab${activeView === view.key ? " mcp-view-tab-active" : ""}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeView === view.key}
-                      onClick={() => setActiveView(view.key)}
-                    >
-                      <span>{view.label}</span>
-                      <span className="management-status-badge tone-neutral">{count}</span>
-                    </button>
-                  );
-                })}
-              </div>
+                    return (
+                      <button
+                        key={view.key}
+                        className={`mcp-view-tab${activeView === view.key ? " mcp-view-tab-active" : ""}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeView === view.key}
+                        onClick={() => setActiveView(view.key)}
+                      >
+                        <span>{view.label}</span>
+                        <span className="management-status-badge tone-neutral">{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </section>
 
               <section className="management-section-card management-section-card-compact">
-                  <div className="management-section-header">
-                    <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
-                    <span className="management-status-badge tone-neutral">{currentViewCount} 项</span>
-                  </div>
+                <div className="management-section-header">
+                  <h3 className="management-section-title">{getFlatViewTitle(activeView)}</h3>
+                  <span className="management-status-badge tone-neutral">
+                    {currentViewCount} 项
+                  </span>
+                </div>
 
-                  <div className="management-list-shell">
-                {activeView === "servers" ? (
-                  filteredServers.length === 0 ? (
+                <div className="management-list-shell">
+                  {activeView === "servers" ? (
+                    filteredServers.length === 0 ? (
+                      <div className="management-empty-state">
+                        <p className="management-empty-title">没有匹配的服务器</p>
+                        <p className="management-empty-copy">
+                          可以先导入现有配置，或手动注册一台新服务器。
+                        </p>
+                      </div>
+                    ) : (
+                      <ul className="management-card-grid mcp-card-grid">
+                        {filteredServers.map((server) => {
+                          const isActive = server.id === selectedServerId;
+                          const counts = getCapabilityCounts(server.capabilities);
+                          const isStale = isStaleImportedServer(server);
+
+                          return (
+                            <li key={server.id}>
+                              <article
+                                className={`management-list-card mcp-server-card${isActive ? " management-list-card-active" : ""}`}
+                              >
+                                <div className="mcp-card-row">
+                                  <div className="management-detail-copy">
+                                    <strong className="management-list-title mcp-card-title">
+                                      {server.name}
+                                    </strong>
+                                    <p className="management-list-subtitle">
+                                      {getPrimaryServerValue(server)}
+                                    </p>
+                                  </div>
+                                  <label
+                                    className="mcp-card-switch"
+                                    aria-label={`${server.name} 连接开关`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={server.enabled}
+                                      onChange={() =>
+                                        void enableMutation.mutateAsync({
+                                          id: server.id,
+                                          enabled: !server.enabled,
+                                        })
+                                      }
+                                      disabled={enableMutation.isPending}
+                                    />
+                                    <span className="mcp-card-switch-track" />
+                                  </label>
+                                </div>
+
+                                <div className="mcp-server-count-row">
+                                  <span className="management-status-badge tone-success">
+                                    {counts.tool > 0
+                                      ? `工具 ${counts.tool}`
+                                      : `能力 ${server.capabilities.length}`}
+                                  </span>
+                                  {isStale ? (
+                                    <span className="management-status-badge tone-warning">
+                                      导入缺失
+                                    </span>
+                                  ) : null}
+                                  <span className="management-status-badge tone-neutral">
+                                    {server.transport}
+                                  </span>
+                                  <span
+                                    className={`management-status-badge ${getServerTone(server.status)}`}
+                                  >
+                                    {server.status}
+                                  </span>
+                                  <span
+                                    className={`management-status-badge ${getHealthTone(server.health_status)}`}
+                                  >
+                                    健康 {server.health_status ?? "未检测"}
+                                  </span>
+                                </div>
+
+                                <div className="action-row mcp-card-actions">
+                                  <button
+                                    className="text-button"
+                                    type="button"
+                                    onClick={() => navigate(`/mcp/${server.id}`)}
+                                  >
+                                    查看详情
+                                  </button>
+                                  <button
+                                    className="text-button"
+                                    type="button"
+                                    disabled={deleteMutation.isPending}
+                                    onClick={() =>
+                                      deleteMutation.mutate({
+                                        id: server.id,
+                                        name: server.name,
+                                      })
+                                    }
+                                  >
+                                    {deleteMutation.isPending ? "删除中" : "删除"}
+                                  </button>
+                                </div>
+                              </article>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )
+                  ) : currentFlatItems.length === 0 ? (
                     <div className="management-empty-state">
-                      <p className="management-empty-title">没有匹配的服务器</p>
+                      <p className="management-empty-title">
+                        {MCP_VIEW_OPTIONS.find((view) => view.key === activeView)?.emptyTitle ??
+                          "没有匹配项"}
+                      </p>
                       <p className="management-empty-copy">
-                        可以先导入现有配置，或手动注册一台新服务器。
+                        可以调整关键词，或切回服务器视图查看完整连接信息。
                       </p>
                     </div>
                   ) : (
-                    <ul className="management-card-grid mcp-card-grid">
-                      {filteredServers.map((server) => {
-                        const isActive = server.id === selectedServerId;
-                        const counts = getCapabilityCounts(server.capabilities);
-                        const isStale = isStaleImportedServer(server);
-
-                        return (
-                          <li key={server.id}>
-                            <article
-                              className={`management-list-card mcp-server-card${isActive ? " management-list-card-active" : ""}`}
-                            >
-                              <div className="mcp-card-row">
-                                <div className="management-detail-copy">
-                                  <strong className="management-list-title mcp-card-title">
-                                    {server.name}
-                                  </strong>
-                                  <p className="management-list-subtitle">
-                                    {getPrimaryServerValue(server)}
-                                  </p>
-                                </div>
-                                <label
-                                  className="mcp-card-switch"
-                                  aria-label={`${server.name} 连接开关`}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={server.enabled}
-                                    onChange={() =>
-                                      void enableMutation.mutateAsync({
-                                        id: server.id,
-                                        enabled: !server.enabled,
-                                      })
-                                    }
-                                    disabled={enableMutation.isPending}
-                                  />
-                                  <span className="mcp-card-switch-track" />
-                                </label>
-                              </div>
-
-                              <div className="mcp-server-count-row">
-                                <span className="management-status-badge tone-success">
-                                  {counts.tool > 0 ? `工具 ${counts.tool}` : `能力 ${server.capabilities.length}`}
-                                </span>
-                                {isStale ? (
-                                  <span className="management-status-badge tone-warning">
-                                    导入缺失
-                                  </span>
-                                ) : null}
-                                <span className="management-status-badge tone-neutral">
-                                  {server.transport}
-                                </span>
-                                <span
-                                  className={`management-status-badge ${getServerTone(server.status)}`}
-                                >
-                                  {server.status}
-                                </span>
-                                <span
-                                  className={`management-status-badge ${getHealthTone(server.health_status)}`}
-                                >
-                                  健康 {server.health_status ?? "未检测"}
-                                </span>
-                              </div>
-
-                              <div className="action-row mcp-card-actions">
-                                <button
-                                  className="text-button"
-                                  type="button"
-                                  onClick={() => navigate(`/mcp/${server.id}`)}
-                                >
-                                  查看详情
-                                </button>
-                                <button
-                                  className="text-button"
-                                  type="button"
-                                  disabled={deleteMutation.isPending}
-                                  onClick={() =>
-                                    deleteMutation.mutate({
-                                      id: server.id,
-                                      name: server.name,
-                                    })
-                                  }
-                                >
-                                  {deleteMutation.isPending ? "删除中" : "删除"}
-                                </button>
-                              </div>
-                            </article>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )
-                ) : currentFlatItems.length === 0 ? (
-                  <div className="management-empty-state">
-                    <p className="management-empty-title">
-                      {MCP_VIEW_OPTIONS.find((view) => view.key === activeView)?.emptyTitle ??
-                        "没有匹配项"}
-                    </p>
-                    <p className="management-empty-copy">
-                      可以调整关键词，或切回服务器视图查看完整连接信息。
-                    </p>
-                  </div>
-                ) : (
                     <ul className="management-card-grid">
-                    {currentFlatItems.map((entry) => (
-                      <li key={`${entry.server.id}:${entry.capabilityKey}`}>
-                        <article className="management-list-card mcp-flat-card">
-                          <strong className="management-list-title">{entry.capability.name}</strong>
-                          <p className="management-list-subtitle">{entry.server.name}</p>
+                      {currentFlatItems.map((entry) => (
+                        <li key={`${entry.server.id}:${entry.capabilityKey}`}>
+                          <article className="management-list-card mcp-flat-card">
+                            <strong className="management-list-title">
+                              {entry.capability.name}
+                            </strong>
+                            <p className="management-list-subtitle">{entry.server.name}</p>
 
-                          <div className="action-row">
-                            {isStaleImportedServer(entry.server) ? (
-                              <span className="management-status-badge tone-warning">导入缺失</span>
-                            ) : null}
-                            <button
-                              className="text-button"
-                              type="button"
-                              onClick={() =>
-                                handleOpenCapability(entry.server, entry.capabilityKey)
-                              }
-                            >
-                              {entry.capability.kind === "tool" ? "查看并调用" : "查看详情"}
-                            </button>
-                          </div>
-                        </article>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                  </div>
+                            <div className="action-row">
+                              {isStaleImportedServer(entry.server) ? (
+                                <span className="management-status-badge tone-warning">
+                                  导入缺失
+                                </span>
+                              ) : null}
+                              <button
+                                className="text-button"
+                                type="button"
+                                onClick={() =>
+                                  handleOpenCapability(entry.server, entry.capabilityKey)
+                                }
+                              >
+                                {entry.capability.kind === "tool" ? "查看并调用" : "查看详情"}
+                              </button>
+                            </div>
+                          </article>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </section>
 
               <section className="management-section-card">
-                  <div className="management-section-header">
-                    <h3 className="management-section-title">手动注册</h3>
-                  </div>
-
-                  <form
-                    className="settings-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      setRegisterFormError(null);
-                      void registerMutation.mutateAsync();
-                    }}
-                  >
-                <div className="field-inline-group">
-                  <label className="field-label">
-                    名称
-                    <input
-                      className="field-inline-input"
-                      type="text"
-                      value={registerName}
-                      onChange={(event) => setRegisterName(event.target.value)}
-                      placeholder="例如：local-browser"
-                    />
-                  </label>
-
-                  <label className="field-label">
-                    传输方式
-                    <select
-                      className="field-inline-input"
-                      value={registerTransport}
-                      onChange={(event) => setRegisterTransport(event.target.value as MCPTransport)}
-                    >
-                      <option value="stdio">stdio</option>
-                      <option value="http">http</option>
-                    </select>
-                  </label>
-
-                  <label className="field-label">
-                    超时毫秒
-                    <input
-                      className="field-inline-input"
-                      type="number"
-                      min="1"
-                      value={registerTimeoutMs}
-                      onChange={(event) => setRegisterTimeoutMs(event.target.value)}
-                      placeholder="5000"
-                    />
-                  </label>
+                <div className="management-section-header">
+                  <h3 className="management-section-title">手动注册</h3>
                 </div>
 
-                <label className="settings-inline-toggle">
-                  <input
-                    type="checkbox"
-                    checked={registerEnabled}
-                    onChange={(event) => setRegisterEnabled(event.target.checked)}
-                  />
-                  注册后立即启用
-                </label>
-
-                {registerTransport === "stdio" ? (
-                  <>
+                <form
+                  className="settings-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setRegisterFormError(null);
+                    void registerMutation.mutateAsync();
+                  }}
+                >
+                  <div className="field-inline-group">
                     <label className="field-label">
-                      命令
+                      名称
                       <input
-                        className="field-input"
+                        className="field-inline-input"
                         type="text"
-                        value={registerCommand}
-                        onChange={(event) => setRegisterCommand(event.target.value)}
-                        placeholder="例如：npx @modelcontextprotocol/server-filesystem"
+                        value={registerName}
+                        onChange={(event) => setRegisterName(event.target.value)}
+                        placeholder="例如：local-browser"
                       />
                     </label>
 
                     <label className="field-label">
-                      参数（每行一个）
-                      <textarea
-                        className="field-textarea"
-                        value={registerArgs}
-                        onChange={(event) => setRegisterArgs(event.target.value)}
-                        placeholder={"--root\nD:/AI/aegissec"}
-                      />
+                      传输方式
+                      <select
+                        className="field-inline-input"
+                        value={registerTransport}
+                        onChange={(event) =>
+                          setRegisterTransport(event.target.value as MCPTransport)
+                        }
+                      >
+                        <option value="stdio">stdio</option>
+                        <option value="http">http</option>
+                      </select>
                     </label>
 
                     <label className="field-label">
-                      环境变量 JSON
-                      <textarea
-                        className="field-textarea"
-                        value={registerEnv}
-                        onChange={(event) => setRegisterEnv(event.target.value)}
-                        placeholder='{"NODE_ENV": "production"}'
-                      />
-                    </label>
-                  </>
-                ) : (
-                  <>
-                    <label className="field-label">
-                      URL
+                      超时毫秒
                       <input
-                        className="field-input"
-                        type="url"
-                        value={registerUrl}
-                        onChange={(event) => setRegisterUrl(event.target.value)}
-                        placeholder="例如：https://example.com/mcp"
+                        className="field-inline-input"
+                        type="number"
+                        min="1"
+                        value={registerTimeoutMs}
+                        onChange={(event) => setRegisterTimeoutMs(event.target.value)}
+                        placeholder="5000"
                       />
                     </label>
+                  </div>
 
-                    <label className="field-label">
-                      请求头 JSON
-                      <textarea
-                        className="field-textarea"
-                        value={registerHeaders}
-                        onChange={(event) => setRegisterHeaders(event.target.value)}
-                        placeholder='{"Authorization": "Bearer <token>"}'
-                      />
-                    </label>
-                  </>
-                )}
+                  <label className="settings-inline-toggle">
+                    <input
+                      type="checkbox"
+                      checked={registerEnabled}
+                      onChange={(event) => setRegisterEnabled(event.target.checked)}
+                    />
+                    注册后立即启用
+                  </label>
 
-                    {registerFormError ? <div className="management-error-banner">{registerFormError}</div> : null}
+                  {registerTransport === "stdio" ? (
+                    <>
+                      <label className="field-label">
+                        命令
+                        <input
+                          className="field-input"
+                          type="text"
+                          value={registerCommand}
+                          onChange={(event) => setRegisterCommand(event.target.value)}
+                          placeholder="例如：npx @modelcontextprotocol/server-filesystem"
+                        />
+                      </label>
 
-                    <div className="management-action-row">
-                      <button className="button button-primary" type="submit" disabled={registerMutation.isPending}>
-                        {registerMutation.isPending ? "注册中" : "注册服务器"}
-                      </button>
-                    </div>
-                  </form>
+                      <label className="field-label">
+                        参数（每行一个）
+                        <textarea
+                          className="field-textarea"
+                          value={registerArgs}
+                          onChange={(event) => setRegisterArgs(event.target.value)}
+                          placeholder={"--root\nD:/AI/aegissec"}
+                        />
+                      </label>
+
+                      <label className="field-label">
+                        环境变量 JSON
+                        <textarea
+                          className="field-textarea"
+                          value={registerEnv}
+                          onChange={(event) => setRegisterEnv(event.target.value)}
+                          placeholder='{"NODE_ENV": "production"}'
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <label className="field-label">
+                        URL
+                        <input
+                          className="field-input"
+                          type="url"
+                          value={registerUrl}
+                          onChange={(event) => setRegisterUrl(event.target.value)}
+                          placeholder="例如：https://example.com/mcp"
+                        />
+                      </label>
+
+                      <label className="field-label">
+                        请求头 JSON
+                        <textarea
+                          className="field-textarea"
+                          value={registerHeaders}
+                          onChange={(event) => setRegisterHeaders(event.target.value)}
+                          placeholder='{"Authorization": "Bearer <token>"}'
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {registerFormError ? (
+                    <div className="management-error-banner">{registerFormError}</div>
+                  ) : null}
+
+                  <div className="management-action-row">
+                    <button
+                      className="button button-primary"
+                      type="submit"
+                      disabled={registerMutation.isPending}
+                    >
+                      {registerMutation.isPending ? "注册中" : "注册服务器"}
+                    </button>
+                  </div>
+                </form>
               </section>
             </>
           )}

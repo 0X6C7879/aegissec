@@ -912,6 +912,119 @@
         }
       }
     },
+    "/api/sessions/{session_id}/continuations/{continuation_token}/resolve": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Resolve Continuation",
+        "operationId": "resolve_continuation_api_sessions__session_id__continuations__continuation_token__resolve_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "continuation_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Continuation Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinuationResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Resolve Continuation Api Sessions  Session Id  Continuations  Continuation Token  Resolve Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/generations/active/inject": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Inject Active Generation Context",
+        "operationId": "inject_active_generation_context_api_sessions__session_id__generations_active_inject_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveGenerationInjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveGenerationInjectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sessions/{session_id}/cancel": {
       "post": {
         "tags": [
@@ -1362,6 +1475,52 @@
               "application/json": {
                 "schema": {
                   "title": "Response Get Session Artifacts Api Sessions  Session Id  Artifacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/slash-catalog": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Session Slash Catalog",
+        "operationId": "get_session_slash_catalog_api_sessions__session_id__slash_catalog_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SlashCatalogItem"
+                  },
+                  "title": "Response Get Session Slash Catalog Api Sessions  Session Id  Slash Catalog Get"
                 }
               }
             }
@@ -2229,6 +2388,27 @@
         }
       }
     },
+    "/api/runtime/runs/clear": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Clear Runtime Runs",
+        "operationId": "clear_runtime_runs_api_runtime_runs_clear_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Clear Runtime Runs Api Runtime Runs Clear Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sessions/{session_id}/graphs/task": {
       "get": {
         "tags": [
@@ -2666,6 +2846,47 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SkillContextRead"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skills/orchestration-plan": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Preview Skill Orchestration Plan",
+        "operationId": "preview_skill_orchestration_plan_api_skills_orchestration_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillOrchestrationPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOrchestrationPreviewRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -3418,6 +3639,53 @@
   },
   "components": {
     "schemas": {
+      "ActiveGenerationInjectRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "ActiveGenerationInjectRequest"
+      },
+      "ActiveGenerationInjectResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "generation_id": {
+            "type": "string",
+            "title": "Generation Id"
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "running_checkpoint",
+              "paused_continuation"
+            ],
+            "title": "Delivery"
+          },
+          "queued_injection_count": {
+            "type": "integer",
+            "title": "Queued Injection Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "generation_id",
+          "delivery"
+        ],
+        "title": "ActiveGenerationInjectResponse"
+      },
       "AssistantTranscriptSegment": {
         "properties": {
           "id": {
@@ -3839,6 +4107,16 @@
             "type": "boolean",
             "title": "Wait For Completion",
             "default": false
+          },
+          "slash_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlashActionSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -3931,6 +4209,68 @@
           "agents"
         ],
         "title": "CompatibilitySource"
+      },
+      "ContinuationResolveRequest": {
+        "properties": {
+          "approve": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approve"
+          },
+          "approved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved"
+          },
+          "scope_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Confirmed"
+          },
+          "user_input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Input"
+          },
+          "resolution_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Payload"
+          }
+        },
+        "type": "object",
+        "title": "ContinuationResolveRequest"
       },
       "ConversationBranchRead": {
         "properties": {
@@ -6512,6 +6852,149 @@
             ],
             "title": "Effort"
           },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "model_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Hint"
+          },
+          "verification_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Mode"
+          },
+          "shell_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shell Profile"
+          },
+          "trust_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Level"
+          },
+          "preflight_checks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Preflight Checks"
+          },
+          "orchestration_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestration Role"
+          },
+          "orchestration_hints": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestration Hints"
+          },
+          "fanout_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fanout Group"
+          },
+          "preferred_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Stage"
+          },
+          "context_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Strategy"
+          },
+          "execution_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Policy"
+          },
+          "result_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Schema"
+          },
           "aliases": {
             "items": {
               "type": "string"
@@ -6548,6 +7031,11 @@
             "type": "object",
             "title": "Resolved Identity"
           },
+          "discovery_provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Discovery Provenance"
+          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -6581,6 +7069,158 @@
           "prompt_fragment"
         ],
         "title": "SkillContextRead"
+      },
+      "SkillOrchestrationPreviewRead": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "prompt_fragment": {
+            "type": "string",
+            "title": "Prompt Fragment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload",
+          "prompt_fragment"
+        ],
+        "title": "SkillOrchestrationPreviewRead"
+      },
+      "SkillOrchestrationPreviewRequest": {
+        "properties": {
+          "touched_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Touched Paths",
+            "default": []
+          },
+          "workspace_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Path"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "user_goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Goal"
+          },
+          "current_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Prompt"
+          },
+          "scenario_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Type"
+          },
+          "agent_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Role"
+          },
+          "workflow_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Stage"
+          },
+          "available_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Tools"
+          },
+          "invocation_arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invocation Arguments"
+          },
+          "include_reference_only": {
+            "type": "boolean",
+            "title": "Include Reference Only",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "SkillOrchestrationPreviewRequest"
       },
       "SkillRecordRead": {
         "properties": {
@@ -6756,6 +7396,149 @@
             ],
             "title": "Effort"
           },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "model_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Hint"
+          },
+          "verification_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Mode"
+          },
+          "shell_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shell Profile"
+          },
+          "trust_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Level"
+          },
+          "preflight_checks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Preflight Checks"
+          },
+          "orchestration_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestration Role"
+          },
+          "orchestration_hints": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestration Hints"
+          },
+          "fanout_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fanout Group"
+          },
+          "preferred_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Stage"
+          },
+          "context_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Strategy"
+          },
+          "execution_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Policy"
+          },
+          "result_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Schema"
+          },
           "aliases": {
             "items": {
               "type": "string"
@@ -6791,6 +7574,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Resolved Identity"
+          },
+          "discovery_provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Discovery Provenance"
           }
         },
         "type": "object",
@@ -6818,6 +7606,158 @@
           "ignored"
         ],
         "title": "SkillRecordStatus"
+      },
+      "SlashActionInvocation": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Tool Name"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Arguments"
+          },
+          "mcp_server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server Id"
+          },
+          "mcp_tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Tool Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name"
+        ],
+        "title": "SlashActionInvocation"
+      },
+      "SlashActionSelection": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Id"
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Trigger"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Type"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source"
+          },
+          "display_text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Display Text"
+          },
+          "invocation": {
+            "$ref": "#/components/schemas/SlashActionInvocation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "trigger",
+          "type",
+          "source",
+          "display_text",
+          "invocation"
+        ],
+        "title": "SlashActionSelection"
+      },
+      "SlashCatalogItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "badge": {
+            "type": "string",
+            "title": "Badge"
+          },
+          "keybind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keybind"
+          },
+          "disabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled"
+          },
+          "action": {
+            "$ref": "#/components/schemas/SlashActionSelection"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "trigger",
+          "title",
+          "description",
+          "type",
+          "source",
+          "badge",
+          "action"
+        ],
+        "title": "SlashCatalogItem"
       },
       "ToggleMCPServerRequest": {
         "properties": {

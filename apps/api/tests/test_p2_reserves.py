@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pytest import MonkeyPatch
 from sqlalchemy import JSON
 from sqlmodel import Session as DBSession
 from sqlmodel import SQLModel, create_engine
@@ -31,6 +32,7 @@ def test_sqlmodel_json_columns_are_dialect_neutral() -> None:
 def test_queue_backend_factory_exposes_redis_reserve_mode(
     tmp_path: Path,
     test_settings: Settings,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     engine = create_engine(
         f"sqlite:///{(tmp_path / 'queue-factory.db').as_posix()}",
@@ -39,6 +41,10 @@ def test_queue_backend_factory_exposes_redis_reserve_mode(
     SQLModel.metadata.create_all(engine)
     db_session = DBSession(engine)
     test_settings.queue_backend = "redis"
+    monkeypatch.setattr(
+        "app.services.workflow_queue.get_runtime_backend",
+        lambda _settings: object(),
+    )
     try:
         backend = get_workflow_queue_backend(
             test_settings,

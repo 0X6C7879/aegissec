@@ -234,7 +234,11 @@ function readMilestoneReasons(node: SessionGraphNode): Set<string> {
 
 function isActiveNode(node: SessionGraphNode): boolean {
   const status = getNodeStatus(node);
-  return readBoolean(node.data.current) || readBoolean(node.data.active) || ACTIVE_STATUS.has(status ?? "");
+  return (
+    readBoolean(node.data.current) ||
+    readBoolean(node.data.active) ||
+    ACTIVE_STATUS.has(status ?? "")
+  );
 }
 
 function hasOutcomeSupport(node: SessionGraphNode, index: GraphIndex): boolean {
@@ -307,7 +311,8 @@ function matchesFocusHint(node: SessionGraphNode, focusHints: string[]): boolean
   return candidates.some((candidate) =>
     focusHints.some(
       (hint) =>
-        hint.length >= 4 && (candidate === hint || candidate.includes(hint) || hint.includes(candidate)),
+        hint.length >= 4 &&
+        (candidate === hint || candidate.includes(hint) || hint.includes(candidate)),
     ),
   );
 }
@@ -411,7 +416,8 @@ function chooseBestNode(
       return attemptsDiff;
     }
 
-    const sequenceDiff = (readNumber(right.data.sequence) ?? 0) - (readNumber(left.data.sequence) ?? 0);
+    const sequenceDiff =
+      (readNumber(right.data.sequence) ?? 0) - (readNumber(left.data.sequence) ?? 0);
     if (sequenceDiff !== 0) {
       return sequenceDiff;
     }
@@ -433,7 +439,9 @@ function chooseBestOutcomeSupportAction(
   focusHints: string[] = [],
 ): SessionGraphNode | null {
   const outcomeNodes = graph.nodes.filter((node) => node.node_type === "outcome");
-  const completedOutcome = outcomeNodes.find((node) => OUTCOME_STATUS.has(getNodeStatus(node) ?? ""));
+  const completedOutcome = outcomeNodes.find((node) =>
+    OUTCOME_STATUS.has(getNodeStatus(node) ?? ""),
+  );
   const targetOutcome = completedOutcome ?? outcomeNodes[0];
   if (!targetOutcome) {
     return null;
@@ -460,7 +468,11 @@ function chooseBestMilestoneAction(
   return chooseBestNode(actionNodes, index, focusHints);
 }
 
-function chooseDefaultFocusNode(graph: SessionGraph, latestNodeId: string | null, index: GraphIndex): SessionGraphNode | null {
+function chooseDefaultFocusNode(
+  graph: SessionGraph,
+  latestNodeId: string | null,
+  index: GraphIndex,
+): SessionGraphNode | null {
   const focusHints = collectGraphFocusHints(graph);
   const bestMilestoneAction = chooseBestMilestoneAction(graph, index, focusHints);
   if (bestMilestoneAction) {
@@ -516,8 +528,14 @@ function chooseBestIncomingTaskEdge(taskId: string, index: GraphIndex): SessionG
   return [...candidates].sort((left, right) => {
     const leftNode = index.nodeMap.get(left.source);
     const rightNode = index.nodeMap.get(right.source);
-    const leftPriority = leftNode?.node_type === "root" ? 100 : getNodeTimestamp(leftNode ?? index.nodeMap.get(taskId)!);
-    const rightPriority = rightNode?.node_type === "root" ? 100 : getNodeTimestamp(rightNode ?? index.nodeMap.get(taskId)!);
+    const leftPriority =
+      leftNode?.node_type === "root"
+        ? 100
+        : getNodeTimestamp(leftNode ?? index.nodeMap.get(taskId)!);
+    const rightPriority =
+      rightNode?.node_type === "root"
+        ? 100
+        : getNodeTimestamp(rightNode ?? index.nodeMap.get(taskId)!);
     return rightPriority - leftPriority;
   })[0]!;
 }
@@ -540,7 +558,11 @@ function buildTaskDependencyChain(taskId: string, index: GraphIndex): string[] {
   return chain;
 }
 
-function chooseBestPrecedingAction(actionId: string, taskId: string | null, index: GraphIndex): SessionGraphEdge | null {
+function chooseBestPrecedingAction(
+  actionId: string,
+  taskId: string | null,
+  index: GraphIndex,
+): SessionGraphEdge | null {
   const incoming = index.incoming.get(actionId) ?? [];
   const candidates = incoming.filter((edge) => {
     if (edge.relation !== "precedes") {
@@ -567,7 +589,11 @@ function chooseBestPrecedingAction(actionId: string, taskId: string | null, inde
   })[0]!;
 }
 
-function buildActionAncestorChain(actionId: string, taskId: string | null, index: GraphIndex): string[] {
+function buildActionAncestorChain(
+  actionId: string,
+  taskId: string | null,
+  index: GraphIndex,
+): string[] {
   const chain = [actionId];
   let currentActionId = actionId;
   const visited = new Set<string>([actionId]);
@@ -585,7 +611,11 @@ function buildActionAncestorChain(actionId: string, taskId: string | null, index
   return chain;
 }
 
-function chooseBestFollowingAction(actionId: string, taskId: string | null, index: GraphIndex): SessionGraphEdge | null {
+function chooseBestFollowingAction(
+  actionId: string,
+  taskId: string | null,
+  index: GraphIndex,
+): SessionGraphEdge | null {
   const outgoing = index.outgoing.get(actionId) ?? [];
   const candidates = outgoing.filter((edge) => {
     if (edge.relation !== "precedes") {
@@ -612,14 +642,20 @@ function chooseBestFollowingAction(actionId: string, taskId: string | null, inde
   })[0]!;
 }
 
-function buildActionOutcomeTail(actionId: string, taskId: string | null, index: GraphIndex): string[] {
+function buildActionOutcomeTail(
+  actionId: string,
+  taskId: string | null,
+  index: GraphIndex,
+): string[] {
   const tail: string[] = [];
   let currentActionId = actionId;
   const visited = new Set<string>([actionId]);
 
   while (true) {
     const outgoing = index.outgoing.get(currentActionId) ?? [];
-    const directOutcome = outgoing.find((edge) => index.nodeMap.get(edge.target)?.node_type === "outcome");
+    const directOutcome = outgoing.find(
+      (edge) => index.nodeMap.get(edge.target)?.node_type === "outcome",
+    );
     if (directOutcome) {
       pushUnique(tail, directOutcome.target);
       return tail;
@@ -643,7 +679,9 @@ function addChainToContext(chain: string[], context: AttackPathContext, index: G
   for (let i = 0; i < chain.length - 1; i += 1) {
     const source = chain[i];
     const target = chain[i + 1];
-    const edge = (index.outgoing.get(source) ?? []).find((candidate) => candidate.target === target);
+    const edge = (index.outgoing.get(source) ?? []).find(
+      (candidate) => candidate.target === target,
+    );
     if (edge) {
       context.edgeIds.add(edge.id);
     }
@@ -669,7 +707,9 @@ function buildContextFromAction(actionId: string, index: GraphIndex): AttackPath
 
   const actionChain = buildActionAncestorChain(actionId, taskId, index);
   if (taskId && actionChain.length > 0) {
-    const edge = (index.outgoing.get(taskId) ?? []).find((candidate) => candidate.target === actionChain[0]);
+    const edge = (index.outgoing.get(taskId) ?? []).find(
+      (candidate) => candidate.target === actionChain[0],
+    );
     if (edge) {
       context.edgeIds.add(edge.id);
     }
@@ -690,9 +730,7 @@ export function chooseRepresentativeMilestoneChain(graph: SessionGraph, taskId: 
   const index = buildGraphIndex(graph);
   const taskChain = buildTaskDependencyChain(taskId, index);
   const taskNode = index.nodeMap.get(taskId) ?? null;
-  const actions = graph.nodes.filter(
-    (node) => actionBelongsToTask(node, taskId, index),
-  );
+  const actions = graph.nodes.filter((node) => actionBelongsToTask(node, taskId, index));
   const focusAction = chooseBestNode(actions, index, collectTaskFocusHints(taskNode));
   if (!focusAction) {
     return taskChain;
@@ -711,9 +749,12 @@ export function getBestExecutionPathContext(
   latestNodeId: string | null,
 ): AttackPathContext {
   const index = buildGraphIndex(graph);
-  const emptyContext: AttackPathContext = { nodeIds: new Set<string>(), edgeIds: new Set<string>() };
+  const emptyContext: AttackPathContext = {
+    nodeIds: new Set<string>(),
+    edgeIds: new Set<string>(),
+  };
 
-  const selectedNode = selectedNodeId ? index.nodeMap.get(selectedNodeId) ?? null : null;
+  const selectedNode = selectedNodeId ? (index.nodeMap.get(selectedNodeId) ?? null) : null;
   if (selectedNode?.node_type === "task") {
     const chain = chooseRepresentativeMilestoneChain(graph, selectedNode.id);
     addChainToContext(chain, emptyContext, index);
@@ -723,7 +764,11 @@ export function getBestExecutionPathContext(
     return buildContextFromAction(selectedNode.id, index);
   }
   if (selectedNode?.node_type === "outcome") {
-    const supportAction = chooseBestOutcomeSupportAction(graph, index, collectGraphFocusHints(graph));
+    const supportAction = chooseBestOutcomeSupportAction(
+      graph,
+      index,
+      collectGraphFocusHints(graph),
+    );
     if (supportAction) {
       const context = buildContextFromAction(supportAction.id, index);
       context.nodeIds.add(selectedNode.id);
@@ -754,7 +799,10 @@ export function displayTitle(node: SessionGraphNode): string {
   switch (getNodeType(node)) {
     case "goal":
     case "root":
-      return truncateText(readString(node.data.goal) ?? readString(node.data.title) ?? fallback, 52) ?? fallback;
+      return (
+        truncateText(readString(node.data.goal) ?? readString(node.data.title) ?? fallback, 52) ??
+        fallback
+      );
     case "task":
       return (
         truncateText(
@@ -809,13 +857,11 @@ export function displayImportance(node: SessionGraphNode): AttackNodeDisplayEmph
   }
   if (
     node.node_type === "action" &&
-    (
-      isActiveNode(node) ||
+    (isActiveNode(node) ||
       BLOCKED_STATUS.has(status ?? "") ||
       hasFindings(node) ||
       hasHypotheses(node) ||
-      (readNumber(node.data.collaboration_value) ?? 0) >= 60
-    )
+      (readNumber(node.data.collaboration_value) ?? 0) >= 60)
   ) {
     return "critical";
   }
@@ -848,7 +894,11 @@ export function isCommandLikeAction(node: SessionGraphNode): boolean {
     return false;
   }
 
-  const toolName = (readString(node.data.tool_name) ?? readString(node.data.tool) ?? "").toLowerCase();
+  const toolName = (
+    readString(node.data.tool_name) ??
+    readString(node.data.tool) ??
+    ""
+  ).toLowerCase();
   return (
     Boolean(readString(node.data.command)) ||
     /shell|bash|zsh|powershell|kali|execute|command|terminal|ctx_execute/.test(toolName)
@@ -885,7 +935,8 @@ function buildFindingValue(finding: Record<string, unknown>): string | null {
 }
 
 function buildHypothesisValue(hypothesis: Record<string, unknown>): string | null {
-  const summary = readString(hypothesis.summary) ?? readString(hypothesis.result) ?? readString(hypothesis.kind);
+  const summary =
+    readString(hypothesis.summary) ?? readString(hypothesis.result) ?? readString(hypothesis.kind);
   const status = readString(hypothesis.status);
   if (!summary && !status) {
     return null;
@@ -917,7 +968,10 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
       {
         title: "Focus",
         items: [
-          { label: "子目标", value: readString(node.data.title) ?? readString(node.data.task_name) ?? node.label },
+          {
+            label: "子目标",
+            value: readString(node.data.title) ?? readString(node.data.task_name) ?? node.label,
+          },
           ...(readString(node.data.summary)
             ? [{ label: "为什么做", value: readString(node.data.summary)! }]
             : []),
@@ -954,7 +1008,13 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
     return [
       {
         title: "Command",
-        items: [{ label: "完整命令", value: readString(node.data.command) ?? readString(node.data.primary_command) ?? node.label }],
+        items: [
+          {
+            label: "完整命令",
+            value:
+              readString(node.data.command) ?? readString(node.data.primary_command) ?? node.label,
+          },
+        ],
       },
       {
         title: "Observation",
@@ -976,14 +1036,20 @@ export function buildAttackNodeDetailSections(node: SessionGraphNode): AttackNod
     {
       title: "Why",
       items: [
-        ...(readString(node.data.thought) ? [{ label: "Why", value: readString(node.data.thought)! }] : []),
-        ...(readString(node.data.summary) ? [{ label: "Action summary", value: readString(node.data.summary)! }] : []),
+        ...(readString(node.data.thought)
+          ? [{ label: "Why", value: readString(node.data.thought)! }]
+          : []),
+        ...(readString(node.data.summary)
+          ? [{ label: "Action summary", value: readString(node.data.summary)! }]
+          : []),
       ],
     },
     {
       title: "Observation",
       items: [
-        ...(getObservationSummary(node) ? [{ label: "Observation", value: getObservationSummary(node)! }] : []),
+        ...(getObservationSummary(node)
+          ? [{ label: "Observation", value: getObservationSummary(node)! }]
+          : []),
       ],
     },
     {
@@ -1010,7 +1076,9 @@ export function getAttackGraphAutoFocusNodeId(
   }
 
   const currentTaskNode = graph.nodes.find(
-    (node) => node.node_type === "task" && (readBoolean(node.data.current) || readBoolean(node.data.active)),
+    (node) =>
+      node.node_type === "task" &&
+      (readBoolean(node.data.current) || readBoolean(node.data.active)),
   );
   if (currentTaskNode) {
     return currentTaskNode.id;

@@ -246,13 +246,15 @@ class CapabilityFacade:
             "primary_prepared": skill_context.get("primary_prepared"),
             "suppressed_skills": skill_context.get("suppressed_skills", []),
             "suppression_reasons": skill_context.get("suppression_reasons", {}),
-            "pruning_applied": bool(
-                cast(dict[str, object], skill_context.get("skill_set_plan", {})).get(
-                    "pruning_applied", False
+            "pruning_applied": (
+                bool(
+                    cast(dict[str, object], skill_context.get("skill_set_plan", {})).get(
+                        "pruning_applied", False
+                    )
                 )
-            )
-            if isinstance(skill_context.get("skill_set_plan"), dict)
-            else False,
+                if isinstance(skill_context.get("skill_set_plan"), dict)
+                else False
+            ),
             "pruned_supporting_skills": skill_context.get("pruned_supporting_skills", []),
             "pruned_reference_skills": skill_context.get("pruned_reference_skills", []),
             "skill_runtime_usage": skill_context.get("skill_runtime_usage", []),
