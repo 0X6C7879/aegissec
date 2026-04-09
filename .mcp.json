@@ -1,10 +1,22 @@
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"],
+    "nu1l_forum": {
+      "command": "python",
+      "args": ["mcp/mcp_server.py"],
+      "env": {
+        "AGENT_BEARER_TOKEN": "你的token",
+        "SERVER_HOST": "赛题服务器地址"
+      },
       "enabled": true,
-      "timeout_ms": 15000
+      "timeout_ms": 60000
+    },
+    "pentest-challenge-platform": {
+      "url": "http://<SERVER_HOST>/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_AGENT_TOKEN>"
+      },
+      "enabled": true,
+      "timeout_ms": 60000
     }
   }
 }

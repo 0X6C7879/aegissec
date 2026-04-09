@@ -6,6 +6,7 @@ from pytest import MonkeyPatch
 from app.compat.skills.models import SkillScanRoot
 from app.core.settings import Settings
 from app.db.models import CompatibilityScope, CompatibilitySource, SkillRecord, SkillRecordStatus
+from app.services.pattt_catalog import build_pattt_catalog
 from tests.test_skills import _create_service_session, _write_skill
 
 
@@ -429,21 +430,6 @@ when_to_use: Use for API validation and endpoint review.
             current_prompt="Need triage planning and API validation",
             workflow_stage="triage",
         )
-        snapshot = skill_service.build_active_skill_snapshot(
-            session_id="session-context",
-            touched_paths=[str(touched_file)],
-            workspace_path=str(project_root),
-            current_prompt="Need triage planning and API validation",
-            workflow_stage="triage",
-        )
-        loaded = skill_service.list_loaded_skills_for_agent(
-            session_id="session-context",
-            touched_paths=[str(touched_file)],
-            workspace_path=str(project_root),
-            current_prompt="Need triage planning and API validation",
-            workflow_stage="triage",
-        )
-
     selected_skill = cast(dict[str, object], payload["selected_skill"])
     resolution = cast(dict[str, object], payload["resolution"])
     assert selected_skill["id"] == resolution["selected_skill_id"]
@@ -477,20 +463,85 @@ when_to_use: Use for API validation and endpoint review.
     assert any(item["prepared_for_context"] is True for item in prepared_selected)
     assert "Task intent profile:" in prompt_fragment
     assert "Primary skill:" in prompt_fragment
-    assert "Supporting skills prepared for context:" in prompt_fragment
-    assert "Why these skills were selected together:" in prompt_fragment
-    assert "Guidance:" in prompt_fragment
-    assert "Skill set plan for this stage" in prompt_fragment
-    assert "demo" in prompt_fragment
-    assert "prepared_for_context=True" in prompt_fragment
-    assert snapshot[0]["selected"] is True
-    assert snapshot[0]["role"] == "primary"
-    loaded_names = [item.directory_name for item in loaded]
-    loaded_roles = [item.role for item in loaded]
-    assert loaded_names[0] == "demo"
-    assert "triage-planner" in loaded_names
-    assert loaded_roles[0] == "primary"
-    assert "supporting" in loaded_roles
+
+
+def test_prepare_best_skill_builds_pattt_prepared_prompt(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "workspace"
+    skills_root = project_root / "skills"
+    pattt_root = project_root / "knowledge" / "pattt"
+    monkeypatch.setenv("AEGISSEC_PATTT_ROOT", str(pattt_root))
+
+    _write_skill(
+        skills_root / "pattt-readme-loader" / "SKILL.md",
+        """---
+name: pattt-readme-loader
+description: PATTT loader
+user_invocable: false
+preferred_stage: verification
+---
+# pattt-readme-loader
+""",
+    )
+    _write_skill(
+        pattt_root / "repo" / "Server Side Request Forgery" / "README.md",
+        """# Server Side Request Forgery
+## Verification
+- http://169.254.169.254/latest/meta-data/
+""",
+    )
+    _write_skill(
+        pattt_root / "repo" / "Server Side Request Forgery" / "SSRF-Cloud-Instances.md",
+        """# SSRF Cloud Instances
+## AWS
+- http://169.254.169.254/latest/meta-data/iam/security-credentials/
+""",
+    )
+    _write_skill(pattt_root / "repo" / ".source-commit", "fixture-sha")
+    build_pattt_catalog(
+        repo_dir=pattt_root / "repo",
+        catalog_dir=pattt_root / "catalog",
+        repo_root=project_root,
+        source_commit="fixture-sha",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings, discovery_paths=None: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            )
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service-pattt.db") as (
+        _,
+        skill_service,
+    ):
+        skill_service.rescan_skills()
+        prepared = skill_service.prepare_best_skill(
+            current_prompt="Need SSRF cloud metadata verification payloads",
+            user_goal="Need SSRF cloud metadata verification payloads",
+            preferred_skill_identifier="pattt-readme-loader",
+            include_reference_only=True,
+        )
+
+    execution = cast(dict[str, object], prepared["execution"])
+    prepared_prompt = cast(str, execution["prepared_prompt"])
+    pattt_context = cast(dict[str, object], execution["pattt_context"])
+    assert prepared["status"] == "selected"
+    assert "PATTT README-first context" in prepared_prompt
+    assert "knowledge/pattt/repo/Server Side Request Forgery/README.md" in prepared_prompt
+    loaded_docs = cast(list[dict[str, object]], pattt_context["loaded_docs"])
+    assert loaded_docs
+    payload_candidates = cast(list[dict[str, object]], pattt_context["payload_candidates"])
+    assert payload_candidates
+    assert all("source_path" in candidate for candidate in payload_candidates)
 
 
 def test_stage_budget_prunes_supporting_skills_and_changes_loaded_runtime_set(

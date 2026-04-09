@@ -326,6 +326,8 @@ class ExecuteSkillTool(BaseTool[ExecuteSkillInput]):
                 result_payload = context.skill_service.execute_skill_by_name_or_directory_name(
                     parsed.skill_name_or_id,
                     session_id=context.session.id,
+                    current_prompt=parsed.current_prompt,
+                    user_goal=parsed.user_goal,
                 )
         except (SkillLookupError, SkillContentReadError) as exc:
             raise ChatRuntimeError(str(exc)) from exc

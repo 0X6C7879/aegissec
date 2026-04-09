@@ -250,11 +250,11 @@ describe("WorkbenchComposer", () => {
     expect(useUiStore.getState().draftsBySession["session-send"]?.content ?? "").toBe("");
   });
 
-  it("defaults to inject/continue while keeping queue-send explicit during active generation", async () => {
+  it("injects follow-up input through the primary action while generation is active", async () => {
     const user = userEvent.setup();
-    const onInterrupt = vi.fn().mockResolvedValue(undefined);
     const onQueueSend = vi.fn().mockResolvedValue(undefined);
     const onInject = vi.fn().mockResolvedValue(undefined);
+    const onInterrupt = vi.fn().mockResolvedValue(undefined);
 
     const { textbox } = renderComposer({
       sessionId: "session-running",
@@ -267,44 +267,52 @@ describe("WorkbenchComposer", () => {
 
     await user.type(textbox, "生成结束后继续验证入口");
 
-    expect(screen.getByRole("button", { name: "注入当前回复" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "注入" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "加入队列" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发送并注入当前任务" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "注入" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加入队列" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "中断" })).not.toBeInTheDocument();
     expect(
-      screen.getByText("助手正在回复；可直接注入补充上下文，当前还有 1 条排队消息。"),
+      screen.getByText("助手正在回复，输入后会直接注入当前任务；当前还有 1 条消息排队。"),
     ).toBeInTheDocument();
     expect(useUiStore.getState().draftsBySession["session-running"]?.content).toBe(
       "生成结束后继续验证入口",
     );
 
-    await user.click(screen.getByRole("button", { name: "注入" }));
+    await user.click(screen.getByRole("button", { name: "发送并注入当前任务" }));
     await waitFor(() => expect(onInject).toHaveBeenCalledWith("生成结束后继续验证入口"));
-
-    await user.type(textbox, "生成结束后继续验证入口");
-    await user.click(screen.getByRole("button", { name: "加入队列" }));
-    await waitFor(() =>
-      expect(onQueueSend).toHaveBeenCalledWith({
-        content: "生成结束后继续验证入口",
-        slashAction: null,
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: "中断" }));
-    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    expect(onQueueSend).not.toHaveBeenCalled();
+    expect(onInterrupt).not.toHaveBeenCalled();
   });
 
-  it("shows continue semantics for paused active generations", () => {
+  it("shows interrupt semantics for paused active generations", () => {
     renderComposer({
       sessionId: "session-paused",
       isActiveGeneration: true,
       isPausedGeneration: true,
     });
 
-    expect(screen.getByRole("button", { name: "继续当前回复" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
-    expect(
-      screen.getByText("当前回复已暂停；补充说明后可继续，也可改为加入队列。"),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "中断当前对话" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "中断" })).not.toBeInTheDocument();
+    expect(screen.getByText("当前回复已暂停，输入内容后会直接注入当前任务。")).toBeInTheDocument();
+  });
+
+  it("interrupts active generation when clicking primary button with empty draft", async () => {
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn().mockResolvedValue(undefined);
+    const onQueueSend = vi.fn().mockResolvedValue(undefined);
+
+    renderComposer({
+      sessionId: "session-interrupt-primary",
+      isActiveGeneration: true,
+      onInterrupt,
+      onQueueSend,
+    });
+
+    await user.click(screen.getByRole("button", { name: "中断当前对话" }));
+
+    await waitFor(() => expect(onInterrupt).toHaveBeenCalledTimes(1));
+    expect(onQueueSend).not.toHaveBeenCalled();
   });
 
   it("keeps the textarea editable while the first send is still pending and preserves the follow-up draft", async () => {
@@ -362,8 +370,9 @@ describe("WorkbenchComposer", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "注入" }));
+    await user.click(screen.getByRole("button", { name: "发送并注入当前任务" }));
     await waitFor(() => expect(onInject).toHaveBeenNthCalledWith(1, "第二条跟进"));
+    expect(onQueueSend).toHaveBeenCalledTimes(1);
   });
 
   it("submits on Enter and preserves Shift + Enter for new lines", async () => {
@@ -392,7 +401,7 @@ describe("WorkbenchComposer", () => {
     expect(useUiStore.getState().draftsBySession["session-enter"]?.content ?? "").toBe("");
   });
 
-  it("uses Enter as inject/continue while active generation is in progress", async () => {
+  it("uses Enter to inject follow-up while active generation is in progress", async () => {
     const user = userEvent.setup();
     const onInject = vi.fn().mockResolvedValue(undefined);
 

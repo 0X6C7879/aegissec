@@ -1,0 +1,1594 @@
+{
+  "account takeover": [
+    "account-takeover"
+  ],
+  "account-takeover": [
+    "account-takeover"
+  ],
+  "at": [
+    "account-takeover"
+  ],
+  "mb": [
+    "account-takeover"
+  ],
+  "mfa bypasses": [
+    "account-takeover"
+  ],
+  "mfa-bypasses": [
+    "account-takeover"
+  ],
+  "akl": [
+    "api-key-leaks"
+  ],
+  "api key leaks": [
+    "api-key-leaks"
+  ],
+  "api-key-leaks": [
+    "api-key-leaks"
+  ],
+  "iis machine keys": [
+    "api-key-leaks"
+  ],
+  "iis-machine-keys": [
+    "api-key-leaks"
+  ],
+  "imk": [
+    "api-key-leaks"
+  ],
+  "akatl": [
+    "api-key-leaks"
+  ],
+  "api key and token leaks": [
+    "api-key-leaks"
+  ],
+  "api-key-and-token-leaks": [
+    "api-key-leaks"
+  ],
+  "bfrl": [
+    "brute-force-rate-limit"
+  ],
+  "brute force rate limit": [
+    "brute-force-rate-limit"
+  ],
+  "brute-force-rate-limit": [
+    "brute-force-rate-limit"
+  ],
+  "brute force & rate limit": [
+    "brute-force-rate-limit"
+  ],
+  "ble": [
+    "business-logic-errors"
+  ],
+  "business logic errors": [
+    "business-logic-errors"
+  ],
+  "business-logic-errors": [
+    "business-logic-errors"
+  ],
+  "clickjacking": [
+    "clickjacking"
+  ],
+  "client side path traversal": [
+    "client-side-path-traversal"
+  ],
+  "client-side-path-traversal": [
+    "client-side-path-traversal"
+  ],
+  "cspt": [
+    "client-side-path-traversal"
+  ],
+  "ci": [
+    "command-injection",
+    "crlf-injection",
+    "css-injection",
+    "csv-injection",
+    "sql-injection"
+  ],
+  "command injection": [
+    "command-injection"
+  ],
+  "command-injection": [
+    "command-injection"
+  ],
+  "cm": [
+    "cors-misconfiguration"
+  ],
+  "cors misconfiguration": [
+    "cors-misconfiguration"
+  ],
+  "cors-misconfiguration": [
+    "cors-misconfiguration"
+  ],
+  "crlf injection": [
+    "crlf-injection"
+  ],
+  "crlf-injection": [
+    "crlf-injection"
+  ],
+  "carriage return line feed": [
+    "crlf-injection"
+  ],
+  "carriage-return-line-feed": [
+    "crlf-injection"
+  ],
+  "crlf": [
+    "crlf-injection"
+  ],
+  "cross site request forgery": [
+    "cross-site-request-forgery"
+  ],
+  "cross-site request forgery": [
+    "cross-site-request-forgery"
+  ],
+  "cross-site-request-forgery": [
+    "cross-site-request-forgery"
+  ],
+  "csrf": [
+    "cross-site-request-forgery"
+  ],
+  "css injection": [
+    "css-injection"
+  ],
+  "css-injection": [
+    "css-injection"
+  ],
+  "csv injection": [
+    "csv-injection"
+  ],
+  "csv-injection": [
+    "csv-injection"
+  ],
+  "ce": [
+    "cve-exploits"
+  ],
+  "cve exploits": [
+    "cve-exploits"
+  ],
+  "cve-exploits": [
+    "cve-exploits"
+  ],
+  "c24l": [
+    "cve-exploits"
+  ],
+  "cve 2021 44228 log4shell": [
+    "cve-exploits"
+  ],
+  "cve-2021-44228 log4shell": [
+    "cve-exploits"
+  ],
+  "cve-2021-44228-log4shell": [
+    "cve-exploits"
+  ],
+  "common vulnerabilities and exposures": [
+    "cve-exploits"
+  ],
+  "common-vulnerabilities-and-exposures": [
+    "cve-exploits"
+  ],
+  "cvae": [
+    "cve-exploits"
+  ],
+  "denial of service": [
+    "denial-of-service"
+  ],
+  "denial-of-service": [
+    "denial-of-service"
+  ],
+  "dos": [
+    "denial-of-service"
+  ],
+  "dc": [
+    "dependency-confusion",
+    "dom-clobbering"
+  ],
+  "dependency confusion": [
+    "dependency-confusion"
+  ],
+  "dependency-confusion": [
+    "dependency-confusion"
+  ],
+  "directory traversal": [
+    "directory-traversal"
+  ],
+  "directory-traversal": [
+    "directory-traversal"
+  ],
+  "dt": [
+    "directory-traversal"
+  ],
+  "dns rebinding": [
+    "dns-rebinding"
+  ],
+  "dns-rebinding": [
+    "dns-rebinding"
+  ],
+  "dr": [
+    "dns-rebinding"
+  ],
+  "dom clobbering": [
+    "dom-clobbering"
+  ],
+  "dom-clobbering": [
+    "dom-clobbering"
+  ],
+  "encoding transformations": [
+    "encoding-transformations"
+  ],
+  "encoding-transformations": [
+    "encoding-transformations"
+  ],
+  "et": [
+    "encoding-transformations"
+  ],
+  "eat": [
+    "encoding-transformations"
+  ],
+  "encoding and transformations": [
+    "encoding-transformations"
+  ],
+  "encoding-and-transformations": [
+    "encoding-transformations"
+  ],
+  "evm": [
+    "external-variable-modification"
+  ],
+  "external variable modification": [
+    "external-variable-modification"
+  ],
+  "external-variable-modification": [
+    "external-variable-modification"
+  ],
+  "fi": [
+    "file-inclusion"
+  ],
+  "file inclusion": [
+    "file-inclusion"
+  ],
+  "file-inclusion": [
+    "file-inclusion"
+  ],
+  "lfi to rce": [
+    "file-inclusion"
+  ],
+  "lfi-to-rce": [
+    "file-inclusion"
+  ],
+  "ltr": [
+    "file-inclusion"
+  ],
+  "inclusion using wrappers": [
+    "file-inclusion"
+  ],
+  "inclusion-using-wrappers": [
+    "file-inclusion"
+  ],
+  "iuw": [
+    "file-inclusion"
+  ],
+  "google web toolkit": [
+    "google-web-toolkit"
+  ],
+  "google-web-toolkit": [
+    "google-web-toolkit"
+  ],
+  "gwt": [
+    "google-web-toolkit"
+  ],
+  "gi": [
+    "graphql-injection"
+  ],
+  "graphql injection": [
+    "graphql-injection"
+  ],
+  "graphql-injection": [
+    "graphql-injection"
+  ],
+  "hb": [
+    "headless-browser"
+  ],
+  "headless browser": [
+    "headless-browser"
+  ],
+  "headless-browser": [
+    "headless-browser"
+  ],
+  "hidden parameters": [
+    "hidden-parameters"
+  ],
+  "hidden-parameters": [
+    "hidden-parameters"
+  ],
+  "hp": [
+    "hidden-parameters"
+  ],
+  "hhp": [
+    "hidden-parameters"
+  ],
+  "http hidden parameters": [
+    "hidden-parameters"
+  ],
+  "http-hidden-parameters": [
+    "hidden-parameters"
+  ],
+  "hpp": [
+    "http-parameter-pollution"
+  ],
+  "http parameter pollution": [
+    "http-parameter-pollution"
+  ],
+  "http-parameter-pollution": [
+    "http-parameter-pollution"
+  ],
+  "id": [
+    "insecure-deserialization"
+  ],
+  "insecure deserialization": [
+    "insecure-deserialization"
+  ],
+  "insecure-deserialization": [
+    "insecure-deserialization"
+  ],
+  ".net deserialization": [
+    "insecure-deserialization"
+  ],
+  "nd": [
+    "insecure-deserialization",
+    "methodology-and-resources__network-discovery"
+  ],
+  "net-deserialization": [
+    "insecure-deserialization"
+  ],
+  "java deserialization": [
+    "insecure-deserialization"
+  ],
+  "java-deserialization": [
+    "insecure-deserialization"
+  ],
+  "jd": [
+    "insecure-deserialization"
+  ],
+  "node deserialization": [
+    "insecure-deserialization"
+  ],
+  "node-deserialization": [
+    "insecure-deserialization"
+  ],
+  "pd": [
+    "insecure-deserialization"
+  ],
+  "php deserialization": [
+    "insecure-deserialization"
+  ],
+  "php-deserialization": [
+    "insecure-deserialization"
+  ],
+  "python deserialization": [
+    "insecure-deserialization"
+  ],
+  "python-deserialization": [
+    "insecure-deserialization"
+  ],
+  "rd": [
+    "insecure-deserialization"
+  ],
+  "ruby deserialization": [
+    "insecure-deserialization"
+  ],
+  "ruby-deserialization": [
+    "insecure-deserialization"
+  ],
+  "idor": [
+    "insecure-direct-object-references"
+  ],
+  "insecure direct object references": [
+    "insecure-direct-object-references"
+  ],
+  "insecure-direct-object-references": [
+    "insecure-direct-object-references"
+  ],
+  "imi": [
+    "insecure-management-interface"
+  ],
+  "insecure management interface": [
+    "insecure-management-interface"
+  ],
+  "insecure-management-interface": [
+    "insecure-management-interface"
+  ],
+  "insecure randomness": [
+    "insecure-randomness"
+  ],
+  "insecure-randomness": [
+    "insecure-randomness"
+  ],
+  "ir": [
+    "insecure-randomness"
+  ],
+  "insecure source code management": [
+    "insecure-source-code-management"
+  ],
+  "insecure-source-code-management": [
+    "insecure-source-code-management"
+  ],
+  "iscm": [
+    "insecure-source-code-management"
+  ],
+  "bazaar": [
+    "insecure-source-code-management"
+  ],
+  "git": [
+    "insecure-source-code-management"
+  ],
+  "mercurial": [
+    "insecure-source-code-management"
+  ],
+  "subversion": [
+    "insecure-source-code-management"
+  ],
+  "java rmi": [
+    "java-rmi"
+  ],
+  "java-rmi": [
+    "java-rmi"
+  ],
+  "jr": [
+    "java-rmi"
+  ],
+  "json web token": [
+    "json-web-token"
+  ],
+  "json-web-token": [
+    "json-web-token"
+  ],
+  "jwt": [
+    "json-web-token"
+  ],
+  "jjwt": [
+    "json-web-token"
+  ],
+  "jwt   json web token": [
+    "json-web-token"
+  ],
+  "jwt - json web token": [
+    "json-web-token"
+  ],
+  "jwt-json-web-token": [
+    "json-web-token"
+  ],
+  "latex injection": [
+    "latex-injection"
+  ],
+  "latex-injection": [
+    "latex-injection"
+  ],
+  "li": [
+    "latex-injection",
+    "ldap-injection"
+  ],
+  "ldap injection": [
+    "ldap-injection"
+  ],
+  "ldap-injection": [
+    "ldap-injection"
+  ],
+  "ma": [
+    "mass-assignment"
+  ],
+  "mass assignment": [
+    "mass-assignment"
+  ],
+  "mass-assignment": [
+    "mass-assignment"
+  ],
+  "active directory attack": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "active-directory-attack": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "ada": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "methodology and resources": [
+    "methodology-and-resources__active-directory-attack",
+    "methodology-and-resources__bind-shell-cheatsheet",
+    "methodology-and-resources__cloud-aws-pentest",
+    "methodology-and-resources__cloud-azure-pentest",
+    "methodology-and-resources__cobalt-strike-cheatsheet",
+    "methodology-and-resources__container-docker-pentest",
+    "methodology-and-resources__container-kubernetes-pentest",
+    "methodology-and-resources__escape-breakout",
+    "methodology-and-resources__hash-cracking",
+    "methodology-and-resources__html-smuggling",
+    "methodology-and-resources__initial-access",
+    "methodology-and-resources__linux-evasion",
+    "methodology-and-resources__linux-persistence",
+    "methodology-and-resources__linux-privilege-escalation",
+    "methodology-and-resources__metasploit-cheatsheet",
+    "methodology-and-resources__methodology-and-enumeration",
+    "methodology-and-resources__mssql-server-cheatsheet",
+    "methodology-and-resources__network-discovery",
+    "methodology-and-resources__network-pivoting-techniques",
+    "methodology-and-resources__office-attacks",
+    "methodology-and-resources__powershell-cheatsheet",
+    "methodology-and-resources__reverse-shell-cheatsheet",
+    "methodology-and-resources__source-code-management",
+    "methodology-and-resources__vulnerability-reports",
+    "methodology-and-resources__web-attack-surface",
+    "methodology-and-resources__windows-amsi-bypass",
+    "methodology-and-resources__windows-defenses",
+    "methodology-and-resources__windows-download-and-execute",
+    "methodology-and-resources__windows-dpapi",
+    "methodology-and-resources__windows-mimikatz",
+    "methodology-and-resources__windows-persistence",
+    "methodology-and-resources__windows-privilege-escalation",
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "methodology and resources active directory attack": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "active directory attacks": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "active-directory-attacks": [
+    "methodology-and-resources__active-directory-attack"
+  ],
+  "bind shell cheatsheet": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "bind-shell-cheatsheet": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "bsc": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "methodology and resources bind shell cheatsheet": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "bind shell": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "bind-shell": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "bs": [
+    "methodology-and-resources__bind-shell-cheatsheet"
+  ],
+  "cap": [
+    "methodology-and-resources__cloud-aws-pentest",
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud   aws pentest": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "cloud - aws pentest": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "cloud-aws-pentest": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "methodology and resources cloud - aws pentest": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "ca": [
+    "methodology-and-resources__cloud-aws-pentest",
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud   aws": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "cloud - aws": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "cloud-aws": [
+    "methodology-and-resources__cloud-aws-pentest"
+  ],
+  "cloud   azure pentest": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud - azure pentest": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud-azure-pentest": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "methodology and resources cloud - azure pentest": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud   azure": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud - azure": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cloud-azure": [
+    "methodology-and-resources__cloud-azure-pentest"
+  ],
+  "cobalt strike   cheatsheet": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cobalt strike - cheatsheet": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cobalt-strike-cheatsheet": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "csc": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "methodology and resources cobalt strike - cheatsheet": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cobalt strike": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cobalt-strike": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cs": [
+    "methodology-and-resources__cobalt-strike-cheatsheet"
+  ],
+  "cdp": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container   docker pentest": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container - docker pentest": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container-docker-pentest": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "methodology and resources container - docker pentest": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "cd": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container   docker": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container - docker": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "container-docker": [
+    "methodology-and-resources__container-docker-pentest"
+  ],
+  "ckp": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container   kubernetes pentest": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container - kubernetes pentest": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container-kubernetes-pentest": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "methodology and resources container - kubernetes pentest": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "ck": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container   kubernetes": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container - kubernetes": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "container-kubernetes": [
+    "methodology-and-resources__container-kubernetes-pentest"
+  ],
+  "eb": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "escape breakout": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "escape-breakout": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "methodology and resources escape breakout": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "aeab": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "application escape and breakout": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "application-escape-and-breakout": [
+    "methodology-and-resources__escape-breakout"
+  ],
+  "hash cracking": [
+    "methodology-and-resources__hash-cracking"
+  ],
+  "hash-cracking": [
+    "methodology-and-resources__hash-cracking"
+  ],
+  "hc": [
+    "methodology-and-resources__hash-cracking"
+  ],
+  "methodology and resources hash cracking": [
+    "methodology-and-resources__hash-cracking"
+  ],
+  "hs": [
+    "methodology-and-resources__html-smuggling"
+  ],
+  "html smuggling": [
+    "methodology-and-resources__html-smuggling"
+  ],
+  "html-smuggling": [
+    "methodology-and-resources__html-smuggling"
+  ],
+  "methodology and resources html smuggling": [
+    "methodology-and-resources__html-smuggling"
+  ],
+  "ia": [
+    "methodology-and-resources__initial-access"
+  ],
+  "initial access": [
+    "methodology-and-resources__initial-access"
+  ],
+  "initial-access": [
+    "methodology-and-resources__initial-access"
+  ],
+  "methodology and resources initial access": [
+    "methodology-and-resources__initial-access"
+  ],
+  "le": [
+    "methodology-and-resources__linux-evasion"
+  ],
+  "linux   evasion": [
+    "methodology-and-resources__linux-evasion"
+  ],
+  "linux - evasion": [
+    "methodology-and-resources__linux-evasion"
+  ],
+  "linux-evasion": [
+    "methodology-and-resources__linux-evasion"
+  ],
+  "methodology and resources linux - evasion": [
+    "methodology-and-resources__linux-evasion"
+  ],
+  "linux   persistence": [
+    "methodology-and-resources__linux-persistence"
+  ],
+  "linux - persistence": [
+    "methodology-and-resources__linux-persistence"
+  ],
+  "linux-persistence": [
+    "methodology-and-resources__linux-persistence"
+  ],
+  "lp": [
+    "methodology-and-resources__linux-persistence"
+  ],
+  "methodology and resources linux - persistence": [
+    "methodology-and-resources__linux-persistence"
+  ],
+  "linux   privilege escalation": [
+    "methodology-and-resources__linux-privilege-escalation"
+  ],
+  "linux - privilege escalation": [
+    "methodology-and-resources__linux-privilege-escalation"
+  ],
+  "linux-privilege-escalation": [
+    "methodology-and-resources__linux-privilege-escalation"
+  ],
+  "lpe": [
+    "methodology-and-resources__linux-privilege-escalation"
+  ],
+  "methodology and resources linux - privilege escalation": [
+    "methodology-and-resources__linux-privilege-escalation"
+  ],
+  "mc": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "metasploit   cheatsheet": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "metasploit - cheatsheet": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "metasploit-cheatsheet": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "methodology and resources metasploit - cheatsheet": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "metasploit": [
+    "methodology-and-resources__metasploit-cheatsheet"
+  ],
+  "mae": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "methodology and enumeration": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "methodology and resources methodology and enumeration": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "methodology-and-enumeration": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "bhmae": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "bug hunting methodology and enumeration": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "bug-hunting-methodology-and-enumeration": [
+    "methodology-and-resources__methodology-and-enumeration"
+  ],
+  "methodology and resources mssql server - cheatsheet": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "msc": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "mssql server   cheatsheet": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "mssql server - cheatsheet": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "mssql-server-cheatsheet": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "ms": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "mssql server": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "mssql-server": [
+    "methodology-and-resources__mssql-server-cheatsheet"
+  ],
+  "methodology and resources network discovery": [
+    "methodology-and-resources__network-discovery"
+  ],
+  "network discovery": [
+    "methodology-and-resources__network-discovery"
+  ],
+  "network-discovery": [
+    "methodology-and-resources__network-discovery"
+  ],
+  "methodology and resources network pivoting techniques": [
+    "methodology-and-resources__network-pivoting-techniques"
+  ],
+  "network pivoting techniques": [
+    "methodology-and-resources__network-pivoting-techniques"
+  ],
+  "network-pivoting-techniques": [
+    "methodology-and-resources__network-pivoting-techniques"
+  ],
+  "npt": [
+    "methodology-and-resources__network-pivoting-techniques"
+  ],
+  "methodology and resources office - attacks": [
+    "methodology-and-resources__office-attacks"
+  ],
+  "oa": [
+    "methodology-and-resources__office-attacks"
+  ],
+  "office   attacks": [
+    "methodology-and-resources__office-attacks"
+  ],
+  "office - attacks": [
+    "methodology-and-resources__office-attacks"
+  ],
+  "office-attacks": [
+    "methodology-and-resources__office-attacks"
+  ],
+  "methodology and resources powershell - cheatsheet": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "pc": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "powershell   cheatsheet": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "powershell - cheatsheet": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "powershell-cheatsheet": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "powershell": [
+    "methodology-and-resources__powershell-cheatsheet"
+  ],
+  "methodology and resources reverse shell cheatsheet": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "reverse shell cheatsheet": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "reverse-shell-cheatsheet": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "rsc": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "reverse shell cheat sheet": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "reverse-shell-cheat-sheet": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "rscs": [
+    "methodology-and-resources__reverse-shell-cheatsheet"
+  ],
+  "methodology and resources source code management": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "scm": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "source code management": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "source-code-management": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "scmccc": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "source code management & ci/cd compromise": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "source-code-management-ci-cd-compromise": [
+    "methodology-and-resources__source-code-management"
+  ],
+  "methodology and resources vulnerability reports": [
+    "methodology-and-resources__vulnerability-reports"
+  ],
+  "vr": [
+    "methodology-and-resources__vulnerability-reports"
+  ],
+  "vulnerability reports": [
+    "methodology-and-resources__vulnerability-reports"
+  ],
+  "vulnerability-reports": [
+    "methodology-and-resources__vulnerability-reports"
+  ],
+  "methodology and resources web attack surface": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "was": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "web attack surface": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "web-attack-surface": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "se": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "subdomains enumeration": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "subdomains-enumeration": [
+    "methodology-and-resources__web-attack-surface"
+  ],
+  "methodology and resources windows - amsi bypass": [
+    "methodology-and-resources__windows-amsi-bypass"
+  ],
+  "wab": [
+    "methodology-and-resources__windows-amsi-bypass"
+  ],
+  "windows   amsi bypass": [
+    "methodology-and-resources__windows-amsi-bypass"
+  ],
+  "windows - amsi bypass": [
+    "methodology-and-resources__windows-amsi-bypass"
+  ],
+  "windows-amsi-bypass": [
+    "methodology-and-resources__windows-amsi-bypass"
+  ],
+  "methodology and resources windows - defenses": [
+    "methodology-and-resources__windows-defenses"
+  ],
+  "wd": [
+    "methodology-and-resources__windows-defenses",
+    "methodology-and-resources__windows-dpapi"
+  ],
+  "windows   defenses": [
+    "methodology-and-resources__windows-defenses"
+  ],
+  "windows - defenses": [
+    "methodology-and-resources__windows-defenses"
+  ],
+  "windows-defenses": [
+    "methodology-and-resources__windows-defenses"
+  ],
+  "methodology and resources windows - download and execute": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "wdae": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows   download and execute": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows - download and execute": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows-download-and-execute": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "wdaem": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows   download and execute methods": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows - download and execute methods": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "windows-download-and-execute-methods": [
+    "methodology-and-resources__windows-download-and-execute"
+  ],
+  "methodology and resources windows - dpapi": [
+    "methodology-and-resources__windows-dpapi"
+  ],
+  "windows   dpapi": [
+    "methodology-and-resources__windows-dpapi"
+  ],
+  "windows - dpapi": [
+    "methodology-and-resources__windows-dpapi"
+  ],
+  "windows-dpapi": [
+    "methodology-and-resources__windows-dpapi"
+  ],
+  "methodology and resources windows - mimikatz": [
+    "methodology-and-resources__windows-mimikatz"
+  ],
+  "windows   mimikatz": [
+    "methodology-and-resources__windows-mimikatz"
+  ],
+  "windows - mimikatz": [
+    "methodology-and-resources__windows-mimikatz"
+  ],
+  "windows-mimikatz": [
+    "methodology-and-resources__windows-mimikatz"
+  ],
+  "wm": [
+    "methodology-and-resources__windows-mimikatz"
+  ],
+  "methodology and resources windows - persistence": [
+    "methodology-and-resources__windows-persistence"
+  ],
+  "windows   persistence": [
+    "methodology-and-resources__windows-persistence"
+  ],
+  "windows - persistence": [
+    "methodology-and-resources__windows-persistence"
+  ],
+  "windows-persistence": [
+    "methodology-and-resources__windows-persistence"
+  ],
+  "wp": [
+    "methodology-and-resources__windows-persistence"
+  ],
+  "methodology and resources windows - privilege escalation": [
+    "methodology-and-resources__windows-privilege-escalation"
+  ],
+  "windows   privilege escalation": [
+    "methodology-and-resources__windows-privilege-escalation"
+  ],
+  "windows - privilege escalation": [
+    "methodology-and-resources__windows-privilege-escalation"
+  ],
+  "windows-privilege-escalation": [
+    "methodology-and-resources__windows-privilege-escalation"
+  ],
+  "wpe": [
+    "methodology-and-resources__windows-privilege-escalation"
+  ],
+  "methodology and resources windows - using credentials": [
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "windows   using credentials": [
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "windows - using credentials": [
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "windows-using-credentials": [
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "wuc": [
+    "methodology-and-resources__windows-using-credentials"
+  ],
+  "ni": [
+    "nosql-injection"
+  ],
+  "nosql injection": [
+    "nosql-injection"
+  ],
+  "nosql-injection": [
+    "nosql-injection"
+  ],
+  "oauth misconfiguration": [
+    "oauth-misconfiguration"
+  ],
+  "oauth-misconfiguration": [
+    "oauth-misconfiguration"
+  ],
+  "om": [
+    "oauth-misconfiguration"
+  ],
+  "open redirect": [
+    "open-redirect"
+  ],
+  "open-redirect": [
+    "open-redirect"
+  ],
+  "or": [
+    "open-redirect"
+  ],
+  "open url redirect": [
+    "open-redirect"
+  ],
+  "open-url-redirect": [
+    "open-redirect"
+  ],
+  "our": [
+    "open-redirect"
+  ],
+  "ol": [
+    "orm-leak"
+  ],
+  "orm leak": [
+    "orm-leak"
+  ],
+  "orm-leak": [
+    "orm-leak"
+  ],
+  "pi": [
+    "prompt-injection",
+    "sql-injection"
+  ],
+  "prompt injection": [
+    "prompt-injection"
+  ],
+  "prompt-injection": [
+    "prompt-injection"
+  ],
+  "pp": [
+    "prototype-pollution"
+  ],
+  "prototype pollution": [
+    "prototype-pollution"
+  ],
+  "prototype-pollution": [
+    "prototype-pollution"
+  ],
+  "race condition": [
+    "race-condition"
+  ],
+  "race-condition": [
+    "race-condition"
+  ],
+  "rc": [
+    "race-condition"
+  ],
+  "re": [
+    "regular-expression"
+  ],
+  "regular expression": [
+    "regular-expression"
+  ],
+  "regular-expression": [
+    "regular-expression"
+  ],
+  "request smuggling": [
+    "request-smuggling"
+  ],
+  "request-smuggling": [
+    "request-smuggling"
+  ],
+  "rs": [
+    "request-smuggling"
+  ],
+  "reverse proxy misconfigurations": [
+    "reverse-proxy-misconfigurations"
+  ],
+  "reverse-proxy-misconfigurations": [
+    "reverse-proxy-misconfigurations"
+  ],
+  "rpm": [
+    "reverse-proxy-misconfigurations"
+  ],
+  "saml injection": [
+    "saml-injection"
+  ],
+  "saml-injection": [
+    "saml-injection"
+  ],
+  "si": [
+    "saml-injection",
+    "sql-injection"
+  ],
+  "server side include injection": [
+    "server-side-include-injection"
+  ],
+  "server-side-include-injection": [
+    "server-side-include-injection"
+  ],
+  "ssii": [
+    "server-side-include-injection"
+  ],
+  "server side request forgery": [
+    "server-side-request-forgery"
+  ],
+  "server-side-request-forgery": [
+    "server-side-request-forgery"
+  ],
+  "ssrf": [
+    "server-side-request-forgery"
+  ],
+  "server-side request forgery": [
+    "server-side-request-forgery"
+  ],
+  "sae": [
+    "server-side-request-forgery"
+  ],
+  "ssrf advanced exploitation": [
+    "server-side-request-forgery"
+  ],
+  "ssrf-advanced-exploitation": [
+    "server-side-request-forgery"
+  ],
+  "ssrf url for cloud instances": [
+    "server-side-request-forgery"
+  ],
+  "ssrf-url-for-cloud-instances": [
+    "server-side-request-forgery"
+  ],
+  "sufci": [
+    "server-side-request-forgery"
+  ],
+  "server side template injection": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection": [
+    "server-side-template-injection"
+  ],
+  "ssti": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   asp.net": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - asp.net": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-asp-net": [
+    "server-side-template-injection"
+  ],
+  "sstian": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   elixir": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - elixir": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-elixir": [
+    "server-side-template-injection"
+  ],
+  "sstie": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   java": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - java": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-java": [
+    "server-side-template-injection"
+  ],
+  "sstij": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   javascript": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - javascript": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-javascript": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   php": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - php": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-php": [
+    "server-side-template-injection"
+  ],
+  "sstip": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   python": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - python": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-python": [
+    "server-side-template-injection"
+  ],
+  "server side template injection   ruby": [
+    "server-side-template-injection"
+  ],
+  "server side template injection - ruby": [
+    "server-side-template-injection"
+  ],
+  "server-side-template-injection-ruby": [
+    "server-side-template-injection"
+  ],
+  "sstir": [
+    "server-side-template-injection"
+  ],
+  "sql injection": [
+    "sql-injection"
+  ],
+  "sql-injection": [
+    "sql-injection"
+  ],
+  "sqli": [
+    "sql-injection"
+  ],
+  "gbsi": [
+    "sql-injection"
+  ],
+  "google bigquery sql injection": [
+    "sql-injection"
+  ],
+  "google-bigquery-sql-injection": [
+    "sql-injection"
+  ],
+  "cassandra injection": [
+    "sql-injection"
+  ],
+  "cassandra-injection": [
+    "sql-injection"
+  ],
+  "db2 injection": [
+    "sql-injection"
+  ],
+  "db2-injection": [
+    "sql-injection"
+  ],
+  "di": [
+    "sql-injection"
+  ],
+  "mi": [
+    "sql-injection"
+  ],
+  "mssql injection": [
+    "sql-injection"
+  ],
+  "mssql-injection": [
+    "sql-injection"
+  ],
+  "mysql injection": [
+    "sql-injection"
+  ],
+  "mysql-injection": [
+    "sql-injection"
+  ],
+  "oracle sql injection": [
+    "sql-injection"
+  ],
+  "oracle-sql-injection": [
+    "sql-injection"
+  ],
+  "osi": [
+    "sql-injection"
+  ],
+  "postgresql injection": [
+    "sql-injection"
+  ],
+  "postgresql-injection": [
+    "sql-injection"
+  ],
+  "sqlite injection": [
+    "sql-injection"
+  ],
+  "sqlite-injection": [
+    "sql-injection"
+  ],
+  "sqlmap": [
+    "sql-injection"
+  ],
+  "tabnabbing": [
+    "tabnabbing"
+  ],
+  "tj": [
+    "type-juggling"
+  ],
+  "type juggling": [
+    "type-juggling"
+  ],
+  "type-juggling": [
+    "type-juggling"
+  ],
+  "uif": [
+    "upload-insecure-files"
+  ],
+  "upload insecure files": [
+    "upload-insecure-files"
+  ],
+  "upload-insecure-files": [
+    "upload-insecure-files"
+  ],
+  ".htaccess": [
+    "upload-insecure-files"
+  ],
+  "htaccess": [
+    "upload-insecure-files"
+  ],
+  "vh": [
+    "virtual-hosts"
+  ],
+  "virtual hosts": [
+    "virtual-hosts"
+  ],
+  "virtual-hosts": [
+    "virtual-hosts"
+  ],
+  "virtual host": [
+    "virtual-hosts"
+  ],
+  "virtual-host": [
+    "virtual-hosts"
+  ],
+  "wcd": [
+    "web-cache-deception"
+  ],
+  "web cache deception": [
+    "web-cache-deception"
+  ],
+  "web-cache-deception": [
+    "web-cache-deception"
+  ],
+  "web sockets": [
+    "web-sockets"
+  ],
+  "web-sockets": [
+    "web-sockets"
+  ],
+  "ws": [
+    "web-sockets"
+  ],
+  "xi": [
+    "xpath-injection",
+    "xslt-injection",
+    "xss-injection",
+    "xxe-injection"
+  ],
+  "xpath injection": [
+    "xpath-injection"
+  ],
+  "xpath-injection": [
+    "xpath-injection"
+  ],
+  "xl": [
+    "xs-leak"
+  ],
+  "xs leak": [
+    "xs-leak"
+  ],
+  "xs-leak": [
+    "xs-leak"
+  ],
+  "xslt injection": [
+    "xslt-injection"
+  ],
+  "xslt-injection": [
+    "xslt-injection"
+  ],
+  "xss": [
+    "xss-injection"
+  ],
+  "xss injection": [
+    "xss-injection"
+  ],
+  "xss-injection": [
+    "xss-injection"
+  ],
+  "xfb": [
+    "xss-injection"
+  ],
+  "xss filter bypass": [
+    "xss-injection"
+  ],
+  "xss-filter-bypass": [
+    "xss-injection"
+  ],
+  "polyglot xss": [
+    "xss-injection"
+  ],
+  "polyglot-xss": [
+    "xss-injection"
+  ],
+  "px": [
+    "xss-injection"
+  ],
+  "common waf bypass": [
+    "xss-injection"
+  ],
+  "common-waf-bypass": [
+    "xss-injection"
+  ],
+  "cwb": [
+    "xss-injection"
+  ],
+  "cb": [
+    "xss-injection"
+  ],
+  "csp bypass": [
+    "xss-injection"
+  ],
+  "csp-bypass": [
+    "xss-injection"
+  ],
+  "xiaaa": [
+    "xss-injection"
+  ],
+  "xss in angular and angularjs": [
+    "xss-injection"
+  ],
+  "xss-in-angular-and-angularjs": [
+    "xss-injection"
+  ],
+  "cross site scripting": [
+    "xss-injection"
+  ],
+  "cross-site-scripting": [
+    "xss-injection"
+  ],
+  "css": [
+    "xss-injection"
+  ],
+  "xxe": [
+    "xxe-injection"
+  ],
+  "xxe injection": [
+    "xxe-injection"
+  ],
+  "xxe-injection": [
+    "xxe-injection"
+  ],
+  "xee": [
+    "xxe-injection"
+  ],
+  "xml external entity": [
+    "xxe-injection"
+  ],
+  "xml-external-entity": [
+    "xxe-injection"
+  ],
+  "zip slip": [
+    "zip-slip"
+  ],
+  "zip-slip": [
+    "zip-slip"
+  ],
+  "zs": [
+    "zip-slip"
+  ]
+}

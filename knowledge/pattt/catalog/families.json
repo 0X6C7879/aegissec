@@ -1,0 +1,1895 @@
+[
+  {
+    "family_id": "account-takeover",
+    "display_name": "Account Takeover",
+    "root_dir": "knowledge/pattt/repo/Account Takeover",
+    "layout": "readme_with_child_docs",
+    "canonical_doc": "knowledge/pattt/repo/Account Takeover/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Account Takeover/mfa-bypass.md"
+    ],
+    "assets": [],
+    "aliases": [
+      "account takeover",
+      "account-takeover",
+      "at"
+    ],
+    "sha256": "0ca749bb5f8209526d07b8e36a35c92eeb5b30f6960a6737ee720f345017a7e5"
+  },
+  {
+    "family_id": "api-key-leaks",
+    "display_name": "API Key Leaks",
+    "root_dir": "knowledge/pattt/repo/API Key Leaks",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/API Key Leaks/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/API Key Leaks/IIS-Machine-Keys.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/API Key Leaks/Files/MachineKeys.txt"
+    ],
+    "aliases": [
+      "akl",
+      "api key leaks",
+      "api-key-leaks"
+    ],
+    "sha256": "cd0254a257585eecf5230db5f057e434299e96ae4d48dcd6fecc456ceffd5bd1"
+  },
+  {
+    "family_id": "brute-force-rate-limit",
+    "display_name": "Brute Force Rate Limit",
+    "root_dir": "knowledge/pattt/repo/Brute Force Rate Limit",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Brute Force Rate Limit/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "bfrl",
+      "brute force rate limit",
+      "brute-force-rate-limit"
+    ],
+    "sha256": "88c545c51e3d8da114aaeef22e301038c9b50f6de9f181c9157478ad99b946d1"
+  },
+  {
+    "family_id": "business-logic-errors",
+    "display_name": "Business Logic Errors",
+    "root_dir": "knowledge/pattt/repo/Business Logic Errors",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Business Logic Errors/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ble",
+      "business logic errors",
+      "business-logic-errors"
+    ],
+    "sha256": "3b9dfcbca3a48855b6f70a14525f63e005dcfd4061973f72fff547d84d6b1e36"
+  },
+  {
+    "family_id": "clickjacking",
+    "display_name": "Clickjacking",
+    "root_dir": "knowledge/pattt/repo/Clickjacking",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Clickjacking/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "clickjacking"
+    ],
+    "sha256": "857855040c7786d67781b0ceace7b29c45a8dd2318bf9dc057d864a3919bac41"
+  },
+  {
+    "family_id": "client-side-path-traversal",
+    "display_name": "Client Side Path Traversal",
+    "root_dir": "knowledge/pattt/repo/Client Side Path Traversal",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Client Side Path Traversal/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "client side path traversal",
+      "client-side-path-traversal",
+      "cspt"
+    ],
+    "sha256": "4db81432562b51848e4aeb820ffb14ae641b187fd8783175dd2a4325c2a095d9"
+  },
+  {
+    "family_id": "command-injection",
+    "display_name": "Command Injection",
+    "root_dir": "knowledge/pattt/repo/Command Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Command Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Command Injection/Intruder/command-execution-unix.txt",
+      "knowledge/pattt/repo/Command Injection/Intruder/command_exec.txt"
+    ],
+    "aliases": [
+      "ci",
+      "command injection",
+      "command-injection"
+    ],
+    "sha256": "21afc41c8c947c72a3b945d3826e656f1c193e325dfff62292a9688f1fe43920"
+  },
+  {
+    "family_id": "cors-misconfiguration",
+    "display_name": "CORS Misconfiguration",
+    "root_dir": "knowledge/pattt/repo/CORS Misconfiguration",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/CORS Misconfiguration/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "cm",
+      "cors misconfiguration",
+      "cors-misconfiguration"
+    ],
+    "sha256": "5cd2e3a76a261e9175fdb115215bd7af4f8bf502336aaa3a8fb4c8c9e7ccc034"
+  },
+  {
+    "family_id": "crlf-injection",
+    "display_name": "CRLF Injection",
+    "root_dir": "knowledge/pattt/repo/CRLF Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/CRLF Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/CRLF Injection/Files/crlfinjection.txt"
+    ],
+    "aliases": [
+      "ci",
+      "crlf injection",
+      "crlf-injection"
+    ],
+    "sha256": "209496b3cfce428d765c3872d362ef3e88d0f80d7c98d0ef3d0158febfee7c44"
+  },
+  {
+    "family_id": "cross-site-request-forgery",
+    "display_name": "Cross-Site Request Forgery",
+    "root_dir": "knowledge/pattt/repo/Cross-Site Request Forgery",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Cross-Site Request Forgery/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Cross-Site Request Forgery/Images/CSRF-CheatSheet.png"
+    ],
+    "aliases": [
+      "cross site request forgery",
+      "cross-site request forgery",
+      "cross-site-request-forgery",
+      "csrf"
+    ],
+    "sha256": "815a97e1381cd546d41f5ab3a8459ab4d97083ea94bdec95be124128ddd83262"
+  },
+  {
+    "family_id": "css-injection",
+    "display_name": "CSS Injection",
+    "root_dir": "knowledge/pattt/repo/CSS Injection",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/CSS Injection/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ci",
+      "css injection",
+      "css-injection"
+    ],
+    "sha256": "cb526c10329904278dcb6d460fcf2478f9c825f87c62f718909cdf0e42120f0c"
+  },
+  {
+    "family_id": "csv-injection",
+    "display_name": "CSV Injection",
+    "root_dir": "knowledge/pattt/repo/CSV Injection",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/CSV Injection/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ci",
+      "csv injection",
+      "csv-injection"
+    ],
+    "sha256": "3c62ba369a5da666db18ade0e50529bb8e19b7173f57506ad5dcab2b19e16a1f"
+  },
+  {
+    "family_id": "cve-exploits",
+    "display_name": "CVE Exploits",
+    "root_dir": "knowledge/pattt/repo/CVE Exploits",
+    "layout": "readme_with_child_docs",
+    "canonical_doc": "knowledge/pattt/repo/CVE Exploits/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/CVE Exploits/Log4Shell.md"
+    ],
+    "assets": [],
+    "aliases": [
+      "ce",
+      "cve exploits",
+      "cve-exploits"
+    ],
+    "sha256": "4352ff31b428d88b0990d36fcbd5642d99092554e10584586a0ac6a80b53d01b"
+  },
+  {
+    "family_id": "denial-of-service",
+    "display_name": "Denial of Service",
+    "root_dir": "knowledge/pattt/repo/Denial of Service",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Denial of Service/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "denial of service",
+      "denial-of-service",
+      "dos"
+    ],
+    "sha256": "ced86ef9bc3d2c3e14cdbfb95573c55262d444af14856e160b2352c045b802cd"
+  },
+  {
+    "family_id": "dependency-confusion",
+    "display_name": "Dependency Confusion",
+    "root_dir": "knowledge/pattt/repo/Dependency Confusion",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Dependency Confusion/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "dc",
+      "dependency confusion",
+      "dependency-confusion"
+    ],
+    "sha256": "eb82f985fbd8fee1f38bc2705f9a40519b7a628fa575b83be0ffd35b48fca7cd"
+  },
+  {
+    "family_id": "directory-traversal",
+    "display_name": "Directory Traversal",
+    "root_dir": "knowledge/pattt/repo/Directory Traversal",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Directory Traversal/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Directory Traversal/Intruder/deep_traversal.txt",
+      "knowledge/pattt/repo/Directory Traversal/Intruder/directory_traversal.txt",
+      "knowledge/pattt/repo/Directory Traversal/Intruder/dotdotpwn.txt",
+      "knowledge/pattt/repo/Directory Traversal/Intruder/traversals-8-deep-exotic-encoding.txt"
+    ],
+    "aliases": [
+      "directory traversal",
+      "directory-traversal",
+      "dt"
+    ],
+    "sha256": "1d5a91b6714674b7462ffb6ab8fd6d93a28b86d632899a397e49b63ca32ea022"
+  },
+  {
+    "family_id": "dns-rebinding",
+    "display_name": "DNS Rebinding",
+    "root_dir": "knowledge/pattt/repo/DNS Rebinding",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/DNS Rebinding/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "dns rebinding",
+      "dns-rebinding",
+      "dr"
+    ],
+    "sha256": "fbf028d103a6e8831c1f437dc48cf520cfc05a1d77604bd0edf16ebf0c41aaee"
+  },
+  {
+    "family_id": "dom-clobbering",
+    "display_name": "DOM Clobbering",
+    "root_dir": "knowledge/pattt/repo/DOM Clobbering",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/DOM Clobbering/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "dc",
+      "dom clobbering",
+      "dom-clobbering"
+    ],
+    "sha256": "0f8c5031b51ae81af2bb39890e57e1fd8d9519642fb1b51b338571d64b72800e"
+  },
+  {
+    "family_id": "encoding-transformations",
+    "display_name": "Encoding Transformations",
+    "root_dir": "knowledge/pattt/repo/Encoding Transformations",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Encoding Transformations/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "encoding transformations",
+      "encoding-transformations",
+      "et"
+    ],
+    "sha256": "456b9a6e9abefbb6c5349204edd2a8ef459e2e7d0b3691127f1d1d6ce57a5852"
+  },
+  {
+    "family_id": "external-variable-modification",
+    "display_name": "External Variable Modification",
+    "root_dir": "knowledge/pattt/repo/External Variable Modification",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/External Variable Modification/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "evm",
+      "external variable modification",
+      "external-variable-modification"
+    ],
+    "sha256": "74af878a608cdf7ca313bdede7db4e970256fbe321013db9549c42c94914ee32"
+  },
+  {
+    "family_id": "file-inclusion",
+    "display_name": "File Inclusion",
+    "root_dir": "knowledge/pattt/repo/File Inclusion",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/File Inclusion/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/File Inclusion/LFI-to-RCE.md",
+      "knowledge/pattt/repo/File Inclusion/Wrappers.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/File Inclusion/Files/LFI2RCE.py",
+      "knowledge/pattt/repo/File Inclusion/Files/phpinfolfi.py",
+      "knowledge/pattt/repo/File Inclusion/Files/uploadlfi.py",
+      "knowledge/pattt/repo/File Inclusion/Intruders/BSD-files.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/dot-slash-PathTraversal_and_LFI_pairing.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/JHADDIX_LFI.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/LFI-FD-check.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/LFI-WindowsFileCheck.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/Linux-files.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/List_Of_File_To_Include.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/List_Of_File_To_Include_NullByteAdded.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/Mac-files.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/php-filter-iconv.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/simple-check.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/Traversal.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/Web-files.txt",
+      "knowledge/pattt/repo/File Inclusion/Intruders/Windows-files.txt"
+    ],
+    "aliases": [
+      "fi",
+      "file inclusion",
+      "file-inclusion"
+    ],
+    "sha256": "c79c212e96da312306db17937c0f3c7f7cbec2334d2df9c372afd1f70e83bb26"
+  },
+  {
+    "family_id": "google-web-toolkit",
+    "display_name": "Google Web Toolkit",
+    "root_dir": "knowledge/pattt/repo/Google Web Toolkit",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Google Web Toolkit/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "google web toolkit",
+      "google-web-toolkit",
+      "gwt"
+    ],
+    "sha256": "62cb874319464769d47e054453a2416975d78e013f30300a19f243fb11c80f6e"
+  },
+  {
+    "family_id": "graphql-injection",
+    "display_name": "GraphQL Injection",
+    "root_dir": "knowledge/pattt/repo/GraphQL Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/GraphQL Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/GraphQL Injection/Images/htb-help.png"
+    ],
+    "aliases": [
+      "gi",
+      "graphql injection",
+      "graphql-injection"
+    ],
+    "sha256": "dc5be014f13ffbef9ca95f3802e341bb5e38c50eb5ce9a4eeb8ff2009ec53aef"
+  },
+  {
+    "family_id": "headless-browser",
+    "display_name": "Headless Browser",
+    "root_dir": "knowledge/pattt/repo/Headless Browser",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Headless Browser/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Headless Browser/files/iframe.html",
+      "knowledge/pattt/repo/Headless Browser/files/window_location_js.html"
+    ],
+    "aliases": [
+      "hb",
+      "headless browser",
+      "headless-browser"
+    ],
+    "sha256": "e74f35b12bdfed19e2b7a72d6904a5e75c40076ef296d689cdc587791d545d4e"
+  },
+  {
+    "family_id": "hidden-parameters",
+    "display_name": "Hidden Parameters",
+    "root_dir": "knowledge/pattt/repo/Hidden Parameters",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Hidden Parameters/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "hidden parameters",
+      "hidden-parameters",
+      "hp"
+    ],
+    "sha256": "1badd4cf51b4e404d02288784916940b76e20910874f7eba085be9b15a22ee31"
+  },
+  {
+    "family_id": "http-parameter-pollution",
+    "display_name": "HTTP Parameter Pollution",
+    "root_dir": "knowledge/pattt/repo/HTTP Parameter Pollution",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/HTTP Parameter Pollution/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "hpp",
+      "http parameter pollution",
+      "http-parameter-pollution"
+    ],
+    "sha256": "a2a9725dce2d8a3bc564ede1c7d40e09c34292450bb97fa88a49df95e365c0dc"
+  },
+  {
+    "family_id": "insecure-deserialization",
+    "display_name": "Insecure Deserialization",
+    "root_dir": "knowledge/pattt/repo/Insecure Deserialization",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/Insecure Deserialization/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Insecure Deserialization/DotNET.md",
+      "knowledge/pattt/repo/Insecure Deserialization/Java.md",
+      "knowledge/pattt/repo/Insecure Deserialization/Node.md",
+      "knowledge/pattt/repo/Insecure Deserialization/PHP.md",
+      "knowledge/pattt/repo/Insecure Deserialization/Python.md",
+      "knowledge/pattt/repo/Insecure Deserialization/Ruby.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/Insecure Deserialization/Files/node-serialize.js",
+      "knowledge/pattt/repo/Insecure Deserialization/Files/ruby-serialize.yaml",
+      "knowledge/pattt/repo/Insecure Deserialization/Files/Ruby_universal_gadget_generate_verify.rb",
+      "knowledge/pattt/repo/Insecure Deserialization/Images/NETNativeFormatters.png"
+    ],
+    "aliases": [
+      "id",
+      "insecure deserialization",
+      "insecure-deserialization"
+    ],
+    "sha256": "d694b226ee44de414ea3c2d511e7b070ba6b6520fa7319719743a4fd2557ef70"
+  },
+  {
+    "family_id": "insecure-direct-object-references",
+    "display_name": "Insecure Direct Object References",
+    "root_dir": "knowledge/pattt/repo/Insecure Direct Object References",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Insecure Direct Object References/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Insecure Direct Object References/Images/idor.png"
+    ],
+    "aliases": [
+      "idor",
+      "insecure direct object references",
+      "insecure-direct-object-references"
+    ],
+    "sha256": "a34e6212861c913ece0290b7dde2760dbff23fdfe03aa558fff6ee3f2cef84fc"
+  },
+  {
+    "family_id": "insecure-management-interface",
+    "display_name": "Insecure Management Interface",
+    "root_dir": "knowledge/pattt/repo/Insecure Management Interface",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Insecure Management Interface/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Insecure Management Interface/Intruder/springboot_actuator.txt"
+    ],
+    "aliases": [
+      "imi",
+      "insecure management interface",
+      "insecure-management-interface"
+    ],
+    "sha256": "4eb327c0929c1b6fbb39b44067458961877ea6dbd97976320e4990292e01564b"
+  },
+  {
+    "family_id": "insecure-randomness",
+    "display_name": "Insecure Randomness",
+    "root_dir": "knowledge/pattt/repo/Insecure Randomness",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Insecure Randomness/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "insecure randomness",
+      "insecure-randomness",
+      "ir"
+    ],
+    "sha256": "9a51d495ea53b74b86e74efc31e6c1fc259776ce208c72bebe2a63bf790e2f4b"
+  },
+  {
+    "family_id": "insecure-source-code-management",
+    "display_name": "Insecure Source Code Management",
+    "root_dir": "knowledge/pattt/repo/Insecure Source Code Management",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/Insecure Source Code Management/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Insecure Source Code Management/Bazaar.md",
+      "knowledge/pattt/repo/Insecure Source Code Management/Git.md",
+      "knowledge/pattt/repo/Insecure Source Code Management/Mercurial.md",
+      "knowledge/pattt/repo/Insecure Source Code Management/Subversion.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/Insecure Source Code Management/Files/github-dorks.txt"
+    ],
+    "aliases": [
+      "insecure source code management",
+      "insecure-source-code-management",
+      "iscm"
+    ],
+    "sha256": "0f23fb53153ad52e413690d979421f261a23955a0f48fc4c85e1ac85decdd152"
+  },
+  {
+    "family_id": "java-rmi",
+    "display_name": "Java RMI",
+    "root_dir": "knowledge/pattt/repo/Java RMI",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Java RMI/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "java rmi",
+      "java-rmi",
+      "jr"
+    ],
+    "sha256": "2591d53160d6cdc1355cd37d4a26f41e8c089b44ab2000c88f7a43b9ce9ba38e"
+  },
+  {
+    "family_id": "json-web-token",
+    "display_name": "JSON Web Token",
+    "root_dir": "knowledge/pattt/repo/JSON Web Token",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/JSON Web Token/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "json web token",
+      "json-web-token",
+      "jwt"
+    ],
+    "sha256": "c2f30267e9c434e0cd903d8c958e0dd6aee2916406c7a1687b1e069c025416ab"
+  },
+  {
+    "family_id": "latex-injection",
+    "display_name": "LaTeX Injection",
+    "root_dir": "knowledge/pattt/repo/LaTeX Injection",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/LaTeX Injection/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "latex injection",
+      "latex-injection",
+      "li"
+    ],
+    "sha256": "3a2e72b6d3f1e3578322b909ac361ab9f4c4ff3cfc954eca803ca79e9e8f85c0"
+  },
+  {
+    "family_id": "ldap-injection",
+    "display_name": "LDAP Injection",
+    "root_dir": "knowledge/pattt/repo/LDAP Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/LDAP Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/LDAP Injection/Intruder/LDAP_attributes.txt",
+      "knowledge/pattt/repo/LDAP Injection/Intruder/LDAP_FUZZ.txt",
+      "knowledge/pattt/repo/LDAP Injection/Intruder/LDAP_FUZZ_SMALL.txt"
+    ],
+    "aliases": [
+      "ldap injection",
+      "ldap-injection",
+      "li"
+    ],
+    "sha256": "0a413de9231e73cb5dd0b2d70e23fb39b50d52732bc0617294ad75e55107c400"
+  },
+  {
+    "family_id": "mass-assignment",
+    "display_name": "Mass Assignment",
+    "root_dir": "knowledge/pattt/repo/Mass Assignment",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Mass Assignment/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ma",
+      "mass assignment",
+      "mass-assignment"
+    ],
+    "sha256": "56efcd2b0e9a6730fdb58df1756b79e6592f0ca621f42a83de56b0e50d9b305e"
+  },
+  {
+    "family_id": "methodology-and-resources__active-directory-attack",
+    "display_name": "Methodology and Resources / Active Directory Attack",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Active Directory Attack.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "active directory attack",
+      "active-directory-attack",
+      "ada",
+      "methodology and resources",
+      "methodology and resources active directory attack"
+    ],
+    "sha256": "e633e6814d56eab81118180bbba2f5d69d707d53ffcc4915e2eefc57f660c8b7"
+  },
+  {
+    "family_id": "methodology-and-resources__bind-shell-cheatsheet",
+    "display_name": "Methodology and Resources / Bind Shell Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Bind Shell Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "bind shell cheatsheet",
+      "bind-shell-cheatsheet",
+      "bsc",
+      "methodology and resources",
+      "methodology and resources bind shell cheatsheet"
+    ],
+    "sha256": "b595c49b662e8d0e1f4fb39d2ae277fffa59ed34144fafdf127caa0616c828ec"
+  },
+  {
+    "family_id": "methodology-and-resources__cloud-aws-pentest",
+    "display_name": "Methodology and Resources / Cloud - AWS Pentest",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Cloud - AWS Pentest.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "cap",
+      "cloud   aws pentest",
+      "cloud - aws pentest",
+      "cloud-aws-pentest",
+      "methodology and resources",
+      "methodology and resources cloud - aws pentest"
+    ],
+    "sha256": "c4e3e49d2e2eb6284e8bd7193a5eb93529e34d11fe03266cb22ad46a28efa8c8"
+  },
+  {
+    "family_id": "methodology-and-resources__cloud-azure-pentest",
+    "display_name": "Methodology and Resources / Cloud - Azure Pentest",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Cloud - Azure Pentest.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "cap",
+      "cloud   azure pentest",
+      "cloud - azure pentest",
+      "cloud-azure-pentest",
+      "methodology and resources",
+      "methodology and resources cloud - azure pentest"
+    ],
+    "sha256": "bbee3079f857bdfc2a90088d450f82ce38cc3e1cb2ab13946868a70651dcf3e5"
+  },
+  {
+    "family_id": "methodology-and-resources__cobalt-strike-cheatsheet",
+    "display_name": "Methodology and Resources / Cobalt Strike - Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Cobalt Strike - Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "cobalt strike   cheatsheet",
+      "cobalt strike - cheatsheet",
+      "cobalt-strike-cheatsheet",
+      "csc",
+      "methodology and resources",
+      "methodology and resources cobalt strike - cheatsheet"
+    ],
+    "sha256": "7d67a4dfbe95361a241cee7f719f7281511d74ded6e646f5610013e780d744c2"
+  },
+  {
+    "family_id": "methodology-and-resources__container-docker-pentest",
+    "display_name": "Methodology and Resources / Container - Docker Pentest",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Container - Docker Pentest.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "cdp",
+      "container   docker pentest",
+      "container - docker pentest",
+      "container-docker-pentest",
+      "methodology and resources",
+      "methodology and resources container - docker pentest"
+    ],
+    "sha256": "23b6eb43b86f427dff237e2ca48d79e4148000c238f25278961265eb5e310b90"
+  },
+  {
+    "family_id": "methodology-and-resources__container-kubernetes-pentest",
+    "display_name": "Methodology and Resources / Container - Kubernetes Pentest",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Container - Kubernetes Pentest.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ckp",
+      "container   kubernetes pentest",
+      "container - kubernetes pentest",
+      "container-kubernetes-pentest",
+      "methodology and resources",
+      "methodology and resources container - kubernetes pentest"
+    ],
+    "sha256": "c2ef161f9ed1e110833c40ae57a16ffc722af4445458a75cb07d85b47b2e0c43"
+  },
+  {
+    "family_id": "methodology-and-resources__escape-breakout",
+    "display_name": "Methodology and Resources / Escape Breakout",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Escape Breakout.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "eb",
+      "escape breakout",
+      "escape-breakout",
+      "methodology and resources",
+      "methodology and resources escape breakout"
+    ],
+    "sha256": "3eed443976779a7f2de922d00e155205e47d643c1f351d0e7ee3dce779cac332"
+  },
+  {
+    "family_id": "methodology-and-resources__hash-cracking",
+    "display_name": "Methodology and Resources / Hash Cracking",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Hash Cracking.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "hash cracking",
+      "hash-cracking",
+      "hc",
+      "methodology and resources",
+      "methodology and resources hash cracking"
+    ],
+    "sha256": "8de3f295225a447987ca71ce24b1533384a7904b1bcf7cad609ceec756ac8728"
+  },
+  {
+    "family_id": "methodology-and-resources__html-smuggling",
+    "display_name": "Methodology and Resources / HTML Smuggling",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/HTML Smuggling.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "hs",
+      "html smuggling",
+      "html-smuggling",
+      "methodology and resources",
+      "methodology and resources html smuggling"
+    ],
+    "sha256": "915a5bc599bc5dc92774762044398294023e40165f90529a37c015a81187b1b4"
+  },
+  {
+    "family_id": "methodology-and-resources__initial-access",
+    "display_name": "Methodology and Resources / Initial Access",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Initial Access.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ia",
+      "initial access",
+      "initial-access",
+      "methodology and resources",
+      "methodology and resources initial access"
+    ],
+    "sha256": "ba0caa99a25d20767ccb883513b159b7f25b6770abeab5ff3d165d0b46f3add5"
+  },
+  {
+    "family_id": "methodology-and-resources__linux-evasion",
+    "display_name": "Methodology and Resources / Linux - Evasion",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Linux - Evasion.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "le",
+      "linux   evasion",
+      "linux - evasion",
+      "linux-evasion",
+      "methodology and resources",
+      "methodology and resources linux - evasion"
+    ],
+    "sha256": "54710b7e230f54f1f603811469dd458668676d475df2a5b6c93ce715bc9eb579"
+  },
+  {
+    "family_id": "methodology-and-resources__linux-persistence",
+    "display_name": "Methodology and Resources / Linux - Persistence",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Linux - Persistence.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "linux   persistence",
+      "linux - persistence",
+      "linux-persistence",
+      "lp",
+      "methodology and resources",
+      "methodology and resources linux - persistence"
+    ],
+    "sha256": "6550d71b357f34232f32fd1ab6291cce77d39878eaef34a101e7544109b8e8f9"
+  },
+  {
+    "family_id": "methodology-and-resources__linux-privilege-escalation",
+    "display_name": "Methodology and Resources / Linux - Privilege Escalation",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Linux - Privilege Escalation.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "linux   privilege escalation",
+      "linux - privilege escalation",
+      "linux-privilege-escalation",
+      "lpe",
+      "methodology and resources",
+      "methodology and resources linux - privilege escalation"
+    ],
+    "sha256": "ad712e4c236d45953fc49c0c16bd9699666442b5e699b5a19c7f799d459171d5"
+  },
+  {
+    "family_id": "methodology-and-resources__metasploit-cheatsheet",
+    "display_name": "Methodology and Resources / Metasploit - Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Metasploit - Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "mc",
+      "metasploit   cheatsheet",
+      "metasploit - cheatsheet",
+      "metasploit-cheatsheet",
+      "methodology and resources",
+      "methodology and resources metasploit - cheatsheet"
+    ],
+    "sha256": "5faadfd416303d83f55b29f79fd7d6248b37253177a973c407197aa8309a2608"
+  },
+  {
+    "family_id": "methodology-and-resources__methodology-and-enumeration",
+    "display_name": "Methodology and Resources / Methodology and enumeration",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Methodology and enumeration.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "mae",
+      "methodology and enumeration",
+      "methodology and resources",
+      "methodology and resources methodology and enumeration",
+      "methodology-and-enumeration"
+    ],
+    "sha256": "384be4b0e6242c2993df6d6a1c661c43ca7aebb9d7cda37d00d079b6f9a6a663"
+  },
+  {
+    "family_id": "methodology-and-resources__mssql-server-cheatsheet",
+    "display_name": "Methodology and Resources / MSSQL Server - Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/MSSQL Server - Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources mssql server - cheatsheet",
+      "msc",
+      "mssql server   cheatsheet",
+      "mssql server - cheatsheet",
+      "mssql-server-cheatsheet"
+    ],
+    "sha256": "18ef0f8f08cd0db70bdf3edee25817215fa2eefc4aca504e1681b3ff4cc06042"
+  },
+  {
+    "family_id": "methodology-and-resources__network-discovery",
+    "display_name": "Methodology and Resources / Network Discovery",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Network Discovery.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources network discovery",
+      "nd",
+      "network discovery",
+      "network-discovery"
+    ],
+    "sha256": "0b01a777d99a5a019acc48b8dc26ef55c97a91aa4ecf49d449a8bf653af492d4"
+  },
+  {
+    "family_id": "methodology-and-resources__network-pivoting-techniques",
+    "display_name": "Methodology and Resources / Network Pivoting Techniques",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Network Pivoting Techniques.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources network pivoting techniques",
+      "network pivoting techniques",
+      "network-pivoting-techniques",
+      "npt"
+    ],
+    "sha256": "4b198dad2016cb72cb7aab8e5a070bb2b27e94732554f398cea3978096b378f9"
+  },
+  {
+    "family_id": "methodology-and-resources__office-attacks",
+    "display_name": "Methodology and Resources / Office - Attacks",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Office - Attacks.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources office - attacks",
+      "oa",
+      "office   attacks",
+      "office - attacks",
+      "office-attacks"
+    ],
+    "sha256": "7e8c0d73eebe3218b066e3275915875cbe10204218308f937940cd06f80b814a"
+  },
+  {
+    "family_id": "methodology-and-resources__powershell-cheatsheet",
+    "display_name": "Methodology and Resources / Powershell - Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Powershell - Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources powershell - cheatsheet",
+      "pc",
+      "powershell   cheatsheet",
+      "powershell - cheatsheet",
+      "powershell-cheatsheet"
+    ],
+    "sha256": "0151938bd6851e4be2aa3a9a15b1ac163812510a6bc17262f09612c05196fe19"
+  },
+  {
+    "family_id": "methodology-and-resources__reverse-shell-cheatsheet",
+    "display_name": "Methodology and Resources / Reverse Shell Cheatsheet",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Reverse Shell Cheatsheet.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources reverse shell cheatsheet",
+      "reverse shell cheatsheet",
+      "reverse-shell-cheatsheet",
+      "rsc"
+    ],
+    "sha256": "f1c86df428d1d02fbed3a8fe052fe98a8812d172f1d32faa6da5651dc62a5598"
+  },
+  {
+    "family_id": "methodology-and-resources__source-code-management",
+    "display_name": "Methodology and Resources / Source Code Management",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Source Code Management.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources source code management",
+      "scm",
+      "source code management",
+      "source-code-management"
+    ],
+    "sha256": "77b3a1db3862f34f8bfa389c52f20f162e4ca5ea4d4c142f01e4b0c4d6d8c268"
+  },
+  {
+    "family_id": "methodology-and-resources__vulnerability-reports",
+    "display_name": "Methodology and Resources / Vulnerability Reports",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Vulnerability Reports.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources vulnerability reports",
+      "vr",
+      "vulnerability reports",
+      "vulnerability-reports"
+    ],
+    "sha256": "d35dea5b8cdab3a54865fcacabe7eea873d682a15818187280f2e4b3fab27db7"
+  },
+  {
+    "family_id": "methodology-and-resources__web-attack-surface",
+    "display_name": "Methodology and Resources / Web Attack Surface",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Web Attack Surface.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources web attack surface",
+      "was",
+      "web attack surface",
+      "web-attack-surface"
+    ],
+    "sha256": "55c3b5dca457f35db68ccf0180dc599efa7d0f6085d3dc8e0b3bdc6c8663bdfe"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-amsi-bypass",
+    "display_name": "Methodology and Resources / Windows - AMSI Bypass",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - AMSI Bypass.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - amsi bypass",
+      "wab",
+      "windows   amsi bypass",
+      "windows - amsi bypass",
+      "windows-amsi-bypass"
+    ],
+    "sha256": "c991f07998458f0b6b53c1674d63350403fb7c145efb5620a33def2c27c42775"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-defenses",
+    "display_name": "Methodology and Resources / Windows - Defenses",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Defenses.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - defenses",
+      "wd",
+      "windows   defenses",
+      "windows - defenses",
+      "windows-defenses"
+    ],
+    "sha256": "3e569f5d1b8c08b77c58c5ab97195382d4d23a387e0c766b7a6e77052e1a9f41"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-download-and-execute",
+    "display_name": "Methodology and Resources / Windows - Download and Execute",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Download and Execute.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - download and execute",
+      "wdae",
+      "windows   download and execute",
+      "windows - download and execute",
+      "windows-download-and-execute"
+    ],
+    "sha256": "9f701f7d76e1bc01a44b908720acccab7ee0311f0c8a547971d80f6b2f0aa1cb"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-dpapi",
+    "display_name": "Methodology and Resources / Windows - DPAPI",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - DPAPI.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - dpapi",
+      "wd",
+      "windows   dpapi",
+      "windows - dpapi",
+      "windows-dpapi"
+    ],
+    "sha256": "75837e412fac188cebec4d593373fdd9241e245669da2db02e959812c685f9c8"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-mimikatz",
+    "display_name": "Methodology and Resources / Windows - Mimikatz",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Mimikatz.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - mimikatz",
+      "windows   mimikatz",
+      "windows - mimikatz",
+      "windows-mimikatz",
+      "wm"
+    ],
+    "sha256": "57063df3446c0f9192f01209f54e62f571d2f15d17265c9ba88003f4138c3be0"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-persistence",
+    "display_name": "Methodology and Resources / Windows - Persistence",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Persistence.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - persistence",
+      "windows   persistence",
+      "windows - persistence",
+      "windows-persistence",
+      "wp"
+    ],
+    "sha256": "2a1c43bf0e8107379813c5c02276baa8ece26ba3f7b1674415b16fdc8053d8ba"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-privilege-escalation",
+    "display_name": "Methodology and Resources / Windows - Privilege Escalation",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Privilege Escalation.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - privilege escalation",
+      "windows   privilege escalation",
+      "windows - privilege escalation",
+      "windows-privilege-escalation",
+      "wpe"
+    ],
+    "sha256": "097a2eedd0c2db4987c665d32ef861f35b4efe67838f89bdb49139cf33ce8a43"
+  },
+  {
+    "family_id": "methodology-and-resources__windows-using-credentials",
+    "display_name": "Methodology and Resources / Windows - Using credentials",
+    "root_dir": "knowledge/pattt/repo/Methodology and Resources",
+    "layout": "standalone_manual",
+    "canonical_doc": "knowledge/pattt/repo/Methodology and Resources/Windows - Using credentials.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "methodology and resources",
+      "methodology and resources windows - using credentials",
+      "windows   using credentials",
+      "windows - using credentials",
+      "windows-using-credentials",
+      "wuc"
+    ],
+    "sha256": "e5188ed8c684c9b12f55ad35cf94584ed86288f0f8e466ff646c0a4d830b3ffc"
+  },
+  {
+    "family_id": "nosql-injection",
+    "display_name": "NoSQL Injection",
+    "root_dir": "knowledge/pattt/repo/NoSQL Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/NoSQL Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/NoSQL Injection/Intruder/MongoDB.txt",
+      "knowledge/pattt/repo/NoSQL Injection/Intruder/NoSQL.txt"
+    ],
+    "aliases": [
+      "ni",
+      "nosql injection",
+      "nosql-injection"
+    ],
+    "sha256": "5b8b1539f270bc51395c40475353b58739b35e22c2c9556ff628996057cccbdd"
+  },
+  {
+    "family_id": "oauth-misconfiguration",
+    "display_name": "OAuth Misconfiguration",
+    "root_dir": "knowledge/pattt/repo/OAuth Misconfiguration",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/OAuth Misconfiguration/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "oauth misconfiguration",
+      "oauth-misconfiguration",
+      "om"
+    ],
+    "sha256": "5f9a5e6b4297c836ee47e6811132fd0989471d3ca489b51207066a21b51e4103"
+  },
+  {
+    "family_id": "open-redirect",
+    "display_name": "Open Redirect",
+    "root_dir": "knowledge/pattt/repo/Open Redirect",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Open Redirect/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Open Redirect/Intruder/Open-Redirect-payloads.txt",
+      "knowledge/pattt/repo/Open Redirect/Intruder/open_redirect_wordlist.txt",
+      "knowledge/pattt/repo/Open Redirect/Intruder/openredirects.txt"
+    ],
+    "aliases": [
+      "open redirect",
+      "open-redirect",
+      "or"
+    ],
+    "sha256": "6c4ea9a9889c5477bcf945ad7a3e947e0095b5149718a63734c86b6518ec1b19"
+  },
+  {
+    "family_id": "orm-leak",
+    "display_name": "ORM Leak",
+    "root_dir": "knowledge/pattt/repo/ORM Leak",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/ORM Leak/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "ol",
+      "orm leak",
+      "orm-leak"
+    ],
+    "sha256": "049e8649e78d5be09c9b8a5bd37e30982d4c88f13a2daee8dcd94cacb91cf381"
+  },
+  {
+    "family_id": "prompt-injection",
+    "display_name": "Prompt Injection",
+    "root_dir": "knowledge/pattt/repo/Prompt Injection",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Prompt Injection/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "pi",
+      "prompt injection",
+      "prompt-injection"
+    ],
+    "sha256": "4d8599bfea8ca66ae87a892acc906a94e16e280d26133ca2dab51393f2f9c41c"
+  },
+  {
+    "family_id": "prototype-pollution",
+    "display_name": "Prototype Pollution",
+    "root_dir": "knowledge/pattt/repo/Prototype Pollution",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Prototype Pollution/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "pp",
+      "prototype pollution",
+      "prototype-pollution"
+    ],
+    "sha256": "49fe4c3fe207e47b2c3ab7ba85e3fd3e9367786527b9fdf641d1268766a2c787"
+  },
+  {
+    "family_id": "race-condition",
+    "display_name": "Race Condition",
+    "root_dir": "knowledge/pattt/repo/Race Condition",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Race Condition/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "race condition",
+      "race-condition",
+      "rc"
+    ],
+    "sha256": "81023183945a3d483185cab5c6d58e534c91843ceee5724eef4ba2073801a399"
+  },
+  {
+    "family_id": "regular-expression",
+    "display_name": "Regular Expression",
+    "root_dir": "knowledge/pattt/repo/Regular Expression",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Regular Expression/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "re",
+      "regular expression",
+      "regular-expression"
+    ],
+    "sha256": "53ab03d6ea8a661cbdfe5ec03a065c9a0c0535248613f2c83c229e5c63a4eb25"
+  },
+  {
+    "family_id": "request-smuggling",
+    "display_name": "Request Smuggling",
+    "root_dir": "knowledge/pattt/repo/Request Smuggling",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Request Smuggling/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "request smuggling",
+      "request-smuggling",
+      "rs"
+    ],
+    "sha256": "142186d697130d79b6b796b3708f2f22266a25222a541f34cde0f0fadf494f2b"
+  },
+  {
+    "family_id": "reverse-proxy-misconfigurations",
+    "display_name": "Reverse Proxy Misconfigurations",
+    "root_dir": "knowledge/pattt/repo/Reverse Proxy Misconfigurations",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Reverse Proxy Misconfigurations/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "reverse proxy misconfigurations",
+      "reverse-proxy-misconfigurations",
+      "rpm"
+    ],
+    "sha256": "025eb781956e55063bf9a16f60c429ba65988febb3a5a8b8309858e2699b6fb6"
+  },
+  {
+    "family_id": "saml-injection",
+    "display_name": "SAML Injection",
+    "root_dir": "knowledge/pattt/repo/SAML Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/SAML Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/SAML Injection/Images/SAML-xml-flaw.png",
+      "knowledge/pattt/repo/SAML Injection/Images/XSLT1.jpg"
+    ],
+    "aliases": [
+      "saml injection",
+      "saml-injection",
+      "si"
+    ],
+    "sha256": "2e8cb52afd5577740ad7d97ff7fbf9928f7a6dc3662f2804995533b9b39eaffb"
+  },
+  {
+    "family_id": "server-side-include-injection",
+    "display_name": "Server Side Include Injection",
+    "root_dir": "knowledge/pattt/repo/Server Side Include Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Server Side Include Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Server Side Include Injection/Files/ssi_esi.txt"
+    ],
+    "aliases": [
+      "server side include injection",
+      "server-side-include-injection",
+      "ssii"
+    ],
+    "sha256": "212685ba5328384112cc0c0f21ce17b4225fb9cf668b454fc7b75f3bb9b70fb5"
+  },
+  {
+    "family_id": "server-side-request-forgery",
+    "display_name": "Server Side Request Forgery",
+    "root_dir": "knowledge/pattt/repo/Server Side Request Forgery",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/Server Side Request Forgery/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Server Side Request Forgery/SSRF-Advanced-Exploitation.md",
+      "knowledge/pattt/repo/Server Side Request Forgery/SSRF-Cloud-Instances.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ip.py",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/SSRF_expect.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_ffmpeg.avi",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_iframe.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_svg_css_import.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_svg_css_link.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_svg_css_xmlstylesheet.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_svg_image.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/ssrf_svg_use.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Files/SSRF_url.svg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/aws-cli.jpg",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/Parser and Curl less than 7.54.png",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/SSRF_Parser.png",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/SSRF_PDF.png",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/SSRF_stream.png",
+      "knowledge/pattt/repo/Server Side Request Forgery/Images/WeakParser.jpg"
+    ],
+    "aliases": [
+      "server side request forgery",
+      "server-side-request-forgery",
+      "ssrf"
+    ],
+    "sha256": "97193932e2d0ab7c16ec31a351ab6f7106711c5fa73358eb3fb92f9fc394038a"
+  },
+  {
+    "family_id": "server-side-template-injection",
+    "display_name": "Server Side Template Injection",
+    "root_dir": "knowledge/pattt/repo/Server Side Template Injection",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/Server Side Template Injection/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Server Side Template Injection/ASP.md",
+      "knowledge/pattt/repo/Server Side Template Injection/Elixir.md",
+      "knowledge/pattt/repo/Server Side Template Injection/Java.md",
+      "knowledge/pattt/repo/Server Side Template Injection/JavaScript.md",
+      "knowledge/pattt/repo/Server Side Template Injection/PHP.md",
+      "knowledge/pattt/repo/Server Side Template Injection/Python.md",
+      "knowledge/pattt/repo/Server Side Template Injection/Ruby.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/Server Side Template Injection/Images/serverside.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/technique_Boolean-Based.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/technique_Error-Based.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/technique_Polyglot-Based.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/technique_Rendered.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/technique_Time-Based.png",
+      "knowledge/pattt/repo/Server Side Template Injection/Images/template-library.jpg",
+      "knowledge/pattt/repo/Server Side Template Injection/Intruder/ssti.fuzz"
+    ],
+    "aliases": [
+      "server side template injection",
+      "server-side-template-injection",
+      "ssti"
+    ],
+    "sha256": "2d33ee79978f026baf08c2172e1b38f78947d42f39c1d4342759555c7ea8618d"
+  },
+  {
+    "family_id": "sql-injection",
+    "display_name": "SQL Injection",
+    "root_dir": "knowledge/pattt/repo/SQL Injection",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/SQL Injection/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/SQL Injection/BigQuery Injection.md",
+      "knowledge/pattt/repo/SQL Injection/Cassandra Injection.md",
+      "knowledge/pattt/repo/SQL Injection/DB2 Injection.md",
+      "knowledge/pattt/repo/SQL Injection/MSSQL Injection.md",
+      "knowledge/pattt/repo/SQL Injection/MySQL Injection.md",
+      "knowledge/pattt/repo/SQL Injection/OracleSQL Injection.md",
+      "knowledge/pattt/repo/SQL Injection/PostgreSQL Injection.md",
+      "knowledge/pattt/repo/SQL Injection/SQLite Injection.md",
+      "knowledge/pattt/repo/SQL Injection/SQLmap.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/SQL Injection/Images/PostgreSQL_cmd_exec.png",
+      "knowledge/pattt/repo/SQL Injection/Images/Unicode_SQL_injection.png",
+      "knowledge/pattt/repo/SQL Injection/Images/wildcard_underscore.jpg",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Auth_Bypass.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Auth_Bypass2.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MSSQL-WHERE_Time.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MSSQL.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MSSQL_Enumeration.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MySQL-WHERE_Time.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MYSQL.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_MySQL_ReadLocalFiles.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_Oracle.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/FUZZDB_Postgres_Enumeration.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Generic_ErrorBased.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Generic_Fuzz.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Generic_TimeBased.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/Generic_UnionSelect.txt",
+      "knowledge/pattt/repo/SQL Injection/Intruder/payloads-sql-blind-MSSQL-INSERT",
+      "knowledge/pattt/repo/SQL Injection/Intruder/payloads-sql-blind-MSSQL-WHERE",
+      "knowledge/pattt/repo/SQL Injection/Intruder/payloads-sql-blind-MySQL-INSERT",
+      "knowledge/pattt/repo/SQL Injection/Intruder/payloads-sql-blind-MySQL-ORDER_BY",
+      "knowledge/pattt/repo/SQL Injection/Intruder/payloads-sql-blind-MySQL-WHERE",
+      "knowledge/pattt/repo/SQL Injection/Intruder/SQL-Injection",
+      "knowledge/pattt/repo/SQL Injection/Intruder/SQLi_Polyglots.txt"
+    ],
+    "aliases": [
+      "si",
+      "sql injection",
+      "sql-injection",
+      "sqli"
+    ],
+    "sha256": "c9cc86288f11985be38699646a97805a8313c1bc978ca5a80fa494f21c2b5305"
+  },
+  {
+    "family_id": "tabnabbing",
+    "display_name": "Tabnabbing",
+    "root_dir": "knowledge/pattt/repo/Tabnabbing",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Tabnabbing/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "tabnabbing"
+    ],
+    "sha256": "b8a33d2e84374f2fa3433c75bd960ca24ce19e1919d993c8a3b9e689123bdc27"
+  },
+  {
+    "family_id": "type-juggling",
+    "display_name": "Type Juggling",
+    "root_dir": "knowledge/pattt/repo/Type Juggling",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Type Juggling/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Type Juggling/Images/table_representing_behavior_of_PHP_with_loose_type_comparisons.png"
+    ],
+    "aliases": [
+      "tj",
+      "type juggling",
+      "type-juggling"
+    ],
+    "sha256": "f67a0a1145fe8183ddb17770e865f71bf84fd169a24d4b973e56e77a07a2f1c4"
+  },
+  {
+    "family_id": "upload-insecure-files",
+    "display_name": "Upload Insecure Files",
+    "root_dir": "knowledge/pattt/repo/Upload Insecure Files",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/Upload Insecure Files/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Apache .htaccess/README.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration IIS web.config/web.config",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-admin-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-conf-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-config-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-controllers-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-generate-init.py",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-login-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-models-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-modules-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-scripts-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-settings-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-tests-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-urls-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-utils-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration Python __init__.py/python-view-__init__.py.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/Configuration uwsgi.ini/uwsgi.ini",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/gen_avi_bypass.py",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/gen_xbin_avi.py",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/read_passwd.avi",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/read_passwd_bypass.mp4",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/read_shadow.avi",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE FFmpeg HLS/read_shadow_bypass.mp4",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE ZIP Symbolic Link/etc_passwd.zip",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE ZIP Symbolic Link/generate.sh",
+      "knowledge/pattt/repo/Upload Insecure Files/CVE ZIP Symbolic Link/passwd",
+      "knowledge/pattt/repo/Upload Insecure Files/EICAR/eicar.txt",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/extensions.lst",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.asa",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.ashx",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.asmx",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.asp",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.aspx",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.cer",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.soap",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension ASP/shell.xamlx",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension HTML/xss.html",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/extensions.lst",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/php-script-tag.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.jpg.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.phar",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php3",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php4",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php5",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php7",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.php8",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.phpt",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.pht",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/phpinfo.phtml",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.gif^shell.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.jpeg.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.jpg.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.jpg^shell.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.pgif",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.phar",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.php3",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.php4",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.php5",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.php7",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.phpt",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.pht",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.phtml",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.png.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/shell.png^shell.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Extension PHP/tiny.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Images/file-upload-mindmap.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Jetty RCE/JettyShell.xml",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/createBulletproofJPG.py",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/createCompressedPNG_110x110.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/createGIFwithGlobalColorTable.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/createPNGwithPLTE.php",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/GIF_exploit.gif",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/JPG_exploit-55.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/PNG_110x110_resize_bypass_use_LFI.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Compression/PNG_32x32_resize_bypass_use_LFI.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/convert_local_etc_passwd.svg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/convert_local_etc_passwd_html.svg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/ghostscript_rce_curl.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagemagick_CVE-2022-44268_convert_etc_passwd.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagemagick_ghostscript_cmd_exec.pdf",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagemagik_ghostscript_reverse_shell.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_imageover_file_exfiltration_pangu_wrapper.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_imageover_file_exfiltration_text_wrapper.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_imageover_reverse_shell_devtcp.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_imageover_reverse_shell_netcat_fifo.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_imageover_wget.gif",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_bind_shell_nc.mvg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_curl.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_portscan.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_remote_connection.mvg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_reverse_shell_bash.mvg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_url_touch.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_xml_reverse_shell_nctraditional.xml",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik1_payload_xml_reverse_shell_netcat_encoded.xml",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik2_burpcollaborator_passwd.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik2_centos_id.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik2_ubuntu_id.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik2_ubuntu_shell.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture ImageMagick/imagetragik2_ubuntu_shell2.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/Build_image_to_LFI.py",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/CVE-2021-22204_exiftool_echo.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/CVE-2021-22204_exiftool_revshell.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/PHP_exif_phpinfo.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/PHP_exif_system.gif",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/PHP_exif_system.jpg",
+      "knowledge/pattt/repo/Upload Insecure Files/Picture Metadata/PHP_exif_system.png",
+      "knowledge/pattt/repo/Upload Insecure Files/Server Side Include/exec.shtml",
+      "knowledge/pattt/repo/Upload Insecure Files/Server Side Include/include.shtml",
+      "knowledge/pattt/repo/Upload Insecure Files/Server Side Include/index.stm"
+    ],
+    "aliases": [
+      "uif",
+      "upload insecure files",
+      "upload-insecure-files"
+    ],
+    "sha256": "596a3cf01a386aabd31b25f9db423771b46172d4b3c572b5663a495f039fe5ef"
+  },
+  {
+    "family_id": "virtual-hosts",
+    "display_name": "Virtual Hosts",
+    "root_dir": "knowledge/pattt/repo/Virtual Hosts",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Virtual Hosts/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "vh",
+      "virtual hosts",
+      "virtual-hosts"
+    ],
+    "sha256": "e90909d4fa46d84da80db2b6ab5c3d75bb911ebe3f37c362ac3aded025daee18"
+  },
+  {
+    "family_id": "web-cache-deception",
+    "display_name": "Web Cache Deception",
+    "root_dir": "knowledge/pattt/repo/Web Cache Deception",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Web Cache Deception/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Web Cache Deception/Images/wcd.jpg",
+      "knowledge/pattt/repo/Web Cache Deception/Intruders/param_miner_lowercase_headers.txt"
+    ],
+    "aliases": [
+      "wcd",
+      "web cache deception",
+      "web-cache-deception"
+    ],
+    "sha256": "eb1429a28fd926fa129494c5cec30a8a5c08ac639310a268c8a1ec6e362fea47"
+  },
+  {
+    "family_id": "web-sockets",
+    "display_name": "Web Sockets",
+    "root_dir": "knowledge/pattt/repo/Web Sockets",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/Web Sockets/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/Web Sockets/Files/ws-harness.py",
+      "knowledge/pattt/repo/Web Sockets/Images/sqlmap.png",
+      "knowledge/pattt/repo/Web Sockets/Images/websocket-harness-start.png",
+      "knowledge/pattt/repo/Web Sockets/Images/WebsocketHarness.jpg"
+    ],
+    "aliases": [
+      "web sockets",
+      "web-sockets",
+      "ws"
+    ],
+    "sha256": "ba3e2c440ecc5255fbb37dfcf56099c981b750e697fc81c0497203a63bd679af"
+  },
+  {
+    "family_id": "xpath-injection",
+    "display_name": "XPATH Injection",
+    "root_dir": "knowledge/pattt/repo/XPATH Injection",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/XPATH Injection/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "xi",
+      "xpath injection",
+      "xpath-injection"
+    ],
+    "sha256": "e846f1e4d2c183fbd599bdcd981dd0fce14a7315431740b5b917a1907c939df3"
+  },
+  {
+    "family_id": "xs-leak",
+    "display_name": "XS-Leak",
+    "root_dir": "knowledge/pattt/repo/XS-Leak",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/XS-Leak/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "xl",
+      "xs leak",
+      "xs-leak"
+    ],
+    "sha256": "1fd993d2aec8277c1938c5a2caa9333ecc784d26d641ec28e77eaeea44cd207c"
+  },
+  {
+    "family_id": "xslt-injection",
+    "display_name": "XSLT Injection",
+    "root_dir": "knowledge/pattt/repo/XSLT Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/XSLT Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/XSLT Injection/Files/enum-system-version-vendor.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/file-write.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-dotnet-2.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-dotnet.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-java-1.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-java-2.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-php-assert.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-php-file-create.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-php-file-read.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-php-meterpreter.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/rce-php-scandir.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/read-and-ssrf.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/system-properties.xml",
+      "knowledge/pattt/repo/XSLT Injection/Files/system-properties.xsl",
+      "knowledge/pattt/repo/XSLT Injection/Files/xxe.xsl"
+    ],
+    "aliases": [
+      "xi",
+      "xslt injection",
+      "xslt-injection"
+    ],
+    "sha256": "4c29281e52bd6ea92a1ef15ae2487bc619ead27ce2649deec3a37015be0b61f8"
+  },
+  {
+    "family_id": "xss-injection",
+    "display_name": "XSS Injection",
+    "root_dir": "knowledge/pattt/repo/XSS Injection",
+    "layout": "readme_with_child_docs_and_assets",
+    "canonical_doc": "knowledge/pattt/repo/XSS Injection/README.md",
+    "child_docs": [
+      "knowledge/pattt/repo/XSS Injection/1 - XSS Filter Bypass.md",
+      "knowledge/pattt/repo/XSS Injection/2 - XSS Polyglot.md",
+      "knowledge/pattt/repo/XSS Injection/3 - XSS Common WAF Bypass.md",
+      "knowledge/pattt/repo/XSS Injection/4 - CSP Bypass.md",
+      "knowledge/pattt/repo/XSS Injection/5 - XSS in Angular.md"
+    ],
+    "assets": [
+      "knowledge/pattt/repo/XSS Injection/Files/InsecureFlashFile.swf",
+      "knowledge/pattt/repo/XSS Injection/Files/JupyterNotebookXSS.ipynb",
+      "knowledge/pattt/repo/XSS Injection/Files/mouseover-xss-ecs.jpeg",
+      "knowledge/pattt/repo/XSS Injection/Files/onclick-xss-ecs.jpeg",
+      "knowledge/pattt/repo/XSS Injection/Files/payload_in_all_known_exif_corrupted.jpg",
+      "knowledge/pattt/repo/XSS Injection/Files/payload_in_all_known_exif_corrupted.png",
+      "knowledge/pattt/repo/XSS Injection/Files/payload_in_all_known_metadata.jpg",
+      "knowledge/pattt/repo/XSS Injection/Files/payload_in_all_known_metadata.png",
+      "knowledge/pattt/repo/XSS Injection/Files/payload_text_xss.png",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS1.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS2.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS3.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS_green_triangle.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS_nested_img_xlink.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS_nested_svg.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS_nested_use_xlink.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SVG_XSS_red_lightning.svg",
+      "knowledge/pattt/repo/XSS Injection/Files/SWF_XSS.swf",
+      "knowledge/pattt/repo/XSS Injection/Files/xml.xsd",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.cer",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.dtd",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.htm",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.html.demo",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.hxt",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.mno",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.rdf",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.svgz",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.url.url",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.vml",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.wsdl",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xht",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xhtml",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xml",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xsd",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xsf",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xsl",
+      "knowledge/pattt/repo/XSS Injection/Files/xss.xslt",
+      "knowledge/pattt/repo/XSS Injection/Files/xss_comment_exif_metadata_double_quote.png",
+      "knowledge/pattt/repo/XSS Injection/Files/xss_comment_exif_metadata_single_quote.png",
+      "knowledge/pattt/repo/XSS Injection/Images/DwrkbH1VAAErOI2.jpg",
+      "knowledge/pattt/repo/XSS Injection/Intruders/0xcela_event_handlers.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/BRUTELOGIC-XSS-JS.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/BRUTELOGIC-XSS-STRINGS.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/IntrudersXSS.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/JHADDIX_XSS.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/jsonp_endpoint.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/MarioXSSVectors.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/port_swigger_xss_cheatsheet_event_handlers.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/RSNAKE_XSS.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/xss_alert.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/xss_alert_identifiable.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/xss_payloads_quick.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/XSS_Polyglots.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/xss_swf_fuzz.txt",
+      "knowledge/pattt/repo/XSS Injection/Intruders/XSSDetection.txt"
+    ],
+    "aliases": [
+      "xi",
+      "xss",
+      "xss injection",
+      "xss-injection"
+    ],
+    "sha256": "9e9d44f4fe093ab4161bdc6ad7d33f06e53b4d787bab277c33356437a10b0aaf"
+  },
+  {
+    "family_id": "xxe-injection",
+    "display_name": "XXE Injection",
+    "root_dir": "knowledge/pattt/repo/XXE Injection",
+    "layout": "readme_with_assets",
+    "canonical_doc": "knowledge/pattt/repo/XXE Injection/README.md",
+    "child_docs": [],
+    "assets": [
+      "knowledge/pattt/repo/XXE Injection/Files/Classic XXE - etc passwd.xml",
+      "knowledge/pattt/repo/XXE Injection/Files/Classic XXE B64 Encoded.xml",
+      "knowledge/pattt/repo/XXE Injection/Files/Classic XXE.xml",
+      "knowledge/pattt/repo/XXE Injection/Files/Deny Of Service - Billion Laugh Attack",
+      "knowledge/pattt/repo/XXE Injection/Files/XXE OOB Attack (Yunusov, 2013).xml",
+      "knowledge/pattt/repo/XXE Injection/Files/XXE PHP Wrapper.xml",
+      "knowledge/pattt/repo/XXE Injection/Intruders/xml-attacks.txt",
+      "knowledge/pattt/repo/XXE Injection/Intruders/XXE_Fuzzing.txt"
+    ],
+    "aliases": [
+      "xi",
+      "xxe",
+      "xxe injection",
+      "xxe-injection"
+    ],
+    "sha256": "c23684b56ba7002c4991a44da885252a7673aa58df5fc2ebe40e34c45d4b8aa2"
+  },
+  {
+    "family_id": "zip-slip",
+    "display_name": "Zip Slip",
+    "root_dir": "knowledge/pattt/repo/Zip Slip",
+    "layout": "readme_only",
+    "canonical_doc": "knowledge/pattt/repo/Zip Slip/README.md",
+    "child_docs": [],
+    "assets": [],
+    "aliases": [
+      "zip slip",
+      "zip-slip",
+      "zs"
+    ],
+    "sha256": "7143a1b1b179912150fc5e06a7c10603c34991de1f9e33aa727ae37df55a8f37"
+  }
+]

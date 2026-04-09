@@ -1,0 +1,19 @@
+{
+  "source": "swisskyrepo/PayloadsAllTheThings",
+  "source_branch": "master",
+  "source_commit": "3b069f03347dde5d6c9a24e698cd25cace5de9d5",
+  "generated_at": "2026-04-09T15:48:25.132837+00:00",
+  "repo_dir": "knowledge/pattt/repo",
+  "repo_fingerprint": "a40ac3e4edeacebb1b7407ede664d1476054dcfcf58de91d74d7109f928d2bbc",
+  "family_count": 96,
+  "doc_count": 135,
+  "section_count": 1456,
+  "asset_count": 290,
+  "ignored_directories": [
+    ".github",
+    "_LEARNING_AND_SOCIALS",
+    "_template_vuln"
+  ],
+  "errors": [],
+  "warnings": []
+}

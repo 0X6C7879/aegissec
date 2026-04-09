@@ -897,6 +897,10 @@ class SkillService:
             workspace_path=workspace_path,
             touched_paths=touched_paths,
             session_id=session_id,
+            user_goal=user_goal,
+            current_prompt=current_prompt,
+            scenario_type=scenario_type,
+            workflow_stage=workflow_stage,
         )
         orchestration_execution = None
         skill_orchestration_plan = cast(
@@ -1109,6 +1113,10 @@ class SkillService:
         workspace_path: str | None = None,
         touched_paths: list[str] | None = None,
         session_id: str | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        workflow_stage: str | None = None,
     ) -> dict[str, object]:
         prepared_selected_skills: list[dict[str, object]] = []
         prepared_supporting_skills: list[dict[str, object]] = []
@@ -1128,6 +1136,10 @@ class SkillService:
                 workspace_path=workspace_path,
                 touched_paths=touched_paths,
                 session_id=session_id,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                workflow_stage=workflow_stage,
             )
             role = str(item.get("role") or "")
             prepared_entry = dict(item)
@@ -1663,6 +1675,10 @@ class SkillService:
         workspace_path: str | None = None,
         touched_paths: list[str] | None = None,
         session_id: str | None = None,
+        user_goal: str | None = None,
+        current_prompt: str | None = None,
+        scenario_type: str | None = None,
+        workflow_stage: str | None = None,
     ) -> dict[str, Any]:
         compiled_skill = self.find_compiled_skill_by_name_or_directory_name(
             name_or_slug,
@@ -1691,6 +1707,20 @@ class SkillService:
             if compiled_skill.prepared_invocation is None
             else compiled_skill.prepared_invocation.to_payload()
         )
+        prepared_prompt = compiled_skill.prepared_prompt
+        pattt_context_payload: dict[str, object] | None = None
+        if self._is_pattt_loader(compiled_skill):
+            prepared_prompt, pattt_context_payload = self._prepare_pattt_skill_execution(
+                compiled_skill=compiled_skill,
+                arguments=arguments,
+                workspace_path=workspace_path,
+                touched_paths=touched_paths,
+                session_id=session_id,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                workflow_stage=workflow_stage,
+            )
         return {
             "execution": {
                 "status": "prepared",
@@ -1699,7 +1729,7 @@ class SkillService:
                 "skill_name_or_id": name_or_slug,
                 "skill_id": skill_content.id,
                 "skill_directory_name": skill_content.directory_name,
-                "prepared_prompt": compiled_skill.prepared_prompt,
+                "prepared_prompt": prepared_prompt,
                 "available_tools": [
                     "execute_kali_command",
                     "list_available_skills",
@@ -1718,9 +1748,103 @@ class SkillService:
                 },
                 "shell_enabled": compiled_skill.shell_enabled,
                 "prepared_invocation": prepared_invocation,
+                "pattt_context": pattt_context_payload or {},
             },
             "skill": skill_payload,
         }
+
+    @staticmethod
+    def _is_pattt_loader(compiled_skill: skill_models.CompiledSkill) -> bool:
+        return compiled_skill.directory_name.strip().casefold() == "pattt-readme-loader"
+
+    @staticmethod
+    def _coerce_pattt_bool(
+        arguments: dict[str, object] | None,
+        key: str,
+    ) -> bool | None:
+        if not isinstance(arguments, dict) or key not in arguments:
+            return None
+        value = arguments[key]
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def _coerce_pattt_strings(value: object) -> list[str]:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return [stripped] if stripped else []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _infer_pattt_phase(
+        *,
+        workflow_stage: str | None,
+        current_prompt: str | None,
+        user_goal: str | None,
+    ) -> str:
+        if isinstance(workflow_stage, str) and workflow_stage.strip():
+            return workflow_stage.strip()
+        combined = " ".join(
+            part for part in [current_prompt or "", user_goal or ""] if part
+        ).casefold()
+        if any(keyword in combined for keyword in ["bypass", "绕过", "waf", "csp bypass"]):
+            return "bypass"
+        return "verification"
+
+    def _prepare_pattt_skill_execution(
+        self,
+        *,
+        compiled_skill: skill_models.CompiledSkill,
+        arguments: dict[str, object] | None,
+        workspace_path: str | None,
+        touched_paths: list[str] | None,
+        session_id: str | None,
+        user_goal: str | None,
+        current_prompt: str | None,
+        scenario_type: str | None,
+        workflow_stage: str | None,
+    ) -> tuple[str, dict[str, object]]:
+        from app.compat.skills.compiler import build_prepared_prompt_fragment
+        from app.services.pattt_context import (
+            render_pattt_context_for_prompt,
+            resolve_pattt_context,
+        )
+
+        objective = (
+            user_goal or current_prompt or compiled_skill.when_to_use or compiled_skill.description
+        ).strip()
+        family_hint_value = (arguments or {}).get("family_hint")
+        family_hint = family_hint_value if isinstance(family_hint_value, str) else None
+        explicit_bypass = self._coerce_pattt_bool(arguments, "explicit_bypass")
+        explicit_exploit = self._coerce_pattt_bool(arguments, "explicit_exploit")
+        context_pack = resolve_pattt_context(
+            objective=objective,
+            task_text=current_prompt or objective,
+            family_hint=family_hint,
+            tech_stack=self._coerce_pattt_strings((arguments or {}).get("tech_stack")),
+            signals={
+                "workspace_path": workspace_path,
+                "touched_paths": list(touched_paths or []),
+                "session_id": session_id,
+                "scenario_type": scenario_type,
+                "workflow_stage": workflow_stage,
+                "arguments": dict(arguments or {}),
+            },
+            task_phase=self._infer_pattt_phase(
+                workflow_stage=workflow_stage,
+                current_prompt=current_prompt,
+                user_goal=user_goal,
+            ),
+            explicit_bypass=explicit_bypass if explicit_bypass is not None else False,
+            explicit_exploit=explicit_exploit if explicit_exploit is not None else False,
+        )
+        prepared_prompt = build_prepared_prompt_fragment(
+            compiled_skill,
+            render_pattt_context_for_prompt(context_pack),
+            prepared_invocation=compiled_skill.prepared_invocation,
+        )
+        return prepared_prompt, context_pack.to_payload()
 
     def build_skill_context_payload(
         self,

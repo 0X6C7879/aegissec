@@ -39,7 +39,7 @@ import type {
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
-import type { SlashAction, SlashCatalogItem } from "../types/slash";
+import type { SlashAction } from "../types/slash";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";

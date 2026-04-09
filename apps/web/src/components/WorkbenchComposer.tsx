@@ -124,8 +124,14 @@ export function WorkbenchComposer({
     slashQuery !== null && filteredSlashCatalog.length > 0 && dismissedSlashValue !== draftContent;
   const activeSlashItem =
     filteredSlashCatalog[Math.min(activeSlashIndex, filteredSlashCatalog.length - 1)] ?? null;
-  const isPrimaryDisabled = disabled || pendingAction !== null || trimmedDraftContent.length === 0;
+  const isPrimaryInterruptAction = isActiveGeneration && trimmedDraftContent.length === 0;
+  const isPrimaryDisabled =
+    disabled ||
+    pendingAction !== null ||
+    (!isPrimaryInterruptAction && trimmedDraftContent.length === 0) ||
+    (isPrimaryInterruptAction && isInterrupting);
   const isPendingPrimaryAction = pendingAction !== null;
+  const isPrimaryActionRunning = isPendingPrimaryAction || (isPrimaryInterruptAction && isInterrupting);
   const slashPopoverId = `slash-popover-${sessionId}`;
 
   useEffect(() => {
@@ -243,11 +249,16 @@ export function WorkbenchComposer({
   }
 
   async function handlePrimaryAction(): Promise<void> {
-    await handleDispatch(isActiveGeneration ? "inject" : "send");
-  }
+    if (isPrimaryInterruptAction) {
+      if (disabled || isInterrupting || pendingAction !== null) {
+        return;
+      }
 
-  async function handleQueueAction(): Promise<void> {
-    await handleDispatch("queue");
+      await onInterrupt();
+      return;
+    }
+
+    await handleDispatch(isActiveGeneration ? "inject" : "send");
   }
 
   async function handleSubmitMessage(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -306,15 +317,21 @@ export function WorkbenchComposer({
     void handlePrimaryAction();
   }
 
-  const inlineInjectLabel = isPausedGeneration ? "继续" : "注入";
-  const primaryActionLabel = isActiveGeneration ? inlineInjectLabel : "发送";
+  const primaryActionLabel = isPrimaryInterruptAction
+    ? isInterrupting
+      ? "正在中断对话"
+      : "中断当前对话"
+    : isActiveGeneration
+      ? "发送并注入当前任务"
+      : "发送";
   const composerHint = isActiveGeneration
     ? isPausedGeneration
-      ? "当前回复已暂停；补充说明后可继续，也可改为加入队列。"
+      ? "当前回复已暂停，输入内容后会直接注入当前任务。"
       : queuedCount > 0
-        ? `助手正在回复；可直接注入补充上下文，当前还有 ${queuedCount} 条排队消息。`
-        : "助手正在回复；可直接注入补充上下文，或单独加入队列。"
+        ? `助手正在回复，输入后会直接注入当前任务；当前还有 ${queuedCount} 条消息排队。`
+        : "助手正在回复，输入后会直接注入当前任务。"
     : "可直接发送，Shift + Enter 换行。";
+  const showWaitingIndicator = isPendingPrimaryAction || isPrimaryInterruptAction;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -348,27 +365,6 @@ export function WorkbenchComposer({
 
       <form className="workbench-chat-form" onSubmit={handleSubmitMessage}>
         <div className="workbench-chat-input-shell">
-          {isActiveGeneration ? (
-            <button
-              className="workbench-inline-inject-affordance"
-              type="button"
-              onClick={() => {
-                if (trimmedDraftContent.length === 0) {
-                  textareaRef.current?.focus();
-                  return;
-                }
-
-                void handlePrimaryAction();
-              }}
-              disabled={disabled || pendingAction !== null}
-              aria-label={`${inlineInjectLabel}当前回复`}
-            >
-              <span className="workbench-inline-inject-plus" aria-hidden="true">
-                +
-              </span>
-              <span>{inlineInjectLabel}</span>
-            </button>
-          ) : null}
           <div className="workbench-chat-entry-shell">
             {isSlashPickerOpen ? (
               <SlashPopover
@@ -398,38 +394,31 @@ export function WorkbenchComposer({
         </div>
 
         <div className="workbench-composer-footer">
-          {(isActiveGeneration || isInterrupting) && !disabled ? (
-            <button
-              className="workbench-ghost-action workbench-interrupt-action"
-              type="button"
-              onClick={() => void onInterrupt()}
-              disabled={isInterrupting}
-            >
-              {isInterrupting ? "停止中" : "中断"}
-            </button>
-          ) : null}
-          {isActiveGeneration ? (
-            <button
-              className="workbench-ghost-action workbench-queue-action"
-              type="button"
-              onClick={() => void handleQueueAction()}
-              disabled={disabled || pendingAction !== null || trimmedDraftContent.length === 0}
-            >
-              加入队列
-            </button>
-          ) : null}
           <button
-            className={`workbench-primary-action${isPendingPrimaryAction ? " workbench-primary-action-running" : ""}`}
+            className={`workbench-primary-action${isPrimaryActionRunning ? " workbench-primary-action-running" : ""}`}
             type="submit"
             disabled={isPrimaryDisabled}
             aria-label={primaryActionLabel}
           >
-            {isPendingPrimaryAction ? (
+            {showWaitingIndicator ? (
               <span className="workbench-primary-action-indicator" aria-hidden="true">
+                <span className="workbench-primary-action-indicator-core" />
+                <span className="workbench-primary-action-indicator-core" />
                 <span className="workbench-primary-action-indicator-core" />
               </span>
             ) : (
-              primaryActionLabel
+              <span className="workbench-primary-action-send-icon" aria-hidden="true">
+                <svg viewBox="0 0 20 20" focusable="false">
+                  <path
+                    d="M4.25 10h11.5M10 4.25l5.75 5.75L10 15.75"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </span>
             )}
           </button>
         </div>
