@@ -262,6 +262,43 @@ class SkillService:
                     summaries.append(SkillAgentSummaryRead.model_validate(item))
         return summaries
 
+    def list_user_invocable_skills_for_catalog(self) -> list[SkillAgentSummaryRead]:
+        summaries: list[SkillAgentSummaryRead] = []
+        visible_records = sorted(
+            self._list_visible_skill_records(),
+            key=lambda record: (
+                (record.directory_name or record.name).casefold(),
+                record.id.casefold(),
+            ),
+        )
+
+        for record in visible_records:
+            if record.status != SkillRecordStatus.LOADED or not record.enabled:
+                continue
+
+            compiled_skill = self._compile_skill_record(record)
+            if compiled_skill.identity.source_kind is skill_models.SkillSourceKind.MCP:
+                continue
+            if not compiled_skill.invocable:
+                continue
+            if compiled_skill.user_invocable is False:
+                continue
+
+            summaries.append(
+                SkillAgentSummaryRead.model_validate(
+                    self._compiled_skill_payload(
+                        compiled_skill,
+                        active_due_to_touched_paths=False,
+                        selected=False,
+                        role=None,
+                        prepared_for_context=False,
+                        prepared_for_execution=False,
+                    )
+                )
+            )
+
+        return summaries
+
     def determine_skill_budget(
         self,
         *,

@@ -356,10 +356,8 @@ def _build_skill_slash_catalog_items(
     session_id: str,
 ) -> list[SlashCatalogItem]:
     items: list[SlashCatalogItem] = []
-    for skill in skill_service.list_loaded_skills_for_agent(
-        session_id=session_id,
-        scenario_type="chat_turn",
-    ):
+    del session_id
+    for skill in skill_service.list_user_invocable_skills_for_catalog():
         if not skill.invocable:
             continue
         if skill.user_invocable is False:

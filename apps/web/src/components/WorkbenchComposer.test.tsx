@@ -98,6 +98,76 @@ const slashCatalog: SlashCatalogItem[] = [
   },
 ];
 
+const fullSkillSlashCatalog: SlashCatalogItem[] = [
+  {
+    id: "slash-skill-container-security",
+    trigger: "container-security",
+    title: "Container Security",
+    type: "skill",
+    source: "skill",
+    description: "容器安全技能描述。",
+    badge: "Skill",
+    action: {
+      id: "skill:container-security",
+      trigger: "container-security",
+      type: "skill",
+      source: "skill",
+      display_text: "/container-security",
+      invocation: {
+        tool_name: "execute_skill",
+        arguments: { skill_name_or_id: "container-security" },
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  },
+  {
+    id: "slash-skill-ctf-crypto",
+    trigger: "ctf-crypto",
+    title: "CTF Crypto",
+    type: "skill",
+    source: "skill",
+    description: "CTF Crypto 技能描述。",
+    badge: "Skill",
+    action: {
+      id: "skill:ctf-crypto",
+      trigger: "ctf-crypto",
+      type: "skill",
+      source: "skill",
+      display_text: "/ctf-crypto",
+      invocation: {
+        tool_name: "execute_skill",
+        arguments: { skill_name_or_id: "ctf-crypto" },
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  },
+  {
+    id: "slash-skill-ctf-web",
+    trigger: "ctf-web",
+    title: "CTF Web",
+    type: "skill",
+    source: "skill",
+    description: "CTF Web 技能描述。",
+    badge: "Skill",
+    action: {
+      id: "skill:ctf-web",
+      trigger: "ctf-web",
+      type: "skill",
+      source: "skill",
+      display_text: "/ctf-web",
+      invocation: {
+        tool_name: "execute_skill",
+        arguments: { skill_name_or_id: "ctf-web" },
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
+  },
+  slashCatalog[0],
+];
+
 type RenderComposerOptions = {
   sessionId?: string;
   slashItems?: SlashCatalogItem[];
@@ -342,18 +412,37 @@ describe("WorkbenchComposer", () => {
     const user = userEvent.setup();
     const { textbox } = renderComposer({
       sessionId: "session-slash-open",
-      slashItems: slashCatalog,
+      slashItems: fullSkillSlashCatalog,
     });
 
     await user.type(textbox, "/");
 
     expect(screen.getByRole("listbox", { name: "斜杠指令" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /\/recon/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/container-security/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/ctf-crypto/i })).toBeInTheDocument();
+    expect(screen.queryByText("容器安全技能描述。")).not.toBeInTheDocument();
+    expect(screen.queryByText("CTF Crypto 技能描述。")).not.toBeInTheDocument();
 
     await user.keyboard("{Backspace}");
 
     expect(textbox).toHaveValue("");
     expect(screen.queryByRole("listbox", { name: "斜杠指令" })).not.toBeInTheDocument();
+  });
+
+  it("filters c-prefixed slash skills case-insensitively by trigger priority", async () => {
+    const user = userEvent.setup();
+    const { textbox } = renderComposer({
+      sessionId: "session-slash-c-prefix",
+      slashItems: fullSkillSlashCatalog,
+    });
+
+    await user.type(textbox, "/C");
+
+    expect(screen.getByRole("option", { name: /\/container-security/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/ctf-crypto/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/ctf-web/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/recon/i })).not.toBeInTheDocument();
   });
 
   it("renders stable data attributes for slash options", async () => {

@@ -53,55 +53,6 @@ type InvalidSessionState = {
 const EMPTY_SESSION_EVENTS: ReturnType<typeof useUiStore.getState>["eventsBySession"][string] = [];
 const WORKSPACE_SIDEBAR_STORAGE_KEY = "aegissec.workspace.sidebar.collapsed.v1";
 
-function buildUiNavigationSlashItem(
-  id: string,
-  trigger: string,
-  title: string,
-  description: string,
-  to: string,
-): SlashCatalogItem {
-  return {
-    id,
-    trigger,
-    title,
-    type: "builtin",
-    source: "ui",
-    description,
-    badge: "UI",
-    action: {
-      id,
-      trigger,
-      type: "builtin",
-      source: "ui",
-      display_text: `/${trigger}`,
-      invocation: {
-        tool_name: "ui.navigate",
-        arguments: { to },
-        mcp_server_id: null,
-        mcp_tool_name: null,
-      },
-    },
-  };
-}
-
-const LOCAL_UI_SLASH_ITEMS: SlashCatalogItem[] = [
-  buildUiNavigationSlashItem(
-    "builtin:goto-skills",
-    "goto-skills",
-    "Skills",
-    "打开技能工作区。",
-    "/skills",
-  ),
-  buildUiNavigationSlashItem("builtin:goto-mcp", "goto-mcp", "MCP", "打开 MCP 工作区。", "/mcp"),
-  buildUiNavigationSlashItem(
-    "builtin:goto-runtime",
-    "goto-runtime",
-    "Runtime",
-    "打开运行时工作区。",
-    "/runtime",
-  ),
-];
-
 function getStoredWorkspaceSidebarState(): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -346,11 +297,10 @@ export function SessionWorkspaceWorkbench() {
     placeholderData: (previousValue) => previousValue,
   });
   const slashCatalog = useMemo(() => {
-    const mergedItems = [...LOCAL_UI_SLASH_ITEMS, ...(slashCatalogQuery.data ?? [])];
     const seenIds = new Set<string>();
     const seenTriggers = new Set<string>();
 
-    return mergedItems.filter((item) => {
+    return (slashCatalogQuery.data ?? []).filter((item) => {
       const normalizedTrigger = item.trigger.trim().toLowerCase();
       if (seenIds.has(item.id) || seenTriggers.has(normalizedTrigger)) {
         return false;

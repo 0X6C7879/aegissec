@@ -33,6 +33,30 @@ function canSelectSlashCatalogItem(item: SlashCatalogItem | null): item is Slash
   return item !== null && item.disabled !== true;
 }
 
+function getSlashCatalogMatchScore(item: SlashCatalogItem, normalizedQuery: string): number | null {
+  if (normalizedQuery.length === 0) {
+    return 0;
+  }
+
+  const normalizedTrigger = item.trigger.trim().toLowerCase();
+  const normalizedTitle = item.title.trim().toLowerCase();
+
+  if (normalizedTrigger === normalizedQuery) {
+    return 0;
+  }
+  if (normalizedTrigger.startsWith(normalizedQuery)) {
+    return 1;
+  }
+  if (normalizedTitle.startsWith(normalizedQuery)) {
+    return 2;
+  }
+  if (normalizedTitle === normalizedQuery) {
+    return 3;
+  }
+
+  return null;
+}
+
 type WorkbenchComposerProps = {
   sessionId: string;
   slashCatalog: SlashCatalogItem[];
@@ -80,7 +104,21 @@ export function WorkbenchComposer({
 
     const normalizedQuery = slashQuery.trim().toLowerCase();
 
-    return slashCatalog.filter((item) => item.trigger.toLowerCase().startsWith(normalizedQuery));
+    return slashCatalog
+      .map((item, index) => ({
+        item,
+        index,
+        score: getSlashCatalogMatchScore(item, normalizedQuery),
+      }))
+      .filter((entry) => entry.score !== null)
+      .sort((left, right) => {
+        if (left.score !== right.score) {
+          return (left.score ?? Number.MAX_SAFE_INTEGER) - (right.score ?? Number.MAX_SAFE_INTEGER);
+        }
+
+        return left.index - right.index;
+      })
+      .map((entry) => entry.item);
   }, [slashCatalog, slashQuery]);
   const isSlashPickerOpen =
     slashQuery !== null && filteredSlashCatalog.length > 0 && dismissedSlashValue !== draftContent;

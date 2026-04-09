@@ -88,9 +88,6 @@ export function SlashPopover({
                 ) : null}
               </div>
             </div>
-            {item.description ? (
-              <p className="slash-popover-item-description">{item.description}</p>
-            ) : null}
           </button>
         );
       })}

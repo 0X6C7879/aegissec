@@ -12,6 +12,7 @@ import type {
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
+import type { SlashCatalogItem } from "../types/slash";
 import { SessionWorkspaceWorkbench } from "./SessionWorkspaceWorkbench";
 
 const {
@@ -24,6 +25,7 @@ const {
   mockGetRuntimeStatus,
   mockGetSessionConversation,
   mockGetSessionQueue,
+  mockGetSessionSlashCatalog,
   mockInjectActiveGenerationContext,
   mockForkSessionMessage,
   mockListSessions,
@@ -42,6 +44,7 @@ const {
   mockGetRuntimeStatus: vi.fn(),
   mockGetSessionConversation: vi.fn(),
   mockGetSessionQueue: vi.fn(),
+  mockGetSessionSlashCatalog: vi.fn(),
   mockInjectActiveGenerationContext: vi.fn(),
   mockForkSessionMessage: vi.fn(),
   mockListSessions: vi.fn(),
@@ -63,10 +66,11 @@ vi.mock("../lib/api", async () => {
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
     editSessionMessage: mockEditSessionMessage,
-    getRuntimeStatus: mockGetRuntimeStatus,
-    getSessionConversation: mockGetSessionConversation,
-    getSessionQueue: mockGetSessionQueue,
-    injectActiveGenerationContext: mockInjectActiveGenerationContext,
+      getRuntimeStatus: mockGetRuntimeStatus,
+      getSessionConversation: mockGetSessionConversation,
+      getSessionQueue: mockGetSessionQueue,
+      getSessionSlashCatalog: mockGetSessionSlashCatalog,
+      injectActiveGenerationContext: mockInjectActiveGenerationContext,
     forkSessionMessage: mockForkSessionMessage,
     listSessions: mockListSessions,
     regenerateSessionMessage: mockRegenerateSessionMessage,
@@ -93,12 +97,14 @@ vi.mock("./WorkbenchComposer", () => ({
     isActiveGeneration,
     isPausedGeneration,
     queuedCount,
+    slashCatalog,
     onQueueSend,
     onInject,
   }: {
     isActiveGeneration: boolean;
     isPausedGeneration: boolean;
     queuedCount: number;
+    slashCatalog: Array<{ trigger: string; source: string }>;
     onQueueSend: (payload: { content: string; slashAction?: unknown | null }) => Promise<void>;
     onInject: (content: string) => Promise<void>;
   }) => (
@@ -106,6 +112,9 @@ vi.mock("./WorkbenchComposer", () => ({
       <span data-testid="composer-active-state">{String(isActiveGeneration)}</span>
       <span data-testid="composer-paused-state">{String(isPausedGeneration)}</span>
       <span data-testid="composer-queued-count">{queuedCount}</span>
+      <span data-testid="composer-slash-catalog">
+        {slashCatalog.map((item) => `${item.source}:${item.trigger}`).join("|")}
+      </span>
       <button type="button" onClick={() => void onQueueSend({ content: "排队消息" })}>
         mock-queue-send
       </button>
@@ -202,6 +211,36 @@ function createGraph(sessionId: string, overrides: Partial<SessionGraph> = {}): 
     nodes: [],
     edges: [],
     ...overrides,
+  };
+}
+
+function createSlashCatalogItem(
+  id: string,
+  trigger: string,
+  type: string,
+  source: string,
+): SlashCatalogItem {
+  return {
+    id,
+    trigger,
+    title: trigger,
+    description: `${trigger} description`,
+    type,
+    source,
+    badge: source,
+    action: {
+      id,
+      trigger,
+      type,
+      source,
+      display_text: `/${trigger}`,
+      invocation: {
+        tool_name: source === "skill" ? "execute_skill" : trigger,
+        arguments: {},
+        mcp_server_id: null,
+        mcp_tool_name: null,
+      },
+    },
   };
 }
 
@@ -310,7 +349,42 @@ describe("SessionWorkspaceWorkbench", () => {
       createConversation(sessionId),
     );
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
+    mockGetSessionSlashCatalog.mockResolvedValue([]);
     mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
+  });
+
+  it("passes only backend slash catalog items to the composer", async () => {
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockGetSessionConversation.mockResolvedValue(createConversation("session-1"));
+    mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
+    mockGetSessionSlashCatalog.mockResolvedValue([
+      createSlashCatalogItem(
+        "builtin:list_available_skills",
+        "list-available-skills",
+        "builtin",
+        "builtin",
+      ),
+      createSlashCatalogItem("skill:ctf-crypto", "ctf-crypto", "skill", "skill"),
+    ]);
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("composer-slash-catalog").textContent).toBe(
+      "builtin:list-available-skills|skill:ctf-crypto",
+    );
+    expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
+      "ui:goto-skills",
+    );
+    expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
+      "ui:goto-mcp",
+    );
+    expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
+      "ui:goto-runtime",
+    );
   });
 
   it("recovers when the route session is missing from the current session list", async () => {

@@ -1480,6 +1480,83 @@ Use when performing Active Directory pentest orchestration.
             app.dependency_overrides[get_mcp_service] = original_mcp_override
 
 
+def test_session_slash_catalog_uses_full_user_invocable_skill_inventory(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "container-security": """---
+name: Container Security
+description: Container hardening skill
+user-invocable: true
+compatibility: [opencode]
+---
+# Container Security
+
+Use when reviewing container security posture.
+""",
+            "ctf-crypto": """---
+name: CTF Crypto
+description: CTF crypto skill
+user-invocable: true
+compatibility: [opencode]
+---
+# CTF Crypto
+
+Use for crypto challenges.
+""",
+            "hidden-helper": """---
+name: Hidden Helper
+description: Internal helper skill
+user-invocable: false
+compatibility: [opencode]
+---
+# Hidden Helper
+
+Internal helper only.
+""",
+            "disabled-skill": """---
+name: Disabled Skill
+description: Disabled skill
+user-invocable: true
+compatibility: [opencode]
+---
+# Disabled Skill
+
+Should not appear when disabled.
+""",
+        },
+    )
+
+    skill_records = api_data(client.get("/api/skills"))
+    disabled_skill = next(
+        record for record in skill_records if record["directory_name"] == "disabled-skill"
+    )
+    disable_response = client.post(f"/api/skills/{disabled_skill['id']}/disable")
+    assert disable_response.status_code == 200
+
+    session_response = client.post(
+        "/api/sessions", json={"title": "Full Skill Slash Catalog Session"}
+    )
+    session_id = api_data(session_response)["id"]
+
+    catalog_response = client.get(f"/api/sessions/{session_id}/slash-catalog")
+
+    assert catalog_response.status_code == 200
+    catalog = api_data(catalog_response)
+    catalog_ids = {item["id"] for item in catalog}
+
+    assert "skill:container-security" in catalog_ids
+    assert "skill:ctf-crypto" in catalog_ids
+    assert "skill:hidden-helper" not in catalog_ids
+    assert "skill:disabled-skill" not in catalog_ids
+
+
 def test_chat_rejects_invalid_stale_slash_action_payload(client: TestClient) -> None:
     session_response = client.post("/api/sessions", json={"title": "Stale Slash Session"})
     session_id = api_data(session_response)["id"]

@@ -2530,10 +2530,11 @@ textarea::placeholder {
 }
 
 .slash-popover-item {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  align-items: center;
   width: 100%;
-  padding: 10px 12px;
+  min-width: 0;
+  padding: 8px 12px;
   border: 1px solid transparent;
   border-radius: 12px;
   background: transparent;
@@ -2562,14 +2563,17 @@ textarea::placeholder {
 }
 
 .slash-popover-item-header {
+  width: 100%;
+  min-width: 0;
   gap: 10px;
   justify-content: space-between;
 }
 
 .slash-popover-item-meta {
   gap: 8px;
+  flex: 0 0 auto;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .slash-popover-item-trigger,
@@ -2578,6 +2582,10 @@ textarea::placeholder {
 }
 
 .slash-popover-item-trigger {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-size: 0.78rem;
   font-weight: 600;
@@ -2590,14 +2598,6 @@ textarea::placeholder {
 .slash-popover-item-keybind {
   color: var(--text-muted);
   font-size: 0.7rem;
-}
-
-.slash-popover-item-description {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.74rem;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
 }
 
 .workbench-inline-inject-affordance {
