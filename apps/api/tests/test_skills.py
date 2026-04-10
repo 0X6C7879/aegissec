@@ -2200,6 +2200,57 @@ description: Demo skill
     assert detail_response.status_code == 404
 
 
+def test_skill_endpoints_ignore_loaded_records_with_missing_entry_files(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    visible_records = _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "demo": """---
+name: demo
+description: Demo skill
+---
+# demo
+""",
+        },
+    )
+    visible_skill_id = next(record["id"] for record in visible_records if record["name"] == "demo")
+
+    local_root = tmp_path / "project" / "skills"
+    missing_entry = local_root / "web-feature-search" / "skill.md"
+
+    database_engine = app.state.database_engine
+    with Session(database_engine) as session:
+        session.add(
+            _build_skill_record(
+                root_dir=local_root,
+                directory_name="web-feature-search",
+                entry_file=missing_entry,
+                name="web-feature-search",
+                description="Missing entry skill",
+            )
+        )
+        session.commit()
+
+    list_response = client.get("/api/skills")
+    assert list_response.status_code == 200
+    listed_records = cast(list[dict[str, object]], api_data(list_response))
+    assert {record["id"] for record in listed_records} == {visible_skill_id}
+
+    context_response = client.get("/api/skills/skill-context")
+    assert context_response.status_code == 200
+    context_payload = cast(dict[str, object], api_data(context_response)["payload"])
+    context_skills = cast(list[dict[str, object]], context_payload["skills"])
+    assert [skill["directory_name"] for skill in context_skills] == ["demo"]
+
+    hidden_detail_response = client.get("/api/skills/web-feature-search-id")
+    assert hidden_detail_response.status_code == 404
+
+
 def _list_agent_loaded_skill_directory_names(client: TestClient) -> list[str]:
     del client
     database_engine = app.state.database_engine

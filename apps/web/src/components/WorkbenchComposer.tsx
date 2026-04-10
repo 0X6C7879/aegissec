@@ -131,7 +131,8 @@ export function WorkbenchComposer({
     (!isPrimaryInterruptAction && trimmedDraftContent.length === 0) ||
     (isPrimaryInterruptAction && isInterrupting);
   const isPendingPrimaryAction = pendingAction !== null;
-  const isPrimaryActionRunning = isPendingPrimaryAction || (isPrimaryInterruptAction && isInterrupting);
+  const isPrimaryActionRunning =
+    isPendingPrimaryAction || (isPrimaryInterruptAction && isInterrupting);
   const slashPopoverId = `slash-popover-${sessionId}`;
 
   useEffect(() => {

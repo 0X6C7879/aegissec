@@ -66,11 +66,11 @@ vi.mock("../lib/api", async () => {
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
     editSessionMessage: mockEditSessionMessage,
-      getRuntimeStatus: mockGetRuntimeStatus,
-      getSessionConversation: mockGetSessionConversation,
-      getSessionQueue: mockGetSessionQueue,
-      getSessionSlashCatalog: mockGetSessionSlashCatalog,
-      injectActiveGenerationContext: mockInjectActiveGenerationContext,
+    getRuntimeStatus: mockGetRuntimeStatus,
+    getSessionConversation: mockGetSessionConversation,
+    getSessionQueue: mockGetSessionQueue,
+    getSessionSlashCatalog: mockGetSessionSlashCatalog,
+    injectActiveGenerationContext: mockInjectActiveGenerationContext,
     forkSessionMessage: mockForkSessionMessage,
     listSessions: mockListSessions,
     regenerateSessionMessage: mockRegenerateSessionMessage,
@@ -379,9 +379,7 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
       "ui:goto-skills",
     );
-    expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
-      "ui:goto-mcp",
-    );
+    expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain("ui:goto-mcp");
     expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
       "ui:goto-runtime",
     );

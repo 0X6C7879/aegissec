@@ -2299,6 +2299,7 @@ class SkillService:
             for record in self._repository.list_skills()
             if self._is_record_root_supported(record, supported_root_keys)
             and record.status != SkillRecordStatus.IGNORED
+            and self._has_visible_skill_entry(record)
         ]
 
     def _get_visible_skill_record(self, skill_id: str) -> SkillRecord | None:
@@ -2306,6 +2307,15 @@ class SkillService:
             if record.id == skill_id:
                 return record
         return None
+
+    def _has_visible_skill_entry(self, record: SkillRecord) -> bool:
+        if self._infer_source_kind(record) is skill_models.SkillSourceKind.MCP:
+            return True
+        entry_file = (
+            self._string_metadata_value(self._compat_metadata(record), "loaded_from")
+            or record.entry_file
+        )
+        return Path(entry_file).is_file()
 
     def _supported_root_keys(self) -> set[tuple[object, object, str]]:
         roots = self._resolve_scan_roots()
