@@ -1,6 +1,6 @@
 ---
 name: codeql
-description: Run CodeQL static analysis for security vulnerability detection, taint tracking, and data flow analysis. Use when asked to analyze code with CodeQL, create CodeQL databases, write custom QL queries, perform security audits, or set up CodeQL in CI/CD pipelines.
+description: Run CodeQL static analysis for security vulnerability detection, taint tracking, interprocedural data flow, and path-problem analysis. Use when asked to analyze code with CodeQL, create CodeQL databases, write custom QL queries, investigate source-to-sink paths, or perform deeper security audits in CI/CD pipelines.
 allowed-tools:
   - Bash
   - Read

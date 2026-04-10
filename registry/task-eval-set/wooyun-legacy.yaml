@@ -22,14 +22,13 @@ cases:
       - 订单篡改
       - 支付绕过
   - case_id: wooyun-reference
-    prompt: 需要按授权绕过和订单篡改模式补充优先级和案例线索。
+    prompt: 需要按授权绕过模式补充优先级和案例线索。
     mode: needs-reference
     required_terms:
       - 授权
-      - 订单
+      - 越权
     reference_topics:
       - authorization
-      - financial
   - case_id: wooyun-logic-reference
     prompt: 结合状态转移和竞态条件，再补一个流程绕过测试角度。
     mode: needs-reference
@@ -39,3 +38,12 @@ cases:
       - 流程绕过
     reference_topics:
       - logic-flow
+  - case_id: wooyun-financial-reference
+    prompt: 单独补充支付与退款异常路径，重点看订单、余额和退款作弊。
+    mode: needs-reference
+    required_terms:
+      - 支付
+      - 退款
+      - 余额
+    reference_topics:
+      - financial

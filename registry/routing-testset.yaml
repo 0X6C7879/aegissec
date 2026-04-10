@@ -50,3 +50,35 @@ cases:
     available_tools:
       - execute_skill
       - read_skill_content
+  - case_id: route-exploit-shadow
+    prompt: 这个下载接口可能能读 /proc/self/environ 和 win.ini，顺便看看双重编码路径遍历还能不能绕过过滤。
+    expected_skill_id: exploit-file-download
+    scenario_type: shadow
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-wooyun-auth-shadow
+    prompt: 帮我测测这个认证和密码重置流程有没有账号接管、授权绕过和支付逻辑串联风险。
+    expected_skill_id: wooyun-legacy
+    scenario_type: shadow
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-semgrep-sarif
+    prompt: I need a fast Semgrep scan that emits SARIF and a lightweight custom rule, not a CodeQL database workflow.
+    expected_skill_id: static-analysis/semgrep
+    scenario_type: neighbor
+    touched_paths:
+      - apps/api/app/main.py
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-codeql-database-workflow
+    prompt: Create a CodeQL database with the right build command and then investigate a path-problem query across the Java service.
+    expected_skill_id: static-analysis/codeql
+    scenario_type: neighbor
+    touched_paths:
+      - services/src/main/java/App.java
+    available_tools:
+      - execute_skill
+      - read_skill_content

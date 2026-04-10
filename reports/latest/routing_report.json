@@ -2,36 +2,36 @@
   "before_after_delta": 0.0,
   "confusion_matrix": {
     "exploit-file-download": {
-      "exploit-file-download": 1
+      "exploit-file-download": 2
     },
     "static-analysis/codeql": {
-      "static-analysis/codeql": 2
+      "static-analysis/codeql": 3
     },
     "static-analysis/semgrep": {
-      "static-analysis/semgrep": 2
+      "static-analysis/semgrep": 3
     },
     "wooyun-legacy": {
-      "wooyun-legacy": 1
+      "wooyun-legacy": 2
     }
   },
   "neighbor_confusion_count": 0,
   "original": {
     "confusion_matrix": {
       "exploit-file-download": {
-        "exploit-file-download": 1
+        "exploit-file-download": 2
       },
       "static-analysis/codeql": {
-        "static-analysis/codeql": 2
+        "static-analysis/codeql": 3
       },
       "static-analysis/semgrep": {
-        "static-analysis/semgrep": 2
+        "static-analysis/semgrep": 3
       },
       "wooyun-legacy": {
-        "wooyun-legacy": 1
+        "wooyun-legacy": 2
       }
     },
     "neighbor_confusion_count": 0,
-    "pass_count": 6,
+    "pass_count": 10,
     "precision": 1.0,
     "recall": 1.0,
     "results": [
@@ -82,32 +82,64 @@
         "scenario_type": "shadow",
         "selected_skill_id": "static-analysis/codeql",
         "variant": "original"
+      },
+      {
+        "case_id": "route-exploit-shadow",
+        "expected_skill_id": "exploit-file-download",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "exploit-file-download",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-wooyun-auth-shadow",
+        "expected_skill_id": "wooyun-legacy",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "wooyun-legacy",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-semgrep-sarif",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-codeql-database-workflow",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "original"
       }
     ],
     "routing_pass_rate": 1.0,
     "shadow_interference_count": 0,
-    "total_cases": 6
+    "total_cases": 10
   },
-  "pass_count": 6,
+  "pass_count": 10,
   "precision": 1.0,
   "recall": 1.0,
   "reduced": {
     "confusion_matrix": {
       "exploit-file-download": {
-        "exploit-file-download": 1
+        "exploit-file-download": 2
       },
       "static-analysis/codeql": {
-        "static-analysis/codeql": 2
+        "static-analysis/codeql": 3
       },
       "static-analysis/semgrep": {
-        "static-analysis/semgrep": 2
+        "static-analysis/semgrep": 3
       },
       "wooyun-legacy": {
-        "wooyun-legacy": 1
+        "wooyun-legacy": 2
       }
     },
     "neighbor_confusion_count": 0,
-    "pass_count": 6,
+    "pass_count": 10,
     "precision": 1.0,
     "recall": 1.0,
     "results": [
@@ -158,11 +190,43 @@
         "scenario_type": "shadow",
         "selected_skill_id": "static-analysis/codeql",
         "variant": "reduced"
+      },
+      {
+        "case_id": "route-exploit-shadow",
+        "expected_skill_id": "exploit-file-download",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "exploit-file-download",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-wooyun-auth-shadow",
+        "expected_skill_id": "wooyun-legacy",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "wooyun-legacy",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-semgrep-sarif",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-codeql-database-workflow",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "reduced"
       }
     ],
     "routing_pass_rate": 1.0,
     "shadow_interference_count": 0,
-    "total_cases": 6
+    "total_cases": 10
   },
   "results": [
     {
@@ -212,9 +276,41 @@
       "scenario_type": "shadow",
       "selected_skill_id": "static-analysis/codeql",
       "variant": "reduced"
+    },
+    {
+      "case_id": "route-exploit-shadow",
+      "expected_skill_id": "exploit-file-download",
+      "passed": true,
+      "scenario_type": "shadow",
+      "selected_skill_id": "exploit-file-download",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-wooyun-auth-shadow",
+      "expected_skill_id": "wooyun-legacy",
+      "passed": true,
+      "scenario_type": "shadow",
+      "selected_skill_id": "wooyun-legacy",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-semgrep-sarif",
+      "expected_skill_id": "static-analysis/semgrep",
+      "passed": true,
+      "scenario_type": "neighbor",
+      "selected_skill_id": "static-analysis/semgrep",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-codeql-database-workflow",
+      "expected_skill_id": "static-analysis/codeql",
+      "passed": true,
+      "scenario_type": "neighbor",
+      "selected_skill_id": "static-analysis/codeql",
+      "variant": "reduced"
     }
   ],
   "routing_pass_rate": 1.0,
   "shadow_interference_count": 0,
-  "total_cases": 6
+  "total_cases": 10
 }

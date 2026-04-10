@@ -1,76 +1,117 @@
 {
   "cost_metrics": {
-    "average_injected_tokens": 2092.25,
-    "average_reference_load_count": 3.0,
-    "body_token_p50": 2068.0,
-    "body_token_p95": 2150.0,
-    "description_token_p50": 61.0,
-    "description_token_p95": 65.0,
-    "reference_token_p50": 1910.5,
-    "reference_token_p95": 3638.0
+    "average_injected_tokens": 2236.622807017544,
+    "average_reference_load_count": 0.375,
+    "body_token_p50": 1812.0,
+    "body_token_p95": 5272.0,
+    "description_token_p50": 52.0,
+    "description_token_p95": 130.0,
+    "reference_token_p50": 0.0,
+    "reference_token_p95": 13711.0
   },
-  "family_total": 3,
+  "family_total": 49,
   "governance_metrics": {
     "deprecated_candidates": [],
-    "duplicate_content_ratio": 0.09657320872274143,
+    "duplicate_content_ratio": 0.04553807281497645,
     "obsolescence_top": [
       {
-        "obsolescence_score": 0.08,
-        "skill_id": "exploit-file-download"
+        "obsolescence_score": 0.75,
+        "skill_id": "wireless-attacks"
       },
       {
-        "obsolescence_score": 0.05,
-        "skill_id": "static-analysis/codeql"
+        "obsolescence_score": 0.75,
+        "skill_id": "windows-privilege-escalation"
       },
       {
-        "obsolescence_score": 0.04,
-        "skill_id": "static-analysis/semgrep"
+        "obsolescence_score": 0.75,
+        "skill_id": "webapp-testing"
       },
       {
-        "obsolescence_score": 0.03,
-        "skill_id": "wooyun-legacy"
+        "obsolescence_score": 0.75,
+        "skill_id": "web3-blockchain"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "web-app-security"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "tunnel"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "threat-modeling"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "test-engineering"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "static-analysis/sarif-parsing"
+      },
+      {
+        "obsolescence_score": 0.75,
+        "skill_id": "sqlmap-sqli"
       }
     ],
     "route_collision_top": [
       {
-        "route_collision_score": 0.26,
-        "skill_id": "static-analysis/codeql"
-      },
-      {
-        "route_collision_score": 0.24,
-        "skill_id": "static-analysis/semgrep"
-      },
-      {
-        "route_collision_score": 0.18,
-        "skill_id": "exploit-file-download"
-      },
-      {
-        "route_collision_score": 0.11,
+        "route_collision_score": 0.0,
         "skill_id": "wooyun-legacy"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "wireless-attacks"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "windows-privilege-escalation"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "webapp-testing"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "web3-blockchain"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "web-app-security"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "tunnel"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "threat-modeling"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "test-engineering"
+      },
+      {
+        "route_collision_score": 0.0,
+        "skill_id": "static-analysis/semgrep"
       }
     ],
-    "uninvoked_30d_count": 0,
-    "watch_candidates": [
-      {
-        "reasons": [
-          "high_route_collision"
-        ],
-        "skill_id": "static-analysis/codeql"
-      }
-    ]
+    "uninvoked_30d_count": 110,
+    "watch_candidates": []
   },
   "quality_metrics": {
     "regression_count": 0,
     "routing_precision": 1.0,
     "routing_recall": 1.0,
-    "selective_restore_trigger_rate": 0.5,
+    "selective_restore_trigger_rate": 0.375,
     "task_pass_rate": 1.0
   },
-  "skill_total": 4,
+  "skill_total": 114,
   "status_counts": {
     "active": 4,
     "deprecated": 0,
-    "incubating": 0,
+    "incubating": 110,
     "retired": 0,
     "watch": 0
   }

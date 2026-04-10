@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -125,19 +126,77 @@ def index_registry_by_path(entries: list[SkillRegistryEntry]) -> dict[str, Skill
     return {entry.path.casefold(): entry for entry in entries}
 
 
+def synchronize_registry_entries(
+    *,
+    entries: list[SkillRegistryEntry],
+    skills: list[GovernedSkill],
+    default_owner: str = "sec-platform",
+    default_version: str = "0.1.0",
+) -> list[SkillRegistryEntry]:
+    from app.compat.skills.governance_discovery import (
+        build_skill_token_summary,
+        stable_governance_skill_id,
+    )
+
+    existing_by_path = index_registry_by_path(entries)
+    synchronized: list[SkillRegistryEntry] = []
+    for skill in sorted(skills, key=lambda item: item.relative_path.casefold()):
+        token_summary = build_skill_token_summary(skill)
+        existing_entry = existing_by_path.get(skill.relative_path.casefold())
+        if existing_entry is None:
+            inferred_family = _infer_registry_family(
+                skill_id=stable_governance_skill_id(skill.relative_path),
+                discovered_family=skill.family,
+            )
+            synchronized.append(
+                SkillRegistryEntry(
+                    skill_id=stable_governance_skill_id(skill.relative_path),
+                    path=skill.relative_path,
+                    family=inferred_family,
+                    owner=default_owner,
+                    version=default_version,
+                    status=SkillGovernanceStatus.INCUBATING,
+                    description_tokens=token_summary["description_tokens"],
+                    body_tokens=token_summary["body_tokens"],
+                    reference_tokens=token_summary["reference_tokens"],
+                )
+            )
+            continue
+        synchronized.append(
+            replace(
+                existing_entry,
+                path=skill.relative_path,
+                family=_infer_registry_family(
+                    skill_id=existing_entry.skill_id,
+                    discovered_family=skill.family,
+                    existing_family=existing_entry.family,
+                ),
+                description_tokens=token_summary["description_tokens"],
+                body_tokens=token_summary["body_tokens"],
+                reference_tokens=token_summary["reference_tokens"],
+            )
+        )
+    return _populate_neighbor_defaults(synchronized)
+
+
 def refresh_registry_entries(
     *,
     entries: list[SkillRegistryEntry],
     skills: list[GovernedSkill],
     routing_report: dict[str, object] | None = None,
     task_report: dict[str, object] | None = None,
+    last_verified_model: str | None = None,
+    last_verified_at: str | None = None,
 ) -> list[SkillRegistryEntry]:
     from app.compat.skills.governance_discovery import build_skill_token_summary
 
+    entries = synchronize_registry_entries(entries=entries, skills=skills)
     skills_by_path = {skill.relative_path.casefold(): skill for skill in skills}
     routing_rates = _extract_per_skill_routing_rates(routing_report)
     task_rates = _extract_per_skill_task_rates(task_report)
+    collision_scores = _extract_per_skill_collision_scores(routing_report)
     refreshed: list[SkillRegistryEntry] = []
+    verified_at_value = last_verified_at or _timestamp_now_iso()
 
     for entry in entries:
         skill = skills_by_path.get(entry.path.casefold())
@@ -157,9 +216,149 @@ def refresh_registry_entries(
                 reference_tokens=reference_tokens,
                 routing_pass_rate=routing_rates.get(entry.skill_id, entry.routing_pass_rate),
                 task_pass_rate=task_rates.get(entry.skill_id, entry.task_pass_rate),
+                route_collision_score=collision_scores.get(
+                    entry.skill_id, entry.route_collision_score
+                ),
+                obsolescence_score=_derive_obsolescence_score(
+                    invocation_30d=entry.invocation_30d,
+                    route_collision_score=collision_scores.get(
+                        entry.skill_id, entry.route_collision_score
+                    ),
+                    routing_pass_rate=routing_rates.get(entry.skill_id, entry.routing_pass_rate),
+                    task_pass_rate=task_rates.get(entry.skill_id, entry.task_pass_rate),
+                ),
+                last_verified_model=last_verified_model or entry.last_verified_model,
+                last_verified_at=(
+                    verified_at_value if last_verified_model else entry.last_verified_at
+                ),
             )
         )
     return refreshed
+
+
+def write_skill_registry(registry_file: Path, entries: list[SkillRegistryEntry]) -> None:
+    registry_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "skills": [entry.to_payload() for entry in entries],
+    }
+    serialized = yaml.safe_dump(
+        payload,
+        allow_unicode=True,
+        sort_keys=False,
+        width=120,
+    )
+    tmp_file = registry_file.with_suffix(f"{registry_file.suffix}.tmp")
+    tmp_file.write_text(serialized, encoding="utf-8")
+    tmp_file.replace(registry_file)
+
+
+def derive_status_proposals(
+    *,
+    entries: list[SkillRegistryEntry],
+    watch_candidates: list[dict[str, object]],
+    deprecated_candidates: list[dict[str, object]],
+    promote_recovered: bool = False,
+    routing_pass_threshold: float = 0.95,
+    task_pass_threshold: float = 0.95,
+) -> list[dict[str, object]]:
+    watch_ids = _index_candidate_reasons(watch_candidates)
+    deprecated_ids = _index_candidate_reasons(deprecated_candidates)
+    proposals: list[dict[str, object]] = []
+    for entry in entries:
+        target_status: SkillGovernanceStatus | None = None
+        reasons: list[str] = []
+        if entry.skill_id in deprecated_ids and entry.status is SkillGovernanceStatus.WATCH:
+            target_status = SkillGovernanceStatus.DEPRECATED
+            reasons = deprecated_ids[entry.skill_id]
+        elif entry.skill_id in watch_ids and entry.status in {
+            SkillGovernanceStatus.ACTIVE,
+            SkillGovernanceStatus.INCUBATING,
+        }:
+            target_status = SkillGovernanceStatus.WATCH
+            reasons = watch_ids[entry.skill_id]
+        elif (
+            promote_recovered
+            and entry.status is SkillGovernanceStatus.WATCH
+            and entry.skill_id not in watch_ids
+            and entry.skill_id not in deprecated_ids
+            and entry.routing_pass_rate >= routing_pass_threshold
+            and entry.task_pass_rate >= task_pass_threshold
+        ):
+            target_status = SkillGovernanceStatus.ACTIVE
+            reasons = ["recovered_above_thresholds"]
+        if target_status is None or target_status is entry.status:
+            continue
+        proposals.append(
+            {
+                "skill_id": entry.skill_id,
+                "from": entry.status.value,
+                "to": target_status.value,
+                "reasons": reasons,
+            }
+        )
+    return proposals
+
+
+def apply_status_changes(
+    *,
+    entries: list[SkillRegistryEntry],
+    changes: list[dict[str, object]],
+) -> list[SkillRegistryEntry]:
+    changes_by_skill: dict[str, SkillGovernanceStatus] = {}
+    for change in changes:
+        skill_id = change.get("skill_id")
+        target = change.get("to")
+        if not isinstance(skill_id, str) or not isinstance(target, str):
+            raise GovernanceRegistryError("Each status change must include skill_id and to.")
+        if target not in SkillGovernanceStatus._value2member_map_:
+            raise GovernanceRegistryError(f"Unsupported target status '{target}'.")
+        changes_by_skill[skill_id] = SkillGovernanceStatus(target)
+
+    updated_entries: list[SkillRegistryEntry] = []
+    for entry in entries:
+        target_status = changes_by_skill.get(entry.skill_id)
+        if target_status is None:
+            updated_entries.append(entry)
+            continue
+        validate_status_transition(entry.status, target_status)
+        updated_entries.append(replace(entry, status=target_status))
+    return updated_entries
+
+
+def validate_status_transition(
+    source: SkillGovernanceStatus,
+    target: SkillGovernanceStatus,
+) -> None:
+    allowed: dict[SkillGovernanceStatus, set[SkillGovernanceStatus]] = {
+        SkillGovernanceStatus.INCUBATING: {
+            SkillGovernanceStatus.ACTIVE,
+            SkillGovernanceStatus.WATCH,
+            SkillGovernanceStatus.DEPRECATED,
+            SkillGovernanceStatus.RETIRED,
+        },
+        SkillGovernanceStatus.ACTIVE: {
+            SkillGovernanceStatus.WATCH,
+            SkillGovernanceStatus.DEPRECATED,
+            SkillGovernanceStatus.RETIRED,
+        },
+        SkillGovernanceStatus.WATCH: {
+            SkillGovernanceStatus.ACTIVE,
+            SkillGovernanceStatus.DEPRECATED,
+            SkillGovernanceStatus.RETIRED,
+        },
+        SkillGovernanceStatus.DEPRECATED: {
+            SkillGovernanceStatus.WATCH,
+            SkillGovernanceStatus.RETIRED,
+        },
+        SkillGovernanceStatus.RETIRED: {SkillGovernanceStatus.DEPRECATED},
+    }
+    if source is target:
+        return
+    if target not in allowed.get(source, set()):
+        raise GovernanceRegistryError(
+            f"Invalid status transition: {source.value} -> {target.value}."
+        )
 
 
 def _load_yaml_file(path: Path) -> object:
@@ -263,3 +462,124 @@ def _extract_per_skill_task_rates(report: dict[str, object] | None) -> dict[str,
     return {
         skill_id: passes.get(skill_id, 0) / total for skill_id, total in totals.items() if total > 0
     }
+
+
+def _extract_per_skill_collision_scores(report: dict[str, object] | None) -> dict[str, float]:
+    if report is None:
+        return {}
+    reduced = report.get("reduced")
+    source = reduced if isinstance(reduced, dict) else report
+    raw_results = source.get("results") if isinstance(source, dict) else None
+    if not isinstance(raw_results, list):
+        return {}
+    totals: dict[str, int] = {}
+    misses: dict[str, int] = {}
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        skill_id = item.get("expected_skill_id")
+        if not isinstance(skill_id, str):
+            continue
+        totals[skill_id] = totals.get(skill_id, 0) + 1
+        if item.get("passed") is not True:
+            misses[skill_id] = misses.get(skill_id, 0) + 1
+    return {
+        skill_id: round(misses.get(skill_id, 0) / total, 4)
+        for skill_id, total in totals.items()
+        if total > 0
+    }
+
+
+def _derive_obsolescence_score(
+    *,
+    invocation_30d: int,
+    route_collision_score: float,
+    routing_pass_rate: float,
+    task_pass_rate: float,
+) -> float:
+    inactivity_component = 1.0 if invocation_30d <= 0 else 0.0
+    routing_gap = max(0.0, 1.0 - routing_pass_rate)
+    task_gap = max(0.0, 1.0 - task_pass_rate)
+    score = (
+        0.35 * inactivity_component
+        + 0.25 * route_collision_score
+        + 0.20 * routing_gap
+        + 0.20 * task_gap
+    )
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
+def _timestamp_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _populate_neighbor_defaults(entries: list[SkillRegistryEntry]) -> list[SkillRegistryEntry]:
+    by_skill_id = {entry.skill_id: entry for entry in entries}
+    by_family: dict[str, list[str]] = {}
+    by_prefix: dict[str, list[str]] = {}
+    for entry in entries:
+        if entry.family:
+            by_family.setdefault(entry.family, []).append(entry.skill_id)
+        by_prefix.setdefault(_skill_neighbor_prefix(entry), []).append(entry.skill_id)
+
+    updated_entries: list[SkillRegistryEntry] = []
+    for entry in entries:
+        curated_neighbors = [neighbor for neighbor in entry.neighbors if neighbor in by_skill_id]
+        if curated_neighbors:
+            updated_entries.append(replace(entry, neighbors=curated_neighbors[:5]))
+            continue
+
+        neighbor_ids: list[str] = []
+        if entry.family:
+            neighbor_ids.extend(
+                skill_id
+                for skill_id in by_family.get(entry.family, [])
+                if skill_id != entry.skill_id
+            )
+        if len(neighbor_ids) < 5:
+            neighbor_ids.extend(
+                skill_id
+                for skill_id in by_prefix.get(_skill_neighbor_prefix(entry), [])
+                if skill_id != entry.skill_id and skill_id not in neighbor_ids
+            )
+        updated_entries.append(replace(entry, neighbors=neighbor_ids[:5]))
+    return updated_entries
+
+
+def _infer_registry_family(
+    *,
+    skill_id: str,
+    discovered_family: str | None,
+    existing_family: str | None = None,
+) -> str | None:
+    if existing_family:
+        return existing_family
+    if discovered_family:
+        return discovered_family
+    prefix = skill_id.split("/", maxsplit=1)[0]
+    if "-" in prefix:
+        return prefix.split("-", maxsplit=1)[0]
+    return prefix or None
+
+
+def _skill_neighbor_prefix(entry: SkillRegistryEntry) -> str:
+    if entry.family:
+        return entry.family
+    return entry.skill_id.split("/", maxsplit=1)[0].split("-", maxsplit=1)[0]
+
+
+def _index_candidate_reasons(
+    candidates: list[dict[str, object]],
+) -> dict[str, list[str]]:
+    indexed: dict[str, list[str]] = {}
+    for candidate in candidates:
+        skill_id = candidate.get("skill_id")
+        raw_reasons = candidate.get("reasons")
+        if not isinstance(skill_id, str):
+            continue
+        if isinstance(raw_reasons, list):
+            reasons = [reason for reason in raw_reasons if isinstance(reason, str)]
+        else:
+            reasons = []
+        indexed[skill_id] = reasons
+    return indexed

@@ -20,6 +20,7 @@ def main() -> int:
     from apps.api.app.compat.skills.governance_lint import lint_governed_skills
     from apps.api.app.compat.skills.governance_registry import (
         load_skill_registry,
+        synchronize_registry_entries,
     )
 
     parser = build_argument_parser()
@@ -32,26 +33,21 @@ def main() -> int:
         REPO_ROOT / "registry" / "skill-registry.yaml"
     )
     discovery = discover_governed_skills(skills_root)
+    registry_entries = synchronize_registry_entries(
+        entries=registry_entries, skills=discovery.skills
+    )
     selected_skills = [
         skill
         for skill in discovery.skills
         if _matches_scope(skill_id=skill.governance_id, family=skill.family, args=args)
     ]
-    if not args.all and not args.skill_id and not args.family:
-        registry_paths = {entry.path.casefold() for entry in registry_entries}
-        selected_skills = [
-            skill
-            for skill in selected_skills
-            if skill.relative_path.casefold() in registry_paths
-        ]
-
     selected_issues = [
         issue
         for issue in discovery.issues
-        if args.all
-        and not args.skill_id
-        and not args.family
-        or any(skill.relative_path == issue.relative_path for skill in selected_skills)
+        if (
+            (not args.skill_id and not args.family)
+            or any(skill.relative_path == issue.relative_path for skill in selected_skills)
+        )
     ]
     issues = lint_governed_skills(
         skills=selected_skills,

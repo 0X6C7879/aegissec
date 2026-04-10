@@ -7,9 +7,9 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from app.agent.token_budget import estimate_token_count
-from app.compat.skills.governance_config import REFERENCE_GLOB, RESERVED_DIRECT_CHILDREN
 from app.compat.skills import models as skill_models
 from app.compat.skills.discovery_cache import build_discovery_provenance
+from app.compat.skills.governance_config import REFERENCE_GLOB, RESERVED_DIRECT_CHILDREN
 from app.compat.skills.governance_models import (
     GovernanceReferenceDocument,
     GovernedSkill,
@@ -59,6 +59,8 @@ def classify_filesystem_skill_markdowns(
         relative_path = skill_file.resolve().relative_to(root_path.resolve()).as_posix()
         classification = classify_skill_markdown_path(relative_path)
         if classification is None:
+            if _should_ignore_embedded_markdown(relative_path):
+                continue
             issues.append(
                 SkillDiscoveryIssue(
                     relative_path=relative_path,
@@ -171,14 +173,23 @@ def load_reference_documents(skill_dir: Path) -> list[GovernanceReferenceDocumen
         when_value = metadata.get("when")
         topics_value = metadata.get("topics")
         cost_hint_value = metadata.get("cost_hint")
-        topics = (
-            [item.strip() for item in topics_value if isinstance(item, str) and item.strip()]
-            if isinstance(topics_value, list)
-            else []
-        )
+        topics = _normalize_reference_topics(topics_value)
+        reference_title = _first_reference_heading(body)
+        if not topics:
+            topics = _infer_reference_topics(
+                reference_file=reference_file,
+                body=body,
+                reference_title=reference_title,
+            )
         when_text = (
             when_value.strip() if isinstance(when_value, str) and when_value.strip() else None
         )
+        if when_text is None:
+            when_text = _infer_reference_when(
+                reference_file=reference_file,
+                reference_title=reference_title,
+                topics=topics,
+            )
         if isinstance(cost_hint_value, str):
             normalized_cost = cost_hint_value.strip().casefold()
             cost_hint = (
@@ -188,6 +199,12 @@ def load_reference_documents(skill_dir: Path) -> list[GovernanceReferenceDocumen
             )
         else:
             cost_hint = ReferenceCostHint.UNKNOWN
+        if cost_hint is ReferenceCostHint.UNKNOWN:
+            cost_hint = _infer_reference_cost_hint(body)
+        enriched_metadata = dict(metadata)
+        enriched_metadata.setdefault("when", when_text)
+        enriched_metadata.setdefault("topics", list(topics))
+        enriched_metadata.setdefault("cost_hint", cost_hint.value)
         documents.append(
             GovernanceReferenceDocument(
                 path=reference_file.resolve().as_posix(),
@@ -196,7 +213,7 @@ def load_reference_documents(skill_dir: Path) -> list[GovernanceReferenceDocumen
                 topics=topics,
                 cost_hint=cost_hint,
                 content=body,
-                metadata=dict(metadata),
+                metadata=enriched_metadata,
             )
         )
     return documents
@@ -246,6 +263,119 @@ def _split_optional_frontmatter(text: str) -> tuple[dict[str, object], str]:
     frontmatter = loaded if isinstance(loaded, dict) else {}
     body = "\n".join(lines[closing_index + 1 :]).strip()
     return frontmatter, body
+
+
+def _should_ignore_embedded_markdown(relative_path: str) -> bool:
+    parts = PurePosixPath(relative_path).parts
+    return any(part in RESERVED_DIRECT_CHILDREN for part in parts[1:-1])
+
+
+def _normalize_reference_topics(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return _dedupe_reference_topics(
+        [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    )
+
+
+def _infer_reference_topics(
+    *,
+    reference_file: Path,
+    body: str,
+    reference_title: str | None,
+) -> list[str]:
+    candidates: list[str] = []
+    stem = reference_file.stem
+    candidates.extend([stem, stem.replace("_", "-"), stem.replace("_", " ")])
+    if reference_title:
+        candidates.extend(
+            [
+                reference_title,
+                reference_title.replace("/", " "),
+                reference_title.replace("-", " "),
+            ]
+        )
+    first_paragraph = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    if first_paragraph and not first_paragraph.startswith("#"):
+        candidates.append(first_paragraph)
+    return _dedupe_reference_topics(candidates)
+
+
+def _dedupe_reference_topics(values: list[str] | tuple[str, ...]) -> list[str]:
+    normalized_topics: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        if not isinstance(raw_value, str):
+            continue
+        for candidate in _topic_variants(raw_value):
+            canonical = re.sub(r"[\s_-]+", " ", candidate).strip().casefold()
+            if len(canonical) < 2 or canonical in seen:
+                continue
+            seen.add(canonical)
+            normalized_topics.append(candidate)
+    return normalized_topics
+
+
+def _topic_variants(value: str) -> list[str]:
+    stripped = value.strip().strip("#").strip()
+    if not stripped:
+        return []
+    collapsed = re.sub(r"\s+", " ", stripped)
+    variants = [collapsed]
+    if "_" in collapsed or "-" in collapsed:
+        variants.append(collapsed.replace("_", "-"))
+        variants.append(collapsed.replace("_", " ").replace("-", " "))
+    return variants
+
+
+def _first_reference_heading(body: str) -> str | None:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return stripped.lstrip("#").strip()
+    return None
+
+
+def _infer_reference_when(
+    *,
+    reference_file: Path,
+    reference_title: str | None,
+    topics: list[str],
+) -> str:
+    normalized_stem = reference_file.stem.casefold()
+    if "background" in normalized_stem:
+        return (
+            "Read when the task needs background context, domain framing, "
+            "or supporting rationale."
+        )
+    if "example" in normalized_stem:
+        return "Read when the task needs worked examples, payload samples, or concrete cases."
+    if "template" in normalized_stem or "output" in normalized_stem:
+        return (
+            "Read when the task needs output structure, report templates, "
+            "or reusable response scaffolds."
+        )
+    if "schema" in normalized_stem:
+        return (
+            "Read when the task needs field definitions, protocol details, "
+            "or structural constraints."
+        )
+    if "faq" in normalized_stem:
+        return (
+            "Read when the task hits edge cases, troubleshooting branches, "
+            "or repeated operator questions."
+        )
+    label = topics[0] if topics else reference_title or reference_file.stem.replace("_", " ")
+    return f"Read when the task needs detailed guidance for {label}."
+
+
+def _infer_reference_cost_hint(body: str) -> ReferenceCostHint:
+    token_count = estimate_token_count(body)
+    if token_count <= 256:
+        return ReferenceCostHint.LOW
+    if token_count <= 1024:
+        return ReferenceCostHint.MEDIUM
+    return ReferenceCostHint.HIGH
 
 
 def _slugify_token(value: str) -> str:

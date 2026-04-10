@@ -39,3 +39,10 @@ cases:
       - sink
     reference_topics:
       - query-writing
+  - case_id: codeql-sarif-core
+    prompt: 如果要把分析结果接入代码扫描平台，CodeQL 常见输出形式和查询包选择应该怎么表达？
+    mode: core-only
+    required_terms:
+      - codeql
+      - query
+      - database

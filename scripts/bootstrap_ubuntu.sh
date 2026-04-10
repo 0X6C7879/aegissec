@@ -11,9 +11,9 @@ WEB_PID_FILE="$STATE_DIR/web.pid"
 
 UV_PYTHON_VERSION="${UV_PYTHON_VERSION:-3.12}"
 PNPM_VERSION="${PNPM_VERSION:-10.15.1}"
-API_HOST="${AEGISSEC_API_HOST:-127.0.0.1}"
+API_HOST="${AEGISSEC_API_HOST:-0.0.0.0}"
 API_PORT="${AEGISSEC_API_PORT:-8000}"
-WEB_HOST="${AEGISSEC_WEB_HOST:-127.0.0.1}"
+WEB_HOST="${AEGISSEC_WEB_HOST:-0.0.0.0}"
 WEB_PORT="${AEGISSEC_WEB_PORT:-5173}"
 KALI_IMAGE_TAG="${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}"
 KALI_INSTALL_CTF_TOOLS="${AEGISSEC_KALI_INSTALL_CTF_TOOLS:-1}"
@@ -56,9 +56,9 @@ Commands:
 
 Environment overrides:
   UV_PYTHON_VERSION   Python version used by uv (default: 3.12)
-  AEGISSEC_API_HOST   API bind host (default: 127.0.0.1)
+  AEGISSEC_API_HOST   API bind host (default: 0.0.0.0)
   AEGISSEC_API_PORT   API bind port (default: 8000)
-  AEGISSEC_WEB_HOST   Web bind host (default: 127.0.0.1)
+  AEGISSEC_WEB_HOST   Web bind host (default: 0.0.0.0)
   AEGISSEC_WEB_PORT   Web bind port (default: 5173)
   AEGISSEC_KALI_IMAGE                 Kali image tag (default: aegissec-kali:latest)
   AEGISSEC_KALI_INSTALL_CTF_TOOLS     Install scripts/install_ctf_tools.sh in image build (default: 1)
@@ -376,9 +376,29 @@ wait_for_url() {
   die "$label did not become ready within ${timeout_seconds}s. Check logs under $LOG_DIR"
 }
 
+access_host_for_bind_host() {
+  local bind_host="$1"
+
+  case "$bind_host" in
+    "0.0.0.0")
+      printf '127.0.0.1\n'
+      ;;
+    "::"|"[::]")
+      printf 'localhost\n'
+      ;;
+    *)
+      printf '%s\n' "$bind_host"
+      ;;
+  esac
+}
+
 start_stack() {
   ensure_state_dirs
   ensure_env_file
+  local api_access_host
+  local web_access_host
+  api_access_host="$(access_host_for_bind_host "$API_HOST")"
+  web_access_host="$(access_host_for_bind_host "$WEB_HOST")"
 
   start_service \
     "API server" \
@@ -392,13 +412,17 @@ start_stack() {
     "$LOG_DIR/web.log" \
     "cd '$REPO_ROOT/apps/web' && export PATH='$HOME/.local/bin':\$PATH && corepack pnpm install --frozen-lockfile >/dev/null && corepack pnpm dev --host '$WEB_HOST' --port '$WEB_PORT'"
 
-  wait_for_url "http://${API_HOST}:${API_PORT}/health" "API server" 120
-  wait_for_url "http://${WEB_HOST}:${WEB_PORT}" "Web server" 120
+  wait_for_url "http://${api_access_host}:${API_PORT}/health" "API server" 120
+  wait_for_url "http://${web_access_host}:${WEB_PORT}" "Web server" 120
 }
 
 show_status() {
   local api_status="stopped"
   local web_status="stopped"
+  local api_access_host
+  local web_access_host
+  api_access_host="$(access_host_for_bind_host "$API_HOST")"
+  web_access_host="$(access_host_for_bind_host "$WEB_HOST")"
 
   if is_pid_running "$API_PID_FILE"; then
     api_status="running (PID $(cat "$API_PID_FILE"))"
@@ -411,8 +435,8 @@ show_status() {
   cat <<EOF
 API: ${api_status}
 Web: ${web_status}
-API URL: http://${API_HOST}:${API_PORT}/health
-Web URL: http://${WEB_HOST}:${WEB_PORT}
+API URL: http://${api_access_host}:${API_PORT}/health
+Web URL: http://${web_access_host}:${WEB_PORT}
 Logs: $LOG_DIR
 EOF
 }

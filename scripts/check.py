@@ -22,11 +22,21 @@ def main() -> int:
     run(["uv", "run", "black", "--check", "."], API_DIR)
     run(["uv", "run", "mypy", "app", "tests"], API_DIR)
     run(["uv", "run", "pytest"], API_DIR)
-    run(["python", str(REPO_ROOT / "ci" / "lint_skills.py")], REPO_ROOT)
+    run(["python", str(REPO_ROOT / "ci" / "lint_skills.py"), "--strict"], REPO_ROOT)
     run(["python", str(REPO_ROOT / "ci" / "reduce_skill.py")], REPO_ROOT)
     run(["python", str(REPO_ROOT / "ci" / "eval_routing.py")], REPO_ROOT)
     run(["python", str(REPO_ROOT / "ci" / "eval_task.py")], REPO_ROOT)
-    run(["python", str(REPO_ROOT / "ci" / "report_metrics.py")], REPO_ROOT)
+    run(
+        [
+            "python",
+            str(REPO_ROOT / "ci" / "report_metrics.py"),
+            "--strict-thresholds",
+            "--write-registry",
+            "--last-verified-model",
+            "gpt-5.4",
+        ],
+        REPO_ROOT,
+    )
     run(
         ["uv", "run", "python", str(REPO_ROOT / "scripts" / "export_api_schema.py")],
         API_DIR,

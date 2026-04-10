@@ -230,12 +230,12 @@ def normalize_pattt_request(
         **raw_constraints,
         "phase": normalized_phase,
         "signals": normalized_signals,
-        "explicit_bypass": normalized_explicit_bypass
-        if normalized_explicit_bypass is not None
-        else False,
-        "explicit_exploit": normalized_explicit_exploit
-        if normalized_explicit_exploit is not None
-        else False,
+        "explicit_bypass": (
+            normalized_explicit_bypass if normalized_explicit_bypass is not None else False
+        ),
+        "explicit_exploit": (
+            normalized_explicit_exploit if normalized_explicit_exploit is not None else False
+        ),
         "task_text": task_text_value,
     }
     return PatttResolverRequest(

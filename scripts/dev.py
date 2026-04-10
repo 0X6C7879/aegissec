@@ -58,9 +58,9 @@ def stop_process(process: subprocess.Popen[str]) -> None:
 
 def main() -> int:
     env = os.environ.copy()
-    api_host = env.get("AEGISSEC_API_HOST", "127.0.0.1")
+    api_host = env.get("AEGISSEC_API_HOST", "0.0.0.0")
     api_port = env.get("AEGISSEC_API_PORT", "8000")
-    web_host = env.get("AEGISSEC_WEB_HOST", "127.0.0.1")
+    web_host = env.get("AEGISSEC_WEB_HOST", "0.0.0.0")
     web_port = env.get("AEGISSEC_WEB_PORT", "5173")
 
     print("==> Syncing API dependencies")

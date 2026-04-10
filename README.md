@@ -225,7 +225,7 @@ cd aegissec
 cp .env.example .env
 ```
 
-默认开发端口：
+默认开发访问地址（服务监听默认绑定到 `0.0.0.0`）：
 
 - API: `127.0.0.1:8000`
 - Web: `127.0.0.1:5173`
@@ -299,9 +299,9 @@ Compose 当前会启动：
 
 ```env
 AEGISSEC_APP_NAME=aegissec
-AEGISSEC_API_HOST=127.0.0.1
+AEGISSEC_API_HOST=0.0.0.0
 AEGISSEC_API_PORT=8000
-AEGISSEC_WEB_HOST=127.0.0.1
+AEGISSEC_WEB_HOST=0.0.0.0
 AEGISSEC_WEB_PORT=5173
 AEGISSEC_FRONTEND_ORIGIN=http://127.0.0.1:5173
 AEGISSEC_API_AUTH_MODE=disabled

@@ -1,6 +1,6 @@
 ---
 name: semgrep
-description: Run Semgrep static analysis for fast security scanning and pattern matching. Use when asked to scan code with Semgrep, write custom YAML rules, find vulnerabilities quickly, use taint mode, or set up Semgrep in CI/CD pipelines.
+description: Run Semgrep static analysis for fast security scanning, SARIF/JSON output, and lightweight pattern matching. Use when asked to scan code with Semgrep, write lightweight custom YAML rules, find vulnerabilities quickly, use taint mode, or integrate fast checks in CI/CD pipelines.
 allowed-tools:
   - Bash
   - Read

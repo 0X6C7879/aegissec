@@ -14,6 +14,9 @@ BODY_TARGET_MAX_TOKENS = 320
 ROUTING_PASS_THRESHOLD = 0.95
 TASK_PASS_THRESHOLD = 0.95
 MAX_RESTORE_ROUNDS = 2
+REFERENCE_MAX_SELECTED = 2
+REFERENCE_MAX_TOKEN_BUDGET = 2048
+REFERENCE_LOAD_TARGET = 2.0
 
 REFERENCE_GLOB = "**/*.md"
 REFERENCE_REQUIRED_FIELDS = ("when", "topics", "cost_hint")
@@ -84,8 +87,6 @@ PLACEHOLDER_TEXT_HINTS = (
 PLACEHOLDER_FILE_HINTS = (
     "placeholder",
     "todo",
-    "template",
-    "sample",
 )
 
 
@@ -101,6 +102,9 @@ class GovernanceThresholds:
     routing_pass_threshold: float = ROUTING_PASS_THRESHOLD
     task_pass_threshold: float = TASK_PASS_THRESHOLD
     max_restore_rounds: int = MAX_RESTORE_ROUNDS
+    reference_max_selected: int = REFERENCE_MAX_SELECTED
+    reference_max_token_budget: int = REFERENCE_MAX_TOKEN_BUDGET
+    reference_load_target: float = REFERENCE_LOAD_TARGET
 
 
 DEFAULT_THRESHOLDS = GovernanceThresholds()

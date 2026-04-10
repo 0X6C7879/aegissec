@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="aegissec", alias="AEGISSEC_APP_NAME")
     app_version: str = "0.1.0"
-    api_host: str = Field(default="127.0.0.1", alias="AEGISSEC_API_HOST")
+    api_host: str = Field(default="0.0.0.0", alias="AEGISSEC_API_HOST")
     api_port: int = Field(default=8000, alias="AEGISSEC_API_PORT")
     frontend_origin: str = Field(
         default="http://127.0.0.1:5173",

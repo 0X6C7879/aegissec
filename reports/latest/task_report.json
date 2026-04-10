@@ -1,38 +1,38 @@
 {
-  "baseline_pass_rate": 0.4,
+  "baseline_pass_rate": 0.4166666666666667,
   "coverage": {
     "per_skill": {
       "exploit-file-download": {
         "meets_recommended_minimum": true,
         "mode_counts": {
-          "core-only": 3,
+          "core-only": 4,
           "needs-reference": 2
         },
-        "total_cases": 5
+        "total_cases": 6
       },
       "static-analysis/codeql": {
         "meets_recommended_minimum": true,
         "mode_counts": {
-          "core-only": 3,
+          "core-only": 4,
           "needs-reference": 2
         },
-        "total_cases": 5
+        "total_cases": 6
       },
       "static-analysis/semgrep": {
         "meets_recommended_minimum": true,
         "mode_counts": {
-          "core-only": 3,
+          "core-only": 4,
           "needs-reference": 2
         },
-        "total_cases": 5
+        "total_cases": 6
       },
       "wooyun-legacy": {
         "meets_recommended_minimum": true,
         "mode_counts": {
           "core-only": 3,
-          "needs-reference": 2
+          "needs-reference": 3
         },
-        "total_cases": 5
+        "total_cases": 6
       }
     }
   },
@@ -72,7 +72,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1986
+        "token_cost": 2063
       },
       "reduced": {
         "failure_reasons": [],
@@ -86,9 +86,9 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 427
+        "token_cost": 400
       },
-      "restore_rounds": 1,
+      "restore_rounds": 0,
       "skill_id": "exploit-file-download"
     },
     {
@@ -120,7 +120,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1986
+        "token_cost": 2063
       },
       "reduced": {
         "failure_reasons": [],
@@ -134,7 +134,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 427
+        "token_cost": 494
       },
       "restore_rounds": 1,
       "skill_id": "exploit-file-download"
@@ -171,7 +171,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1986
+        "token_cost": 2063
       },
       "reduced": {
         "failure_reasons": [],
@@ -185,9 +185,9 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 427
+        "token_cost": 400
       },
-      "restore_rounds": 1,
+      "restore_rounds": 0,
       "skill_id": "exploit-file-download"
     },
     {
@@ -221,7 +221,7 @@
         "selected_references": [
           "references/bypass_techniques.md"
         ],
-        "token_cost": 3531
+        "token_cost": 3608
       },
       "reduced": {
         "failure_reasons": [],
@@ -236,7 +236,7 @@
         "selected_references": [
           "references/bypass_techniques.md"
         ],
-        "token_cost": 1972
+        "token_cost": 2039
       },
       "restore_rounds": 1,
       "skill_id": "exploit-file-download"
@@ -276,7 +276,7 @@
         "selected_references": [
           "references/sensitive_files.md"
         ],
-        "token_cost": 4079
+        "token_cost": 4156
       },
       "reduced": {
         "failure_reasons": [],
@@ -292,9 +292,57 @@
         "selected_references": [
           "references/sensitive_files.md"
         ],
-        "token_cost": 2426
+        "token_cost": 2493
       },
       "restore_rounds": 0,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "编码",
+          "路径遍历",
+          "payload"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 11
+      },
+      "case_id": "traversal-encoding-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "编码",
+          "路径遍历",
+          "payload"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2063
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "编码",
+          "路径遍历",
+          "payload"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 406
+      },
+      "restore_rounds": 1,
       "skill_id": "exploit-file-download"
     },
     {
@@ -326,7 +374,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2170
+        "token_cost": 2184
       },
       "reduced": {
         "failure_reasons": [],
@@ -374,7 +422,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2170
+        "token_cost": 2184
       },
       "reduced": {
         "failure_reasons": [],
@@ -424,7 +472,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2170
+        "token_cost": 2184
       },
       "reduced": {
         "failure_reasons": [],
@@ -478,7 +526,7 @@
         "selected_references": [
           "references/database-workflow.md"
         ],
-        "token_cost": 2248
+        "token_cost": 2262
       },
       "reduced": {
         "failure_reasons": [],
@@ -532,7 +580,7 @@
         "selected_references": [
           "references/query-writing.md"
         ],
-        "token_cost": 2245
+        "token_cost": 2259
       },
       "reduced": {
         "failure_reasons": [],
@@ -549,6 +597,57 @@
           "references/query-writing.md"
         ],
         "token_cost": 495
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql"
+        ],
+        "missing_terms": [
+          "query",
+          "database"
+        ],
+        "passed": false,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 11
+      },
+      "case_id": "codeql-sarif-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql",
+          "query",
+          "database"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2184
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql",
+          "query",
+          "database"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
       },
       "restore_rounds": 0,
       "skill_id": "static-analysis/codeql"
@@ -585,7 +684,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2150
+        "token_cost": 2163
       },
       "reduced": {
         "failure_reasons": [],
@@ -633,7 +732,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2150
+        "token_cost": 2163
       },
       "reduced": {
         "failure_reasons": [],
@@ -647,7 +746,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 502
+        "token_cost": 444
       },
       "restore_rounds": 1,
       "skill_id": "static-analysis/semgrep"
@@ -681,7 +780,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 2150
+        "token_cost": 2163
       },
       "reduced": {
         "failure_reasons": [],
@@ -733,7 +832,7 @@
         "selected_references": [
           "references/rule-writing.md"
         ],
-        "token_cost": 2262
+        "token_cost": 2275
       },
       "reduced": {
         "failure_reasons": [],
@@ -789,7 +888,7 @@
         "selected_references": [
           "references/triage.md"
         ],
-        "token_cost": 2222
+        "token_cost": 2235
       },
       "reduced": {
         "failure_reasons": [],
@@ -806,6 +905,54 @@
           "references/triage.md"
         ],
         "token_cost": 492
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep",
+          "json",
+          "sarif"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 13
+      },
+      "case_id": "semgrep-output-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep",
+          "json",
+          "sarif"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2163
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep",
+          "json",
+          "sarif"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
       },
       "restore_rounds": 0,
       "skill_id": "static-analysis/semgrep"
@@ -839,7 +986,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1783
+        "token_cost": 1713
       },
       "reduced": {
         "failure_reasons": [],
@@ -887,7 +1034,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1783
+        "token_cost": 1713
       },
       "reduced": {
         "failure_reasons": [],
@@ -935,7 +1082,7 @@
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [],
-        "token_cost": 1783
+        "token_cost": 1713
       },
       "reduced": {
         "failure_reasons": [],
@@ -957,18 +1104,20 @@
     {
       "baseline": {
         "failure_reasons": [
+          "missing_required_terms",
           "missing_required_reference"
         ],
         "format_passed": true,
         "matched_terms": [
-          "授权",
-          "订单"
+          "授权"
         ],
-        "missing_terms": [],
+        "missing_terms": [
+          "越权"
+        ],
         "passed": false,
         "reference_usage_passed": false,
         "selected_references": [],
-        "token_cost": 7
+        "token_cost": 5
       },
       "case_id": "wooyun-reference",
       "mode": "needs-reference",
@@ -977,32 +1126,30 @@
         "format_passed": true,
         "matched_terms": [
           "授权",
-          "订单"
+          "越权"
         ],
         "missing_terms": [],
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [
-          "references/authorization-domain.md",
-          "references/financial-domain.md"
+          "references/authorization-domain.md"
         ],
-        "token_cost": 3763
+        "token_cost": 2800
       },
       "reduced": {
         "failure_reasons": [],
         "format_passed": true,
         "matched_terms": [
           "授权",
-          "订单"
+          "越权"
         ],
         "missing_terms": [],
         "passed": true,
         "reference_usage_passed": true,
         "selected_references": [
-          "references/authorization-domain.md",
-          "references/financial-domain.md"
+          "references/authorization-domain.md"
         ],
-        "token_cost": 2401
+        "token_cost": 1507
       },
       "restore_rounds": 0,
       "skill_id": "wooyun-legacy"
@@ -1040,7 +1187,7 @@
         "selected_references": [
           "references/logic-flow-domain.md"
         ],
-        "token_cost": 2689
+        "token_cost": 2619
       },
       "reduced": {
         "failure_reasons": [],
@@ -1056,12 +1203,66 @@
         "selected_references": [
           "references/logic-flow-domain.md"
         ],
-        "token_cost": 1512
+        "token_cost": 1367
       },
       "restore_rounds": 1,
       "skill_id": "wooyun-legacy"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "余额"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 7
+      },
+      "case_id": "wooyun-financial-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "余额"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/financial-domain.md"
+        ],
+        "token_cost": 2607
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "余额"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/financial-domain.md"
+        ],
+        "token_cost": 1315
+      },
+      "restore_rounds": 0,
+      "skill_id": "wooyun-legacy"
     }
   ],
-  "selective_restore_trigger_rate": 0.5,
-  "total_cases": 20
+  "selective_restore_trigger_rate": 0.375,
+  "total_cases": 24
 }

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from statistics import median
 
+from app.compat.skills.governance_config import ROUTING_PASS_THRESHOLD, TASK_PASS_THRESHOLD
 from app.compat.skills.governance_discovery import build_skill_token_summary
-from app.compat.skills.governance_reduce import _strip_frontmatter
 from app.compat.skills.governance_models import (
     GovernedSkill,
     SkillGovernanceStatus,
     SkillRegistryEntry,
 )
+from app.compat.skills.governance_reduce import _strip_frontmatter
 
 
 def build_registry_metrics_report(
@@ -67,9 +68,7 @@ def build_registry_metrics_report(
                     for summary in token_summaries
                 ]
             ),
-            "average_reference_load_count": _safe_average(
-                [len(skill.references) for skill in skills]
-            ),
+            "average_reference_load_count": _safe_average(_selected_reference_loads(task_report)),
         },
         "quality_metrics": {
             "routing_precision": _numeric_metric(routing_report, "precision"),
@@ -88,8 +87,8 @@ def build_registry_metrics_report(
             "route_collision_top": route_collision_top,
             "obsolescence_top": obsolescence_top,
             "duplicate_content_ratio": _duplicate_content_ratio(skills),
-            "watch_candidates": _build_watch_candidates(registry_entries),
-            "deprecated_candidates": _build_deprecated_candidates(registry_entries),
+            "watch_candidates": build_watch_candidates(registry_entries),
+            "deprecated_candidates": build_deprecated_candidates(registry_entries),
         },
     }
 
@@ -123,6 +122,14 @@ def _numeric_metric(report: dict[str, object] | None, key: str) -> float:
     return 0.0
 
 
+def build_watch_candidates(entries: list[SkillRegistryEntry]) -> list[dict[str, object]]:
+    return _build_watch_candidates(entries)
+
+
+def build_deprecated_candidates(entries: list[SkillRegistryEntry]) -> list[dict[str, object]]:
+    return _build_deprecated_candidates(entries)
+
+
 def _duplicate_content_ratio(skills: list[GovernedSkill]) -> float:
     paragraphs: list[str] = []
     for skill in skills:
@@ -136,24 +143,34 @@ def _duplicate_content_ratio(skills: list[GovernedSkill]) -> float:
 
 
 def _normalized_paragraphs(text: str) -> list[str]:
-    return [
-        " ".join(paragraph.split()).casefold()
-        for paragraph in text.split("\n\n")
-        if " ".join(paragraph.split()).strip()
-    ]
+    normalized: list[str] = []
+    for paragraph in text.split("\n\n"):
+        collapsed = " ".join(paragraph.split()).casefold()
+        stripped_markdown = collapsed.strip("-#*`> ").strip()
+        if not stripped_markdown:
+            continue
+        if len(stripped_markdown) < 12:
+            continue
+        normalized.append(collapsed)
+    return normalized
 
 
 def _build_watch_candidates(entries: list[SkillRegistryEntry]) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
     for entry in entries:
+        if entry.status in {
+            SkillGovernanceStatus.INCUBATING,
+            SkillGovernanceStatus.RETIRED,
+        }:
+            continue
         reasons: list[str] = []
         if entry.invocation_30d <= 0:
             reasons.append("unused_in_30d")
         if entry.route_collision_score >= 0.25:
             reasons.append("high_route_collision")
-        if entry.task_pass_rate < 0.95:
+        if entry.task_pass_rate < TASK_PASS_THRESHOLD:
             reasons.append("low_task_pass_rate")
-        if entry.routing_pass_rate < 0.95:
+        if entry.routing_pass_rate < ROUTING_PASS_THRESHOLD:
             reasons.append("low_routing_pass_rate")
         if reasons:
             candidates.append({"skill_id": entry.skill_id, "reasons": reasons})
@@ -171,3 +188,22 @@ def _build_deprecated_candidates(entries: list[SkillRegistryEntry]) -> list[dict
         if reasons:
             candidates.append({"skill_id": entry.skill_id, "reasons": reasons})
     return candidates
+
+
+def _selected_reference_loads(task_report: dict[str, object] | None) -> list[int]:
+    if not isinstance(task_report, dict):
+        return []
+    raw_results = task_report.get("results")
+    if not isinstance(raw_results, list):
+        return []
+    loads: list[int] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        reduced = item.get("reduced")
+        if not isinstance(reduced, dict):
+            continue
+        selected = reduced.get("selected_references")
+        if isinstance(selected, list):
+            loads.append(len(selected))
+    return loads

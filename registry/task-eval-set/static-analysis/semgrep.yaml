@@ -39,3 +39,10 @@ cases:
       - triage
     reference_topics:
       - triage
+  - case_id: semgrep-output-core
+    prompt: 解释一下 Semgrep 在快速扫描场景里，为什么适合先出 JSON 或 SARIF 结果再做分流。
+    mode: core-only
+    required_terms:
+      - semgrep
+      - json
+      - sarif

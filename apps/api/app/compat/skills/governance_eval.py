@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 from app.agent.token_budget import estimate_token_count
 from app.compat.skills import models as skill_models
 from app.compat.skills.compiler import compile_skill_record
+from app.compat.skills.governance_config import (
+    DEFAULT_THRESHOLDS,
+    REFERENCE_MAX_SELECTED,
+)
 from app.compat.skills.governance_discovery import (
     discover_governed_skills,
     stable_governance_skill_id,
@@ -16,8 +20,9 @@ from app.compat.skills.governance_models import (
     GovernedSkill,
     RoutingEvaluationResult,
     RoutingTestCase,
-    SkillRegistryEntry,
+    SkillGovernanceStatus,
     SkillReductionResult,
+    SkillRegistryEntry,
     TaskCaseEvaluationResult,
     TaskEvalCase,
     TaskVariantResult,
@@ -27,7 +32,6 @@ from app.compat.skills.governance_reduce import (
     restore_reduction as apply_restore_reduction,
 )
 from app.compat.skills.governance_registry import index_registry_by_path
-from app.compat.skills.resolution import resolve_skill_candidates
 from app.db.models import CompatibilityScope, CompatibilitySource, SkillRecord, SkillRecordStatus
 
 
@@ -43,6 +47,7 @@ def build_governed_skill_catalog(
     skills_root: Path,
     *,
     registry_entries: list[SkillRegistryEntry] | None = None,
+    allowed_statuses: set[SkillGovernanceStatus] | None = None,
 ) -> GovernedSkillCatalog:
     discovery = discover_governed_skills(skills_root)
     registry_by_path = index_registry_by_path(registry_entries or [])
@@ -53,7 +58,11 @@ def build_governed_skill_catalog(
 
     for discovered_skill in discovery.skills:
         registry_entry = registry_by_path.get(discovered_skill.relative_path.casefold())
-        if registry_entries is not None and registry_entry is None:
+        if (
+            registry_entry is not None
+            and allowed_statuses is not None
+            and registry_entry.status not in allowed_statuses
+        ):
             continue
         governance_id = (
             registry_entry.skill_id
@@ -356,15 +365,17 @@ def evaluate_tasks(
     original_pass_count = sum(1 for result in results if result.original.passed)
     return {
         "total_cases": total_cases,
-        "baseline_pass_rate": 1.0
-        if total_cases == 0
-        else sum(1 for result in results if result.baseline.passed) / total_cases,
+        "baseline_pass_rate": (
+            1.0
+            if total_cases == 0
+            else sum(1 for result in results if result.baseline.passed) / total_cases
+        ),
         "original_pass_rate": 1.0 if total_cases == 0 else original_pass_count / total_cases,
         "reduced_pass_rate": 1.0 if total_cases == 0 else reduced_pass_count / total_cases,
         "regression_count": regression_count,
-        "selective_restore_trigger_rate": 0.0
-        if total_cases == 0
-        else restore_trigger_count / total_cases,
+        "selective_restore_trigger_rate": (
+            0.0 if total_cases == 0 else restore_trigger_count / total_cases
+        ),
         "coverage": _build_task_coverage_summary(task_cases_by_skill),
         "results": [result.to_payload() for result in results],
     }
@@ -416,14 +427,51 @@ def _select_references(
     if case.mode != "needs-reference":
         return []
     requested_topics = {topic.casefold() for topic in case.reference_topics}
-    selected = [
+    candidates = [
         reference
         for reference in skill.references
         if requested_topics & {topic.casefold() for topic in reference.topics}
     ]
-    if selected:
-        return selected
-    return skill.references[:1]
+    if not candidates:
+        fallback = sorted(
+            skill.references,
+            key=lambda reference: (
+                _reference_cost_rank(reference),
+                estimate_token_count(reference.content),
+                reference.relative_path,
+            ),
+        )
+        return fallback[:1]
+
+    ranked = sorted(
+        candidates,
+        key=lambda reference: (
+            -len(requested_topics & {topic.casefold() for topic in reference.topics}),
+            _reference_cost_rank(reference),
+            estimate_token_count(reference.content),
+            reference.relative_path,
+        ),
+    )
+    selected: list[GovernanceReferenceDocument] = []
+    covered_topics: set[str] = set()
+    token_budget = 0
+    for reference in ranked:
+        reference_topics = {topic.casefold() for topic in reference.topics}
+        reference_tokens = estimate_token_count(reference.content)
+        would_add_new_topic = bool((reference_topics & requested_topics) - covered_topics)
+        within_cap = len(selected) < DEFAULT_THRESHOLDS.reference_max_selected
+        within_budget = (
+            token_budget + reference_tokens <= DEFAULT_THRESHOLDS.reference_max_token_budget
+        )
+        if not within_cap:
+            break
+        if not selected or would_add_new_topic or within_budget:
+            selected.append(reference)
+            covered_topics |= reference_topics & requested_topics
+            token_budget += reference_tokens
+        if covered_topics >= requested_topics:
+            break
+    return selected[:REFERENCE_MAX_SELECTED] or ranked[:1]
 
 
 def _join_reference_content(references: list[GovernanceReferenceDocument]) -> str:
@@ -450,6 +498,16 @@ def _coerce_float(value: object) -> float:
     if isinstance(value, int | float):
         return float(value)
     return 0.0
+
+
+def _reference_cost_rank(reference: GovernanceReferenceDocument) -> int:
+    if reference.cost_hint.value == "low":
+        return 0
+    if reference.cost_hint.value == "medium":
+        return 1
+    if reference.cost_hint.value == "high":
+        return 2
+    return 1
 
 
 def _to_skill_record(

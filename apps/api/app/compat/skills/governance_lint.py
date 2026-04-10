@@ -14,6 +14,7 @@ from app.compat.skills.governance_models import (
     GovernanceLintIssue,
     GovernedSkill,
     SkillDiscoveryIssue,
+    SkillGovernanceStatus,
     SkillRegistryEntry,
 )
 from app.compat.skills.governance_registry import index_registry_by_path
@@ -86,6 +87,12 @@ def _lint_single_skill(
             )
         )
 
+    enforce_reduction_hygiene = registry_entry is None or registry_entry.status in {
+        SkillGovernanceStatus.ACTIVE,
+        SkillGovernanceStatus.WATCH,
+        SkillGovernanceStatus.DEPRECATED,
+    }
+
     if skill.parsed_record.error_message:
         issues.append(
             GovernanceLintIssue(
@@ -109,7 +116,7 @@ def _lint_single_skill(
             )
         )
     description_tokens = estimate_token_count(description)
-    if description_tokens < DEFAULT_THRESHOLDS.description_min_tokens:
+    if enforce_reduction_hygiene and description_tokens < DEFAULT_THRESHOLDS.description_min_tokens:
         issues.append(
             GovernanceLintIssue(
                 level="warning",
@@ -122,7 +129,10 @@ def _lint_single_skill(
                 path=skill.relative_path,
             )
         )
-    if description_tokens > DEFAULT_THRESHOLDS.description_warn_max_tokens:
+    if (
+        enforce_reduction_hygiene
+        and description_tokens > DEFAULT_THRESHOLDS.description_warn_max_tokens
+    ):
         issues.append(
             GovernanceLintIssue(
                 level="warning",
@@ -137,7 +147,7 @@ def _lint_single_skill(
         )
 
     body_line_count = len(raw_text.splitlines())
-    if body_line_count > DEFAULT_THRESHOLDS.body_hard_max_lines:
+    if enforce_reduction_hygiene and body_line_count > DEFAULT_THRESHOLDS.body_hard_max_lines:
         issues.append(
             GovernanceLintIssue(
                 level="warning",
@@ -151,7 +161,7 @@ def _lint_single_skill(
             )
         )
 
-    if _WORD_PLACEHOLDER_RE.search(raw_text.casefold()):
+    if enforce_reduction_hygiene and _WORD_PLACEHOLDER_RE.search(raw_text.casefold()):
         issues.append(
             GovernanceLintIssue(
                 level="warning",
@@ -162,13 +172,32 @@ def _lint_single_skill(
             )
         )
 
-    issues.extend(_lint_directory_placeholders(skill))
-    issues.extend(_lint_reference_documents(skill, raw_text, strict=strict))
-    issues.extend(_lint_body_reference_duplication(skill, raw_text))
+    issues.extend(_lint_directory_placeholders(skill, enabled=enforce_reduction_hygiene))
+    issues.extend(
+        _lint_reference_documents(
+            skill,
+            raw_text,
+            strict=strict,
+            require_explicit_routing=enforce_reduction_hygiene,
+        )
+    )
+    issues.extend(
+        _lint_body_reference_duplication(
+            skill,
+            raw_text,
+            enabled=enforce_reduction_hygiene,
+        )
+    )
     return issues
 
 
-def _lint_directory_placeholders(skill: GovernedSkill) -> list[GovernanceLintIssue]:
+def _lint_directory_placeholders(
+    skill: GovernedSkill,
+    *,
+    enabled: bool,
+) -> list[GovernanceLintIssue]:
+    if not enabled:
+        return []
     skill_dir = Path(skill.entry_file).parent
     issues: list[GovernanceLintIssue] = []
     for candidate in skill_dir.rglob("*"):
@@ -189,7 +218,11 @@ def _lint_directory_placeholders(skill: GovernedSkill) -> list[GovernanceLintIss
 
 
 def _lint_reference_documents(
-    skill: GovernedSkill, raw_text: str, *, strict: bool
+    skill: GovernedSkill,
+    raw_text: str,
+    *,
+    strict: bool,
+    require_explicit_routing: bool,
 ) -> list[GovernanceLintIssue]:
     issues: list[GovernanceLintIssue] = []
     normalized_body = raw_text.casefold()
@@ -204,8 +237,10 @@ def _lint_reference_documents(
                     path=reference.relative_path,
                 )
             )
-        if reference.relative_path.casefold() not in normalized_body and not any(
-            topic.casefold() in normalized_body for topic in reference.topics
+        if (
+            require_explicit_routing
+            and reference.relative_path.casefold() not in normalized_body
+            and not any(topic.casefold() in normalized_body for topic in reference.topics)
         ):
             issues.append(
                 GovernanceLintIssue(
@@ -222,12 +257,17 @@ def _lint_reference_documents(
 
 
 def _lint_body_reference_duplication(
-    skill: GovernedSkill, raw_text: str
+    skill: GovernedSkill,
+    raw_text: str,
+    *,
+    enabled: bool,
 ) -> list[GovernanceLintIssue]:
+    if not enabled:
+        return []
     normalized_body_paragraphs = {
         _normalize_text(paragraph)
         for paragraph in raw_text.split("\n\n")
-        if _normalize_text(paragraph)
+        if _is_meaningful_paragraph(paragraph)
     }
     duplicated_references = [
         reference.relative_path
@@ -254,10 +294,24 @@ def _paragraphs(text: str) -> list[str]:
     return [
         paragraph
         for paragraph in (_normalize_text(item) for item in text.split("\n\n"))
-        if paragraph
+        if paragraph and _is_meaningful_paragraph(paragraph)
     ]
 
 
 def _normalize_text(value: str) -> str:
     collapsed = re.sub(r"\s+", " ", value).strip().casefold()
+    stripped_markdown = collapsed.strip("-#*`> ").strip()
+    if not stripped_markdown:
+        return ""
+    if len(stripped_markdown) < 12:
+        return ""
     return collapsed
+
+
+def _is_meaningful_paragraph(value: str) -> bool:
+    normalized = _normalize_text(value)
+    if not normalized or normalized.startswith("#"):
+        return False
+    if normalized.startswith("|") or set(normalized) <= {"-", "|", ":"}:
+        return False
+    return len(normalized) >= 32

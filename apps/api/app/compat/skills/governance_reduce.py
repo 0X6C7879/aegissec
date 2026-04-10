@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app.agent.token_budget import estimate_token_count, truncate_text_to_token_budget
 from app.compat.skills.governance_config import (
     BACKGROUND_HINTS,
     CORE_RULE_HINTS,
@@ -10,7 +11,6 @@ from app.compat.skills.governance_config import (
     EXAMPLE_HINTS,
     TEMPLATE_HINTS,
 )
-from app.agent.token_budget import estimate_token_count, truncate_text_to_token_budget
 from app.compat.skills.governance_models import (
     GovernedSkill,
     SkillBodyParagraphKind,
