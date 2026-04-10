@@ -105,11 +105,11 @@ def configured_mcp_import_targets(paths: list[str]) -> list[MCPImportTarget]:
 def import_mcp_servers(targets: list[MCPImportTarget]) -> list[ImportedMCPServer]:
     imported: list[ImportedMCPServer] = []
     for target in targets:
-        config_path = Path(target.file_path)
-        if not config_path.exists() or not config_path.is_file():
+        if not os.path.isfile(target.file_path):
             continue
 
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        with open(target.file_path, encoding="utf-8") as config_file:
+            payload = json.load(config_file)
         imported.extend(_parse_servers_from_payload(target, payload))
 
     imported.sort(key=lambda server: (server.source, server.scope, server.name, server.config_path))
@@ -307,9 +307,14 @@ def _normalize_stdio_command(command: str) -> str:
         return command
     if "/" in command or "\\" in command:
         return command
-    if Path(command).suffix:
+    if _command_has_suffix(command):
         return command
     return f"{command}.cmd"
+
+
+def _command_has_suffix(command: str) -> bool:
+    stem, separator, suffix = command.rpartition(".")
+    return bool(stem and separator and suffix)
 
 
 def _normalize_string_list(value: object) -> list[str]:

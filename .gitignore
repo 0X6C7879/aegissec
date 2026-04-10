@@ -16,7 +16,15 @@ test-results/
 apps/api/data/*.db
 apps/api/data/runtime-workspace/
 .playwright-mcp/
-.sisyphus/notepads/test_optimization/
+.sisyphus/
+.omx/
+docs/
+.tmp_check.log
+ad_content.txt
+mkdocs.yml
+mkdocs_base64.txt
+session.json
+output/
 temp_claude_code/
 =
 .editorconfig

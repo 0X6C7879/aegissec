@@ -15,7 +15,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: adscan
@@ -33,7 +33,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: agent-browser
@@ -51,7 +51,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: api-security-testing
@@ -69,7 +69,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: backend-engineering
@@ -87,7 +87,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: browser-devtools-cli
@@ -105,7 +105,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: bypass
@@ -123,7 +123,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: c2
@@ -141,7 +141,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: cloud-security
@@ -159,7 +159,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: container-security
@@ -177,7 +177,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: ctf-ai-ml
@@ -195,7 +195,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-crypto
@@ -218,7 +218,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -241,7 +241,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -264,7 +264,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -287,7 +287,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -310,7 +310,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -333,7 +333,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -356,7 +356,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -379,7 +379,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -402,7 +402,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -425,7 +425,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - dirsearch-recon
@@ -444,7 +444,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - dirsearch-command-generator
@@ -463,7 +463,7 @@ skills:
   routing_pass_rate: 1.0
   obsolescence_score: 0.0
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - wooyun-legacy
@@ -482,7 +482,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -503,7 +503,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -524,7 +524,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -545,7 +545,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: initial-access-recon
@@ -563,7 +563,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: java-audit-pipeline
@@ -581,7 +581,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit
@@ -604,7 +604,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -627,7 +627,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -650,7 +650,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -673,7 +673,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -696,7 +696,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -719,7 +719,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -742,7 +742,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -765,7 +765,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -788,7 +788,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -811,7 +811,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: linuxgun
@@ -829,7 +829,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: mobile-pentesting
@@ -847,7 +847,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - mobile-security
@@ -866,7 +866,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - mobile-pentesting
@@ -885,7 +885,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: network-service-enumeration
@@ -903,7 +903,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: nmap-recon
@@ -921,7 +921,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: nu1l-zone-competition
@@ -939,7 +939,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: password-attacks
@@ -957,7 +957,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: pattt-readme-loader
@@ -975,7 +975,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: pentest-report
@@ -993,7 +993,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: persistence-techniques
@@ -1011,7 +1011,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - persistence
@@ -1030,7 +1030,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - persistence-techniques
@@ -1049,7 +1049,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: php-archive-extract-audit
@@ -1067,7 +1067,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-audit-pipeline
@@ -1090,7 +1090,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1113,7 +1113,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1136,7 +1136,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1159,7 +1159,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1182,7 +1182,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1205,7 +1205,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1228,7 +1228,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1251,7 +1251,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1274,7 +1274,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1297,7 +1297,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1320,7 +1320,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1343,7 +1343,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1366,7 +1366,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1389,7 +1389,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1412,7 +1412,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1435,7 +1435,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1458,7 +1458,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1481,7 +1481,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1504,7 +1504,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1527,7 +1527,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1550,7 +1550,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1573,7 +1573,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1596,7 +1596,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1619,7 +1619,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1642,7 +1642,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1665,7 +1665,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1688,7 +1688,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1711,7 +1711,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1734,7 +1734,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1757,7 +1757,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1780,7 +1780,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1803,7 +1803,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1826,7 +1826,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1849,7 +1849,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1872,7 +1872,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1895,7 +1895,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: protocol-reverse-engineering
@@ -1913,7 +1913,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: recon-dir-scan
@@ -1931,7 +1931,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - recon-fingerprint
@@ -1953,7 +1953,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - recon-dir-scan
@@ -1975,7 +1975,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - recon-dir-scan
@@ -1997,7 +1997,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - recon-dir-scan
@@ -2019,7 +2019,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - recon-dir-scan
@@ -2041,7 +2041,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: reverse-engineering
@@ -2059,7 +2059,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: secknowledge
@@ -2077,7 +2077,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: security-testing-patterns
@@ -2095,7 +2095,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: shell-scripting
@@ -2113,7 +2113,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: solve-challenge
@@ -2131,7 +2131,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: sqlmap-sqli
@@ -2149,7 +2149,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: static-analysis/codeql
@@ -2167,7 +2167,7 @@ skills:
   routing_pass_rate: 1.0
   obsolescence_score: 0.0
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - static-analysis/semgrep
@@ -2186,7 +2186,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - static-analysis/codeql
@@ -2206,7 +2206,7 @@ skills:
   routing_pass_rate: 1.0
   obsolescence_score: 0.0
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - static-analysis/codeql
@@ -2225,7 +2225,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: threat-modeling
@@ -2243,7 +2243,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: tunnel
@@ -2261,7 +2261,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: web-app-security
@@ -2279,7 +2279,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: web3-blockchain
@@ -2297,7 +2297,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: webapp-testing
@@ -2315,7 +2315,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: windows-privilege-escalation
@@ -2333,7 +2333,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: wireless-attacks
@@ -2351,7 +2351,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors: []
 - skill_id: wooyun-legacy
@@ -2369,7 +2369,7 @@ skills:
   routing_pass_rate: 1.0
   obsolescence_score: 0.0
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-10T11:24:33Z'
+  last_verified_at: '2026-04-10T11:39:52Z'
   depends_on: []
   neighbors:
   - exploit-file-download
