@@ -119,6 +119,57 @@ class Settings(BaseSettings):
         alias="AEGISSEC_LLM_REQUEST_TIMEOUT_SECONDS",
         gt=0,
     )
+    llm_max_output_tokens: int = Field(
+        default=2048,
+        alias="AEGISSEC_LLM_MAX_OUTPUT_TOKENS",
+        gt=0,
+    )
+    llm_max_concurrency: int = Field(
+        default=6,
+        alias="AEGISSEC_LLM_MAX_CONCURRENCY",
+        gt=0,
+    )
+    llm_rate_limit_rpm: int = Field(
+        default=15000,
+        alias="AEGISSEC_LLM_RATE_LIMIT_RPM",
+        gt=0,
+    )
+    llm_rate_limit_tpm_total: int = Field(
+        default=40_000_000,
+        alias="AEGISSEC_LLM_RATE_LIMIT_TPM_TOTAL",
+        gt=0,
+    )
+    llm_rate_limit_tpm_input: int = Field(
+        default=36_000_000,
+        alias="AEGISSEC_LLM_RATE_LIMIT_TPM_INPUT",
+        gt=0,
+    )
+    llm_rate_limit_tpm_output: int = Field(
+        default=4_000_000,
+        alias="AEGISSEC_LLM_RATE_LIMIT_TPM_OUTPUT",
+        gt=0,
+    )
+    llm_rate_limit_safety_ratio: float = Field(
+        default=0.2,
+        alias="AEGISSEC_LLM_RATE_LIMIT_SAFETY_RATIO",
+        gt=0,
+        le=1,
+    )
+    llm_rate_limit_max_retries: int = Field(
+        default=6,
+        alias="AEGISSEC_LLM_RATE_LIMIT_MAX_RETRIES",
+        ge=0,
+    )
+    llm_rate_limit_base_delay_ms: int = Field(
+        default=500,
+        alias="AEGISSEC_LLM_RATE_LIMIT_BASE_DELAY_MS",
+        gt=0,
+    )
+    llm_rate_limit_max_delay_seconds: int = Field(
+        default=30,
+        alias="AEGISSEC_LLM_RATE_LIMIT_MAX_DELAY_SECONDS",
+        gt=0,
+    )
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     anthropic_api_base_url: str | None = Field(default=None, alias="ANTHROPIC_API_BASE_URL")

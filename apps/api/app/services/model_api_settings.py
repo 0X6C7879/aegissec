@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,7 @@ class ModelAPISettingsService:
         current_values["provider"] = provider_value
 
         self._persist_values(current_values)
+        self._sync_process_environment(current_values)
         get_settings.cache_clear()
         return self._build_state(
             provider=provider_value,
@@ -226,6 +228,22 @@ class ModelAPISettingsService:
             return False
         raw_value = line.split("=", 1)[1].lstrip()
         return raw_value.startswith('"') or raw_value.startswith("'")
+
+    @staticmethod
+    def _set_process_env_value(env_key: str, value: str | None) -> None:
+        if value is None:
+            os.environ.pop(env_key, None)
+            return
+        os.environ[env_key] = value
+
+    def _sync_process_environment(self, values: dict[str, str | None]) -> None:
+        self._set_process_env_value(LLM_PROVIDER_ENV_KEY, values.get("provider"))
+
+        for field_name, env_key in MODEL_API_ENV_KEYS.items():
+            self._set_process_env_value(env_key, values.get(field_name))
+
+        for field_name, env_key in ANTHROPIC_ENV_KEYS.items():
+            self._set_process_env_value(env_key, values.get(field_name))
 
     @staticmethod
     def _build_state(

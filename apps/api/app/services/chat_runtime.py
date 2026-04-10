@@ -19,6 +19,7 @@ from app.agent.prompting import (
 )
 from app.core.settings import Settings, get_settings
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
+from app.services.llm_rate_control import compute_retry_delay_seconds, get_llm_rate_controller
 
 MAX_TOOL_STEPS = 24
 TOOL_BUDGET_EXHAUSTED_PROMPT = (
@@ -208,6 +209,13 @@ class GenerationCallbacks:
     on_context_injection_applied: ContextInjectionHandler | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class UsageSnapshot:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
 def _append_tool_budget_exhausted_prompt(
     messages: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -218,6 +226,38 @@ def _append_tool_budget_exhausted_prompt(
             "content": TOOL_BUDGET_EXHAUSTED_PROMPT,
         },
     ]
+
+
+def _extract_openai_usage_snapshot(response_payload: Mapping[str, object]) -> UsageSnapshot:
+    raw_usage = response_payload.get("usage")
+    if not isinstance(raw_usage, dict):
+        return UsageSnapshot()
+
+    prompt_tokens = raw_usage.get("prompt_tokens")
+    completion_tokens = raw_usage.get("completion_tokens")
+    total_tokens = raw_usage.get("total_tokens")
+    return UsageSnapshot(
+        input_tokens=prompt_tokens if isinstance(prompt_tokens, int) else None,
+        output_tokens=completion_tokens if isinstance(completion_tokens, int) else None,
+        total_tokens=total_tokens if isinstance(total_tokens, int) else None,
+    )
+
+
+def _extract_anthropic_usage_snapshot(response_payload: Mapping[str, object]) -> UsageSnapshot:
+    raw_usage = response_payload.get("usage")
+    if not isinstance(raw_usage, dict):
+        return UsageSnapshot()
+
+    input_tokens = raw_usage.get("input_tokens")
+    output_tokens = raw_usage.get("output_tokens")
+    total_tokens = None
+    if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+        total_tokens = input_tokens + output_tokens
+    return UsageSnapshot(
+        input_tokens=input_tokens if isinstance(input_tokens, int) else None,
+        output_tokens=output_tokens if isinstance(output_tokens, int) else None,
+        total_tokens=total_tokens,
+    )
 
 
 class ChatRuntime(Protocol):
@@ -239,6 +279,7 @@ class OpenAICompatibleChatRuntime:
     def __init__(self, settings: Settings, timeout_seconds: float = 30.0) -> None:
         self._settings = settings
         self._timeout_seconds = timeout_seconds
+        self._rate_controller = get_llm_rate_controller(settings)
 
     async def generate_reply(
         self,
@@ -318,29 +359,63 @@ class OpenAICompatibleChatRuntime:
         payload: dict[str, object],
     ) -> dict[str, object]:
         timeout = httpx.Timeout(self._timeout_seconds, connect=min(self._timeout_seconds, 10.0))
+        previous_delay: float | None = None
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(self._settings.llm_rate_limit_max_retries + 1):
+            lease = await self._rate_controller.acquire(
+                payload,
+                max_output_tokens=self._settings.llm_max_output_tokens,
+            )
             try:
-                response = await client.post(endpoint, headers=headers, json=payload)
-                response.raise_for_status()
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(endpoint, headers=headers, json=payload)
+                    response.raise_for_status()
+                response_payload = response.json()
+                if not isinstance(response_payload, dict):
+                    raise ChatRuntimeError("LLM API returned an unexpected response shape.")
             except httpx.TimeoutException as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
+                is_rate_limit = exc.response.status_code == 429
+                await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
+                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers=exc.response.headers,
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                if is_rate_limit:
+                    raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
             except httpx.HTTPError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
+            except ValueError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
+            except ChatRuntimeError:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                raise
 
-        try:
-            response_payload = response.json()
-        except ValueError as exc:
-            raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
+            usage = _extract_openai_usage_snapshot(response_payload)
+            await self._rate_controller.finalize(
+                lease,
+                rate_limited=False,
+                actual_input_tokens=usage.input_tokens,
+                actual_output_tokens=usage.output_tokens,
+                actual_total_tokens=usage.total_tokens,
+            )
+            return response_payload
 
-        if not isinstance(response_payload, dict):
-            raise ChatRuntimeError("LLM API returned an unexpected response shape.")
-
-        return response_payload
+        raise ChatRuntimeError("LLM API rate limit exceeded after retries.")
 
     def _build_payload(
         self,
@@ -354,6 +429,7 @@ class OpenAICompatibleChatRuntime:
         payload: dict[str, object] = {
             "model": model,
             "messages": messages,
+            "max_tokens": self._settings.llm_max_output_tokens,
             "stream": stream,
         }
         if allow_tools:
@@ -390,94 +466,124 @@ class OpenAICompatibleChatRuntime:
         callbacks: GenerationCallbacks,
     ) -> dict[str, object]:
         timeout = httpx.Timeout(self._timeout_seconds, connect=min(self._timeout_seconds, 10.0))
-        message: dict[str, object] = {"role": "assistant", "content": "", "tool_calls": []}
-        tool_call_fragments: dict[int, dict[str, object]] = {}
+        previous_delay: float | None = None
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(self._settings.llm_rate_limit_max_retries + 1):
+            message: dict[str, object] = {"role": "assistant", "content": "", "tool_calls": []}
+            tool_call_fragments: dict[int, dict[str, object]] = {}
+            lease = await self._rate_controller.acquire(
+                payload,
+                max_output_tokens=self._settings.llm_max_output_tokens,
+            )
             try:
-                async with client.stream(
-                    "POST", endpoint, headers=headers, json=payload
-                ) as response:
-                    response.raise_for_status()
-                    async for raw_line in response.aiter_lines():
-                        if callbacks.is_cancelled is not None and callbacks.is_cancelled():
-                            raise asyncio.CancelledError
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST", endpoint, headers=headers, json=payload
+                    ) as response:
+                        response.raise_for_status()
+                        async for raw_line in response.aiter_lines():
+                            if callbacks.is_cancelled is not None and callbacks.is_cancelled():
+                                raise asyncio.CancelledError
 
-                        line = raw_line.strip()
-                        if not line or not line.startswith("data:"):
-                            continue
-
-                        data = line.removeprefix("data:").strip()
-                        if data == "[DONE]":
-                            break
-
-                        chunk = json.loads(data)
-                        if not isinstance(chunk, dict):
-                            continue
-
-                        choices = chunk.get("choices")
-                        if not isinstance(choices, list) or not choices:
-                            continue
-
-                        choice = choices[0]
-                        if not isinstance(choice, dict):
-                            continue
-
-                        delta = choice.get("delta")
-                        if not isinstance(delta, dict):
-                            continue
-
-                        content_delta = delta.get("content")
-                        if isinstance(content_delta, str) and content_delta:
-                            message["content"] = f"{message['content']}{content_delta}"
-                            if callbacks.on_text_delta is not None:
-                                await callbacks.on_text_delta(content_delta)
-
-                        for raw_tool_call in delta.get("tool_calls", []):
-                            if not isinstance(raw_tool_call, dict):
-                                continue
-                            index = raw_tool_call.get("index")
-                            if not isinstance(index, int):
+                            line = raw_line.strip()
+                            if not line or not line.startswith("data:"):
                                 continue
 
-                            fragment = tool_call_fragments.setdefault(
-                                index,
-                                {
-                                    "id": raw_tool_call.get("id"),
-                                    "function": {"name": "", "arguments": ""},
-                                },
-                            )
-                            if isinstance(raw_tool_call.get("id"), str):
-                                fragment["id"] = raw_tool_call["id"]
-                            function_payload = raw_tool_call.get("function")
-                            if isinstance(function_payload, dict):
-                                function_fragment = fragment["function"]
-                                if isinstance(function_fragment, dict):
-                                    if isinstance(function_payload.get("name"), str):
-                                        function_fragment["name"] = (
-                                            f"{function_fragment['name']}{function_payload['name']}"
-                                        )
-                                    if isinstance(function_payload.get("arguments"), str):
-                                        function_fragment["arguments"] = (
-                                            f"{function_fragment['arguments']}{function_payload['arguments']}"
-                                        )
+                            data = line.removeprefix("data:").strip()
+                            if data == "[DONE]":
+                                break
+
+                            chunk = json.loads(data)
+                            if not isinstance(chunk, dict):
+                                continue
+
+                            choices = chunk.get("choices")
+                            if not isinstance(choices, list) or not choices:
+                                continue
+
+                            choice = choices[0]
+                            if not isinstance(choice, dict):
+                                continue
+
+                            delta = choice.get("delta")
+                            if not isinstance(delta, dict):
+                                continue
+
+                            content_delta = delta.get("content")
+                            if isinstance(content_delta, str) and content_delta:
+                                message["content"] = f"{message['content']}{content_delta}"
+                                if callbacks.on_text_delta is not None:
+                                    await callbacks.on_text_delta(content_delta)
+
+                            for raw_tool_call in delta.get("tool_calls", []):
+                                if not isinstance(raw_tool_call, dict):
+                                    continue
+                                index = raw_tool_call.get("index")
+                                if not isinstance(index, int):
+                                    continue
+
+                                fragment = tool_call_fragments.setdefault(
+                                    index,
+                                    {
+                                        "id": raw_tool_call.get("id"),
+                                        "function": {"name": "", "arguments": ""},
+                                    },
+                                )
+                                if isinstance(raw_tool_call.get("id"), str):
+                                    fragment["id"] = raw_tool_call["id"]
+                                function_payload = raw_tool_call.get("function")
+                                if isinstance(function_payload, dict):
+                                    function_fragment = fragment["function"]
+                                    if isinstance(function_fragment, dict):
+                                        if isinstance(function_payload.get("name"), str):
+                                            function_fragment["name"] = (
+                                                f"{function_fragment['name']}"
+                                                f"{function_payload['name']}"
+                                            )
+                                        if isinstance(function_payload.get("arguments"), str):
+                                            function_fragment["arguments"] = (
+                                                f"{function_fragment['arguments']}"
+                                                f"{function_payload['arguments']}"
+                                            )
             except asyncio.CancelledError:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise
             except httpx.TimeoutException as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
+                is_rate_limit = exc.response.status_code == 429
+                await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
+                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers=exc.response.headers,
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                if is_rate_limit:
+                    raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
             except httpx.HTTPError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
             except json.JSONDecodeError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
 
-        message["tool_calls"] = [
-            tool_call_fragments[index] for index in sorted(tool_call_fragments)
-        ]
-        return {"choices": [{"message": message}]}
+            await self._rate_controller.finalize(lease, rate_limited=False)
+            message["tool_calls"] = [
+                tool_call_fragments[index] for index in sorted(tool_call_fragments)
+            ]
+            return {"choices": [{"message": message}]}
+
+        raise ChatRuntimeError("LLM API rate limit exceeded after retries.")
 
     @staticmethod
     def _build_initial_messages(
@@ -913,6 +1019,7 @@ class AnthropicChatRuntime:
     def __init__(self, settings: Settings, timeout_seconds: float = 30.0) -> None:
         self._settings = settings
         self._timeout_seconds = timeout_seconds
+        self._rate_controller = get_llm_rate_controller(settings)
 
     async def generate_reply(
         self,
@@ -1003,29 +1110,63 @@ class AnthropicChatRuntime:
         payload: dict[str, object],
     ) -> dict[str, object]:
         timeout = httpx.Timeout(self._timeout_seconds, connect=min(self._timeout_seconds, 10.0))
+        previous_delay: float | None = None
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(self._settings.llm_rate_limit_max_retries + 1):
+            lease = await self._rate_controller.acquire(
+                payload,
+                max_output_tokens=self._settings.llm_max_output_tokens,
+            )
             try:
-                response = await client.post(endpoint, headers=headers, json=payload)
-                response.raise_for_status()
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(endpoint, headers=headers, json=payload)
+                    response.raise_for_status()
+                response_payload = response.json()
+                if not isinstance(response_payload, dict):
+                    raise ChatRuntimeError("LLM API returned an unexpected response shape.")
             except httpx.TimeoutException as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
+                is_rate_limit = exc.response.status_code == 429
+                await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
+                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers=exc.response.headers,
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                if is_rate_limit:
+                    raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
             except httpx.HTTPError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
+            except ValueError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
+            except ChatRuntimeError:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                raise
 
-        try:
-            response_payload = response.json()
-        except ValueError as exc:
-            raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
+            usage = _extract_anthropic_usage_snapshot(response_payload)
+            await self._rate_controller.finalize(
+                lease,
+                rate_limited=False,
+                actual_input_tokens=usage.input_tokens,
+                actual_output_tokens=usage.output_tokens,
+                actual_total_tokens=usage.total_tokens,
+            )
+            return response_payload
 
-        if not isinstance(response_payload, dict):
-            raise ChatRuntimeError("LLM API returned an unexpected response shape.")
-
-        return response_payload
+        raise ChatRuntimeError("LLM API rate limit exceeded after retries.")
 
     def _build_payload(
         self,
@@ -1039,7 +1180,7 @@ class AnthropicChatRuntime:
         payload: dict[str, object] = {
             "model": model,
             "messages": messages,
-            "max_tokens": 4096,
+            "max_tokens": self._settings.llm_max_output_tokens,
             "system": SYSTEM_PROMPT,
             "stream": stream,
         }
@@ -1076,104 +1217,134 @@ class AnthropicChatRuntime:
         callbacks: GenerationCallbacks,
     ) -> dict[str, object]:
         timeout = httpx.Timeout(self._timeout_seconds, connect=min(self._timeout_seconds, 10.0))
-        text_parts: list[str] = []
-        tool_use_fragments: dict[int, dict[str, object]] = {}
-        tool_use_input_fragments: dict[int, list[str]] = {}
+        previous_delay: float | None = None
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(self._settings.llm_rate_limit_max_retries + 1):
+            text_parts: list[str] = []
+            tool_use_fragments: dict[int, dict[str, object]] = {}
+            tool_use_input_fragments: dict[int, list[str]] = {}
+            lease = await self._rate_controller.acquire(
+                payload,
+                max_output_tokens=self._settings.llm_max_output_tokens,
+            )
             try:
-                async with client.stream(
-                    "POST", endpoint, headers=headers, json=payload
-                ) as response:
-                    response.raise_for_status()
-                    event_name = ""
-                    async for raw_line in response.aiter_lines():
-                        if callbacks.is_cancelled is not None and callbacks.is_cancelled():
-                            raise asyncio.CancelledError
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST", endpoint, headers=headers, json=payload
+                    ) as response:
+                        response.raise_for_status()
+                        event_name = ""
+                        async for raw_line in response.aiter_lines():
+                            if callbacks.is_cancelled is not None and callbacks.is_cancelled():
+                                raise asyncio.CancelledError
 
-                        line = raw_line.strip()
-                        if not line:
-                            event_name = ""
-                            continue
-                        if line.startswith("event:"):
-                            event_name = line.removeprefix("event:").strip()
-                            continue
-                        if not line.startswith("data:"):
-                            continue
-
-                        data = line.removeprefix("data:").strip()
-                        if data == "[DONE]":
-                            break
-
-                        event_payload = json.loads(data)
-                        if not isinstance(event_payload, dict):
-                            continue
-
-                        if event_name == "content_block_delta":
-                            delta = event_payload.get("delta")
-                            if not isinstance(delta, dict):
+                            line = raw_line.strip()
+                            if not line:
+                                event_name = ""
                                 continue
-                            delta_type = delta.get("type")
-                            if delta_type in {"text_delta", "text"}:
-                                text = delta.get("text")
-                                if isinstance(text, str) and text:
-                                    text_parts.append(text)
-                                    if callbacks.on_text_delta is not None:
-                                        await callbacks.on_text_delta(text)
+                            if line.startswith("event:"):
+                                event_name = line.removeprefix("event:").strip()
                                 continue
-                            if delta_type == "input_json_delta":
+                            if not line.startswith("data:"):
+                                continue
+
+                            data = line.removeprefix("data:").strip()
+                            if data == "[DONE]":
+                                break
+
+                            event_payload = json.loads(data)
+                            if not isinstance(event_payload, dict):
+                                continue
+
+                            if event_name == "content_block_delta":
+                                delta = event_payload.get("delta")
+                                if not isinstance(delta, dict):
+                                    continue
+                                delta_type = delta.get("type")
+                                if delta_type in {"text_delta", "text"}:
+                                    text = delta.get("text")
+                                    if isinstance(text, str) and text:
+                                        text_parts.append(text)
+                                        if callbacks.on_text_delta is not None:
+                                            await callbacks.on_text_delta(text)
+                                    continue
+                                if delta_type == "input_json_delta":
+                                    index = event_payload.get("index")
+                                    partial_json = delta.get("partial_json")
+                                    if isinstance(index, int) and isinstance(partial_json, str):
+                                        fragments = tool_use_input_fragments.setdefault(index, [])
+                                        fragments.append(partial_json)
+                                    continue
+
+                            if event_name == "content_block_start":
                                 index = event_payload.get("index")
-                                partial_json = delta.get("partial_json")
-                                if isinstance(index, int) and isinstance(partial_json, str):
-                                    fragments = tool_use_input_fragments.setdefault(index, [])
-                                    fragments.append(partial_json)
-                                continue
-
-                        if event_name == "content_block_start":
-                            index = event_payload.get("index")
-                            content_block = event_payload.get("content_block")
-                            if not isinstance(index, int) or not isinstance(content_block, dict):
-                                continue
-                            if content_block.get("type") != "tool_use":
-                                continue
-                            tool_use_fragments[index] = {
-                                "type": "tool_use",
-                                "id": content_block.get("id"),
-                                "name": content_block.get("name"),
-                                "input": {},
-                            }
+                                content_block = event_payload.get("content_block")
+                                if not isinstance(index, int) or not isinstance(
+                                    content_block, dict
+                                ):
+                                    continue
+                                if content_block.get("type") != "tool_use":
+                                    continue
+                                tool_use_fragments[index] = {
+                                    "type": "tool_use",
+                                    "id": content_block.get("id"),
+                                    "name": content_block.get("name"),
+                                    "input": {},
+                                }
             except asyncio.CancelledError:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise
             except httpx.TimeoutException as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
+                is_rate_limit = exc.response.status_code == 429
+                await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
+                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers=exc.response.headers,
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                if is_rate_limit:
+                    raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
             except httpx.HTTPError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
             except json.JSONDecodeError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API returned invalid JSON.") from exc
 
-        content_blocks: list[dict[str, object]] = []
-        if text_parts:
-            content_blocks.append({"type": "text", "text": "".join(text_parts)})
+            await self._rate_controller.finalize(lease, rate_limited=False)
+            content_blocks: list[dict[str, object]] = []
+            if text_parts:
+                content_blocks.append({"type": "text", "text": "".join(text_parts)})
 
-        for index in sorted(tool_use_fragments):
-            tool_use = dict(tool_use_fragments[index])
-            input_payload: dict[str, object] = {}
-            raw_input = "".join(tool_use_input_fragments.get(index, []))
-            if raw_input:
-                try:
-                    parsed_input = json.loads(raw_input)
-                    if isinstance(parsed_input, dict):
-                        input_payload = parsed_input
-                except json.JSONDecodeError:
-                    input_payload = {}
-            tool_use["input"] = input_payload
-            content_blocks.append(tool_use)
+            for index in sorted(tool_use_fragments):
+                tool_use = dict(tool_use_fragments[index])
+                input_payload: dict[str, object] = {}
+                raw_input = "".join(tool_use_input_fragments.get(index, []))
+                if raw_input:
+                    try:
+                        parsed_input = json.loads(raw_input)
+                        if isinstance(parsed_input, dict):
+                            input_payload = parsed_input
+                    except json.JSONDecodeError:
+                        input_payload = {}
+                tool_use["input"] = input_payload
+                content_blocks.append(tool_use)
 
-        return {"content": content_blocks}
+            return {"content": content_blocks}
+
+        raise ChatRuntimeError("LLM API rate limit exceeded after retries.")
 
     @staticmethod
     def _build_initial_messages(

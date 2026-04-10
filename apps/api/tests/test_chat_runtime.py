@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import json
-from collections.abc import Sequence
-from typing import cast
+from collections.abc import AsyncIterator, Sequence
+from typing import Any, cast
 
+import httpx
 from pytest import MonkeyPatch
 
 from app.core.settings import Settings
@@ -21,6 +24,7 @@ from app.services.chat_runtime import (
     ToolCallResult,
     get_chat_runtime,
 )
+from app.services.llm_rate_limit import reset_llm_rate_limiter_cache
 
 
 def test_extract_message_content_preserves_think_blocks_in_string_payload() -> None:
@@ -384,6 +388,87 @@ def _build_anthropic_tool_response(call_id: int, command: str) -> dict[str, obje
             }
         ]
     }
+
+
+class _FakeAsyncClient:
+    def __init__(
+        self,
+        responses: list[httpx.Response],
+        *,
+        stream_lines: list[list[str]] | None = None,
+    ) -> None:
+        self._responses = responses
+        self._stream_lines = stream_lines or []
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
+
+    async def post(
+        self,
+        endpoint: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> httpx.Response:
+        del endpoint, headers, json
+        return self._responses.pop(0)
+
+    def stream(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> _FakeStreamContext:
+        del method, endpoint, headers, json
+        return _FakeStreamContext(
+            response=self._responses.pop(0),
+            lines=self._stream_lines.pop(0) if self._stream_lines else [],
+        )
+
+
+class _FakeStreamContext:
+    def __init__(self, *, response: httpx.Response, lines: list[str]) -> None:
+        self._response = response
+        self._lines = lines
+
+    async def __aenter__(self) -> _FakeStreamResponse:
+        return _FakeStreamResponse(response=self._response, lines=self._lines)
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
+
+
+class _FakeStreamResponse:
+    def __init__(self, *, response: httpx.Response, lines: list[str]) -> None:
+        self._response = response
+        self._lines = lines
+
+    def raise_for_status(self) -> None:
+        self._response.raise_for_status()
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        for line in self._lines:
+            yield line
+
+
+def _httpx_response(
+    status_code: int,
+    *,
+    endpoint: str = "https://example.test/v1/chat/completions",
+    headers: dict[str, str] | None = None,
+    json_payload: dict[str, object] | None = None,
+) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        request=httpx.Request("POST", endpoint),
+        headers=headers,
+        json=json_payload or {},
+    )
 
 
 # Anthropic-specific tests
@@ -979,6 +1064,252 @@ def test_get_chat_runtime_applies_configured_timeout_for_anthropic(
 
     assert isinstance(runtime, AnthropicChatRuntime)
     assert runtime._timeout_seconds == 90  # noqa: SLF001
+
+
+def test_openai_request_completion_retries_rate_limit_with_retry_after(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_rate_limit_max_retries=1,
+        llm_rate_limit_base_delay_ms=500,
+        llm_rate_limit_max_delay_seconds=30,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleep_calls: list[float] = []
+    finalized: list[bool] = []
+    noted_backoffs: list[float] = []
+
+    class FakeRateController:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def acquire(self, payload: dict[str, object], *, max_output_tokens: int) -> object:
+            del payload, max_output_tokens
+            return object()
+
+        async def finalize(
+            self,
+            lease: object,
+            *,
+            rate_limited: bool,
+            actual_input_tokens: int | None = None,
+            actual_output_tokens: int | None = None,
+            actual_total_tokens: int | None = None,
+        ) -> None:
+            del lease, actual_input_tokens, actual_output_tokens, actual_total_tokens
+            finalized.append(rate_limited)
+
+        async def note_backoff(self, delay_seconds: float) -> None:
+            noted_backoffs.append(delay_seconds)
+
+    runtime._rate_controller = cast(  # noqa: SLF001
+        Any,
+        FakeRateController(runtime._rate_controller.config),
+    )
+
+    responses = [
+        httpx.Response(
+            429,
+            headers={"Retry-After": "2"},
+            request=httpx.Request("POST", "https://example.test"),
+            json={"error": {"message": "too many requests"}},
+        ),
+        httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://example.test"),
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+            },
+        ),
+    ]
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: object) -> None:
+            del timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            del exc_type, exc, tb
+
+        async def post(
+            self,
+            endpoint: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> httpx.Response:
+            del endpoint, headers, json
+            return responses.pop(0)
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr("app.services.chat_runtime.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._request_completion(  # noqa: SLF001
+            "https://example.test/v1/chat/completions",
+            {"Authorization": "Bearer test"},
+            {"model": "demo-model", "messages": [], "max_tokens": 256},
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "ok"
+    assert sleep_calls == [2.0]
+    assert noted_backoffs == [2.0]
+    assert finalized == [True, False]
+
+
+def test_openai_build_payload_uses_configured_max_output_tokens() -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=1536,
+    )
+
+    payload = OpenAICompatibleChatRuntime(settings=settings)._build_payload(  # noqa: SLF001
+        "demo-model",
+        [{"role": "user", "content": "hello"}],
+        mcp_tools=None,
+        allow_tools=False,
+        stream=False,
+    )
+
+    assert payload["max_tokens"] == 1536
+
+
+def test_openai_request_completion_retries_on_429(monkeypatch: MonkeyPatch) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=2,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    responses = [
+        _httpx_response(
+            429,
+            headers={"retry-after-ms": "50"},
+            json_payload={"error": {"message": "rate_limited"}},
+        ),
+        _httpx_response(
+            200,
+            json_payload={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+            },
+        ),
+    ]
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses),
+    )
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._request_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": False},
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "ok"
+    assert sleeps
+    assert sleeps[0] >= 0.05
+
+
+def test_anthropic_stream_completion_retries_on_429(monkeypatch: MonkeyPatch) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        anthropic_api_key="test-key",
+        anthropic_api_base_url="https://example.test",
+        anthropic_model="claude-demo",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=2,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = AnthropicChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    responses = [
+        _httpx_response(
+            429,
+            endpoint="https://example.test/v1/messages",
+            headers={"retry-after": "0.05"},
+            json_payload={"error": {"message": "rate_limited"}},
+        ),
+        _httpx_response(200, endpoint="https://example.test/v1/messages"),
+    ]
+    stream_lines = [
+        [],
+        [
+            "event: content_block_delta",
+            'data: {"delta":{"type":"text_delta","text":"stream ok"}}',
+            "data: [DONE]",
+        ],
+    ]
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses, stream_lines=stream_lines),
+    )
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._stream_completion(
+            "https://example.test/v1/messages",
+            {"x-api-key": "test-key"},
+            {
+                "model": "claude-demo",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 128,
+                "stream": True,
+            },
+            GenerationCallbacks(),
+        )
+    )
+
+    assert result == {"content": [{"type": "text", "text": "stream ok"}]}
+    assert sleeps
+    assert sleeps[0] >= 0.05
 
 
 def test_openai_runtime_streams_when_tools_are_enabled() -> None:

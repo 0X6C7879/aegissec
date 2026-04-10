@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-10T11:41:08.243Z",
-  "turn_count": 1,
-  "last_progress_at": "2026-04-10T11:41:08.243Z",
-  "last_agent_output": "已修复这条 CI 失败，改动在 [importer.py](/D:/AI/aegissec/apps/api/app/compat/mcp/importer.py)。\n\n根因是 `app.compat"
+  "last_turn_at": "2026-04-10T15:03:22.869Z",
+  "turn_count": 5,
+  "last_progress_at": "2026-04-10T15:03:22.869Z",
+  "last_agent_output": "已把 429 限流的持续执行方案接进后端模型请求层，入口集中在 [chat_runtime.py](/D:/AI/aegissec/apps/api/app/services/chat_runtime"
 }

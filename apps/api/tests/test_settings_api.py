@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from pathlib import Path
 
@@ -10,6 +11,16 @@ from pytest import MonkeyPatch
 from app.core.settings import Settings, get_settings
 from app.main import app
 from tests.utils import api_data
+
+MANAGED_MODEL_ENV_KEYS = (
+    "LLM_PROVIDER",
+    "LLM_API_BASE_URL",
+    "LLM_DEFAULT_MODEL",
+    "LLM_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_BASE_URL",
+    "ANTHROPIC_MODEL",
+)
 
 
 @pytest.fixture
@@ -23,6 +34,8 @@ def isolated_settings_env(tmp_path: Path, monkeypatch: MonkeyPatch) -> Generator
         "env_file",
         (str(env_file), str(env_local_file)),
     )
+    for env_key in MANAGED_MODEL_ENV_KEYS:
+        monkeypatch.delenv(env_key, raising=False)
     monkeypatch.setattr("app.services.model_api_settings.REPO_ROOT", tmp_path)
     get_settings.cache_clear()
 
@@ -181,3 +194,46 @@ def test_put_model_api_settings_can_clear_api_key_and_base_url(isolated_settings
     assert "LLM_API_KEY=" not in env_local_text
     assert 'LLM_DEFAULT_MODEL="model-after-clear"' in env_local_text
     assert get_settings().llm_api_key is None
+
+
+def test_put_model_api_settings_refreshes_process_environment(
+    isolated_settings_env: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_BASE_URL", "https://stale.example.com/v1")
+    monkeypatch.setenv("LLM_DEFAULT_MODEL", "stale-model")
+    monkeypatch.setenv("LLM_API_KEY", "stale-secret")
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/settings/model-api",
+            json={
+                "provider": "openai",
+                "base_url": "https://fresh.example.com/v1",
+                "model": "fresh-model",
+                "api_key": "fresh-secret",
+                "clear_api_key": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert os.environ.get("LLM_PROVIDER") == "openai"
+    assert os.environ.get("LLM_API_BASE_URL") == "https://fresh.example.com/v1"
+    assert os.environ.get("LLM_DEFAULT_MODEL") == "fresh-model"
+    assert os.environ.get("LLM_API_KEY") == "fresh-secret"
+    assert get_settings().llm_api_base_url == "https://fresh.example.com/v1"
+    assert get_settings().llm_default_model == "fresh-model"
+    assert get_settings().llm_api_key == "fresh-secret"
+
+    with TestClient(app) as client:
+        clear_response = client.put(
+            "/api/settings/model-api",
+            json={
+                "clear_api_key": True,
+            },
+        )
+
+    assert clear_response.status_code == 200
+    assert "LLM_API_KEY" not in os.environ
