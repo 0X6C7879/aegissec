@@ -1777,6 +1777,22 @@ class SkillService:
         return []
 
     @staticmethod
+    def _coerce_pattt_string(value: object) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _coerce_pattt_positive_int(value: object, default: int) -> int:
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, str) and value.strip().isdigit():
+            parsed = int(value.strip())
+            if parsed > 0:
+                return parsed
+        return default
+
+    @staticmethod
     def _infer_pattt_phase(
         *,
         workflow_stage: str | None,
@@ -1807,6 +1823,7 @@ class SkillService:
     ) -> tuple[str, dict[str, object]]:
         from app.compat.skills.compiler import build_prepared_prompt_fragment
         from app.services.pattt_context import (
+            normalize_pattt_request,
             render_pattt_context_for_prompt,
             resolve_pattt_context,
         )
@@ -1814,31 +1831,50 @@ class SkillService:
         objective = (
             user_goal or current_prompt or compiled_skill.when_to_use or compiled_skill.description
         ).strip()
-        family_hint_value = (arguments or {}).get("family_hint")
-        family_hint = family_hint_value if isinstance(family_hint_value, str) else None
-        explicit_bypass = self._coerce_pattt_bool(arguments, "explicit_bypass")
-        explicit_exploit = self._coerce_pattt_bool(arguments, "explicit_exploit")
-        context_pack = resolve_pattt_context(
-            objective=objective,
-            task_text=current_prompt or objective,
-            family_hint=family_hint,
-            tech_stack=self._coerce_pattt_strings((arguments or {}).get("tech_stack")),
-            signals={
-                "workspace_path": workspace_path,
-                "touched_paths": list(touched_paths or []),
-                "session_id": session_id,
-                "scenario_type": scenario_type,
-                "workflow_stage": workflow_stage,
-                "arguments": dict(arguments or {}),
-            },
-            task_phase=self._infer_pattt_phase(
-                workflow_stage=workflow_stage,
-                current_prompt=current_prompt,
-                user_goal=user_goal,
-            ),
-            explicit_bypass=explicit_bypass if explicit_bypass is not None else False,
-            explicit_exploit=explicit_exploit if explicit_exploit is not None else False,
+        request_payload = normalize_pattt_request(
+            request={
+                **dict(arguments or {}),
+                "vuln_family": self._coerce_pattt_string((arguments or {}).get("vuln_family"))
+                or self._coerce_pattt_string((arguments or {}).get("family_hint")),
+                "objective": objective,
+                "target_kind": self._coerce_pattt_string((arguments or {}).get("target_kind"))
+                or self._coerce_pattt_string(scenario_type),
+                "injection_point": self._coerce_pattt_string(
+                    (arguments or {}).get("injection_point")
+                ),
+                "stack": self._coerce_pattt_strings((arguments or {}).get("stack"))
+                or self._coerce_pattt_strings((arguments or {}).get("tech_stack")),
+                "constraints": {
+                    "phase": self._infer_pattt_phase(
+                        workflow_stage=workflow_stage,
+                        current_prompt=current_prompt,
+                        user_goal=user_goal,
+                    ),
+                    "explicit_bypass": self._coerce_pattt_bool(arguments, "explicit_bypass"),
+                    "explicit_exploit": self._coerce_pattt_bool(arguments, "explicit_exploit"),
+                    "signals": {
+                        "workspace_path": workspace_path,
+                        "touched_paths": list(touched_paths or []),
+                        "session_id": session_id,
+                        "scenario_type": scenario_type,
+                        "workflow_stage": workflow_stage,
+                        "arguments": dict(arguments or {}),
+                    },
+                    "task_text": current_prompt or objective,
+                },
+                "top_k": {
+                    "families": self._coerce_pattt_positive_int(
+                        (arguments or {}).get("max_families"),
+                        3,
+                    ),
+                    "docs": self._coerce_pattt_positive_int(
+                        (arguments or {}).get("max_docs"),
+                        4,
+                    ),
+                },
+            }
         )
+        context_pack = resolve_pattt_context(request=request_payload.to_payload())
         prepared_prompt = build_prepared_prompt_fragment(
             compiled_skill,
             render_pattt_context_for_prompt(context_pack),

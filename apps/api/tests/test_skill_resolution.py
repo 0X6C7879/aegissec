@@ -1,13 +1,16 @@
 from importlib import import_module
+from types import SimpleNamespace
 from typing import cast
 
 from app.compat.skills import models as skill_models
 from app.db.models import CompatibilityScope, CompatibilitySource
 
 skill_resolution = import_module("app.compat.skills.resolution")
+session_runner = import_module("app.harness.session_runner")
 build_skill_candidate_prompt_fragment = skill_resolution.build_skill_candidate_prompt_fragment
 score_skill_candidate = skill_resolution.score_skill_candidate
 resolve_skill_candidates = skill_resolution.resolve_skill_candidates
+resolve_autorouted_skill_candidate = session_runner._resolve_autorouted_skill_candidate
 
 
 def test_path_matched_skill_ranks_above_unconditional() -> None:
@@ -480,6 +483,138 @@ def test_semantic_redundancy_rejects_duplicate_specialized_web_skill() -> None:
         for candidate in result.rejected_candidates
         if candidate.compiled_skill.directory_name in {"ctf-web", "web-xss-specialist"}
     )
+
+
+def test_pattt_loader_outranks_generic_skill_for_payload_retrieval_tasks() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Need SSRF payloads and Burp Intruder candidates for verification",
+        top_k=5,
+    )
+    pattt_loader = _compiled_skill(
+        "pattt-readme-loader",
+        when_to_use=(
+            "Use when a task needs payload, bypass, exploit, fuzz, or Burp Intruder guidance "
+            "from PayloadsAllTheThings."
+        ),
+        semantic_family="payloadsallthethings",
+        semantic_domain="offensive-knowledge",
+        semantic_task_mode="retrieval",
+        semantic_tags=["pattt", "payloadsallthethings", "readme-first", "verification"],
+    )
+    generic = _compiled_skill(
+        "generic-recon",
+        when_to_use="Use for generic web recon and validation.",
+        semantic_family="generic-recon",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["web", "recon"],
+    )
+
+    result = resolve_skill_candidates([generic, pattt_loader], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "pattt-readme-loader"
+
+
+def test_pattt_loader_becomes_supporting_when_concrete_execution_skill_matches() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Validate SSRF on http://target.local using PATTT payloads",
+        top_k=5,
+    )
+    pattt_loader = _compiled_skill(
+        "pattt-readme-loader",
+        when_to_use=(
+            "Use when a task needs payload, bypass, exploit, fuzz, or Burp Intruder guidance "
+            "from PayloadsAllTheThings."
+        ),
+        semantic_family="payloadsallthethings",
+        semantic_domain="offensive-knowledge",
+        semantic_task_mode="retrieval",
+        semantic_tags=["pattt", "payloadsallthethings", "readme-first", "verification"],
+    )
+    ssrf_validator = _compiled_skill(
+        "ssrf-validator",
+        when_to_use="Use for SSRF validation against HTTP targets.",
+        semantic_family="generic-recon",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["web", "ssrf", "validation"],
+    )
+
+    result = resolve_skill_candidates([pattt_loader, ssrf_validator], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "ssrf-validator"
+    assert any(
+        candidate.compiled_skill.directory_name == "pattt-readme-loader"
+        for candidate in result.supporting_candidates
+    )
+
+
+def test_pattt_loader_does_not_overtrigger_for_generic_remote_http_recon() -> None:
+    request = skill_models.SkillResolutionRequest(
+        current_prompt="Inspect remote HTTP service at http://target.local for generic recon",
+        top_k=5,
+    )
+    pattt_loader = _compiled_skill(
+        "pattt-readme-loader",
+        when_to_use=(
+            "Use when a task needs payload, bypass, exploit, fuzz, or Burp Intruder guidance "
+            "from PayloadsAllTheThings."
+        ),
+        semantic_family="payloadsallthethings",
+        semantic_domain="offensive-knowledge",
+        semantic_task_mode="retrieval",
+        semantic_tags=["pattt", "payloadsallthethings", "readme-first", "verification"],
+    )
+    generic = _compiled_skill(
+        "generic-recon",
+        when_to_use="Use for generic web recon and validation.",
+        semantic_family="generic-recon",
+        semantic_domain="web",
+        semantic_task_mode="specialized",
+        semantic_tags=["web", "recon"],
+    )
+
+    result = resolve_skill_candidates([pattt_loader, generic], request)
+
+    assert result.primary_candidate is not None
+    assert result.primary_candidate.compiled_skill.directory_name == "generic-recon"
+    assert all(
+        candidate.compiled_skill.directory_name != "pattt-readme-loader"
+        for candidate in result.all_selected_candidates
+    )
+
+
+def test_session_runner_does_not_overtrigger_pattt_from_stale_recent_context() -> None:
+    pattt_skill = SimpleNamespace(
+        directory_name="pattt-readme-loader",
+        name="pattt-readme-loader",
+        family="payloadsallthethings",
+        domain="offensive-knowledge",
+        task_mode="retrieval",
+        description=(
+            "README-first PayloadsAllTheThings loader for payload retrieval, Burp Intruder "
+            "wordlists, fuzz candidates, verification probes, bypass ideas, exploit-gated research."
+        ),
+    )
+    generic_skill = SimpleNamespace(
+        directory_name="generic-recon",
+        name="generic-recon",
+        family="generic-recon",
+        domain="web",
+        task_mode="specialized",
+        description="Generic recon helper for remote HTTP inspection.",
+    )
+
+    selected_skill, route_report = resolve_autorouted_skill_candidate(
+        available_skills=[pattt_skill, generic_skill],
+        latest_message_text="Inspect remote HTTP service at http://target.local for generic recon",
+        recent_context_text="Earlier we discussed SSRF payloads and Burp Intruder candidates.",
+    )
+
+    assert selected_skill is generic_skill or selected_skill is None
+    assert route_report["top_candidate"] != "pattt-readme-loader"
 
 
 def _compiled_skill(

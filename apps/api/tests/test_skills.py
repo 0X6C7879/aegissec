@@ -254,9 +254,13 @@ def test_compatibility_skill_scan_placeholders_are_disabled_scaffolding(tmp_path
     assert any(root.root_label == "mcp-skills" for root in placeholders)
 
 
-def test_scan_skill_files_only_includes_top_level_skill_directories(tmp_path: Path) -> None:
+def test_scan_skill_files_supports_flat_and_family_skill_directories_but_skips_irregular_deep_paths(
+    tmp_path: Path,
+) -> None:
     local_root = tmp_path / "project" / "skills"
     _write_skill(local_root / "top-level" / "SKILL.md", "# Top level")
+    _write_skill(local_root / "family" / "member" / "SKILL.md", "# Family member")
+    _write_skill(local_root / "static-analysis" / "skills" / "semgrep" / "SKILL.md", "# Nested")
     _write_skill(local_root / "nested" / "scripts" / "SKILL.md", "# Nested")
 
     discovered = scan_skill_files(
@@ -269,7 +273,11 @@ def test_scan_skill_files_only_includes_top_level_skill_directories(tmp_path: Pa
         ]
     )
 
-    assert [item.directory_name for item in discovered] == ["top-level"]
+    assert [item.relative_path for item in discovered] == [
+        "family/member/SKILL.md",
+        "static-analysis/skills/semgrep/SKILL.md",
+        "top-level/SKILL.md",
+    ]
 
 
 def test_scan_skill_files_preserves_relative_path_and_skips_disabled_placeholder_roots(

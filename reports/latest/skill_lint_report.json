@@ -1,0 +1,100 @@
+{
+  "checked_skill_count": 4,
+  "issue_count": 10,
+  "issues": [
+    {
+      "code": "reference_not_explicitly_routed",
+      "details": null,
+      "level": "warning",
+      "message": "Reference file is not explicitly mentioned by path or topic in SKILL.md.",
+      "path": "references/sensitive_files.md",
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "code": "body_reference_duplication",
+      "details": {
+        "reference_paths": [
+          "references/bypass_techniques.md",
+          "references/sensitive_files.md"
+        ]
+      },
+      "level": "warning",
+      "message": "Reference content duplicates material already present in SKILL.md.",
+      "path": "exploit-file-download/SKILL.md",
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "code": "description_too_long",
+      "details": null,
+      "level": "warning",
+      "message": "Description token count is above the recommended soft cap of 120.",
+      "path": "wooyun-legacy/SKILL.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_when",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/configuration-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_topics",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/configuration-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_cost_hint",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/configuration-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_when",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/information-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_topics",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/information-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "reference_missing_cost_hint",
+      "details": null,
+      "level": "warning",
+      "message": "Reference metadata is invalid or incomplete.",
+      "path": "references/information-domain.md",
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "code": "body_reference_duplication",
+      "details": {
+        "reference_paths": [
+          "references/authentication-domain.md",
+          "references/authorization-domain.md",
+          "references/configuration-domain.md",
+          "references/financial-domain.md",
+          "references/information-domain.md",
+          "references/logic-flow-domain.md"
+        ]
+      },
+      "level": "warning",
+      "message": "Reference content duplicates material already present in SKILL.md.",
+      "path": "wooyun-legacy/SKILL.md",
+      "skill_id": "wooyun-legacy"
+    }
+  ]
+}

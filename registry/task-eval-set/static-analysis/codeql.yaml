@@ -1,0 +1,41 @@
+skill_id: static-analysis/codeql
+cases:
+  - case_id: codeql-core
+    prompt: 用 CodeQL 做跨函数 taint tracking，确认用户输入能否流入 SQL sink。
+    mode: core-only
+    required_terms:
+      - codeql
+      - taint
+      - sink
+  - case_id: codeql-database-core
+    prompt: 说明 CodeQL database create 的关键参数，特别是 --language、--command、--source-root。
+    mode: core-only
+    required_terms:
+      - database create
+      - --language
+      - --source-root
+  - case_id: codeql-query-core
+    prompt: 写自定义 CodeQL 查询时，需要哪些 data flow / taint tracking 组件？
+    mode: core-only
+    required_terms:
+      - dataflow
+      - tainttracking
+      - query
+  - case_id: codeql-database-reference
+    prompt: 需要补充一次完整的数据库构建工作流和 build command 提醒。
+    mode: needs-reference
+    required_terms:
+      - database
+      - build
+      - source-root
+    reference_topics:
+      - database-workflow
+  - case_id: codeql-query-reference
+    prompt: 需要补充 path-problem 与 source-to-sink 这类查询设计提示。
+    mode: needs-reference
+    required_terms:
+      - path-problem
+      - source
+      - sink
+    reference_topics:
+      - query-writing

@@ -1,0 +1,1067 @@
+{
+  "baseline_pass_rate": 0.4,
+  "coverage": {
+    "per_skill": {
+      "exploit-file-download": {
+        "meets_recommended_minimum": true,
+        "mode_counts": {
+          "core-only": 3,
+          "needs-reference": 2
+        },
+        "total_cases": 5
+      },
+      "static-analysis/codeql": {
+        "meets_recommended_minimum": true,
+        "mode_counts": {
+          "core-only": 3,
+          "needs-reference": 2
+        },
+        "total_cases": 5
+      },
+      "static-analysis/semgrep": {
+        "meets_recommended_minimum": true,
+        "mode_counts": {
+          "core-only": 3,
+          "needs-reference": 2
+        },
+        "total_cases": 5
+      },
+      "wooyun-legacy": {
+        "meets_recommended_minimum": true,
+        "mode_counts": {
+          "core-only": 3,
+          "needs-reference": 2
+        },
+        "total_cases": 5
+      }
+    }
+  },
+  "original_pass_rate": 1.0,
+  "reduced_pass_rate": 1.0,
+  "regression_count": 0,
+  "results": [
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "lfi",
+          "/etc/passwd"
+        ],
+        "missing_terms": [
+          "路径遍历"
+        ],
+        "passed": false,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 12
+      },
+      "case_id": "lfi-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "lfi",
+          "/etc/passwd",
+          "路径遍历"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1986
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "lfi",
+          "/etc/passwd",
+          "路径遍历"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 427
+      },
+      "restore_rounds": 1,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "php://filter",
+          "base64",
+          "源码"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 14
+      },
+      "case_id": "php-filter-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "php://filter",
+          "base64",
+          "源码"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1986
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "php://filter",
+          "base64",
+          "源码"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 427
+      },
+      "restore_rounds": 1,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "windows",
+          "文件读取"
+        ],
+        "missing_terms": [
+          "win.ini"
+        ],
+        "passed": false,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 9
+      },
+      "case_id": "windows-target-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "windows",
+          "win.ini",
+          "文件读取"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1986
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "windows",
+          "win.ini",
+          "文件读取"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 427
+      },
+      "restore_rounds": 1,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "绕过",
+          "url 编码"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 9
+      },
+      "case_id": "lfi-bypass-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "绕过",
+          "url 编码"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/bypass_techniques.md"
+        ],
+        "token_cost": 3531
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "绕过",
+          "url 编码"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/bypass_techniques.md"
+        ],
+        "token_cost": 1972
+      },
+      "restore_rounds": 1,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms",
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "敏感文件"
+        ],
+        "missing_terms": [
+          "/proc/self/environ",
+          "win.ini"
+        ],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 11
+      },
+      "case_id": "sensitive-files-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "/proc/self/environ",
+          "win.ini",
+          "敏感文件"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/sensitive_files.md"
+        ],
+        "token_cost": 4079
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "/proc/self/environ",
+          "win.ini",
+          "敏感文件"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/sensitive_files.md"
+        ],
+        "token_cost": 2426
+      },
+      "restore_rounds": 0,
+      "skill_id": "exploit-file-download"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql",
+          "taint",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 13
+      },
+      "case_id": "codeql-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql",
+          "taint",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2170
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "codeql",
+          "taint",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "database create",
+          "--language",
+          "--source-root"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 18
+      },
+      "case_id": "codeql-database-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "database create",
+          "--language",
+          "--source-root"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2170
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "database create",
+          "--language",
+          "--source-root"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 446
+      },
+      "restore_rounds": 1,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms"
+        ],
+        "format_passed": true,
+        "matched_terms": [],
+        "missing_terms": [
+          "dataflow",
+          "tainttracking",
+          "query"
+        ],
+        "passed": false,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 13
+      },
+      "case_id": "codeql-query-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "dataflow",
+          "tainttracking",
+          "query"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2170
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "dataflow",
+          "tainttracking",
+          "query"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 447
+      },
+      "restore_rounds": 1,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms",
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "build"
+        ],
+        "missing_terms": [
+          "database",
+          "source-root"
+        ],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 9
+      },
+      "case_id": "codeql-database-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "database",
+          "build",
+          "source-root"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/database-workflow.md"
+        ],
+        "token_cost": 2248
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "database",
+          "build",
+          "source-root"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/database-workflow.md"
+        ],
+        "token_cost": 499
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "path-problem",
+          "source",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 11
+      },
+      "case_id": "codeql-query-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "path-problem",
+          "source",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/query-writing.md"
+        ],
+        "token_cost": 2245
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "path-problem",
+          "source",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/query-writing.md"
+        ],
+        "token_cost": 495
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/codeql"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep"
+        ],
+        "missing_terms": [
+          "quick",
+          "pattern"
+        ],
+        "passed": false,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 10
+      },
+      "case_id": "semgrep-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep",
+          "quick",
+          "pattern"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2150
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "semgrep",
+          "quick",
+          "pattern"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "--config auto",
+          "sarif",
+          "ruleset"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 11
+      },
+      "case_id": "semgrep-config-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "--config auto",
+          "sarif",
+          "ruleset"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2150
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "--config auto",
+          "sarif",
+          "ruleset"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 502
+      },
+      "restore_rounds": 1,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "taint mode",
+          "metavariable",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 17
+      },
+      "case_id": "semgrep-taint-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "taint mode",
+          "metavariable",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 2150
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "taint mode",
+          "metavariable",
+          "sink"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 552
+      },
+      "restore_rounds": 1,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "metavariable-regex",
+          "pattern-not",
+          "yaml"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 15
+      },
+      "case_id": "semgrep-rule-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "metavariable-regex",
+          "pattern-not",
+          "yaml"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/rule-writing.md"
+        ],
+        "token_cost": 2262
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "metavariable-regex",
+          "pattern-not",
+          "yaml"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/rule-writing.md"
+        ],
+        "token_cost": 533
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_terms",
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "sarif",
+          "json"
+        ],
+        "missing_terms": [
+          "triage"
+        ],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 9
+      },
+      "case_id": "semgrep-triage-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "sarif",
+          "json",
+          "triage"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/triage.md"
+        ],
+        "token_cost": 2222
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "sarif",
+          "json",
+          "triage"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/triage.md"
+        ],
+        "token_cost": 492
+      },
+      "restore_rounds": 0,
+      "skill_id": "static-analysis/semgrep"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "业务逻辑"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 6
+      },
+      "case_id": "wooyun-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "业务逻辑"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1783
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "支付",
+          "退款",
+          "业务逻辑"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
+      },
+      "restore_rounds": 0,
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "密码重置",
+          "认证",
+          "账号"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 7
+      },
+      "case_id": "wooyun-auth-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "密码重置",
+          "认证",
+          "账号"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1783
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "密码重置",
+          "认证",
+          "账号"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 421
+      },
+      "restore_rounds": 0,
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "价格篡改",
+          "订单篡改",
+          "支付绕过"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 7
+      },
+      "case_id": "wooyun-order-core",
+      "mode": "core-only",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "价格篡改",
+          "订单篡改",
+          "支付绕过"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 1783
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "价格篡改",
+          "订单篡改",
+          "支付绕过"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [],
+        "token_cost": 572
+      },
+      "restore_rounds": 1,
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "授权",
+          "订单"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 7
+      },
+      "case_id": "wooyun-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "授权",
+          "订单"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/authorization-domain.md",
+          "references/financial-domain.md"
+        ],
+        "token_cost": 3763
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "授权",
+          "订单"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/authorization-domain.md",
+          "references/financial-domain.md"
+        ],
+        "token_cost": 2401
+      },
+      "restore_rounds": 0,
+      "skill_id": "wooyun-legacy"
+    },
+    {
+      "baseline": {
+        "failure_reasons": [
+          "missing_required_reference"
+        ],
+        "format_passed": true,
+        "matched_terms": [
+          "状态转移",
+          "竞态",
+          "流程绕过"
+        ],
+        "missing_terms": [],
+        "passed": false,
+        "reference_usage_passed": false,
+        "selected_references": [],
+        "token_cost": 7
+      },
+      "case_id": "wooyun-logic-reference",
+      "mode": "needs-reference",
+      "original": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "状态转移",
+          "竞态",
+          "流程绕过"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/logic-flow-domain.md"
+        ],
+        "token_cost": 2689
+      },
+      "reduced": {
+        "failure_reasons": [],
+        "format_passed": true,
+        "matched_terms": [
+          "状态转移",
+          "竞态",
+          "流程绕过"
+        ],
+        "missing_terms": [],
+        "passed": true,
+        "reference_usage_passed": true,
+        "selected_references": [
+          "references/logic-flow-domain.md"
+        ],
+        "token_cost": 1512
+      },
+      "restore_rounds": 1,
+      "skill_id": "wooyun-legacy"
+    }
+  ],
+  "selective_restore_trigger_rate": 0.5,
+  "total_cases": 20
+}

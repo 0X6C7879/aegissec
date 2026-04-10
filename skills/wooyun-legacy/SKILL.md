@@ -1,7 +1,7 @@
 ---
 name: wooyun-legacy
 description: >-
-  Use when doing security testing, security audits, bug bounty triage, or business-logic review of web apps, APIs, or business systems. Covers 22,132 WooYun cases across authentication bypass, authorization bypass, payment tampering, information disclosure, logic flaws, and misconfiguration. Also trigger on implicit black-box requests like "test this endpoint", "find bugs", "can I bypass this", "帮我测测这个接口", "这个参数能不能改", and "帮我找bug".
+  Use when doing security testing, security audits, bug bounty triage, or business-logic review of web apps, APIs, or business systems. Especially relevant for 支付、退款、订单、越权、价格篡改、授权绕过、认证绕过 and 业务逻辑流程问题. Covers 22,132 WooYun cases across authentication bypass, authorization bypass, payment tampering, information disclosure, logic flaws, and misconfiguration. Also trigger on implicit black-box requests like "test this endpoint", "find bugs", "can I bypass this", "帮我测测这个支付接口", "帮我测测这个接口", "这个参数能不能改", and "帮我找bug".
 ---
 
 # WooYun 业务逻辑漏洞方法论

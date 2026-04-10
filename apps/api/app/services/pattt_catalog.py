@@ -11,6 +11,7 @@ from typing import Any, cast
 
 DEFAULT_PATTT_UPSTREAM = "swisskyrepo/PayloadsAllTheThings"
 DEFAULT_PATTT_BRANCH = "master"
+# PATTT validator output is intentionally richer than build metadata.
 PATTT_ROOT_ENV = "AEGISSEC_PATTT_ROOT"
 IGNORED_TOP_LEVEL_DIRS = frozenset({".github", "_template_vuln", "_LEARNING_AND_SOCIALS"})
 IGNORED_TOP_LEVEL_FILES = frozenset({"README.md", "LICENSE", "mkdocs.yml", "CONTRIBUTING.md"})
@@ -280,6 +281,30 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _build_family_breakdown(families: list[dict[str, Any]]) -> dict[str, int]:
+    canonical_readme_family_count = 0
+    readme_with_child_manuals_family_count = 0
+    readme_only_family_count = 0
+    standalone_manual_family_count = 0
+    for family in families:
+        canonical_doc = str(family.get("canonical_doc") or "")
+        child_docs = family.get("child_docs") if isinstance(family.get("child_docs"), list) else []
+        if canonical_doc.endswith("/README.md"):
+            canonical_readme_family_count += 1
+            if child_docs:
+                readme_with_child_manuals_family_count += 1
+            else:
+                readme_only_family_count += 1
+        else:
+            standalone_manual_family_count += 1
+    return {
+        "canonical_readme_family_count": canonical_readme_family_count,
+        "readme_with_child_manuals_family_count": readme_with_child_manuals_family_count,
+        "readme_only_family_count": readme_only_family_count,
+        "standalone_manual_family_count": standalone_manual_family_count,
+    }
+
+
 def build_pattt_catalog(
     *,
     repo_dir: Path | None = None,
@@ -475,6 +500,7 @@ def build_pattt_catalog(
         "doc_count": len(docs),
         "section_count": len(sections),
         "asset_count": len(assets),
+        **_build_family_breakdown(families),
         "ignored_directories": ignored_directories,
         "errors": errors,
         "warnings": warnings,
@@ -539,7 +565,8 @@ def validate_pattt_catalog(
         for family_dir in _iter_top_level_directories(resolved_repo_dir)
         for path in _iter_family_markdown_files(family_dir)
     }
-    if set(catalog_docs) != set(live_docs):
+    docs_disk_mismatches = sorted(set(catalog_docs) ^ set(live_docs))
+    if docs_disk_mismatches:
         errors.append("docs.jsonl does not match markdown files on disk.")
     catalog_assets = {str(row["path"]): row for row in catalog["assets"]}
     live_assets = {
@@ -547,11 +574,22 @@ def validate_pattt_catalog(
         for family_dir in _iter_top_level_directories(resolved_repo_dir)
         for path in _iter_family_assets(family_dir)
     }
-    if set(catalog_assets) != set(live_assets):
+    assets_disk_mismatches = sorted(set(catalog_assets) ^ set(live_assets))
+    if assets_disk_mismatches:
         errors.append("assets.jsonl does not match asset files on disk.")
     catalog_families = {str(row["family_id"]): row for row in catalog["families"]}
     if not catalog_families:
         errors.append("families.json is empty.")
+
+    missing_entrypoint_directories: list[str] = []
+    for family_dir in _iter_top_level_directories(resolved_repo_dir):
+        markdown_files = _iter_family_markdown_files(family_dir)
+        if markdown_files:
+            continue
+        relative_dir = _relative_repo_path(family_dir, paths.repo_root)
+        missing_entrypoint_directories.append(relative_dir)
+        if _iter_family_assets(family_dir):
+            errors.append(f"Top-level directory missing entrypoint docs: {relative_dir}")
 
     for doc in catalog["docs"]:
         if doc["path"].endswith("/README.md") and doc["kind"] != "canonical":
@@ -567,17 +605,25 @@ def validate_pattt_catalog(
 
     build_meta = catalog["build_meta"]
     live_fingerprint = _repo_fingerprint(resolved_repo_dir)
-    if str(build_meta.get("repo_fingerprint") or "") != live_fingerprint:
+    fingerprint_matches = str(build_meta.get("repo_fingerprint") or "") == live_fingerprint
+    if not fingerprint_matches:
         errors.append("Catalog fingerprint does not match repo content on disk.")
+
+    family_breakdown = _build_family_breakdown(catalog["families"])
 
     report = {
         "ok": not errors,
         "errors": errors,
         "warnings": list(catalog["build_meta"].get("warnings", [])),
         "family_count": len(catalog["families"]),
+        **family_breakdown,
         "doc_count": len(catalog["docs"]),
         "section_count": len(catalog["sections"]),
         "asset_count": len(catalog["assets"]),
+        "missing_entrypoint_directories": missing_entrypoint_directories,
+        "docs_disk_mismatches": docs_disk_mismatches,
+        "assets_disk_mismatches": assets_disk_mismatches,
+        "fingerprint_matches": fingerprint_matches,
         "ignored_directories": list(catalog["build_meta"].get("ignored_directories", [])),
         "repo_fingerprint": live_fingerprint,
     }

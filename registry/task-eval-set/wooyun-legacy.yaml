@@ -1,0 +1,41 @@
+skill_id: wooyun-legacy
+cases:
+  - case_id: wooyun-core
+    prompt: 设计一个支付和退款流程的业务逻辑测试计划。
+    mode: core-only
+    required_terms:
+      - 支付
+      - 退款
+      - 业务逻辑
+  - case_id: wooyun-auth-core
+    prompt: 评估密码重置和认证流程是否存在绕过或账号接管风险。
+    mode: core-only
+    required_terms:
+      - 密码重置
+      - 认证
+      - 账号
+  - case_id: wooyun-order-core
+    prompt: 针对下单和支付流程，检查价格篡改、订单篡改和支付绕过。
+    mode: core-only
+    required_terms:
+      - 价格篡改
+      - 订单篡改
+      - 支付绕过
+  - case_id: wooyun-reference
+    prompt: 需要按授权绕过和订单篡改模式补充优先级和案例线索。
+    mode: needs-reference
+    required_terms:
+      - 授权
+      - 订单
+    reference_topics:
+      - authorization
+      - financial
+  - case_id: wooyun-logic-reference
+    prompt: 结合状态转移和竞态条件，再补一个流程绕过测试角度。
+    mode: needs-reference
+    required_terms:
+      - 状态转移
+      - 竞态
+      - 流程绕过
+    reference_topics:
+      - logic-flow

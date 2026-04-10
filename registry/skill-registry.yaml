@@ -1,0 +1,78 @@
+version: 1
+skills:
+  - skill_id: exploit-file-download
+    path: exploit-file-download/SKILL.md
+    family: exploit
+    owner: sec-platform
+    version: 1.0.0
+    status: active
+    description_tokens: 44
+    body_tokens: 1490
+    reference_tokens: 210
+    invocation_30d: 12
+    route_collision_score: 0.18
+    task_pass_rate: 0.0
+    routing_pass_rate: 0.0
+    obsolescence_score: 0.08
+    last_verified_model: gpt-5.4
+    last_verified_at: 2026-04-10
+    depends_on: []
+    neighbors:
+      - wooyun-legacy
+  - skill_id: static-analysis/semgrep
+    path: static-analysis/skills/semgrep/SKILL.md
+    family: static-analysis
+    owner: sec-platform
+    version: 1.0.0
+    status: active
+    description_tokens: 34
+    body_tokens: 1200
+    reference_tokens: 0
+    invocation_30d: 21
+    route_collision_score: 0.24
+    task_pass_rate: 0.0
+    routing_pass_rate: 0.0
+    obsolescence_score: 0.04
+    last_verified_model: gpt-5.4
+    last_verified_at: 2026-04-10
+    depends_on: []
+    neighbors:
+      - static-analysis/codeql
+  - skill_id: static-analysis/codeql
+    path: static-analysis/skills/codeql/SKILL.md
+    family: static-analysis
+    owner: sec-platform
+    version: 1.0.0
+    status: active
+    description_tokens: 35
+    body_tokens: 1420
+    reference_tokens: 0
+    invocation_30d: 17
+    route_collision_score: 0.26
+    task_pass_rate: 0.0
+    routing_pass_rate: 0.0
+    obsolescence_score: 0.05
+    last_verified_model: gpt-5.4
+    last_verified_at: 2026-04-10
+    depends_on: []
+    neighbors:
+      - static-analysis/semgrep
+  - skill_id: wooyun-legacy
+    path: wooyun-legacy/SKILL.md
+    family: business-logic
+    owner: sec-platform
+    version: 1.0.0
+    status: active
+    description_tokens: 66
+    body_tokens: 1680
+    reference_tokens: 980
+    invocation_30d: 15
+    route_collision_score: 0.11
+    task_pass_rate: 0.0
+    routing_pass_rate: 0.0
+    obsolescence_score: 0.03
+    last_verified_model: gpt-5.4
+    last_verified_at: 2026-04-10
+    depends_on: []
+    neighbors:
+      - exploit-file-download

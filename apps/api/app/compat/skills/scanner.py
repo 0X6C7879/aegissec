@@ -14,6 +14,7 @@ from .discovery_cache import (
     build_root_cache_key,
     canonicalize_skill_path,
 )
+from .governance_discovery import discover_supported_filesystem_skill_markdowns
 from .models import DiscoveredSkillFile, SkillScanRoot, SkillSourceKind
 
 
@@ -249,20 +250,21 @@ def _discover_skill_files_for_root(scan_root: SkillScanRoot) -> list[DiscoveredS
 
     discovered: list[DiscoveredSkillFile] = []
     resolved_root = root_path.resolve()
-    for skill_file in resolved_root.glob("*/SKILL.md"):
+    for skill_file, directory_name, relative_path in discover_supported_filesystem_skill_markdowns(
+        resolved_root
+    ):
         if not skill_file.is_file():
             continue
 
         metadata = dict(scan_root.metadata)
         resolved_entry = canonicalize_skill_path(skill_file.as_posix())
         metadata.setdefault("loaded_from", resolved_entry)
-        relative_path = skill_file.resolve().relative_to(resolved_root).as_posix()
         discovered.append(
             DiscoveredSkillFile(
                 source=scan_root.source,
                 scope=scan_root.scope,
                 root_dir=resolved_root.as_posix(),
-                directory_name=skill_file.parent.name,
+                directory_name=directory_name,
                 entry_file=resolved_entry,
                 relative_path=relative_path,
                 source_kind=scan_root.source_kind,

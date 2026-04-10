@@ -1,0 +1,52 @@
+version: 1
+cases:
+  - case_id: route-exploit-file-download
+    prompt: 测试下载接口是否存在任意文件下载、路径遍历和 LFI 读取问题，并给出绕过思路。
+    expected_skill_id: exploit-file-download
+    scenario_type: core
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-static-analysis-semgrep
+    prompt: Run Semgrep against this repository for a fast security scan and suggest a custom YAML rule for command injection.
+    expected_skill_id: static-analysis/semgrep
+    scenario_type: neighbor
+    touched_paths:
+      - apps/api/app/main.py
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-static-analysis-codeql
+    prompt: Build a CodeQL database for this Java service and investigate taint flow across multiple functions.
+    expected_skill_id: static-analysis/codeql
+    scenario_type: neighbor
+    touched_paths:
+      - services/src/main/java/App.java
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-wooyun-legacy
+    prompt: 帮我测测这个支付接口有没有越权、价格篡改、退款流程漏洞这类业务逻辑问题。
+    expected_skill_id: wooyun-legacy
+    scenario_type: shadow
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-semgrep-vs-codeql
+    prompt: I need a fast single-repo scan with Semgrep and a custom YAML rule, not a heavy interprocedural analysis.
+    expected_skill_id: static-analysis/semgrep
+    scenario_type: shadow
+    touched_paths:
+      - apps/api/app/main.py
+    available_tools:
+      - execute_skill
+      - read_skill_content
+  - case_id: route-codeql-vs-semgrep
+    prompt: Track taint from HTTP handler to SQL sink across several Java classes and explain the source-to-sink path.
+    expected_skill_id: static-analysis/codeql
+    scenario_type: shadow
+    touched_paths:
+      - services/src/main/java/App.java
+    available_tools:
+      - execute_skill
+      - read_skill_content

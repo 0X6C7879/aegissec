@@ -1,6 +1,6 @@
 ---
 name: pattt-readme-loader
-description: README-first PayloadsAllTheThings loader that resolves real vendored docs before suggesting traceable candidates.
+description: README-first PayloadsAllTheThings loader for payload retrieval, Burp Intruder wordlists, fuzz candidates, verification probes, bypass ideas, exploit-gated research, and traceable offensive-web knowledge.
 user_invocable: false
 preferred_stage: verification
 context_strategy: focused
@@ -12,7 +12,7 @@ semantic_tags:
   - payloadsallthethings
   - readme-first
   - verification
-when_to_use: Use when a task needs payload, bypass, or exploit guidance from PayloadsAllTheThings and a README-first source load is required.
+when_to_use: Use when a task needs PATTT-backed payloads, Burp Intruder candidates, fuzz inputs, SSRF, SQLi, XSS, SSTI, XXE, upload, CVE, prompt-injection, bypass, or exploit-gated guidance and a README-first source load is required.
 context_hint: This skill must resolve vendored PATTT docs from disk first; catalog metadata is only for routing.
 ---
 # pattt-readme-loader

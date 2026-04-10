@@ -16,6 +16,7 @@ _DEFAULT_TOP_K = 5
 _DEFAULT_SUPPORTING_LIMIT = 3
 _SUPPORTING_SCORE_GAP_THRESHOLD = 8
 _MIN_SUPPORTING_SCORE = 8
+_PATTT_TAGS = {"pattt", "payloadsallthethings"}
 _FIXED_RUNTIME_TOOLS = {
     "execute_kali_command",
     "list_available_skills",
@@ -702,6 +703,10 @@ def _score_semantic_family_fit(
     score = 0
     if intent_profile.is_ctf and family == "ctf":
         score += 8
+    if family == "payloadsallthethings" and any(
+        tag in intent_profile.preferred_skill_tags for tag in _PATTT_TAGS
+    ):
+        score += 6
     if (
         intent_profile.dominant_domain in {"java_code_audit", "java_route_trace"}
         and family == "java-audit"

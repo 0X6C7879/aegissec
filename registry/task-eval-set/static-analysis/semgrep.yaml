@@ -1,0 +1,41 @@
+skill_id: static-analysis/semgrep
+cases:
+  - case_id: semgrep-core
+    prompt: 用 Semgrep 做一次快速安全扫描，并说明什么时候适合它而不是更重的分析器。
+    mode: core-only
+    required_terms:
+      - semgrep
+      - quick
+      - pattern
+  - case_id: semgrep-config-core
+    prompt: 说明 --config auto、ruleset 组合和 SARIF 输出的常见用法。
+    mode: core-only
+    required_terms:
+      - --config auto
+      - sarif
+      - ruleset
+  - case_id: semgrep-taint-core
+    prompt: 用 Semgrep 写 taint mode 规则时，应该关注哪些 source / sink / metavariable 相关点？
+    mode: core-only
+    required_terms:
+      - taint mode
+      - metavariable
+      - sink
+  - case_id: semgrep-rule-reference
+    prompt: 需要补一个自定义 YAML 规则编写提示，特别是 metavariable-regex 和 pattern-not。
+    mode: needs-reference
+    required_terms:
+      - metavariable-regex
+      - pattern-not
+      - yaml
+    reference_topics:
+      - rule-writing
+  - case_id: semgrep-triage-reference
+    prompt: 补充一下扫描结果分流方式，特别是 SARIF 和 JSON 的选择。
+    mode: needs-reference
+    required_terms:
+      - sarif
+      - json
+      - triage
+    reference_topics:
+      - triage

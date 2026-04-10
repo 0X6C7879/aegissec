@@ -539,6 +539,8 @@ preferred_stage: verification
     assert "knowledge/pattt/repo/Server Side Request Forgery/README.md" in prepared_prompt
     loaded_docs = cast(list[dict[str, object]], pattt_context["loaded_docs"])
     assert loaded_docs
+    assert all("content" not in doc for doc in loaded_docs)
+    assert all(doc["content_redacted"] is True for doc in loaded_docs)
     payload_candidates = cast(list[dict[str, object]], pattt_context["payload_candidates"])
     assert payload_candidates
     assert all("source_path" in candidate for candidate in payload_candidates)

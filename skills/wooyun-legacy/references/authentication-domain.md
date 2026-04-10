@@ -1,3 +1,12 @@
+---
+when: Need authentication-specific hypotheses, password reset abuse, or credential workflow patterns.
+topics:
+  - authentication
+  - password-reset
+  - credential-workflow
+cost_hint: medium
+---
+
 # 身份认证领域
 
 ## 概述

@@ -1,3 +1,12 @@
+---
+when: Need payment, order, price, balance, or refund abuse patterns.
+topics:
+  - financial
+  - payment
+  - refund
+cost_hint: medium
+---
+
 # 金融领域
 
 ## 概述

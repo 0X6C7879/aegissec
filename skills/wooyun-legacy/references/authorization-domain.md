@@ -1,3 +1,12 @@
+---
+when: Need authorization bypass, IDOR, privilege escalation, or arbitrary-operation patterns.
+topics:
+  - authorization
+  - idor
+  - privilege-escalation
+cost_hint: medium
+---
+
 # 授权域
 
 ## 概述

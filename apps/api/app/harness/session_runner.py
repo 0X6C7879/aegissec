@@ -222,6 +222,7 @@ def _score_skill_for_autoroute(
     skill: Any,
     normalized_context: str,
     context_tokens: set[str],
+    latest_message_tokens: set[str],
 ) -> tuple[int, str]:
     family = getattr(skill, "family", None)
     domain = getattr(skill, "domain", None)
@@ -252,6 +253,36 @@ def _score_skill_for_autoroute(
             "专注",
         }
     )
+    wants_pattt_guidance = any(
+        token in latest_message_tokens
+        for token in {
+            "payload",
+            "payloads",
+            "burp",
+            "intruder",
+            "wordlist",
+            "fuzz",
+            "candidate",
+            "candidates",
+        }
+    ) and any(
+        token in latest_message_tokens
+        for token in {
+            "ssrf",
+            "sqli",
+            "xss",
+            "ssti",
+            "xxe",
+            "upload",
+            "cve",
+            "prompt",
+            "payload",
+            "payloads",
+        }
+    )
+
+    if family == "payloadsallthethings" and wants_pattt_guidance:
+        return 82, "PATTT prior from payload/bypass/exploit retrieval context"
 
     if family == "ctf" and domain == "web" and is_http_context:
         web_score = 78 if specialized_focus else 74
@@ -319,6 +350,12 @@ def _resolve_autorouted_skill_candidate(
             filter_description_stop_tokens=False,
         )
     )
+    latest_message_tokens = set(
+        _extract_skill_autoroute_tokens(
+            latest_message_text,
+            filter_description_stop_tokens=False,
+        )
+    )
     if not normalized_context and not context_tokens:
         return None, {
             "decision": "skipped",
@@ -334,6 +371,7 @@ def _resolve_autorouted_skill_candidate(
             skill=skill,
             normalized_context=normalized_context,
             context_tokens=context_tokens,
+            latest_message_tokens=latest_message_tokens,
         )
         if score <= 0:
             continue
@@ -471,7 +509,9 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload if isinstance(skill_payload, dict) else None
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(

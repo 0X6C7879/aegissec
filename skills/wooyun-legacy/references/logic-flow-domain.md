@@ -1,3 +1,12 @@
+---
+when: Need state-machine abuse, race-condition, or workflow-bypass patterns.
+topics:
+  - logic-flow
+  - race-condition
+  - state-transition
+cost_hint: medium
+---
+
 # 业务逻辑领域
 
 ## 概述

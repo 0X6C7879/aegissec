@@ -1,0 +1,220 @@
+{
+  "before_after_delta": 0.0,
+  "confusion_matrix": {
+    "exploit-file-download": {
+      "exploit-file-download": 1
+    },
+    "static-analysis/codeql": {
+      "static-analysis/codeql": 2
+    },
+    "static-analysis/semgrep": {
+      "static-analysis/semgrep": 2
+    },
+    "wooyun-legacy": {
+      "wooyun-legacy": 1
+    }
+  },
+  "neighbor_confusion_count": 0,
+  "original": {
+    "confusion_matrix": {
+      "exploit-file-download": {
+        "exploit-file-download": 1
+      },
+      "static-analysis/codeql": {
+        "static-analysis/codeql": 2
+      },
+      "static-analysis/semgrep": {
+        "static-analysis/semgrep": 2
+      },
+      "wooyun-legacy": {
+        "wooyun-legacy": 1
+      }
+    },
+    "neighbor_confusion_count": 0,
+    "pass_count": 6,
+    "precision": 1.0,
+    "recall": 1.0,
+    "results": [
+      {
+        "case_id": "route-exploit-file-download",
+        "expected_skill_id": "exploit-file-download",
+        "passed": true,
+        "scenario_type": "core",
+        "selected_skill_id": "exploit-file-download",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-static-analysis-semgrep",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-static-analysis-codeql",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-wooyun-legacy",
+        "expected_skill_id": "wooyun-legacy",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "wooyun-legacy",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-semgrep-vs-codeql",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "original"
+      },
+      {
+        "case_id": "route-codeql-vs-semgrep",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "original"
+      }
+    ],
+    "routing_pass_rate": 1.0,
+    "shadow_interference_count": 0,
+    "total_cases": 6
+  },
+  "pass_count": 6,
+  "precision": 1.0,
+  "recall": 1.0,
+  "reduced": {
+    "confusion_matrix": {
+      "exploit-file-download": {
+        "exploit-file-download": 1
+      },
+      "static-analysis/codeql": {
+        "static-analysis/codeql": 2
+      },
+      "static-analysis/semgrep": {
+        "static-analysis/semgrep": 2
+      },
+      "wooyun-legacy": {
+        "wooyun-legacy": 1
+      }
+    },
+    "neighbor_confusion_count": 0,
+    "pass_count": 6,
+    "precision": 1.0,
+    "recall": 1.0,
+    "results": [
+      {
+        "case_id": "route-exploit-file-download",
+        "expected_skill_id": "exploit-file-download",
+        "passed": true,
+        "scenario_type": "core",
+        "selected_skill_id": "exploit-file-download",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-static-analysis-semgrep",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-static-analysis-codeql",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "neighbor",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-wooyun-legacy",
+        "expected_skill_id": "wooyun-legacy",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "wooyun-legacy",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-semgrep-vs-codeql",
+        "expected_skill_id": "static-analysis/semgrep",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "static-analysis/semgrep",
+        "variant": "reduced"
+      },
+      {
+        "case_id": "route-codeql-vs-semgrep",
+        "expected_skill_id": "static-analysis/codeql",
+        "passed": true,
+        "scenario_type": "shadow",
+        "selected_skill_id": "static-analysis/codeql",
+        "variant": "reduced"
+      }
+    ],
+    "routing_pass_rate": 1.0,
+    "shadow_interference_count": 0,
+    "total_cases": 6
+  },
+  "results": [
+    {
+      "case_id": "route-exploit-file-download",
+      "expected_skill_id": "exploit-file-download",
+      "passed": true,
+      "scenario_type": "core",
+      "selected_skill_id": "exploit-file-download",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-static-analysis-semgrep",
+      "expected_skill_id": "static-analysis/semgrep",
+      "passed": true,
+      "scenario_type": "neighbor",
+      "selected_skill_id": "static-analysis/semgrep",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-static-analysis-codeql",
+      "expected_skill_id": "static-analysis/codeql",
+      "passed": true,
+      "scenario_type": "neighbor",
+      "selected_skill_id": "static-analysis/codeql",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-wooyun-legacy",
+      "expected_skill_id": "wooyun-legacy",
+      "passed": true,
+      "scenario_type": "shadow",
+      "selected_skill_id": "wooyun-legacy",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-semgrep-vs-codeql",
+      "expected_skill_id": "static-analysis/semgrep",
+      "passed": true,
+      "scenario_type": "shadow",
+      "selected_skill_id": "static-analysis/semgrep",
+      "variant": "reduced"
+    },
+    {
+      "case_id": "route-codeql-vs-semgrep",
+      "expected_skill_id": "static-analysis/codeql",
+      "passed": true,
+      "scenario_type": "shadow",
+      "selected_skill_id": "static-analysis/codeql",
+      "variant": "reduced"
+    }
+  ],
+  "routing_pass_rate": 1.0,
+  "shadow_interference_count": 0,
+  "total_cases": 6
+}

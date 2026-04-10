@@ -8,6 +8,28 @@ from app.compat.skills import models as skill_models
 _URL_RE = re.compile(r"https?://", re.IGNORECASE)
 _HOST_PORT_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b")
 _JAVA_PATH_RE = re.compile(r"\.(?:java|class|jar)\b", re.IGNORECASE)
+_PATTT_GUIDANCE_TOKENS = {
+    "payload",
+    "payloads",
+    "burp",
+    "intruder",
+    "wordlist",
+    "fuzz",
+    "fuzzer",
+    "candidate",
+    "candidates",
+}
+_PATTT_ATTACK_TERMS = {
+    "ssrf",
+    "sqli",
+    "xss",
+    "ssti",
+    "xxe",
+    "upload",
+    "cve",
+    "jwt",
+    "prompt",
+}
 
 _JAVA_AUDIT_FAMILY = "java-audit"
 _CTF_FAMILY = "ctf"
@@ -85,6 +107,9 @@ def infer_task_intent(
         has_http_target
         or bool(_HOST_PORT_RE.search(request_text))
         or any(token in tokens for token in {"host", "port", "remote", "nc", "netcat", "instance"})
+    )
+    wants_pattt_guidance = bool(tokens & _PATTT_GUIDANCE_TOKENS) and bool(
+        tokens & (_PATTT_ATTACK_TERMS | {"payload", "payloads", "burp", "intruder", "wordlist"})
     )
     java_evidence = _has_java_code_evidence(request_text, touched_text)
     ctf_signal = any(
@@ -164,6 +189,9 @@ def infer_task_intent(
     if not java_evidence:
         suppressed_tags.extend([_JAVA_AUDIT_FAMILY, "java-route-tracer", "java-route-mapper"])
         notes.append("java audit family suppressed without Java code evidence")
+    if wants_pattt_guidance:
+        preferred_tags.extend(["pattt", "payloadsallthethings"])
+        notes.append("payload-guidance signals detected for README-first PATTT loading")
 
     return skill_models.SkillIntentProfile(
         dominant_domain=dominant_domain,
@@ -186,6 +214,16 @@ def build_skill_intent_adjustment(
     adjustment = skill_models.SkillIntentAdjustment()
     tags = _skill_tag_set(compiled_skill)
     request_text = _request_text(request)
+    request_tokens = _tokenize(request_text)
+    has_concrete_target = bool(_URL_RE.search(request_text)) or bool(
+        _HOST_PORT_RE.search(request_text)
+    )
+    wants_pattt_guidance = bool(request_tokens & _PATTT_GUIDANCE_TOKENS) and bool(
+        request_tokens
+        & (_PATTT_ATTACK_TERMS | {"payload", "payloads", "burp", "intruder", "wordlist"})
+    )
+    attack_term_overlap = sorted(tags & (request_tokens & _PATTT_ATTACK_TERMS))
+    is_pattt_skill = bool(tags & {"pattt", "payloadsallthethings"})
     java_evidence = _has_java_code_evidence(request_text, " ".join(request.touched_paths))
 
     if _JAVA_AUDIT_FAMILY in tags and not java_evidence:
@@ -228,6 +266,23 @@ def build_skill_intent_adjustment(
     if any(tag in tags for tag in intent_profile.suppressed_skill_tags):
         adjustment.prior_score -= 6
         adjustment.reasons.append("intent prior: matched suppressed semantic tag")
+    if is_pattt_skill and wants_pattt_guidance:
+        pattt_score = 14 if not has_concrete_target else 6
+        adjustment.prior_score += pattt_score
+        adjustment.reasons.append(
+            "intent prior: PATTT matched payload/bypass/exploit retrieval language"
+        )
+    if not is_pattt_skill and has_concrete_target and attack_term_overlap:
+        adjustment.prior_score += 8
+        adjustment.reasons.append(
+            "intent prior: concrete target matched specialized offensive term "
+            + ", ".join(attack_term_overlap[:3])
+        )
+    if is_pattt_skill and has_concrete_target and not wants_pattt_guidance:
+        adjustment.prior_score -= 2
+        adjustment.reasons.append(
+            "intent prior: PATTT downranked when concrete target lacks payload-guidance request"
+        )
     return adjustment
 
 
