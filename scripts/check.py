@@ -15,6 +15,10 @@ def run(command: list[str], workdir: Path) -> None:
     subprocess.run(command, cwd=workdir, check=True)
 
 
+def run_api_python(args: list[str], workdir: Path = REPO_ROOT) -> None:
+    run(["uv", "run", "--project", str(API_DIR), "python", *args], workdir)
+
+
 def main() -> int:
     run(["python", str(REPO_ROOT / "scripts" / "sync_requirements.py")], REPO_ROOT)
     run(["uv", "sync", "--all-extras", "--dev"], API_DIR)
@@ -22,20 +26,18 @@ def main() -> int:
     run(["uv", "run", "black", "--check", "."], API_DIR)
     run(["uv", "run", "mypy", "app", "tests"], API_DIR)
     run(["uv", "run", "pytest"], API_DIR)
-    run(["python", str(REPO_ROOT / "ci" / "lint_skills.py"), "--strict"], REPO_ROOT)
-    run(["python", str(REPO_ROOT / "ci" / "reduce_skill.py")], REPO_ROOT)
-    run(["python", str(REPO_ROOT / "ci" / "eval_routing.py")], REPO_ROOT)
-    run(["python", str(REPO_ROOT / "ci" / "eval_task.py")], REPO_ROOT)
-    run(
+    run_api_python([str(REPO_ROOT / "ci" / "lint_skills.py"), "--strict"])
+    run_api_python([str(REPO_ROOT / "ci" / "reduce_skill.py")])
+    run_api_python([str(REPO_ROOT / "ci" / "eval_routing.py")])
+    run_api_python([str(REPO_ROOT / "ci" / "eval_task.py")])
+    run_api_python(
         [
-            "python",
             str(REPO_ROOT / "ci" / "report_metrics.py"),
             "--strict-thresholds",
             "--write-registry",
             "--last-verified-model",
             "gpt-5.4",
-        ],
-        REPO_ROOT,
+        ]
     )
     run(
         ["uv", "run", "python", str(REPO_ROOT / "scripts" / "export_api_schema.py")],
