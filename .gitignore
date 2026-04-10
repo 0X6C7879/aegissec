@@ -28,7 +28,5 @@ output/
 temp_claude_code/
 =
 .editorconfig
-.prettierignore
-.prettierrc.json
 AGENTS.md
 TODO.md
