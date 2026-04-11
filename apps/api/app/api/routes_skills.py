@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.compat.skills.service import SkillContentReadError, SkillService, get_skill_service
+from app.compat.skills.service import (
+    SkillContentReadError,
+    SkillLookupError,
+    SkillService,
+    get_skill_service,
+)
 from app.db.models import SkillContentRead, SkillRecordRead
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
@@ -69,24 +74,15 @@ async def preview_skill_orchestration_plan(
     )
 
 
-@router.get("/{skill_id}", response_model=SkillRecordRead)
-async def get_skill(
-    skill_id: str,
-    skill_service: SkillService = Depends(get_skill_service),
-) -> SkillRecordRead:
-    skill_record = skill_service.get_skill(skill_id)
-    if skill_record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-    return skill_record
-
-
-@router.get("/{skill_id}/content", response_model=SkillContentRead)
+@router.get("/{skill_id:path}/content", response_model=SkillContentRead)
 async def get_skill_content(
     skill_id: str,
     skill_service: SkillService = Depends(get_skill_service),
 ) -> SkillContentRead:
     try:
         skill_content = skill_service.get_skill_content(skill_id)
+    except SkillLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except SkillContentReadError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -96,6 +92,20 @@ async def get_skill_content(
     if skill_content is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     return skill_content
+
+
+@router.get("/{skill_id:path}", response_model=SkillRecordRead)
+async def get_skill(
+    skill_id: str,
+    skill_service: SkillService = Depends(get_skill_service),
+) -> SkillRecordRead:
+    try:
+        skill_record = skill_service.get_skill(skill_id)
+    except SkillLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if skill_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    return skill_record
 
 
 @router.post("/rescan", response_model=list[SkillRecordRead])
@@ -119,35 +129,44 @@ async def refresh_skills(
     return skill_service.rescan_skills()
 
 
-@router.post("/{skill_id}/toggle", response_model=SkillRecordRead)
+@router.post("/{skill_id:path}/toggle", response_model=SkillRecordRead)
 async def toggle_skill(
     skill_id: str,
     payload: ToggleSkillRequest,
     skill_service: SkillService = Depends(get_skill_service),
 ) -> SkillRecordRead:
-    updated = skill_service.set_skill_enabled(skill_id, payload.enabled)
+    try:
+        updated = skill_service.set_skill_enabled(skill_id, payload.enabled)
+    except SkillLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     return updated
 
 
-@router.post("/{skill_id}/enable", response_model=SkillRecordRead)
+@router.post("/{skill_id:path}/enable", response_model=SkillRecordRead)
 async def enable_skill(
     skill_id: str,
     skill_service: SkillService = Depends(get_skill_service),
 ) -> SkillRecordRead:
-    updated = skill_service.set_skill_enabled(skill_id, True)
+    try:
+        updated = skill_service.set_skill_enabled(skill_id, True)
+    except SkillLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     return updated
 
 
-@router.post("/{skill_id}/disable", response_model=SkillRecordRead)
+@router.post("/{skill_id:path}/disable", response_model=SkillRecordRead)
 async def disable_skill(
     skill_id: str,
     skill_service: SkillService = Depends(get_skill_service),
 ) -> SkillRecordRead:
-    updated = skill_service.set_skill_enabled(skill_id, False)
+    try:
+        updated = skill_service.set_skill_enabled(skill_id, False)
+    except SkillLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     return updated

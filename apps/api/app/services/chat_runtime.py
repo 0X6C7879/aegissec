@@ -526,11 +526,18 @@ class OpenAICompatibleChatRuntime:
                                     index,
                                     {
                                         "id": raw_tool_call.get("id"),
+                                        "type": (
+                                            raw_tool_call.get("type")
+                                            if isinstance(raw_tool_call.get("type"), str)
+                                            else "function"
+                                        ),
                                         "function": {"name": "", "arguments": ""},
                                     },
                                 )
                                 if isinstance(raw_tool_call.get("id"), str):
                                     fragment["id"] = raw_tool_call["id"]
+                                if isinstance(raw_tool_call.get("type"), str):
+                                    fragment["type"] = raw_tool_call["type"]
                                 function_payload = raw_tool_call.get("function")
                                 if isinstance(function_payload, dict):
                                     function_fragment = fragment["function"]
@@ -773,13 +780,19 @@ class OpenAICompatibleChatRuntime:
 
     @staticmethod
     def _assistant_message_for_history(message: dict[str, object]) -> dict[str, object]:
+        tool_calls = message.get("tool_calls", [])
+        has_tool_calls = isinstance(tool_calls, list) and len(tool_calls) > 0
         content = message.get("content", "")
         if isinstance(content, str):
-            content = OpenAICompatibleChatRuntime._sanitize_assistant_content(content)
+            if has_tool_calls:
+                sanitized_content = sanitize_assistant_content(content, fallback_text="")
+                content = sanitized_content or None
+            else:
+                content = OpenAICompatibleChatRuntime._sanitize_assistant_content(content)
         return {
             "role": "assistant",
             "content": content,
-            "tool_calls": message.get("tool_calls", []),
+            "tool_calls": tool_calls,
         }
 
     @staticmethod

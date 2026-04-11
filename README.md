@@ -219,24 +219,48 @@ git clone <your-repo-url>
 cd aegissec
 ```
 
-### 2. 初始化环境变量
+### 2. Ubuntu 24 一键搭建并启动
+
+前置条件：请使用**具备 sudo 权限的普通用户**执行；脚本会拒绝 root 直接运行。
 
 ```bash
-cp .env.example .env
+bash scripts/bootstrap_ubuntu.sh all
 ```
+
+这个入口面向全新 Ubuntu 24 主机，会按顺序完成：
+
+- 安装系统依赖与开发基础工具
+- 安装 uv、Node.js、Corepack/pnpm、Docker
+- 自动从 `.env.example` 生成 `.env`（如果尚不存在）
+- 同步 API / Web 依赖并构建 Kali Runtime 镜像
+- 执行 `python3 scripts/check.py` 的完整校验链路
+- 后台启动 API 和 Web 开发服务
+
+> `all` 首次执行可能耗时较长，因为它会跑完整项目校验与评估脚本，而不只是最小化 smoke test。
 
 默认开发访问地址（服务监听默认绑定到 `0.0.0.0`）：
 
 - API: `127.0.0.1:8000`
 - Web: `127.0.0.1:5173`
 
-### 3. 本地双服务启动
+常用生命周期命令：
+
+```bash
+bash scripts/bootstrap_ubuntu.sh status
+bash scripts/bootstrap_ubuntu.sh stop
+```
+
+- 运行日志位于 `.aegissec/logs/`
+- 如果这是第一次安装 Docker，当前 shell 可能还未拿到最新的 `docker` 组权限；重新登录，或者执行一次 `newgrp docker` 后再直接使用无 `sudo` 的 `docker`
+- `docker` 组通常等价于对 Docker daemon 的高权限访问；只应在你信任的本机开发环境中这样配置
+
+### 3. 前台开发模式
 
 ```bash
 python scripts/dev.py
 ```
 
-该脚本会：
+该脚本适合已经完成环境准备后的前台联调，会：
 
 - 同步 API 依赖
 - 安装 Web 依赖
@@ -245,7 +269,7 @@ python scripts/dev.py
 
 如果你只想单独启动某一侧，也可以使用仓库中的单侧启动脚本。
 
-### 4. 全量检查
+### 4. 单独执行全量检查
 
 ```bash
 python scripts/check.py
@@ -253,11 +277,17 @@ python scripts/check.py
 
 当前检查链路包括：
 
+- `scripts/sync_requirements.py`
 - API 依赖同步
 - Ruff
 - Black
 - MyPy
 - Pytest
+- `ci/lint_skills.py --strict`
+- `ci/reduce_skill.py`
+- `ci/eval_routing.py`
+- `ci/eval_task.py`
+- `ci/report_metrics.py --strict-thresholds --write-registry --last-verified-model gpt-5.4`
 - OpenAPI 导出
 - 前端安装
 - ESLint

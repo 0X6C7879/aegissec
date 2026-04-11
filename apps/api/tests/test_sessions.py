@@ -1530,6 +1530,26 @@ compatibility: [opencode]
 
 Should not appear when disabled.
 """,
+            "static-analysis/skills/semgrep": """---
+name: Semgrep Static
+description: Static semgrep skill
+user-invocable: true
+compatibility: [opencode]
+---
+# Semgrep Static
+
+Use for static analysis semgrep tasks.
+""",
+            "dynamic-analysis/skills/semgrep": """---
+name: Semgrep Dynamic
+description: Dynamic semgrep skill
+user-invocable: true
+compatibility: [opencode]
+---
+# Semgrep Dynamic
+
+Use for dynamic analysis semgrep tasks.
+""",
         },
     )
 
@@ -1553,8 +1573,11 @@ Should not appear when disabled.
 
     assert "skill:container-security" in catalog_ids
     assert "skill:ctf-crypto" in catalog_ids
+    assert "skill:dynamic-analysis/semgrep" in catalog_ids
     assert "skill:hidden-helper" not in catalog_ids
+    assert "skill:static-analysis/semgrep" in catalog_ids
     assert "skill:disabled-skill" not in catalog_ids
+    assert "skill:semgrep" not in catalog_ids
 
 
 def test_chat_rejects_invalid_stale_slash_action_payload(client: TestClient) -> None:
@@ -1572,6 +1595,28 @@ def test_chat_rejects_invalid_stale_slash_action_payload(client: TestClient) -> 
             "attachments": [],
             "wait_for_completion": True,
             "slash_action": stale_action,
+        },
+    )
+
+    assert chat_response.status_code == 422
+    assert "stale slash_action" in chat_response.json()["detail"]
+
+
+def test_chat_rejects_slash_action_id_with_extra_path_suffix(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Slash Path Session"})
+    session_id = api_data(session_response)["id"]
+    catalog = api_data(client.get(f"/api/sessions/{session_id}/slash-catalog"))
+    builtin_item = next(item for item in catalog if item["id"] == "builtin:list_available_skills")
+    malformed_action = dict(builtin_item["action"])
+    malformed_action["id"] = f"{builtin_item['action']['id']}/server-side-exec"
+
+    chat_response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={
+            "content": builtin_item["action"]["display_text"],
+            "attachments": [],
+            "wait_for_completion": True,
+            "slash_action": malformed_action,
         },
     )
 

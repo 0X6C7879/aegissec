@@ -11,6 +11,7 @@ from app.compat.mcp.service import (
     MCPService,
     get_mcp_service,
 )
+from app.compat.skills.governance_discovery import stable_governance_skill_id
 from app.compat.skills.service import (
     SkillService,
     get_skill_service,
@@ -36,6 +37,7 @@ from app.db.models import (
     Session,
     SessionConversationRead,
     SessionStatus,
+    SkillAgentSummaryRead,
     SlashActionInvocation,
     SlashActionSelection,
     SlashCatalogItem,
@@ -308,6 +310,16 @@ def _catalog_item_trigger(name: str) -> str:
     return name.replace(" ", "-").replace("_", "-")
 
 
+def _catalog_skill_identifier(skill: SkillAgentSummaryRead) -> str:
+    relative_path = skill.resolved_identity.get("relative_path")
+    if isinstance(relative_path, str) and relative_path.strip():
+        return stable_governance_skill_id(relative_path.strip())
+    for candidate in (skill.directory_name, skill.name, skill.id):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
 def _tool_has_required_arguments(input_schema: Mapping[str, object] | None) -> bool:
     if not isinstance(input_schema, Mapping):
         return False
@@ -364,7 +376,7 @@ def _build_skill_slash_catalog_items(
             continue
         if skill.source_kind == "mcp":
             continue
-        trigger_name = skill.directory_name or skill.name
+        trigger_name = _catalog_skill_identifier(skill)
         if not trigger_name:
             continue
         trigger = _catalog_item_trigger(trigger_name)
@@ -377,14 +389,14 @@ def _build_skill_slash_catalog_items(
             display_text=f"/{trigger}",
             invocation=SlashActionInvocation(
                 tool_name="execute_skill",
-                arguments={"skill_name_or_id": skill.directory_name or skill.name or skill.id},
+                arguments={"skill_name_or_id": trigger_name},
             ),
         )
         items.append(
             SlashCatalogItem(
                 id=action.id,
                 trigger=trigger,
-                title=skill.name or skill.directory_name,
+                title=skill.name or skill.directory_name or skill.id,
                 description=description,
                 type="skill",
                 source="skill",

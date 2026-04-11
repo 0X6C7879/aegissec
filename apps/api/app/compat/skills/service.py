@@ -18,6 +18,8 @@ from app.compat.skills.discovery_cache import (
 from app.compat.skills.executor import (
     execute_skill_orchestration_plan as execute_skill_orchestration_runtime,
 )
+from app.compat.skills.governance_discovery import stable_governance_skill_id
+from app.compat.skills.identifiers import iter_skill_identifier_candidates
 from app.compat.skills.orchestration_planner import (
     build_skill_orchestration_plan as build_skill_orchestration_preview,
 )
@@ -205,7 +207,7 @@ class SkillService:
         ]
 
     def get_skill(self, skill_id: str) -> SkillRecordRead | None:
-        record = self._get_visible_skill_record(skill_id)
+        record = self._find_skill_record_by_identifier(skill_id, loaded_only=False)
         if record is None:
             return None
         return self._build_skill_record_read(record)
@@ -1650,13 +1652,13 @@ class SkillService:
         return to_skill_record_read(record)
 
     def read_skill_content(self, skill_id: str) -> str:
-        record = self._get_visible_skill_record(skill_id)
+        record = self._find_skill_record_by_identifier(skill_id, loaded_only=False)
         if record is None:
             raise SkillLookupError("Skill not found.")
         return self._read_skill_entry_file(record)
 
     def get_skill_content(self, skill_id: str) -> SkillContentRead | None:
-        record = self._get_visible_skill_record(skill_id)
+        record = self._find_skill_record_by_identifier(skill_id, loaded_only=False)
         if record is None:
             return None
         return self._build_skill_content(record)
@@ -2162,7 +2164,7 @@ class SkillService:
         return self.list_skills()
 
     def set_skill_enabled(self, skill_id: str, enabled: bool) -> SkillRecordRead | None:
-        record = self._get_visible_skill_record(skill_id)
+        record = self._find_skill_record_by_identifier(skill_id, loaded_only=False)
         if record is None:
             return None
         updated = self._repository.set_enabled(record, enabled)
@@ -2265,8 +2267,8 @@ class SkillService:
         *,
         loaded_only: bool,
     ) -> SkillRecord | None:
-        normalized_identifier = identifier.strip()
-        if not normalized_identifier:
+        candidate_identifiers = iter_skill_identifier_candidates(identifier)
+        if not candidate_identifiers:
             return None
 
         records = self._list_visible_skill_records()
@@ -2276,17 +2278,39 @@ class SkillService:
                 for record in records
                 if record.status == SkillRecordStatus.LOADED and record.enabled
             ]
+        record_identifiers = [
+            (record, self._stable_record_identifier(record)) for record in records
+        ]
 
-        for record in records:
-            if record.id == normalized_identifier:
-                return record
+        for normalized_identifier in candidate_identifiers:
+            id_matches = [
+                record
+                for record, _stable_identifier in record_identifiers
+                if record.id.casefold() == normalized_identifier
+            ]
+            matched_record = self._select_unambiguous_skill_record(id_matches, identifier)
+            if matched_record is not None:
+                return matched_record
 
-        normalized_casefold = normalized_identifier.casefold()
-        for field_name in ("directory_name", "name"):
-            for record in records:
-                value = getattr(record, field_name, None)
-                if isinstance(value, str) and value.casefold() == normalized_casefold:
-                    return record
+            stable_matches = [
+                record
+                for record, stable_identifier in record_identifiers
+                if stable_identifier == normalized_identifier
+            ]
+            matched_record = self._select_unambiguous_skill_record(stable_matches, identifier)
+            if matched_record is not None:
+                return matched_record
+
+            for field_name in ("directory_name", "name"):
+                field_matches = [
+                    record
+                    for record, _stable_identifier in record_identifiers
+                    if isinstance(getattr(record, field_name, None), str)
+                    and getattr(record, field_name).strip().casefold() == normalized_identifier
+                ]
+                matched_record = self._select_unambiguous_skill_record(field_matches, identifier)
+                if matched_record is not None:
+                    return matched_record
         return None
 
     def _list_visible_skill_records(self) -> list[SkillRecord]:
@@ -3161,6 +3185,27 @@ class SkillService:
             return entry_path.resolve().relative_to(root_path.resolve()).as_posix()
         except ValueError:
             return entry_path.name
+
+    def _stable_record_identifier(self, record: SkillRecord) -> str | None:
+        source_kind = self._infer_source_kind(record)
+        relative_path = self._relative_path_for_record(record, source_kind)
+        if not relative_path:
+            return None
+        return stable_governance_skill_id(relative_path).casefold()
+
+    @staticmethod
+    def _select_unambiguous_skill_record(
+        records: list[SkillRecord],
+        identifier: str,
+    ) -> SkillRecord | None:
+        if not records:
+            return None
+        unique_records: dict[str, SkillRecord] = {record.id: record for record in records}
+        if len(unique_records) == 1:
+            return next(iter(unique_records.values()))
+        raise SkillLookupError(
+            f"Skill identifier '{identifier}' is ambiguous. Use the full slash-qualified skill id."
+        )
 
     def _infer_source_kind(self, record: SkillRecord) -> skill_models.SkillSourceKind:
         compiler_module = import_module("app.compat.skills.compiler")

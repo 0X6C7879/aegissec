@@ -46,9 +46,12 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/bootstrap_ubuntu.sh [install|verify|start|stop|status|all]
 
+This script is intended for a fresh Ubuntu 24 host and bootstraps the full local
+development stack from system packages to background services.
+
 Commands:
   install  Install Ubuntu system dependencies, project dependencies, and build the Kali image
-  verify   Run backend/frontend checks and verify the Kali image is available
+  verify   Run the canonical project checks and verify the Kali image is available
   start    Start the API and web dev servers in the background and wait for health checks
   stop     Stop background API and web dev servers started by this script
   status   Show process status, URLs, and log file locations
@@ -73,6 +76,16 @@ ensure_repo_root() {
   [[ -f "$REPO_ROOT/README.md" ]] || die "README.md not found; please run this script from the project repository"
   [[ -d "$REPO_ROOT/apps/api" ]] || die "apps/api not found; repository layout is incomplete"
   [[ -d "$REPO_ROOT/apps/web" ]] || die "apps/web not found; repository layout is incomplete"
+}
+
+ensure_supported_ubuntu() {
+  [[ -f /etc/os-release ]] || die "Cannot determine operating system; /etc/os-release is missing"
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+
+  [[ "${ID:-}" == "ubuntu" ]] || die "This bootstrap script only supports Ubuntu hosts"
+  [[ "${VERSION_ID:-}" == 24* ]] || die "This bootstrap script targets Ubuntu 24.x; detected ${VERSION_ID:-unknown}"
 }
 
 ensure_non_root() {
@@ -110,23 +123,29 @@ apt_install_base_packages() {
   log "Installing base Ubuntu packages"
   sudo apt-get update
   sudo apt-get install -y \
+    apt-transport-https \
     bash \
     build-essential \
     ca-certificates \
     curl \
     git \
+    gnupg \
+    lsb-release \
+    pipx \
     procps \
     python3 \
+    python-is-python3 \
     python3-pip \
     python3-venv \
+    software-properties-common \
     wget
 }
 
 ensure_uv() {
   ensure_user_local_bin_on_path
   if ! command -v uv >/dev/null 2>&1; then
-    log "Installing uv"
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    log "Installing uv via pipx"
+    pipx install uv
     ensure_user_local_bin_on_path
   fi
 
@@ -145,11 +164,21 @@ node_major_version() {
 
 ensure_nodejs() {
   local node_major
+  local node_repo_file="/etc/apt/sources.list.d/nodesource.list"
+  local node_keyring="/etc/apt/keyrings/nodesource.gpg"
+  local architecture
   node_major="$(node_major_version)"
 
   if [[ "$node_major" -lt 20 ]]; then
-    log "Installing Node.js 20.x"
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    architecture="$(dpkg --print-architecture)"
+    log "Installing Node.js 20.x from the official NodeSource apt repository"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor --yes -o "$node_keyring"
+    sudo chmod a+r "$node_keyring"
+    printf 'deb [arch=%s signed-by=%s] https://deb.nodesource.com/node_20.x nodistro main\n' \
+      "$architecture" \
+      "$node_keyring" | sudo tee "$node_repo_file" >/dev/null
+    sudo apt-get update
     sudo apt-get install -y nodejs
   else
     log "Node.js $(node --version) already satisfies the requirement"
@@ -163,16 +192,51 @@ ensure_pnpm() {
 }
 
 ensure_docker() {
+  local docker_repo_file="/etc/apt/sources.list.d/docker.list"
+  local docker_keyring="/etc/apt/keyrings/docker.asc"
+  local architecture
+  local ubuntu_codename
+
   if ! command -v docker >/dev/null 2>&1; then
-    log "Installing Docker using the requested installer"
-    bash <(wget -qO- https://xuanyuan.cloud/docker.sh)
+    architecture="$(dpkg --print-architecture)"
+    ubuntu_codename="$({
+      # shellcheck disable=SC1091
+      . /etc/os-release
+      printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+    })"
+    [[ -n "$ubuntu_codename" ]] || die "Could not determine Ubuntu codename for Docker apt repository"
+
+    log "Installing Docker from the official Docker apt repository"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$docker_keyring"
+    sudo chmod a+r "$docker_keyring"
+    printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/ubuntu %s stable\n' \
+      "$architecture" \
+      "$docker_keyring" \
+      "$ubuntu_codename" | sudo tee "$docker_repo_file" >/dev/null
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   else
     log "Docker already installed: $(docker --version)"
   fi
 
-  sudo systemctl enable docker >/dev/null 2>&1 || true
-  sudo systemctl restart docker
+  if sudo systemctl list-unit-files docker.service >/dev/null 2>&1; then
+    sudo systemctl enable docker >/dev/null 2>&1 || true
+    if ! sudo systemctl restart docker; then
+      if sudo docker info >/dev/null 2>&1; then
+        log "Docker daemon is reachable even though docker.service restart failed; continuing"
+      else
+        die "Docker appears installed, but docker.service could not be restarted"
+      fi
+    fi
+  elif sudo docker info >/dev/null 2>&1; then
+    log "Docker daemon is reachable; skipping systemctl management because docker.service is unavailable"
+  else
+    die "Docker appears installed, but docker.service is unavailable and the daemon is not reachable"
+  fi
+
   sudo usermod -aG docker "$USER" >/dev/null 2>&1 || true
+  log "Docker group membership has been refreshed for $USER; open a new shell or run 'newgrp docker' if you want docker commands without sudo"
 }
 
 sha256_file() {
@@ -282,23 +346,13 @@ ensure_kali_image() {
 }
 
 run_verification() {
-  log "Running backend verification"
-  (
-    cd "$REPO_ROOT/apps/api"
-    uv sync --python "$UV_PYTHON_VERSION" --all-extras --dev
-    uv run ruff check .
-    uv run black --check .
-    uv run mypy app tests
-    uv run pytest
-  )
+  ensure_user_local_bin_on_path
+  ensure_env_file
 
-  log "Running frontend verification"
+  log "Running canonical project verification via scripts/check.py"
   (
-    cd "$REPO_ROOT/apps/web"
-    corepack pnpm install --frozen-lockfile
-    corepack pnpm lint
-    corepack pnpm exec tsc -b
-    corepack pnpm build
+    cd "$REPO_ROOT"
+    python3 scripts/check.py
   )
 
   ensure_kali_image
@@ -396,21 +450,36 @@ start_stack() {
   ensure_state_dirs
   ensure_env_file
   local api_access_host
+  local api_command
+  local web_command
   local web_access_host
   api_access_host="$(access_host_for_bind_host "$API_HOST")"
   web_access_host="$(access_host_for_bind_host "$WEB_HOST")"
+
+  printf -v api_command "cd %q && export PATH=%q:\$PATH && uv sync --python %q --all-extras --dev >/dev/null && uv run uvicorn app.main:app --reload --host %q --port %q" \
+    "$REPO_ROOT/apps/api" \
+    "$HOME/.local/bin" \
+    "$UV_PYTHON_VERSION" \
+    "$API_HOST" \
+    "$API_PORT"
+
+  printf -v web_command "cd %q && export PATH=%q:\$PATH && corepack pnpm install --frozen-lockfile >/dev/null && corepack pnpm dev --host %q --port %q" \
+    "$REPO_ROOT/apps/web" \
+    "$HOME/.local/bin" \
+    "$WEB_HOST" \
+    "$WEB_PORT"
 
   start_service \
     "API server" \
     "$API_PID_FILE" \
     "$LOG_DIR/api.log" \
-    "cd '$REPO_ROOT/apps/api' && export PATH='$HOME/.local/bin':\$PATH && uv sync --python '$UV_PYTHON_VERSION' --all-extras --dev >/dev/null && uv run uvicorn app.main:app --reload --host '$API_HOST' --port '$API_PORT'"
+    "$api_command"
 
   start_service \
     "web server" \
     "$WEB_PID_FILE" \
     "$LOG_DIR/web.log" \
-    "cd '$REPO_ROOT/apps/web' && export PATH='$HOME/.local/bin':\$PATH && corepack pnpm install --frozen-lockfile >/dev/null && corepack pnpm dev --host '$WEB_HOST' --port '$WEB_PORT'"
+    "$web_command"
 
   wait_for_url "http://${api_access_host}:${API_PORT}/health" "API server" 120
   wait_for_url "http://${web_access_host}:${WEB_PORT}" "Web server" 120
@@ -457,6 +526,7 @@ main() {
   local command="${1:-all}"
 
   ensure_repo_root
+  ensure_supported_ubuntu
   ensure_non_root
   ensure_state_dirs
 

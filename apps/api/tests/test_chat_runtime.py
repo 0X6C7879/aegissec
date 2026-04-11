@@ -75,6 +75,31 @@ def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
     }
 
 
+def test_assistant_message_for_history_uses_null_content_for_tool_only_turn() -> None:
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "execute_kali_command",
+                "arguments": json.dumps({"command": "pwd"}),
+            },
+        }
+    ]
+    message: dict[str, object] = {
+        "content": "",
+        "tool_calls": tool_calls,
+    }
+
+    history_message = OpenAICompatibleChatRuntime._assistant_message_for_history(message)
+
+    assert history_message == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": tool_calls,
+    }
+
+
 def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     message: dict[str, object] = {
         "tool_calls": [
@@ -1312,6 +1337,85 @@ def test_anthropic_stream_completion_retries_on_429(monkeypatch: MonkeyPatch) ->
     assert sleeps[0] >= 0.05
 
 
+def test_openai_stream_completion_preserves_tool_call_type(monkeypatch: MonkeyPatch) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    responses = [_httpx_response(200)]
+    first_chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "execute_kali_command",
+                                "arguments": '{"command":',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    second_chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": ' "pwd"}',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    stream_lines = [
+        [
+            f"data: {json.dumps(first_chunk)}",
+            f"data: {json.dumps(second_chunk)}",
+            "data: [DONE]",
+        ]
+    ]
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses, stream_lines=stream_lines),
+    )
+
+    result = asyncio.run(
+        runtime._stream_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": True},
+            GenerationCallbacks(),
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    tool_calls = cast(list[dict[str, object]], message["tool_calls"])
+    function_payload = cast(dict[str, object], tool_calls[0]["function"])
+
+    assert message["content"] == ""
+    assert tool_calls[0]["id"] == "call-1"
+    assert tool_calls[0]["type"] == "function"
+    assert function_payload["name"] == "execute_kali_command"
+    assert json.loads(cast(str, function_payload["arguments"])) == {"command": "pwd"}
+
+
 def test_openai_runtime_streams_when_tools_are_enabled() -> None:
     settings = Settings.model_construct(
         llm_api_key="test-key",
@@ -1345,6 +1449,7 @@ def test_openai_runtime_streams_when_tools_are_enabled() -> None:
                                 "tool_calls": [
                                     {
                                         "id": "call-1",
+                                        "type": "function",
                                         "function": {
                                             "name": "execute_kali_command",
                                             "arguments": json.dumps({"command": "pwd"}),
@@ -1395,6 +1500,26 @@ def test_openai_runtime_streams_when_tools_are_enabled() -> None:
     assert result == "streamed final answer"
     assert runtime.stream_calls == 2
     assert all(payload["stream"] is True for payload in runtime.stream_payloads)
+    second_messages = cast(list[dict[str, object]], runtime.stream_payloads[1]["messages"])
+    assistant_history_message = next(
+        message
+        for message in second_messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )
+    assert assistant_history_message == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "execute_kali_command",
+                    "arguments": json.dumps({"command": "pwd"}),
+                },
+            }
+        ],
+    }
 
 
 def test_anthropic_runtime_streams_when_tools_are_enabled() -> None:

@@ -30,7 +30,7 @@ from app.compat.skills.scanner import (
     discover_claude_skill_scan_roots,
     scan_skill_files,
 )
-from app.compat.skills.service import SkillService
+from app.compat.skills.service import SkillLookupError, SkillService
 from app.compat.skills.stage_policy import build_skill_stage_policy
 from app.compat.skills.trust import SkillTrustMetadata
 from app.core.settings import Settings
@@ -530,6 +530,62 @@ Use when performing Active Directory pentest orchestration without using ADscan 
     assert "Use when performing Active Directory pentest orchestration" in content
 
 
+def test_skill_service_reads_slash_qualified_identifier_with_fallback(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    adscan_entry = skills_root / "adscan" / "SKILL.md"
+
+    _write_skill(
+        adscan_entry,
+        """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration without using ADscan itself.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="adscan",
+                entry_file=adscan_entry,
+                name="adscan",
+                description="Active Directory 枚举 skill",
+                compatibility=["opencode"],
+            )
+        )
+        session.commit()
+        payload = skill_service.read_skill_content_by_name_or_directory_name(
+            "adscan/server-side-exec"
+        )
+
+    assert payload.directory_name == "adscan"
+    assert payload.name == "adscan"
+    assert "Use when performing Active Directory pentest orchestration" in payload.content
+
+
 def test_skill_service_executes_skill_with_prepared_execution_contract(
     tmp_path: Path,
     test_settings: Settings,
@@ -594,6 +650,299 @@ Use when performing Active Directory pentest orchestration without using ADscan 
     assert (
         "Use when performing Active Directory pentest orchestration" in result["skill"]["content"]
     )
+
+
+def test_skill_service_executes_slash_qualified_identifier_with_fallback(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    adscan_entry = skills_root / "adscan" / "SKILL.md"
+
+    _write_skill(
+        adscan_entry,
+        """---
+name: adscan
+description: Active Directory 枚举 skill
+compatibility: [opencode]
+---
+# adscan
+
+Use when performing Active Directory pentest orchestration without using ADscan itself.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="adscan",
+                entry_file=adscan_entry,
+                name="adscan",
+                description="Active Directory 枚举 skill",
+                compatibility=["opencode"],
+            )
+        )
+        session.commit()
+        result = skill_service.execute_skill_by_name_or_directory_name("adscan/server-side-exec")
+
+    assert result["execution"]["status"] == "prepared"
+    assert result["execution"]["mode"] == "server_skill_executor_facade"
+    assert result["execution"]["skill_directory_name"] == "adscan"
+    assert result["execution"]["resolved_identity"]["relative_path"] == "adscan/SKILL.md"
+    assert result["skill"]["directory_name"] == "adscan"
+
+
+def test_skill_service_prefers_exact_slash_qualified_skill_over_parent_fallback(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    parent_entry = skills_root / "static-analysis" / "SKILL.md"
+    nested_entry = skills_root / "static-analysis" / "skills" / "semgrep" / "SKILL.md"
+
+    _write_skill(
+        parent_entry,
+        """---
+name: static-analysis
+description: Static analysis parent skill
+compatibility: [opencode]
+---
+# static-analysis
+
+Use for broad static analysis tasks.
+""",
+    )
+    _write_skill(
+        nested_entry,
+        """---
+name: semgrep
+description: Semgrep governed skill
+compatibility: [opencode]
+---
+# semgrep
+
+Use for exact semgrep tasks.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="static-analysis",
+                entry_file=parent_entry,
+                name="static-analysis",
+                description="Static analysis parent skill",
+            )
+        )
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="semgrep",
+                entry_file=nested_entry,
+                name="semgrep",
+                description="Semgrep governed skill",
+                skill_id="static-analysis/semgrep",
+            )
+        )
+        session.commit()
+        payload = skill_service.read_skill_content_by_name_or_directory_name(
+            "static-analysis/semgrep"
+        )
+
+    assert payload.id == "static-analysis/semgrep"
+    assert payload.directory_name == "semgrep"
+    assert "Use for exact semgrep tasks." in payload.content
+
+
+def test_skill_service_executes_exact_slash_qualified_skill_before_alias_collision(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    parent_entry = skills_root / "static-analysis" / "SKILL.md"
+    nested_entry = skills_root / "static-analysis" / "skills" / "semgrep" / "SKILL.md"
+
+    _write_skill(
+        parent_entry,
+        """---
+name: static-analysis
+description: Static analysis parent skill
+aliases:
+  - static-analysis/semgrep
+compatibility: [opencode]
+---
+# static-analysis
+
+Use for broad static analysis tasks.
+""",
+    )
+    _write_skill(
+        nested_entry,
+        """---
+name: semgrep
+description: Semgrep governed skill
+compatibility: [opencode]
+---
+# semgrep
+
+Use for exact semgrep tasks.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="static-analysis",
+                entry_file=parent_entry,
+                name="static-analysis",
+                description="Static analysis parent skill",
+            )
+        )
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="semgrep",
+                entry_file=nested_entry,
+                name="semgrep",
+                description="Semgrep governed skill",
+                skill_id="static-analysis/semgrep",
+            )
+        )
+        session.commit()
+        result = skill_service.execute_skill_by_name_or_directory_name("static-analysis/semgrep")
+
+    assert result["execution"]["status"] == "prepared"
+    assert result["execution"]["resolved_identity"]["relative_path"] == (
+        "static-analysis/skills/semgrep/SKILL.md"
+    )
+    assert result["skill"]["id"] == "static-analysis/semgrep"
+    assert result["skill"]["directory_name"] == "semgrep"
+
+
+def test_skill_service_rejects_ambiguous_bare_name_across_skill_families(
+    tmp_path: Path,
+    test_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    skills_root = tmp_path / "service-skills"
+    static_entry = skills_root / "static-analysis" / "skills" / "semgrep" / "SKILL.md"
+    dynamic_entry = skills_root / "dynamic-analysis" / "skills" / "semgrep" / "SKILL.md"
+
+    _write_skill(
+        static_entry,
+        """---
+name: semgrep
+description: Static semgrep governed skill
+compatibility: [opencode]
+---
+# semgrep
+
+Static semgrep guidance.
+""",
+    )
+    _write_skill(
+        dynamic_entry,
+        """---
+name: semgrep
+description: Dynamic semgrep governed skill
+compatibility: [opencode]
+---
+# semgrep
+
+Dynamic semgrep guidance.
+""",
+    )
+
+    monkeypatch.setattr(
+        "app.compat.skills.service.resolve_skill_scan_roots",
+        lambda _settings: [
+            SkillScanRoot(
+                source=CompatibilitySource.LOCAL,
+                scope=CompatibilityScope.PROJECT,
+                root_dir=str(skills_root),
+            ),
+        ],
+    )
+
+    with _create_service_session(test_settings, tmp_path / "service.db") as (
+        session,
+        skill_service,
+    ):
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="semgrep",
+                entry_file=static_entry,
+                name="semgrep",
+                description="Static semgrep governed skill",
+                skill_id="static-analysis/semgrep",
+            )
+        )
+        session.add(
+            _build_skill_record(
+                root_dir=skills_root,
+                directory_name="semgrep",
+                entry_file=dynamic_entry,
+                name="semgrep",
+                description="Dynamic semgrep governed skill",
+                skill_id="dynamic-analysis/semgrep",
+            )
+        )
+        session.commit()
+        try:
+            skill_service.read_skill_content_by_name_or_directory_name("semgrep")
+        except SkillLookupError as exc:
+            assert "ambiguous" in str(exc)
+        else:
+            raise AssertionError("Expected ambiguous bare skill name to raise SkillLookupError.")
 
 
 def test_compiler_registers_alias_ready_reference_only_skill(tmp_path: Path) -> None:
@@ -2251,6 +2600,48 @@ description: Demo skill
     assert hidden_detail_response.status_code == 404
 
 
+def test_skill_endpoints_support_slash_qualified_skill_ids(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    records = _seed_skills(
+        client,
+        monkeypatch,
+        tmp_path,
+        {
+            "static-analysis/skills/semgrep": """---
+name: semgrep
+description: Semgrep governed skill
+user-invocable: true
+compatibility: [opencode]
+---
+# semgrep
+
+Use for semgrep governed tasks.
+""",
+        },
+    )
+    governed_record = next(record for record in records if record["directory_name"] == "semgrep")
+
+    detail_response = client.get("/api/skills/static-analysis/semgrep")
+    assert detail_response.status_code == 200
+    detail_payload = api_data(detail_response)
+    assert detail_payload["id"] == governed_record["id"]
+    assert detail_payload["directory_name"] == "semgrep"
+
+    content_response = client.get("/api/skills/static-analysis/semgrep/content")
+    assert content_response.status_code == 200
+    content_payload = api_data(content_response)
+    assert content_payload["id"] == governed_record["id"]
+    assert content_payload["directory_name"] == "semgrep"
+    assert "Use for semgrep governed tasks." in content_payload["content"]
+
+    disable_response = client.post("/api/skills/static-analysis/semgrep/disable")
+    assert disable_response.status_code == 200
+    assert api_data(disable_response)["enabled"] is False
+
+
 def _list_agent_loaded_skill_directory_names(client: TestClient) -> list[str]:
     del client
     database_engine = app.state.database_engine
@@ -2309,6 +2700,7 @@ def _create_service_session(
 
 def _build_skill_record(
     *,
+    skill_id: str | None = None,
     root_dir: Path,
     directory_name: str,
     entry_file: Path,
@@ -2321,7 +2713,7 @@ def _build_skill_record(
     error_message: str | None = None,
 ) -> SkillRecord:
     return SkillRecord(
-        id=f"{directory_name}-id",
+        id=skill_id or f"{directory_name}-id",
         source=source,
         scope=scope,
         root_dir=str(root_dir),
