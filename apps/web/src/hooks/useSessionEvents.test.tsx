@@ -71,6 +71,11 @@ describe("useSessionEvents", () => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+    useUiStore.setState({
+      draftsBySession: {},
+      eventsBySession: {},
+      lastServerCursorBySession: {},
+    });
   });
 
   afterEach(() => {
@@ -183,6 +188,97 @@ describe("useSessionEvents", () => {
       },
     ]);
     expect(useUiStore.getState().lastServerCursorBySession[session.id]).toBe(14);
+
+    unmount();
+  });
+
+  it("updates context-window cache and does not duplicate compaction markers on replay", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const session = createSessionSummary();
+
+    queryClient.setQueryData(["conversation", session.id], {
+      session,
+      active_branch: null,
+      branches: [],
+      messages: [],
+      generations: [],
+    } satisfies SessionConversation);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const firstSocket = MockWebSocket.instances[0]!;
+    act(() => {
+      firstSocket.emitOpen();
+      firstSocket.emitMessage({
+        type: "session.compaction.completed",
+        cursor: 31,
+        created_at: "2026-04-11T18:21:02.000Z",
+        data: {
+          mode: "manual",
+          summary: "已压缩对话",
+        },
+      });
+      firstSocket.emitMessage({
+        type: "session.context_window.updated",
+        cursor: 32,
+        created_at: "2026-04-11T18:21:03.000Z",
+        data: {
+          session_id: session.id,
+          model: "gpt-5.4",
+          context_window_tokens: 400000,
+          used_tokens: 21408,
+          reserved_response_tokens: 8192,
+          usage_ratio: 0.0535,
+          auto_compact_threshold_ratio: 0.8,
+          last_compacted_at: "2026-04-11T18:21:02.000Z",
+          last_compact_boundary: "compact-boundary:8",
+          can_manual_compact: true,
+          blocking_reason: null,
+          breakdown: [],
+        },
+      });
+    });
+
+    expect(useUiStore.getState().eventsBySession[session.id]).toMatchObject([
+      {
+        cursor: 31,
+        summary: "已压缩对话",
+      },
+    ]);
+    expect(queryClient.getQueryData(["session-context-window", session.id])).toMatchObject({
+      used_tokens: 21408,
+      last_compact_boundary: "compact-boundary:8",
+    });
+
+    act(() => {
+      firstSocket.emitClose();
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = MockWebSocket.instances[1]!;
+    expect(secondSocket.url).toBe("ws://127.0.0.1:8000/api/sessions/session-1/events?cursor=32");
+
+    act(() => {
+      secondSocket.emitOpen();
+      secondSocket.emitMessage({
+        type: "session.compaction.completed",
+        cursor: 31,
+        created_at: "2026-04-11T18:21:04.000Z",
+        data: {
+          mode: "manual",
+          summary: "重复回放不应出现",
+        },
+      });
+    });
+
+    expect(useUiStore.getState().eventsBySession[session.id]).toHaveLength(1);
+    expect(useUiStore.getState().eventsBySession[session.id]?.[0]?.summary).toBe("已压缩对话");
 
     unmount();
   });

@@ -334,7 +334,9 @@ async def publish_assistant_trace(
     trace_state = str(sanitized_entry.get("state") or "")
     visible_trace_summary = infer_trace_summary(sanitized_entry)
     should_append_trace_segment = (
-        trace_state.startswith("generation.") or trace_state.startswith("skill.autoroute.")
+        trace_state.startswith("generation.")
+        or trace_state.startswith("skill.autoroute.")
+        or trace_state == "context.compacted"
     ) and bool(visible_trace_summary)
     if should_append_trace_segment:
         from app.db.models import AssistantTranscriptSegmentKind

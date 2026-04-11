@@ -14,6 +14,7 @@ import {
 } from "../lib/sessionUtils";
 import { useUiStore } from "../store/uiStore";
 import type {
+  SessionContextWindowUsage,
   SessionConversation,
   SessionDetail,
   SessionEventEnvelope,
@@ -153,6 +154,13 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
               summary: buildEventSummary(envelope.type, envelope.data),
               payload: envelope.data,
             });
+          }
+
+          if (envelope.type === "session.context_window.updated" && isRecord(envelope.data)) {
+            queryClient.setQueryData<SessionContextWindowUsage | undefined>(
+              ["session-context-window", targetSessionId],
+              envelope.data as SessionContextWindowUsage,
+            );
           }
 
           if (envelope.type.startsWith("session.")) {

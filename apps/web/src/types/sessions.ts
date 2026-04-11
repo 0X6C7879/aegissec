@@ -233,6 +233,49 @@ export type SessionQueue = {
   queued_generation_count?: number;
 };
 
+export type ContextWindowBreakdownItem = {
+  key:
+    | "system"
+    | "tool_definitions"
+    | "messages"
+    | "tool_results"
+    | "retrieval"
+    | "memory"
+    | "compact_summary"
+    | "workspace_state"
+    | (string & {});
+  label: string;
+  estimated_tokens: number;
+  share_ratio: number;
+};
+
+export type SessionContextWindowUsage = {
+  session_id: string;
+  model: string | null;
+  context_window_tokens: number;
+  used_tokens: number;
+  reserved_response_tokens: number;
+  usage_ratio: number;
+  auto_compact_threshold_ratio: number | null;
+  last_compacted_at: string | null;
+  last_compact_boundary: string | null;
+  can_manual_compact: boolean;
+  blocking_reason: string | null;
+  breakdown: ContextWindowBreakdownItem[];
+};
+
+export type SessionCompactionResult = {
+  session_id: string;
+  mode: "manual" | "automatic";
+  compacted: boolean;
+  compact_boundary: string | null;
+  before_tokens: number;
+  after_tokens: number;
+  reclaimed_tokens: number;
+  summary: string;
+  created_at: string;
+};
+
 export type SessionReplay = {
   session: SessionSummary;
   branches: ConversationBranch[];

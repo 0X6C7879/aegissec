@@ -8,6 +8,7 @@ from collections.abc import Coroutine
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -20,6 +21,7 @@ from starlette.testclient import WebSocketDenialResponse
 from app.compat.mcp.service import get_mcp_service
 from app.compat.skills.models import SkillScanRoot
 from app.compat.skills.service import SkillContentReadError, SkillService
+from app.core.events import get_event_broker
 from app.db.models import (
     CompatibilityScope,
     CompatibilitySource,
@@ -35,6 +37,7 @@ from app.db.models import (
 from app.db.repositories import SessionRepository
 from app.db.session import get_websocket_db_session
 from app.harness import session_runner as harness_session_runner
+from app.harness.session_runner import _publish_auto_compaction_events_if_needed
 from app.harness.transcript import (
     hidden_stream_tag_names,
     project_visible_stream_content,
@@ -902,6 +905,207 @@ def test_websocket_supports_replay_cursor(client: TestClient) -> None:
     assert int(replay_event["cursor"]) > max_cursor
 
 
+def test_session_context_window_and_manual_compaction_emit_persisted_events(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Context Window Session"})
+    session_id = api_data(session_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.get_session(session_id)
+        assert session is not None
+        active_branch = repository.ensure_active_branch(session)
+        sequence = 1
+        turn_index = 1
+        for index in range(12):
+            user_message = repository.create_message(
+                session=session,
+                role=MessageRole.USER,
+                content=f"user turn {index} " + ("A" * 320),
+                attachments=[],
+                branch_id=active_branch.id,
+                sequence=sequence,
+                turn_index=turn_index,
+            )
+            sequence += 1
+            repository.create_message(
+                session=session,
+                role=MessageRole.ASSISTANT,
+                content=f"assistant turn {index} " + ("B" * 320),
+                attachments=[],
+                parent_message_id=user_message.id,
+                branch_id=active_branch.id,
+                status=MessageStatus.COMPLETED,
+                sequence=sequence,
+                turn_index=turn_index,
+            )
+            sequence += 1
+            turn_index += 1
+        existing_events = repository.list_session_events(session_id, limit=2_000)
+        max_cursor = max(
+            (event.cursor for event in existing_events if isinstance(event.cursor, int)),
+            default=0,
+        )
+
+    context_window_response = client.get(f"/api/sessions/{session_id}/context-window")
+    assert context_window_response.status_code == 200
+    context_window_payload = api_data(context_window_response)
+    assert context_window_payload["session_id"] == session_id
+    assert context_window_payload["can_manual_compact"] is True
+    assert context_window_payload["used_tokens"] > 0
+    assert context_window_payload["last_compacted_at"] is None
+
+    with client.websocket_connect(
+        f"/api/sessions/{session_id}/events?cursor={max_cursor}"
+    ) as websocket:
+        compact_response = client.post(
+            f"/api/sessions/{session_id}/compact",
+            json={"mode": "manual"},
+        )
+        assert compact_response.status_code == 200
+        compact_payload = api_data(compact_response)
+        assert compact_payload["session_id"] == session_id
+        assert compact_payload["mode"] == "manual"
+        assert compact_payload["compacted"] is True
+        assert compact_payload["summary"] == "已压缩对话"
+        assert compact_payload["reclaimed_tokens"] > 0
+        assert str(compact_payload["compact_boundary"]).startswith("compact-boundary:")
+
+        events: list[dict[str, object]] = []
+        seen_types: set[str] = set()
+        while "session.context_window.updated" not in seen_types:
+            event = websocket.receive_json()
+            events.append(event)
+            seen_types.add(str(event["type"]))
+
+    event_types = [str(event["type"]) for event in events]
+    assert "session.compaction.completed" in event_types
+    assert "session.context_window.updated" in event_types
+    typed_event_cursors = cast(
+        list[int],
+        [event["cursor"] for event in events if isinstance(event.get("cursor"), int)],
+    )
+    assert all(cursor > max_cursor for cursor in typed_event_cursors)
+
+    updated_context_window = api_data(client.get(f"/api/sessions/{session_id}/context-window"))
+    assert updated_context_window["last_compact_boundary"] == compact_payload["compact_boundary"]
+    assert updated_context_window["last_compacted_at"] == compact_payload["created_at"]
+
+
+def test_publish_auto_compaction_events_persists_trace_and_context_window(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Auto Compact Session"})
+    session_id = api_data(session_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.get_session(session_id)
+        assert session is not None
+        active_branch = repository.ensure_active_branch(session)
+        user_message = repository.create_message(
+            session=session,
+            role=MessageRole.USER,
+            content="请继续分析",
+            attachments=[],
+            branch_id=active_branch.id,
+            sequence=1,
+            turn_index=1,
+        )
+        assistant_message = repository.create_message(
+            session=session,
+            role=MessageRole.ASSISTANT,
+            content="已有阶段性结论。",
+            attachments=[],
+            parent_message_id=user_message.id,
+            branch_id=active_branch.id,
+            status=MessageStatus.COMPLETED,
+            sequence=2,
+            turn_index=1,
+        )
+
+        event_broker_factory = app.dependency_overrides[get_event_broker]
+        assert event_broker_factory is not None
+        event_broker = event_broker_factory()
+
+        published = asyncio.run(
+            _publish_auto_compaction_events_if_needed(
+                repository=repository,
+                event_broker=event_broker,
+                session=session,
+                assistant_message=assistant_message,
+                prompt_assembly=SimpleNamespace(
+                    prompt_budget=SimpleNamespace(
+                        component_tokens={
+                            "core_immutable": 10,
+                            "safety_scope": 10,
+                            "role_prompt": 0,
+                            "capability_schema": 4,
+                            "capability_prompt": 18,
+                            "task_local": 12,
+                            "history": 16,
+                        }
+                    ),
+                    memory_context=SimpleNamespace(
+                        retrieval_fragment="retrieval fragment",
+                        memory_fragment="memory fragment",
+                    ),
+                ),
+                session_state=SimpleNamespace(
+                    compaction=SimpleNamespace(mode="full", last_compacted_turn=9)
+                ),
+                initial_compaction_turn=0,
+            )
+        )
+
+        assert published is True
+
+        events = [
+            {
+                "type": event.event_type,
+                "payload": dict(event.payload_json),
+                "cursor": event.cursor,
+            }
+            for event in repository.list_session_events(session_id, limit=2_000)
+        ]
+
+    trace_event = next(
+        event
+        for event in events
+        if event["type"] == "assistant.trace"
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("state") == "context.compacted"
+    )
+    trace_payload = cast(dict[str, object], trace_event["payload"])
+    assert trace_payload["summary"] == "已压缩对话"
+
+    compaction_event = next(
+        event for event in events if event["type"] == "session.compaction.completed"
+    )
+    compaction_payload = cast(dict[str, object], compaction_event["payload"])
+    assert compaction_payload["mode"] == "automatic"
+    assert compaction_payload["summary"] == "已压缩对话"
+
+    context_window_event = next(
+        event for event in events if event["type"] == "session.context_window.updated"
+    )
+    context_window_payload = cast(dict[str, object], context_window_event["payload"])
+    assert context_window_payload["last_compact_boundary"] == trace_payload["compact_boundary"]
+    assert context_window_payload["can_manual_compact"] is False
+
+    conversation_payload = api_data(client.get(f"/api/sessions/{session_id}/conversation"))
+    latest_assistant = next(
+        message
+        for message in reversed(conversation_payload["messages"])
+        if message["role"] == "assistant"
+    )
+    assert any(
+        segment["kind"] == "status" and segment["text"] == "已压缩对话"
+        for segment in latest_assistant["assistant_transcript"]
+    )
+
+
 def test_websocket_rejects_invalid_session_before_accept(client: TestClient) -> None:
     with pytest.raises(WebSocketDenialResponse) as exc_info:
         with client.websocket_connect("/api/sessions/nonexistent-session/events"):
@@ -910,6 +1114,85 @@ def test_websocket_rejects_invalid_session_before_accept(client: TestClient) -> 
     response = exc_info.value
     assert response.status_code == 404
     assert "Session not found" in response.text
+
+
+def test_session_compact_rejects_active_generation_and_publishes_failed_event(
+    client: TestClient,
+) -> None:
+    class BlockingChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+            await callbacks.on_text_delta("running")
+            await asyncio.sleep(0.5)
+            return f"done: {content}"
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: BlockingChatRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Compact Reject Session"})
+        session_id = api_data(session_response)["id"]
+
+        with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+            chat_response_box, worker = _post_chat_in_thread(
+                client,
+                session_id,
+                {"content": "hold", "attachments": [], "wait_for_completion": True},
+            )
+
+            while True:
+                event = websocket.receive_json()
+                if event["type"] == "generation.started":
+                    break
+
+            compact_response = client.post(
+                f"/api/sessions/{session_id}/compact",
+                json={"mode": "manual"},
+            )
+            assert compact_response.status_code == 409
+            assert compact_response.json()["detail"] == {
+                "mode": "manual",
+                "summary": "上下文压缩失败",
+                "error": "active generation is running",
+            }
+
+            while True:
+                event = websocket.receive_json()
+                if event["type"] == "session.compaction.failed":
+                    failed_event = event
+                    break
+
+            cancel_response = client.post(f"/api/sessions/{session_id}/cancel")
+            assert cancel_response.status_code == 200
+
+        worker.join(timeout=5)
+        assert chat_response_box["value"] is not None
+        assert chat_response_box["value"].status_code == 409
+        assert failed_event["payload"] == {
+            "mode": "manual",
+            "summary": "上下文压缩失败",
+            "error": "active generation is running",
+        }
+        assert isinstance(failed_event.get("cursor"), int)
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
 
 
 def test_cancel_session_interrupts_active_generation(client: TestClient) -> None:

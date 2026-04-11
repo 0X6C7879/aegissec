@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 from uuid import uuid4
 
 from sqlalchemy import JSON, Column
@@ -760,6 +761,44 @@ class SessionReplayRead(SQLModel):
     branches: list[ConversationBranchRead] = Field(default_factory=list)
     messages: list[MessageRead] = Field(default_factory=list)
     generations: list[ChatGenerationRead] = Field(default_factory=list)
+
+
+class SessionContextWindowBreakdownRead(SQLModel):
+    key: str
+    label: str
+    estimated_tokens: int
+    share_ratio: float
+
+
+class SessionContextWindowRead(SQLModel):
+    session_id: str
+    model: str
+    context_window_tokens: int
+    used_tokens: int
+    reserved_response_tokens: int
+    usage_ratio: float
+    auto_compact_threshold_ratio: float
+    last_compacted_at: datetime | None = None
+    last_compact_boundary: str | None = None
+    can_manual_compact: bool
+    blocking_reason: str | None = None
+    breakdown: list[SessionContextWindowBreakdownRead] = Field(default_factory=list)
+
+
+class SessionCompactRequest(SQLModel):
+    mode: Literal["manual"] = Field(default="manual")
+
+
+class SessionCompactResponse(SQLModel):
+    session_id: str
+    mode: str
+    compacted: bool
+    compact_boundary: str | None = None
+    before_tokens: int
+    after_tokens: int
+    reclaimed_tokens: int
+    summary: str
+    created_at: datetime
 
 
 class MessageRegenerateRequest(SQLModel):

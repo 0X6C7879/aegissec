@@ -163,6 +163,16 @@ describe("sessionUtils realtime summaries", () => {
         command: "nmap 127.0.0.1",
       }),
     ).toBe(true);
+    expect(
+      shouldStoreRealtimeEvent("session.compaction.completed", {
+        summary: "已压缩对话",
+      }),
+    ).toBe(true);
+    expect(
+      shouldStoreRealtimeEvent("session.context_window.updated", {
+        used_tokens: 1200,
+      }),
+    ).toBe(false);
   });
 
   it("maps observable assistant traces to safe visible summaries", () => {
@@ -175,6 +185,38 @@ describe("sessionUtils realtime summaries", () => {
       label: "思路进展 · tool started",
       summary: "开始调用工具：nmap 127.0.0.1",
       tone: "connected",
+    });
+  });
+
+  it("maps compaction traces and session events to safe visible summaries", () => {
+    expect(
+      extractSafeSessionSummary("session.compaction.completed", {
+        summary: "已压缩对话",
+      }),
+    ).toEqual({
+      label: "上下文压缩",
+      summary: "已压缩对话",
+      tone: "success",
+    });
+
+    expect(
+      extractSafeSessionSummary("session.compaction.failed", {
+        error: "active generation is running",
+      }),
+    ).toEqual({
+      label: "上下文压缩",
+      summary: "上下文压缩失败：active generation is running",
+      tone: "error",
+    });
+
+    expect(
+      extractSafeSessionSummary("assistant.trace", {
+        state: "context.compacted",
+      }),
+    ).toEqual({
+      label: "上下文压缩",
+      summary: "已压缩对话",
+      tone: "success",
     });
   });
 

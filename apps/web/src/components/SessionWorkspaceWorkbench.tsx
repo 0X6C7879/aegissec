@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  compactSessionContext,
   isApiError,
   forkSessionMessage,
   getAttackGraph,
@@ -12,6 +13,7 @@ import {
   editSessionMessage,
   getRuntimeStatus,
   getSessionConversation,
+  getSessionContextWindowUsage,
   getSessionQueue,
   getSessionSlashCatalog,
   injectActiveGenerationContext,
@@ -374,6 +376,13 @@ export function SessionWorkspaceWorkbench() {
     },
   });
 
+  const contextWindowUsageQuery = useQuery({
+    enabled: Boolean(activeSessionId),
+    queryKey: ["session-context-window", activeSessionId],
+    queryFn: ({ signal }) => getSessionContextWindowUsage(activeSessionId!, signal),
+    placeholderData: (previousValue) => previousValue,
+  });
+
   const sessionAttackGraphQuery = useQuery({
     enabled: Boolean(activeSessionId),
     queryKey: ["session", activeSessionId, "graph", "attack"],
@@ -508,6 +517,17 @@ export function SessionWorkspaceWorkbench() {
         summary: "停止当前回复失败。",
         payload: { status: "error", error: error instanceof Error ? error.message : "未知错误" },
       });
+    },
+  });
+
+  const compactSessionContextMutation = useMutation({
+    mutationFn: ({ id }: { id: string }) => compactSessionContext(id),
+    onSuccess: async (_result, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["session-context-window", variables.id] }),
+        queryClient.invalidateQueries({ queryKey: ["conversation", variables.id] }),
+        queryClient.invalidateQueries({ queryKey: ["session-queue", variables.id] }),
+      ]);
     },
   });
 
@@ -942,6 +962,7 @@ export function SessionWorkspaceWorkbench() {
       eventType === "generation.failed" ||
       eventType === "assistant.summary" ||
       eventType === "assistant.trace" ||
+      eventType === "session.compaction.completed" ||
       eventType.startsWith("tool.call.") ||
       eventType === "session.updated";
 
@@ -1297,6 +1318,9 @@ export function SessionWorkspaceWorkbench() {
                       cancelGenerationMutation.isPending || cancelSessionMutation.isPending
                     }
                     queuedCount={queuedGenerationCount}
+                    contextUsage={contextWindowUsageQuery.data ?? null}
+                    contextUsageLoading={contextWindowUsageQuery.isLoading}
+                    contextCompacting={compactSessionContextMutation.isPending}
                     onQueueSend={async ({ content, slashAction }) => {
                       await sendChatMutation.mutateAsync({
                         id: activeSession.id,
@@ -1308,9 +1332,12 @@ export function SessionWorkspaceWorkbench() {
                       await injectActiveGenerationMutation.mutateAsync({
                         id: activeSession.id,
                         content,
-                      });
+                        });
                     }}
                     onLocalSlashAction={handleLocalSlashAction}
+                    onManualCompact={async () => {
+                      await compactSessionContextMutation.mutateAsync({ id: activeSession.id });
+                    }}
                     onInterrupt={async () => {
                       if (activeGeneration) {
                         await cancelGenerationMutation.mutateAsync({

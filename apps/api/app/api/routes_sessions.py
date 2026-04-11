@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from fastapi import (
@@ -25,9 +28,16 @@ from app.db.models import (
     ChatGenerationRead,
     GenerationStatus,
     GenerationStepRead,
+    Message,
     MessageStatus,
+    MessageKind,
+    MessageRole,
     Session,
+    SessionCompactRequest,
+    SessionCompactResponse,
     SessionConversationRead,
+    SessionContextWindowBreakdownRead,
+    SessionContextWindowRead,
     SessionCreate,
     SessionDetail,
     SessionQueueRead,
@@ -51,13 +61,18 @@ from app.db.repositories import (
     SessionRepository,
 )
 from app.db.session import get_db_session, get_websocket_db_session
+from app.harness.compact.service import HarnessCompactService
 from app.harness.continuations import (
     ContinuationResolutionError,
     clear_generation_continuation_state,
     normalize_continuation_resolution_input,
     resolve_session_continuation,
 )
+from app.harness.memory.service import HarnessMemoryService
+from app.harness.prompts import HarnessPromptAssembler
+from app.harness.state import HarnessRetrievalManifest, HarnessSessionState
 from app.harness.session_runner import start_worker_if_needed as start_session_worker_if_needed
+from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import ChatRuntime, get_chat_runtime
 from app.services.runtime import RuntimeService, get_runtime_service
 from app.services.session_generation import (
@@ -65,8 +80,12 @@ from app.services.session_generation import (
     SessionGenerationManager,
     get_generation_manager,
 )
+from app.agent.token_budget import estimate_token_count
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+DEFAULT_CONTEXT_WINDOW_TOKENS = 400_000
+DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.8
 
 
 class ContinuationResolveRequest(SQLModel):
@@ -169,6 +188,333 @@ def _build_generation_reads(
         generation_read.queue_position = queue_positions.get(generation.id)
         reads.append(generation_read)
     return reads
+
+
+def _resolve_session_model_name(settings: Settings) -> str:
+    if settings.llm_provider == "anthropic":
+        configured = settings.anthropic_model
+    else:
+        configured = settings.llm_default_model
+    normalized = (configured or "").strip()
+    return normalized or "unknown"
+
+
+def _resolve_context_window_tokens(model_name: str) -> int:
+    normalized = model_name.lower()
+    if normalized.startswith("gpt-5.4"):
+        return 400_000
+    if normalized.startswith("claude"):
+        return 200_000
+    return DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def _latest_compaction_payload(
+    repository: SessionRepository, session_id: str
+) -> dict[str, object] | None:
+    for event in reversed(repository.list_session_events(session_id, limit=2_000)):
+        if event.event_type == SessionEventType.SESSION_CONTEXT_WINDOW_UPDATED.value:
+            payload = dict(event.payload_json)
+            if payload.get("session_id") == session_id:
+                return payload
+    return None
+
+
+def _parse_optional_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _coerce_int(value: object, fallback: int) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _coerce_float(value: object, fallback: float) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _normalize_breakdown_items(value: object) -> list[SessionContextWindowBreakdownRead]:
+    if not isinstance(value, list):
+        return []
+    items: list[SessionContextWindowBreakdownRead] = []
+    for item in value:
+        if isinstance(item, SessionContextWindowBreakdownRead):
+            items.append(item)
+        elif isinstance(item, dict):
+            items.append(SessionContextWindowBreakdownRead.model_validate(item))
+    return items
+
+
+def _resolve_context_window_prompt_anchors(
+    repository: SessionRepository,
+    session: Session,
+) -> tuple[Message | None, Message | None]:
+    messages = [
+        message
+        for message in repository.list_messages(
+            session.id,
+            branch_id=session.active_branch_id,
+            include_superseded=False,
+        )
+        if message.message_kind == MessageKind.MESSAGE
+        and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+    ]
+    if not messages:
+        return None, None
+    latest_message = messages[-1]
+    latest_assistant = next(
+        (message for message in reversed(messages) if message.role == MessageRole.ASSISTANT),
+        latest_message,
+    )
+    latest_user = latest_message if latest_message.role == MessageRole.USER else None
+    return latest_user, latest_assistant
+
+
+def _build_live_context_window_metrics(
+    repository: SessionRepository,
+    session: Session,
+    *,
+    settings: Settings,
+    skill_service: SkillService,
+    mcp_service: MCPService,
+) -> tuple[int, list[SessionContextWindowBreakdownRead]]:
+    model_name = _resolve_session_model_name(settings)
+    context_window_tokens = _resolve_context_window_tokens(model_name)
+    input_budget = max(context_window_tokens - settings.llm_max_output_tokens, 1)
+    latest_user_message, latest_assistant_message = _resolve_context_window_prompt_anchors(
+        repository, session
+    )
+    if latest_assistant_message is None:
+        return 0, []
+
+    prompt_assembler = HarnessPromptAssembler(
+        capability_facade=CapabilityFacade(skill_service=skill_service, mcp_service=mcp_service),
+        skill_service=skill_service,
+        memory_service=HarnessMemoryService(
+            base_dir=(Path(settings.runtime_workspace_dir).resolve() / "memory")
+        ),
+    )
+    prompt_assembly = prompt_assembler.build(
+        session=session,
+        repository=repository,
+        user_message=latest_user_message,
+        assistant_message=latest_assistant_message,
+        branch_id=session.active_branch_id,
+        total_token_budget=input_budget,
+    )
+    prompt_budget = prompt_assembly.prompt_budget.component_tokens
+    breakdown_candidates = [
+        (
+            "system",
+            "System",
+            prompt_budget.get("core_immutable", 0)
+            + prompt_budget.get("safety_scope", 0)
+            + prompt_budget.get("role_prompt", 0),
+        ),
+        (
+            "tool_definitions",
+            "Capability",
+            prompt_budget.get("capability_schema", 0) + prompt_budget.get("capability_prompt", 0),
+        ),
+        (
+            "messages",
+            "Messages",
+            prompt_budget.get("task_local", 0) + prompt_budget.get("history", 0),
+        ),
+        (
+            "retrieval",
+            "Retrieval",
+            estimate_token_count(prompt_assembly.memory_context.retrieval_fragment),
+        ),
+        (
+            "memory",
+            "Memory",
+            estimate_token_count(prompt_assembly.memory_context.memory_fragment),
+        ),
+    ]
+    used_tokens = sum(max(tokens, 0) for _, _, tokens in breakdown_candidates)
+    breakdown = [
+        SessionContextWindowBreakdownRead(
+            key=key,
+            label=label,
+            estimated_tokens=max(tokens, 0),
+            share_ratio=(max(tokens, 0) / context_window_tokens) if context_window_tokens else 0.0,
+        )
+        for key, label, tokens in breakdown_candidates
+        if max(tokens, 0) > 0
+    ]
+    return used_tokens, breakdown
+
+
+def _build_context_window_snapshot(
+    repository: SessionRepository,
+    session: Session,
+    *,
+    settings: Settings,
+    skill_service: SkillService,
+    mcp_service: MCPService,
+    last_compacted_at_override: datetime | None = None,
+    last_compact_boundary_override: str | None = None,
+) -> SessionContextWindowRead:
+    model_name = _resolve_session_model_name(settings)
+    context_window_tokens = _resolve_context_window_tokens(model_name)
+    reserved_response_tokens = settings.llm_max_output_tokens
+    used_tokens, breakdown = _build_live_context_window_metrics(
+        repository,
+        session,
+        settings=settings,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+    )
+    active_generation = repository.get_active_generation(session.id)
+    snapshot = SessionContextWindowRead(
+        session_id=session.id,
+        model=model_name,
+        context_window_tokens=context_window_tokens,
+        used_tokens=used_tokens,
+        reserved_response_tokens=reserved_response_tokens,
+        usage_ratio=(used_tokens / context_window_tokens) if context_window_tokens else 0.0,
+        auto_compact_threshold_ratio=DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO,
+        last_compacted_at=last_compacted_at_override,
+        last_compact_boundary=last_compact_boundary_override,
+        can_manual_compact=active_generation is None,
+        blocking_reason=("active generation is running" if active_generation is not None else None),
+        breakdown=breakdown,
+    )
+    latest_payload = _latest_compaction_payload(repository, session.id)
+    if latest_payload is None:
+        return snapshot
+    return SessionContextWindowRead(
+        session_id=session.id,
+        model=snapshot.model,
+        context_window_tokens=snapshot.context_window_tokens,
+        used_tokens=snapshot.used_tokens,
+        reserved_response_tokens=snapshot.reserved_response_tokens,
+        usage_ratio=snapshot.usage_ratio,
+        auto_compact_threshold_ratio=snapshot.auto_compact_threshold_ratio,
+        last_compacted_at=(
+            last_compacted_at_override
+            if last_compacted_at_override is not None
+            else _parse_optional_datetime(latest_payload.get("last_compacted_at"))
+        ),
+        last_compact_boundary=(
+            last_compact_boundary_override
+            if last_compact_boundary_override is not None
+            else (
+                str(latest_payload.get("last_compact_boundary"))
+                if latest_payload.get("last_compact_boundary") is not None
+                else snapshot.last_compact_boundary
+            )
+        ),
+        can_manual_compact=snapshot.can_manual_compact,
+        blocking_reason=snapshot.blocking_reason,
+        breakdown=list(snapshot.breakdown),
+    )
+
+
+def _serialize_context_window_snapshot(snapshot: SessionContextWindowRead) -> dict[str, object]:
+    return snapshot.model_dump(mode="json")
+
+
+def _find_latest_assistant_message(
+    repository: SessionRepository, session: Session
+) -> Message | None:
+    for message in reversed(
+        repository.list_messages(
+            session.id, branch_id=session.active_branch_id, include_superseded=False
+        )
+    ):
+        if message.role == MessageRole.ASSISTANT and message.message_kind == MessageKind.MESSAGE:
+            return message
+    return None
+
+
+def _manual_compaction_result(
+    repository: SessionRepository,
+    session: Session,
+    *,
+    settings: Settings,
+) -> SessionCompactResponse:
+    messages = repository.list_messages(
+        session.id,
+        branch_id=session.active_branch_id,
+        include_superseded=False,
+    )
+    message_payloads = [
+        {
+            "role": message.role.value,
+            "content": message.content,
+            **(
+                {"attachments": [dict(attachment) for attachment in message.attachments_json]}
+                if message.attachments_json
+                else {}
+            ),
+        }
+        for message in messages
+        if message.message_kind == MessageKind.MESSAGE
+        and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+    ]
+    before_tokens = sum(
+        estimate_token_count(json.dumps(item, ensure_ascii=False)) for item in message_payloads
+    )
+    memory_service = HarnessMemoryService(
+        base_dir=(Path(settings.runtime_workspace_dir).resolve() / "memory")
+    )
+    memory_key = memory_service.memory_key_for_session(session.id, session.project_id)
+    session_state = HarnessSessionState(
+        session_id=session.id,
+        memory_key=memory_key,
+        current_phase=session.current_phase,
+        goal=session.goal,
+        scenario_type=session.scenario_type,
+        retrieval_manifest=HarnessRetrievalManifest(memory_key=memory_key),
+    )
+    compact_service = HarnessCompactService(memory_service=memory_service)
+    compacted_messages = compact_service.maybe_compact(
+        messages=message_payloads,
+        session_state=session_state,
+        render_compact_message=lambda compact_fragment: {
+            "role": "assistant",
+            "content": "已压缩对话",
+            "metadata": {"compact_fragment": compact_fragment},
+        },
+        turn_count=max(len(message_payloads), 1),
+    )
+    compacted = session_state.compaction.mode == "full"
+    after_tokens = sum(
+        estimate_token_count(json.dumps(item, ensure_ascii=False)) for item in compacted_messages
+    )
+    compact_boundary = (
+        f"compact-boundary:{session_state.compaction.last_compacted_turn}" if compacted else None
+    )
+    return SessionCompactResponse(
+        session_id=session.id,
+        mode="manual",
+        compacted=compacted,
+        compact_boundary=compact_boundary,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+        reclaimed_tokens=max(before_tokens - after_tokens, 0),
+        summary="已压缩对话" if compacted else "当前上下文暂不需要压缩",
+        created_at=datetime.now(session.updated_at.tzinfo),
+    )
 
 
 @router.get(
@@ -688,6 +1034,93 @@ async def get_session_queue(
         queued_generation_count=len(queued_generations),
     )
     return ok_response(payload.model_dump(mode="json"))
+
+
+@router.get(
+    "/{session_id}/context-window",
+    response_model=SessionContextWindowRead,
+    summary="Get session context window usage",
+)
+async def get_session_context_window(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    skill_service: SkillService = Depends(get_skill_service),
+    mcp_service: MCPService = Depends(get_mcp_service),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    snapshot = _build_context_window_snapshot(
+        repository,
+        session,
+        settings=settings,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+    )
+    return ok_response(snapshot.model_dump(mode="json"))
+
+
+@router.post(
+    "/{session_id}/compact",
+    response_model=SessionCompactResponse,
+    summary="Compact session context",
+)
+async def compact_session_context(
+    session_id: str,
+    payload: SessionCompactRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+    settings: Settings = Depends(get_settings),
+    skill_service: SkillService = Depends(get_skill_service),
+    mcp_service: MCPService = Depends(get_mcp_service),
+) -> object:
+    repository = SessionRepository(db_session)
+    session = _get_existing_session(repository, session_id)
+    active_generation = repository.get_active_generation(session.id)
+    if active_generation is not None:
+        failure_payload = {
+            "mode": payload.mode,
+            "summary": "上下文压缩失败",
+            "error": "active generation is running",
+        }
+        await event_broker.publish(
+            SessionEvent(
+                type=SessionEventType.SESSION_COMPACTION_FAILED,
+                session_id=session.id,
+                payload=failure_payload,
+            )
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=failure_payload,
+        )
+
+    result = _manual_compaction_result(repository, session, settings=settings)
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.SESSION_COMPACTION_COMPLETED,
+            session_id=session.id,
+            payload=result.model_dump(mode="json"),
+        )
+    )
+
+    updated_snapshot = _build_context_window_snapshot(
+        repository,
+        session,
+        settings=settings,
+        skill_service=skill_service,
+        mcp_service=mcp_service,
+        last_compacted_at_override=(result.created_at if result.compacted else None),
+        last_compact_boundary_override=(result.compact_boundary if result.compacted else None),
+    )
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.SESSION_CONTEXT_WINDOW_UPDATED,
+            session_id=session.id,
+            payload=_serialize_context_window_snapshot(updated_snapshot),
+        )
+    )
+    return ok_response(result.model_dump(mode="json"))
 
 
 @router.get(

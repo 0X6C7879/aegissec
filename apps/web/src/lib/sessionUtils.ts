@@ -743,6 +743,8 @@ function buildAssistantTraceSummary(data: Record<string, unknown>): SafeSessionS
     } else {
       summary = "工具调用失败。";
     }
+  } else if (!summary && state === "context.compacted") {
+    summary = "已压缩对话";
   }
 
   if (!summary) {
@@ -757,6 +759,8 @@ function buildAssistantTraceSummary(data: Record<string, unknown>): SafeSessionS
         ? "cancelled"
         : state?.endsWith(".completed") || state === "tool.finished"
           ? "completed"
+          : state === "context.compacted"
+            ? "completed"
           : state?.endsWith(".started")
             ? "running"
             : null);
@@ -764,7 +768,11 @@ function buildAssistantTraceSummary(data: Record<string, unknown>): SafeSessionS
   return {
     label:
       readFirstNonEmptyString(data, ["label", "title"]) ??
-      (state ? formatAssistantTraceStateLabel(state) : "思路进展"),
+      (state === "context.compacted"
+        ? "上下文压缩"
+        : state
+          ? formatAssistantTraceStateLabel(state)
+          : "思路进展"),
     summary: sanitizeSafeSummaryText(summary),
     tone: toReasoningTone(normalizedStatus),
   };
@@ -2355,6 +2363,27 @@ export function extractSafeSessionSummary(
     return buildSessionStatusSummary(data);
   }
 
+  if (type === "session.compaction.completed") {
+    const summaryText = readFirstNonEmptyString(data, ["summary"]);
+    return {
+      label: "上下文压缩",
+      summary: sanitizeSafeSummaryText(summaryText ?? "已压缩对话"),
+      tone: "success",
+    };
+  }
+
+  if (type === "session.compaction.failed") {
+    const summaryText = readFirstNonEmptyString(data, ["summary"]);
+    const errorMessage = readFirstNonEmptyString(data, ["error"]);
+    return {
+      label: "上下文压缩",
+      summary: sanitizeSafeSummaryText(
+        summaryText ?? (errorMessage ? `上下文压缩失败：${errorMessage}` : "上下文压缩失败"),
+      ),
+      tone: "error",
+    };
+  }
+
   if (type === "assistant.trace") {
     return buildAssistantTraceSummary(data);
   }
@@ -2397,6 +2426,10 @@ export function extractSafeSessionSummary(
 }
 
 export function shouldStoreRealtimeEvent(type: string, data: unknown): boolean {
+  if (type === "session.context_window.updated") {
+    return false;
+  }
+
   if (
     type === "message.created" ||
     type === "message.updated" ||
@@ -2411,6 +2444,10 @@ export function shouldStoreRealtimeEvent(type: string, data: unknown): boolean {
   }
 
   if (type === "session.updated") {
+    return extractSafeSessionSummary(type, data) !== null;
+  }
+
+  if (type === "session.compaction.completed" || type === "session.compaction.failed") {
     return extractSafeSessionSummary(type, data) !== null;
   }
 

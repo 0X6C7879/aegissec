@@ -9,6 +9,7 @@ import type { SessionGraph } from "../types/graphs";
 import type {
   ChatGeneration,
   SessionConversation,
+  SessionContextWindowUsage,
   SessionQueue,
   SessionSummary,
 } from "../types/sessions";
@@ -19,11 +20,13 @@ const {
   mockGetAttackGraph,
   mockCancelGeneration,
   mockCancelSession,
+  mockCompactSessionContext,
   mockCreateSession,
   mockDeleteSession,
   mockEditSessionMessage,
   mockGetRuntimeStatus,
   mockGetSessionConversation,
+  mockGetSessionContextWindowUsage,
   mockGetSessionQueue,
   mockGetSessionSlashCatalog,
   mockInjectActiveGenerationContext,
@@ -38,11 +41,13 @@ const {
   mockGetAttackGraph: vi.fn(),
   mockCancelGeneration: vi.fn(),
   mockCancelSession: vi.fn(),
+  mockCompactSessionContext: vi.fn(),
   mockCreateSession: vi.fn(),
   mockDeleteSession: vi.fn(),
   mockEditSessionMessage: vi.fn(),
   mockGetRuntimeStatus: vi.fn(),
   mockGetSessionConversation: vi.fn(),
+  mockGetSessionContextWindowUsage: vi.fn(),
   mockGetSessionQueue: vi.fn(),
   mockGetSessionSlashCatalog: vi.fn(),
   mockInjectActiveGenerationContext: vi.fn(),
@@ -63,11 +68,13 @@ vi.mock("../lib/api", async () => {
     getAttackGraph: mockGetAttackGraph,
     cancelGeneration: mockCancelGeneration,
     cancelSession: mockCancelSession,
+    compactSessionContext: mockCompactSessionContext,
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
     editSessionMessage: mockEditSessionMessage,
     getRuntimeStatus: mockGetRuntimeStatus,
     getSessionConversation: mockGetSessionConversation,
+    getSessionContextWindowUsage: mockGetSessionContextWindowUsage,
     getSessionQueue: mockGetSessionQueue,
     getSessionSlashCatalog: mockGetSessionSlashCatalog,
     injectActiveGenerationContext: mockInjectActiveGenerationContext,
@@ -98,15 +105,21 @@ vi.mock("./WorkbenchComposer", () => ({
     isPausedGeneration,
     queuedCount,
     slashCatalog,
+    contextUsage,
+    contextCompacting,
     onQueueSend,
     onInject,
+    onManualCompact,
   }: {
     isActiveGeneration: boolean;
     isPausedGeneration: boolean;
     queuedCount: number;
     slashCatalog: Array<{ trigger: string; source: string }>;
+    contextUsage: { used_tokens: number; context_window_tokens: number } | null;
+    contextCompacting: boolean;
     onQueueSend: (payload: { content: string; slashAction?: unknown | null }) => Promise<void>;
     onInject: (content: string) => Promise<void>;
+    onManualCompact?: () => Promise<void>;
   }) => (
     <div data-testid="workbench-composer">
       <span data-testid="composer-active-state">{String(isActiveGeneration)}</span>
@@ -115,11 +128,18 @@ vi.mock("./WorkbenchComposer", () => ({
       <span data-testid="composer-slash-catalog">
         {slashCatalog.map((item) => `${item.source}:${item.trigger}`).join("|")}
       </span>
+      <span data-testid="composer-context-usage">
+        {contextUsage ? `${contextUsage.used_tokens}/${contextUsage.context_window_tokens}` : "none"}
+      </span>
+      <span data-testid="composer-context-compacting">{String(contextCompacting)}</span>
       <button type="button" onClick={() => void onQueueSend({ content: "排队消息" })}>
         mock-queue-send
       </button>
       <button type="button" onClick={() => void onInject("注入消息")}>
         mock-inject-send
+      </button>
+      <button type="button" onClick={() => void onManualCompact?.()}>
+        mock-manual-compact
       </button>
     </div>
   ),
@@ -211,6 +231,23 @@ function createGraph(sessionId: string, overrides: Partial<SessionGraph> = {}): 
     nodes: [],
     edges: [],
     ...overrides,
+  };
+}
+
+function createContextWindowUsage(sessionId: string): SessionContextWindowUsage {
+  return {
+    session_id: sessionId,
+    model: "gpt-5.4",
+    context_window_tokens: 400000,
+    used_tokens: 64000,
+    reserved_response_tokens: 8192,
+    usage_ratio: 0.16,
+    auto_compact_threshold_ratio: 0.8,
+    last_compacted_at: null,
+    last_compact_boundary: null,
+    can_manual_compact: true,
+    blocking_reason: null,
+    breakdown: [],
   };
 }
 
@@ -348,9 +385,23 @@ describe("SessionWorkspaceWorkbench", () => {
     mockGetSessionConversation.mockImplementation(async (sessionId: string) =>
       createConversation(sessionId),
     );
+    mockGetSessionContextWindowUsage.mockImplementation(async (sessionId: string) =>
+      createContextWindowUsage(sessionId),
+    );
     mockGetSessionQueue.mockResolvedValue(createQueue("session-1"));
     mockGetSessionSlashCatalog.mockResolvedValue([]);
     mockGetAttackGraph.mockResolvedValue(createGraph("session-1"));
+    mockCompactSessionContext.mockResolvedValue({
+      session_id: "session-1",
+      mode: "manual",
+      compacted: true,
+      compact_boundary: "compact-boundary:1",
+      before_tokens: 64000,
+      after_tokens: 24000,
+      reclaimed_tokens: 40000,
+      summary: "已压缩对话",
+      created_at: "2026-04-11T18:21:02.000Z",
+    });
   });
 
   it("passes only backend slash catalog items to the composer", async () => {
@@ -383,6 +434,24 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.getByTestId("composer-slash-catalog").textContent).not.toContain(
       "ui:goto-runtime",
     );
+  });
+
+  it("passes context usage to the composer and wires manual compaction", async () => {
+    const user = userEvent.setup();
+
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("composer-context-usage").textContent).toBe("64000/400000");
+    });
+
+    await user.click(screen.getByRole("button", { name: "mock-manual-compact" }));
+
+    await waitFor(() => {
+      expect(mockCompactSessionContext).toHaveBeenCalledWith("session-1");
+    });
   });
 
   it("recovers when the route session is missing from the current session list", async () => {

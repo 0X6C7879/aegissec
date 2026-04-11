@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useUiStore } from "../store/uiStore";
+import type { SessionContextWindowUsage } from "../types/sessions";
 import { SlashPopover } from "./SlashPopover";
+import { ContextWindowPopover } from "./ContextWindowPopover";
 import { isUiOnlySlashAction, type SlashAction, type SlashCatalogItem } from "../types/slash";
 
 type ComposerSubmitAction = "send" | "inject" | "queue";
@@ -65,9 +67,13 @@ type WorkbenchComposerProps = {
   isPausedGeneration: boolean;
   isInterrupting: boolean;
   queuedCount: number;
+  contextUsage?: SessionContextWindowUsage | null;
+  contextUsageLoading?: boolean;
+  contextCompacting?: boolean;
   onQueueSend: (payload: WorkbenchComposerQueuePayload) => Promise<void>;
   onInject: (content: string) => Promise<void>;
   onInterrupt: () => Promise<void>;
+  onManualCompact?: () => Promise<void>;
   onLocalSlashAction?: (action: SlashAction) => Promise<boolean> | boolean;
 };
 
@@ -79,9 +85,13 @@ export function WorkbenchComposer({
   isPausedGeneration,
   isInterrupting,
   queuedCount,
+  contextUsage = null,
+  contextUsageLoading = false,
+  contextCompacting = false,
   onQueueSend,
   onInject,
   onInterrupt,
+  onManualCompact,
   onLocalSlashAction,
 }: WorkbenchComposerProps) {
   const draft = useUiStore((state) => state.draftsBySession[sessionId]);
@@ -395,6 +405,13 @@ export function WorkbenchComposer({
         </div>
 
         <div className="workbench-composer-footer">
+          <ContextWindowPopover
+            usage={contextUsage}
+            loading={contextUsageLoading}
+            compacting={contextCompacting}
+            manualCompactDisabled={disabled || isActiveGeneration || isPausedGeneration}
+            onManualCompact={onManualCompact}
+          />
           <button
             className={`workbench-primary-action${isPrimaryActionRunning ? " workbench-primary-action-running" : ""}`}
             type="submit"

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../store/uiStore";
+import type { SessionContextWindowUsage } from "../types/sessions";
 import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import { WorkbenchComposer } from "./WorkbenchComposer";
 
@@ -168,6 +169,28 @@ const fullSkillSlashCatalog: SlashCatalogItem[] = [
   slashCatalog[0],
 ];
 
+const contextUsage: SessionContextWindowUsage = {
+  session_id: "session-default",
+  model: "gpt-5.4",
+  context_window_tokens: 400000,
+  used_tokens: 320000,
+  reserved_response_tokens: 8192,
+  usage_ratio: 0.8,
+  auto_compact_threshold_ratio: 0.8,
+  last_compacted_at: "2026-04-11T18:21:02.000Z",
+  last_compact_boundary: "compact-boundary:8",
+  can_manual_compact: true,
+  blocking_reason: null,
+  breakdown: [
+    {
+      key: "messages",
+      label: "Messages",
+      estimated_tokens: 240000,
+      share_ratio: 0.6,
+    },
+  ],
+};
+
 type RenderComposerOptions = {
   sessionId?: string;
   slashItems?: SlashCatalogItem[];
@@ -176,9 +199,13 @@ type RenderComposerOptions = {
   isPausedGeneration?: boolean;
   isInterrupting?: boolean;
   queuedCount?: number;
+  contextUsage?: SessionContextWindowUsage | null;
+  contextUsageLoading?: boolean;
+  contextCompacting?: boolean;
   onQueueSend?: ReturnType<typeof vi.fn>;
   onInject?: ReturnType<typeof vi.fn>;
   onInterrupt?: ReturnType<typeof vi.fn>;
+  onManualCompact?: ReturnType<typeof vi.fn>;
   onLocalSlashAction?: ((action: SlashAction) => Promise<boolean> | boolean) | undefined;
 };
 
@@ -190,9 +217,13 @@ function renderComposer({
   isPausedGeneration = false,
   isInterrupting = false,
   queuedCount = 0,
+  contextUsage: providedContextUsage = null,
+  contextUsageLoading = false,
+  contextCompacting = false,
   onQueueSend = vi.fn().mockResolvedValue(undefined),
   onInject = vi.fn().mockResolvedValue(undefined),
   onInterrupt = vi.fn().mockResolvedValue(undefined),
+  onManualCompact = vi.fn().mockResolvedValue(undefined),
   onLocalSlashAction,
 }: RenderComposerOptions = {}) {
   const renderResult = render(
@@ -204,9 +235,13 @@ function renderComposer({
       isPausedGeneration={isPausedGeneration}
       isInterrupting={isInterrupting}
       queuedCount={queuedCount}
+      contextUsage={providedContextUsage}
+      contextUsageLoading={contextUsageLoading}
+      contextCompacting={contextCompacting}
       onQueueSend={onQueueSend}
       onInject={onInject}
       onInterrupt={onInterrupt}
+      onManualCompact={onManualCompact}
       onLocalSlashAction={onLocalSlashAction}
     />,
   );
@@ -216,6 +251,7 @@ function renderComposer({
     onQueueSend,
     onInject,
     onInterrupt,
+    onManualCompact,
     textbox: screen.getByRole("textbox") as HTMLTextAreaElement,
   };
 }
@@ -313,6 +349,45 @@ describe("WorkbenchComposer", () => {
 
     await waitFor(() => expect(onInterrupt).toHaveBeenCalledTimes(1));
     expect(onQueueSend).not.toHaveBeenCalled();
+  });
+
+  it("opens the context popover and highlights warning usage", async () => {
+    const user = userEvent.setup();
+    const onManualCompact = vi.fn().mockResolvedValue(undefined);
+
+    renderComposer({
+      sessionId: "session-context",
+      contextUsage,
+      onManualCompact,
+    });
+
+    const trigger = screen.getByRole("button", { name: "上下文窗口" });
+    expect(trigger).toHaveClass("context-window-trigger-warning");
+
+    await user.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "上下文窗口" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("320.0K / 400.0K");
+    expect(screen.getByText("Messages")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "压缩对话" }));
+    await waitFor(() => expect(onManualCompact).toHaveBeenCalledTimes(1));
+  });
+
+  it("disables manual compaction while a generation is active", async () => {
+    const user = userEvent.setup();
+
+    renderComposer({
+      sessionId: "session-context-busy",
+      isActiveGeneration: true,
+      contextUsage,
+    });
+
+    await user.click(screen.getByRole("button", { name: "上下文窗口" }));
+
+    expect(screen.getByRole("button", { name: "压缩对话" })).toBeDisabled();
+    expect(screen.getByText("当前生成仍在进行，暂不支持手动压缩。")).toBeInTheDocument();
   });
 
   it("keeps the textarea editable while the first send is still pending and preserves the follow-up draft", async () => {

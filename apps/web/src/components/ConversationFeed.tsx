@@ -90,6 +90,32 @@ type ConversationTurn = {
   supplementalMessages: SessionMessage[];
 };
 
+type ConversationEventNoteEntry = {
+  id: string;
+  summary: string;
+};
+
+function isVisibleCompactionEvent(event: SessionEventEntry): boolean {
+  const payload = event.payload as Record<string, unknown> | null;
+  const rawMode = payload && typeof payload["mode"] === "string" ? payload["mode"] : undefined;
+  const eventMode = typeof rawMode === "string" ? rawMode.toLowerCase() : undefined;
+  return (
+    ((event.type === "session.compaction.completed" && eventMode !== "automatic") ||
+      event.type === "session.compaction.failed") &&
+    event.summary.trim().length > 0
+  );
+}
+
+function buildVisibleCompactionNotes(events: SessionEventEntry[]): ConversationEventNoteEntry[] {
+  return events
+    .filter(isVisibleCompactionEvent)
+    .map((event) => ({ id: event.id, summary: event.summary.trim() }));
+}
+
+function ConversationEventNote({ summary }: { summary: string }) {
+  return <p className="conversation-event-note">{summary}</p>;
+}
+
 function toTimestamp(value: string | null | undefined): number {
   if (!value) {
     return 0;
@@ -1629,6 +1655,7 @@ export function ConversationFeed(props: ConversationFeedProps) {
   const {
     messages,
     generations,
+    events,
     activeGeneration = null,
     queuedGenerations = [],
     messageActionBusyId,
@@ -1641,6 +1668,7 @@ export function ConversationFeed(props: ConversationFeedProps) {
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
+  const compactionNotes = useMemo(() => buildVisibleCompactionNotes(events), [events]);
 
   const mergedGenerations = useMemo(
     () => mergeGenerations(generations, activeGeneration, queuedGenerations),
@@ -1655,6 +1683,7 @@ export function ConversationFeed(props: ConversationFeedProps) {
   const lastItemSignature = useMemo(() => {
     const lastMessage = messages[messages.length - 1] ?? null;
     const lastGeneration = mergedGenerations[mergedGenerations.length - 1] ?? null;
+    const lastCompactionNote = compactionNotes[compactionNotes.length - 1] ?? null;
 
     return [
       messages.length,
@@ -1665,8 +1694,10 @@ export function ConversationFeed(props: ConversationFeedProps) {
       lastGeneration?.status ?? "none",
       lastGeneration?.updated_at ?? "none",
       queuedGenerations.length,
+      compactionNotes.length,
+      lastCompactionNote?.id ?? "none",
     ].join(":");
-  }, [mergedGenerations, messages, queuedGenerations.length]);
+  }, [compactionNotes, mergedGenerations, messages, queuedGenerations.length]);
 
   useEffect(() => {
     const feedElement = feedRef.current;
@@ -1999,7 +2030,8 @@ export function ConversationFeed(props: ConversationFeedProps) {
     orphanMessages.length > 0 ||
     orphanGenerationRuns.length > 0 ||
     activeGeneration !== null ||
-    queuedGenerations.length > 0;
+    queuedGenerations.length > 0 ||
+    compactionNotes.length > 0;
 
   if (!hasContent) {
     return (
@@ -2025,6 +2057,10 @@ export function ConversationFeed(props: ConversationFeedProps) {
           {turn.generationRuns.map((run) => renderGenerationRun(run))}
           {turn.supplementalMessages.map((message) => renderMessageBubble(message))}
         </article>
+      ))}
+
+      {compactionNotes.map((eventNote) => (
+        <ConversationEventNote key={eventNote.id} summary={eventNote.summary} />
       ))}
     </section>
   );

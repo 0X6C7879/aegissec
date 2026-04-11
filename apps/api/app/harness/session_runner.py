@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -17,7 +18,9 @@ from sqlmodel import col, select
 
 from app.compat.mcp.service import MCPDisabledServerError, MCPInvalidToolError, MCPService
 from app.compat.skills.service import SkillContentReadError, SkillLookupError, SkillService
-from app.core.events import SessionEventBroker, SessionEventType
+from app.agent.token_budget import estimate_token_count
+from app.core.events import SessionEvent, SessionEventBroker, SessionEventType
+from app.core.settings import Settings, get_settings
 from app.db.models import (
     AssistantTranscriptSegmentKind,
     ChatGeneration,
@@ -83,6 +86,9 @@ _SKILL_AUTOROUTE_MARGIN = 10
 
 logger = logging.getLogger("aegissec.api")
 
+DEFAULT_CONTEXT_WINDOW_TOKENS = 400_000
+DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.8
+
 
 @dataclass(slots=True)
 class HarnessGenerationPreparation:
@@ -91,6 +97,216 @@ class HarnessGenerationPreparation:
     mcp_tool_inventory: list[dict[str, Any]]
     swarm_coordinator: Any
     prompt_assembly: Any
+
+
+def _resolve_session_model_name(settings: Settings) -> str:
+    configured = (
+        settings.anthropic_model
+        if settings.llm_provider == "anthropic"
+        else settings.llm_default_model
+    )
+    normalized = (configured or "").strip()
+    return normalized or "unknown"
+
+
+def _resolve_context_window_tokens(model_name: str) -> int:
+    normalized = model_name.lower()
+    if normalized.startswith("gpt-5.4"):
+        return 400_000
+    if normalized.startswith("claude"):
+        return 200_000
+    return DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def _estimate_context_window_tokens(repository: SessionRepository, session: Session) -> int:
+    active_branch = repository.ensure_active_branch(session)
+    history_messages = repository.build_conversation_context(
+        session_id=session.id,
+        branch_id=active_branch.id,
+    )
+    return sum(
+        estimate_token_count(
+            json.dumps(
+                {
+                    "role": message.role.value,
+                    "content": message.content,
+                    "attachments": message.attachments_json,
+                },
+                ensure_ascii=False,
+            )
+        )
+        for message in history_messages
+        if message.content.strip()
+    )
+
+
+def _build_context_window_updated_payload(
+    repository: SessionRepository,
+    session: Session,
+    *,
+    settings: Settings,
+    prompt_assembly: Any | None = None,
+    used_tokens: int | None = None,
+    last_compacted_at: str | None = None,
+    last_compact_boundary: str | None = None,
+    can_manual_compact: bool,
+    blocking_reason: str | None,
+) -> dict[str, object]:
+    model_name = _resolve_session_model_name(settings)
+    context_window_tokens = _resolve_context_window_tokens(model_name)
+    breakdown: list[dict[str, object]]
+    if prompt_assembly is not None:
+        prompt_budget = getattr(
+            getattr(prompt_assembly, "prompt_budget", None), "component_tokens", {}
+        )
+        memory_context = getattr(prompt_assembly, "memory_context", None)
+        retrieval_fragment = str(getattr(memory_context, "retrieval_fragment", "") or "")
+        memory_fragment = str(getattr(memory_context, "memory_fragment", "") or "")
+        breakdown_candidates = [
+            (
+                "system",
+                "System",
+                int(prompt_budget.get("core_immutable", 0))
+                + int(prompt_budget.get("safety_scope", 0))
+                + int(prompt_budget.get("role_prompt", 0)),
+            ),
+            (
+                "tool_definitions",
+                "Capability",
+                int(prompt_budget.get("capability_schema", 0))
+                + int(prompt_budget.get("capability_prompt", 0)),
+            ),
+            (
+                "messages",
+                "Messages",
+                int(prompt_budget.get("task_local", 0)) + int(prompt_budget.get("history", 0)),
+            ),
+            ("retrieval", "Retrieval", estimate_token_count(retrieval_fragment)),
+            ("memory", "Memory", estimate_token_count(memory_fragment)),
+        ]
+        effective_used_tokens = sum(max(tokens, 0) for _, _, tokens in breakdown_candidates)
+        breakdown = [
+            {
+                "key": key,
+                "label": label,
+                "estimated_tokens": max(tokens, 0),
+                "share_ratio": (max(tokens, 0) / context_window_tokens)
+                if context_window_tokens
+                else 0.0,
+            }
+            for key, label, tokens in breakdown_candidates
+            if max(tokens, 0) > 0
+        ]
+    else:
+        effective_used_tokens = (
+            used_tokens
+            if used_tokens is not None
+            else _estimate_context_window_tokens(repository, session)
+        )
+        breakdown = [
+            {
+                "key": "messages",
+                "label": "Messages",
+                "estimated_tokens": effective_used_tokens,
+                "share_ratio": (effective_used_tokens / context_window_tokens)
+                if context_window_tokens
+                else 0.0,
+            }
+        ]
+    usage_ratio = effective_used_tokens / context_window_tokens if context_window_tokens else 0.0
+    return {
+        "session_id": session.id,
+        "model": model_name,
+        "context_window_tokens": context_window_tokens,
+        "used_tokens": effective_used_tokens,
+        "reserved_response_tokens": settings.llm_max_output_tokens,
+        "usage_ratio": usage_ratio,
+        "auto_compact_threshold_ratio": DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO,
+        "last_compacted_at": last_compacted_at,
+        "last_compact_boundary": last_compact_boundary,
+        "can_manual_compact": can_manual_compact,
+        "blocking_reason": blocking_reason,
+        "breakdown": breakdown,
+    }
+
+
+async def _publish_auto_compaction_events_if_needed(
+    *,
+    repository: SessionRepository,
+    event_broker: SessionEventBroker,
+    session: Session,
+    assistant_message: Message,
+    session_state: Any,
+    prompt_assembly: Any,
+    initial_compaction_turn: int,
+) -> bool:
+    current_compaction_state = getattr(session_state, "compaction", None)
+    last_compacted_turn = getattr(current_compaction_state, "last_compacted_turn", 0)
+    auto_compaction_applied = (
+        current_compaction_state is not None
+        and getattr(current_compaction_state, "mode", "") == "full"
+        and isinstance(last_compacted_turn, int)
+        and last_compacted_turn > 0
+        and last_compacted_turn != initial_compaction_turn
+    )
+    if not auto_compaction_applied:
+        return False
+
+    settings = get_settings()
+    compact_boundary = f"compact-boundary:{last_compacted_turn}"
+    compacted_at = utc_now().isoformat()
+    await harness_trace.publish_assistant_trace(
+        repository,
+        event_broker,
+        session_id=session.id,
+        assistant_message=assistant_message,
+        entry={
+            "state": "context.compacted",
+            "status": "completed",
+            "label": "上下文压缩",
+            "message": "已压缩对话",
+            "summary": "已压缩对话",
+            "compact_boundary": compact_boundary,
+            "mode": "automatic",
+        },
+    )
+    context_window_payload = _build_context_window_updated_payload(
+        repository,
+        session,
+        settings=settings,
+        prompt_assembly=prompt_assembly,
+        last_compacted_at=compacted_at,
+        last_compact_boundary=compact_boundary,
+        can_manual_compact=False,
+        blocking_reason="active generation is running",
+    )
+    raw_used_tokens = context_window_payload.get("used_tokens")
+    used_tokens = raw_used_tokens if isinstance(raw_used_tokens, int) else 0
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.SESSION_COMPACTION_COMPLETED,
+            session_id=session.id,
+            payload={
+                "session_id": session.id,
+                "mode": "automatic",
+                "compacted": True,
+                "compact_boundary": compact_boundary,
+                "before_tokens": used_tokens,
+                "after_tokens": used_tokens,
+                "reclaimed_tokens": 0,
+                "summary": "已压缩对话",
+                "created_at": compacted_at,
+            },
+        )
+    )
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.SESSION_CONTEXT_WINDOW_UPDATED,
+            session_id=session.id,
+            payload=context_window_payload,
+        )
+    )
+    return True
 
 
 def chat_runtime_supports_mcp_tools(chat_runtime: ChatRuntime) -> bool:
@@ -1199,6 +1415,11 @@ async def process_generation(
             current_generation_id = generation.id
             force_new_output_segment = False
             applied_injection_count = 0
+            initial_compaction_turn = getattr(
+                getattr(prompt_assembly.session_state, "compaction", None),
+                "last_compacted_turn",
+                0,
+            )
 
             async def consume_context_injections() -> list[str]:
                 return await generation_manager.drain_injections(
@@ -1404,6 +1625,15 @@ async def process_generation(
                 session_id=session.id,
                 assistant_message=loaded_assistant_message,
                 semantic_snapshot=semantic_snapshot,
+            )
+            await _publish_auto_compaction_events_if_needed(
+                repository=repository,
+                event_broker=event_broker,
+                session=session,
+                assistant_message=loaded_assistant_message,
+                session_state=prompt_assembly.session_state,
+                prompt_assembly=prompt_assembly,
+                initial_compaction_turn=initial_compaction_turn,
             )
             await harness_trace.publish_assistant_trace(
                 repository,

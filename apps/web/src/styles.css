@@ -881,6 +881,18 @@ textarea::placeholder {
   line-height: 1.6;
 }
 
+.conversation-event-note {
+  margin: 0 auto;
+  padding: 7px 12px;
+  border: 1px solid var(--panel-border-soft);
+  border-radius: var(--pill-radius);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .workspace-session-grid {
   display: grid;
   grid-template-columns: var(--workspace-columns);
@@ -2662,6 +2674,171 @@ textarea::placeholder {
   gap: 10px;
   align-items: center;
   justify-content: flex-end;
+}
+
+.context-window-shell {
+  position: relative;
+}
+
+.context-window-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--panel-border-soft);
+  border-radius: var(--control-radius);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.context-window-trigger:hover,
+.context-window-trigger[aria-expanded="true"] {
+  border-color: var(--panel-border);
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+.context-window-trigger-warning {
+  border-color: rgba(255, 184, 77, 0.34);
+  background: rgba(255, 184, 77, 0.08);
+  color: var(--warning);
+}
+
+.context-window-trigger-label,
+.context-window-trigger-value,
+.context-window-popover-metric,
+.context-window-progress-label,
+.context-window-compact-action,
+.context-window-breakdown-value {
+  font: 600 0.72rem/1 var(--font-code);
+}
+
+.context-window-trigger-value {
+  color: var(--text-strong);
+}
+
+.context-window-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 6;
+  display: grid;
+  gap: 12px;
+  width: min(320px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--card-radius);
+  background: var(--panel-background-elevated);
+}
+
+.context-window-popover-header,
+.context-window-progress-shell,
+.context-window-breakdown-row,
+.context-window-popover-footer {
+  display: flex;
+  align-items: center;
+}
+
+.context-window-popover-header,
+.context-window-breakdown-row {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-window-popover-title,
+.context-window-popover-metric,
+.context-window-meta-card strong,
+.context-window-breakdown-value {
+  color: var(--text-strong);
+}
+
+.context-window-popover-copy,
+.context-window-progress-label,
+.context-window-meta-label,
+.context-window-breakdown-label,
+.context-window-empty-copy,
+.context-window-blocking-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.context-window-progress-shell {
+  gap: 10px;
+}
+
+.context-window-progress-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--pill-radius);
+  background: var(--surface-strong);
+}
+
+.context-window-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--teal));
+}
+
+.context-window-meta-grid,
+.context-window-breakdown {
+  display: grid;
+  gap: 8px;
+}
+
+.context-window-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.context-window-meta-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--panel-border-soft);
+  border-radius: var(--control-radius);
+  background: var(--surface-subtle);
+}
+
+.context-window-breakdown-row {
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.context-window-breakdown-label,
+.context-window-breakdown-value {
+  min-width: 0;
+}
+
+.context-window-breakdown-value {
+  text-align: right;
+}
+
+.context-window-blocking-copy {
+  color: var(--warning);
+}
+
+.context-window-popover-footer {
+  justify-content: flex-end;
+}
+
+.context-window-compact-action {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(0, 217, 255, 0.22);
+  border-radius: var(--control-radius);
+  background: linear-gradient(180deg, rgba(0, 217, 255, 0.18), rgba(0, 217, 255, 0.08));
+  color: var(--text-strong);
+}
+
+.context-window-compact-action:disabled {
+  opacity: 0.56;
 }
 
 .workbench-primary-action,

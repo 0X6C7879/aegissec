@@ -4,6 +4,7 @@ import type {
   AssistantTranscriptSegment,
   ChatGeneration,
   GenerationStep,
+  SessionEventEntry,
   SessionMessage,
 } from "../types/sessions";
 import "../styles.css";
@@ -147,6 +148,21 @@ function buildMessages(
       ...overrides.assistant,
     },
   ];
+}
+
+function buildCompactionEvent(
+  overrides: Partial<SessionEventEntry> = {},
+): SessionEventEntry {
+  return {
+    id: "event-compaction-1",
+    sessionId: "session-1",
+    cursor: 101,
+    type: "session.compaction.completed",
+    createdAt: "2026-04-11T18:21:02.000Z",
+    summary: "已压缩对话",
+    payload: { mode: "manual" },
+    ...overrides,
+  };
 }
 
 describe("ConversationFeed", () => {
@@ -294,6 +310,47 @@ describe("ConversationFeed", () => {
 
     expect(shellBlock?.open).toBe(true);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
+  });
+
+  it("renders only compaction event notes near the bottom of the feed", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages()}
+        generations={[buildGeneration()]}
+        events={[
+          buildCompactionEvent(),
+          buildCompactionEvent({
+            id: "event-session-update",
+            cursor: 102,
+            type: "session.updated",
+            summary: "不应显示的普通事件",
+          }),
+        ]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("已压缩对话")).toBeInTheDocument();
+    expect(screen.queryByText("不应显示的普通事件")).not.toBeInTheDocument();
+  });
+
+  it("does not render automatic compaction session notes because the transcript cue already covers them", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages()}
+        generations={[buildGeneration()]}
+        events={[
+          buildCompactionEvent({
+            id: "event-auto-compaction",
+            cursor: 103,
+            payload: { mode: "automatic" },
+          }),
+        ]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.queryByText("已压缩对话")).not.toBeInTheDocument();
   });
 
   it("reads shell stdout and stderr from metadata.result without surfacing raw JSON", () => {

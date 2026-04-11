@@ -3,7 +3,9 @@ import type {
   AttachmentMetadata,
   ChatGeneration,
   ChatResponse,
+  SessionCompactionResult,
   ConversationBranch,
+  SessionContextWindowUsage,
   SessionConversation,
   SessionDetail,
   SessionQueue,
@@ -291,6 +293,22 @@ export async function getSessionQueue(
   signal?: AbortSignal,
 ): Promise<SessionQueue> {
   return apiRequest<SessionQueue>(`/api/sessions/${sessionId}/queue`, { signal });
+}
+
+export async function getSessionContextWindowUsage(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionContextWindowUsage> {
+  return apiRequest<SessionContextWindowUsage>(`/api/sessions/${sessionId}/context-window`, {
+    signal,
+  });
+}
+
+export async function compactSessionContext(sessionId: string): Promise<SessionCompactionResult> {
+  return apiRequest<SessionCompactionResult>(`/api/sessions/${sessionId}/compact`, {
+    method: "POST",
+    body: JSON.stringify({ mode: "manual" }),
+  });
 }
 
 export async function getSessionSlashCatalog(
