@@ -1,12 +1,12 @@
 ---
-name: Web和AI安全测试专家
+name: secknowledge
 description: |
   整合WooYun(88,636案例)+先知L1-L4方法论+GAARM(150风险)的Web和AI安全测试知识库。
   当用户进行以下活动时触发: 漏洞挖掘、渗透测试、安全审计、代码审计、AI安全测试、
   Prompt注入测试、越狱测试、MCP安全评估、LLM应用安全评估。
 ---
 
-# Web和AI安全测试专家
+# secknowledge
 
 > 知识源: WooYun 88,636真实漏洞 × 先知5,600+安全文档 × GAARM 150条AI风险 × 常用 200+安全测试用例
 > 架构: SKILL.md(速查概要) → references/(详细参考)

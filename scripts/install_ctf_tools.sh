@@ -28,6 +28,7 @@ DRY_RUN=false
 FORCE=false
 MODE=""
 FAILED=()
+OPTIONAL_FAILED=()
 SUCCEEDED=()
 SKIPPED=()
 LOG_DIR="${HOME}/.ctf-tools"
@@ -245,8 +246,9 @@ install_apt() {
     gdb radare2 binutils binwalk foremost libimage-exiftool-perl
     tshark sleuthkit ffmpeg steghide testdisk john pcapfix
     nmap whois dnsutils hashcat strace ltrace imagemagick curl jq
-    apktool upx qemu-system-x86 sagemath qrencode
+    apktool upx qemu-system-x86 qrencode
   )
+  local optional_packages=(sagemath)
 
   # Collect packages that need installing
   local to_install=()
@@ -258,27 +260,59 @@ install_apt() {
     to_install+=("$pkg")
   done
 
+  local optional_to_install=()
+  for pkg in "${optional_packages[@]}"; do
+    if [ "$FORCE" = false ] && apt_pkg_installed "$pkg"; then
+      SKIPPED+=("apt:$pkg")
+      continue
+    fi
+    optional_to_install+=("$pkg")
+  done
+
   if [ ${#to_install[@]} -eq 0 ]; then
     log_info "apt: all ${#packages[@]} packages already installed"
+  else
+    log_info "apt: ${#to_install[@]}/${#packages[@]} packages to install (${#SKIPPED[@]} skipped)"
+  fi
+
+  if [ ${#optional_to_install[@]} -eq 0 ]; then
+    log_info "apt(optional): all ${#optional_packages[@]} packages already installed"
+  else
+    log_info "apt(optional): ${#optional_to_install[@]}/${#optional_packages[@]} packages to install"
+  fi
+
+  if [ ${#to_install[@]} -eq 0 ] && [ ${#optional_to_install[@]} -eq 0 ]; then
     return 0
   fi
 
-  log_info "apt: ${#to_install[@]}/${#packages[@]} packages to install (${#SKIPPED[@]} skipped)"
-
   if [ "$DRY_RUN" = true ]; then
-    log_info "Would install: ${to_install[*]}"
+    if [ ${#to_install[@]} -gt 0 ]; then
+      log_info "Would install: ${to_install[*]}"
+    fi
+    if [ ${#optional_to_install[@]} -gt 0 ]; then
+      log_info "Would install optional: ${optional_to_install[*]}"
+    fi
     return 0
   fi
 
   log_info "Updating apt package lists"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get update -q >>"$LOG_FILE" 2>&1 || log_warn "apt-get update failed"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=5 -q >>"$LOG_FILE" 2>&1 || log_warn "apt-get update failed"
 
   for pkg in "${to_install[@]}"; do
-    if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$pkg" >>"$LOG_FILE" 2>&1; then
+    if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o Acquire::Retries=5 --fix-missing "$pkg" >>"$LOG_FILE" 2>&1; then
       SUCCEEDED+=("apt:$pkg")
     else
       log_warn "apt install failed: $pkg"
       FAILED+=("apt:$pkg")
+    fi
+  done
+
+  for pkg in "${optional_to_install[@]}"; do
+    if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o Acquire::Retries=5 --fix-missing "$pkg" >>"$LOG_FILE" 2>&1; then
+      SUCCEEDED+=("apt:$pkg")
+    else
+      log_warn "optional apt install failed: $pkg (manual fallback remains supported)"
+      OPTIONAL_FAILED+=("apt:$pkg")
     fi
   done
 }
@@ -476,6 +510,13 @@ print_summary() {
     echo ""
     echo " Failed packages:"
     for f in "${FAILED[@]}"; do
+      echo "   - $f"
+    done
+  fi
+  if [ ${#OPTIONAL_FAILED[@]} -gt 0 ]; then
+    echo ""
+    echo " Optional packages not installed automatically:"
+    for f in "${OPTIONAL_FAILED[@]}"; do
       echo "   - $f"
     done
   fi

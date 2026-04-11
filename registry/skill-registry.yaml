@@ -815,7 +815,7 @@ skills:
   depends_on: []
   neighbors: []
 - skill_id: linuxgun
-  path: LinuxGun/SKILL.md
+  path: linuxgun/SKILL.md
   family: linuxgun
   owner: sec-platform
   version: 0.1.0

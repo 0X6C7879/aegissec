@@ -1,8 +1,14 @@
-# SKILL.md
+---
+name: linuxgun
+description: Linux 应急响应专用技能。Use when users provide SSH connection fields (hostname, port, username, password) and need guided intrusion triage, evidence-oriented command execution, per-command analysis, threat grading, and actionable containment/remediation recommendations.
+compatibility: Requires filesystem-based agent with terminal execution capability (expect/ssh) and read access to skill reference files.
+metadata:
+  user-invocable: "false"
 id: linux-emergency-response
-name: Linux Gun AI Skills
-trigger_regex: (?=.*hostname\s*=\s*\S+)(?=.*port\s*=\s*\d+)(?=.*username\s*=\s*\S+)(?=.*password\s*=\s*\S+).+
-description: Linux 应急响应专用工具，用户只需提供 SSH 连接信息，AI 自动引导进行全面的入侵排查并分析结果。
+trigger_regex: '(?=.*hostname\s*=\s*\S+)(?=.*port\s*=\s*\d+)(?=.*username\s*=\s*\S+)(?=.*password\s*=\s*\S+).+'
+---
+
+# Linux Gun AI Skills
 
 ## 快速开始
 
