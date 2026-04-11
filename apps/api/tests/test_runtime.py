@@ -1,8 +1,11 @@
 from typing import Any
 
+from docker.errors import DockerException
 from fastapi.testclient import TestClient
 
 from app.db.models import ExecutionStatus
+from app.main import app
+from app.services.runtime import get_runtime_backend
 from tests.utils import api_data
 
 
@@ -173,6 +176,43 @@ def test_runtime_execute_rejects_unknown_session_and_invalid_artifact_path(
     assert invalid_artifact_response.json()["detail"] == (
         "Artifact paths must not contain traversal segments."
     )
+
+
+def test_runtime_status_degrades_when_docker_is_unavailable(
+    client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    def _raise_docker_exception() -> None:
+        raise DockerException("npipe missing")
+
+    monkeypatch.setattr("app.services.runtime.docker.from_env", _raise_docker_exception)
+
+    original_override = app.dependency_overrides[get_runtime_backend]
+    app.dependency_overrides[get_runtime_backend] = lambda: get_runtime_backend(app.state.settings)
+    try:
+        status_response = client.get("/api/runtime/status")
+
+        assert status_response.status_code == 200
+        status_payload = api_data(status_response)
+        assert status_payload["runtime"]["status"] == "missing"
+        assert status_payload["recent_runs"] == []
+        assert status_payload["recent_artifacts"] == []
+
+        health_response = client.get("/api/runtime/health")
+
+        assert health_response.status_code == 200
+        health_payload = api_data(health_response)
+        assert health_payload["status"] == "degraded"
+        assert health_payload["runtime_status"] == "missing"
+
+        start_response = client.post("/api/runtime/start")
+
+        assert start_response.status_code == 503
+        assert start_response.json()["detail"] == (
+            "Docker is not available. Start Docker Desktop or the daemon."
+        )
+    finally:
+        app.dependency_overrides[get_runtime_backend] = original_override
 
 
 def test_runtime_artifact_index_supports_search_and_pagination(

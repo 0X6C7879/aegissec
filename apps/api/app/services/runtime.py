@@ -89,6 +89,19 @@ class RuntimeBackend(Protocol):
     ) -> RuntimeCommandResult: ...
 
 
+def _build_missing_runtime_state(
+    settings: Settings,
+    workspace_dir: Path,
+) -> RuntimeContainerState:
+    return RuntimeContainerState(
+        status=RuntimeContainerStatus.MISSING,
+        container_name=settings.runtime_container_name,
+        image=settings.kali_image,
+        workspace_host_path=str(workspace_dir),
+        workspace_container_path=settings.runtime_workspace_container_path,
+    )
+
+
 class DockerExecApi(Protocol):
     def exec_start(self, exec_id: str, *, stream: bool, demux: bool) -> Iterable[object]: ...
 
@@ -418,13 +431,7 @@ class DockerRuntimeBackend:
         )
 
     def _missing_state(self) -> RuntimeContainerState:
-        return RuntimeContainerState(
-            status=RuntimeContainerStatus.MISSING,
-            container_name=self._settings.runtime_container_name,
-            image=self._settings.kali_image,
-            workspace_host_path=str(self._workspace_dir),
-            workspace_container_path=self._settings.runtime_workspace_container_path,
-        )
+        return _build_missing_runtime_state(self._settings, self._workspace_dir)
 
     @staticmethod
     def _parse_started_at(container: DockerContainer) -> datetime | None:
@@ -854,8 +861,37 @@ class RuntimeService:
         )
 
 
+class DockerUnavailableRuntimeBackend:
+    def __init__(self, settings: Settings, message: str) -> None:
+        self._settings = settings
+        self._workspace_dir = Path(settings.runtime_workspace_dir).resolve()
+        self._workspace_dir.mkdir(parents=True, exist_ok=True)
+        self._message = message
+
+    def inspect(self) -> RuntimeContainerState:
+        return _build_missing_runtime_state(self._settings, self._workspace_dir)
+
+    def ensure_started(self) -> RuntimeContainerState:
+        raise RuntimeOperationError(self._message)
+
+    def stop(self) -> RuntimeContainerState:
+        raise RuntimeOperationError(self._message)
+
+    def execute(
+        self,
+        command: str,
+        timeout_seconds: int,
+        artifact_paths: list[str],
+    ) -> RuntimeCommandResult:
+        del command, timeout_seconds, artifact_paths
+        raise RuntimeOperationError(self._message)
+
+
 def get_runtime_backend(settings: Settings = Depends(get_settings)) -> RuntimeBackend:
-    return DockerRuntimeBackend(settings)
+    try:
+        return DockerRuntimeBackend(settings)
+    except RuntimeOperationError as exc:
+        return DockerUnavailableRuntimeBackend(settings, str(exc))
 
 
 def get_runtime_service(
