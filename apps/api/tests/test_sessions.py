@@ -908,6 +908,24 @@ def test_websocket_supports_replay_cursor(client: TestClient) -> None:
 def test_session_context_window_and_manual_compaction_emit_persisted_events(
     client: TestClient,
 ) -> None:
+    class _FakeSkillService:
+        def list_loaded_skills_for_agent(self, **_: object) -> list[object]:
+            return []
+
+    class _FakeCapabilityFacade:
+        def build_prompt_fragments(self, **_: object) -> dict[str, str]:
+            return {
+                "inventory_summary": "",
+                "schema_summary": "",
+                "prompt_fragment": "",
+            }
+
+        def build_mcp_tool_inventory(self) -> list[dict[str, object]]:
+            return []
+
+    HarnessMemoryService = importlib.import_module("app.harness.memory").HarnessMemoryService
+    HarnessPromptAssembler = importlib.import_module("app.harness.prompts").HarnessPromptAssembler
+
     session_response = client.post("/api/sessions", json={"title": "Context Window Session"})
     session_id = api_data(session_response)["id"]
 
@@ -939,6 +957,26 @@ def test_session_context_window_and_manual_compaction_emit_persisted_events(
                 status=MessageStatus.COMPLETED,
                 sequence=sequence,
                 turn_index=turn_index,
+                metadata_json=(
+                    {
+                        "semantic_state": {
+                            "active_hypotheses": ["hypothesis:manual-restore"],
+                            "evidence_ids": ["runtime:manual-restore"],
+                            "graph_hints": [
+                                {
+                                    "graph_type": "attack",
+                                    "stable_key": "runtime:manual-restore",
+                                }
+                            ],
+                            "artifacts": ["reports/manual-restore.txt"],
+                            "recent_entities": ["restore.example.internal"],
+                            "recent_tools": ["execute_kali_command"],
+                            "reason": "Persist compacted semantic state.",
+                        }
+                    }
+                    if index == 3
+                    else None
+                ),
             )
             sequence += 1
             turn_index += 1
@@ -991,6 +1029,102 @@ def test_session_context_window_and_manual_compaction_emit_persisted_events(
     updated_context_window = api_data(client.get(f"/api/sessions/{session_id}/context-window"))
     assert updated_context_window["last_compact_boundary"] == compact_payload["compact_boundary"]
     assert updated_context_window["last_compacted_at"] == compact_payload["created_at"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = SessionRepository(db_session)
+        session = repository.get_session(session_id)
+        assert session is not None
+        active_branch = repository.ensure_active_branch(session)
+        visible_messages = repository.list_messages(
+            session_id,
+            branch_id=active_branch.id,
+            include_superseded=False,
+        )
+        compacted_history_message = next(
+            message for message in visible_messages if "## Compacted History" in message.content
+        )
+        assert compacted_history_message.role == MessageRole.USER
+        assert compacted_history_message.metadata_json["summary"] == "已压缩对话"
+        assert (
+            compacted_history_message.metadata_json["compact_boundary"]
+            == compact_payload["compact_boundary"]
+        )
+        persisted_compaction_state = cast(
+            dict[str, object], compacted_history_message.metadata_json["compaction_state"]
+        )
+        assert persisted_compaction_state["mode"] == "full"
+        assert (
+            persisted_compaction_state["active_compact_fragment"]
+            == compacted_history_message.content
+        )
+        assert isinstance(persisted_compaction_state["durable_artifact_ref"], str)
+        persisted_semantic_state = cast(
+            dict[str, object], compacted_history_message.metadata_json["semantic_state"]
+        )
+        assert persisted_semantic_state["active_hypotheses"] == ["hypothesis:manual-restore"]
+        assert persisted_semantic_state["recent_entities"] == ["restore.example.internal"]
+        assert not any(
+            message.role == MessageRole.ASSISTANT
+            and message.content.startswith("assistant turn 3 ")
+            for message in visible_messages
+        )
+
+        rebuilt_history = repository.build_conversation_context(
+            session_id=session.id,
+            branch_id=active_branch.id,
+            rough_token_budget=12_000,
+        )
+        assert any("## Compacted History" in message.content for message in rebuilt_history)
+        assert not any(
+            message.role == MessageRole.ASSISTANT
+            and message.content.startswith("assistant turn 3 ")
+            for message in rebuilt_history
+        )
+
+        latest_assistant = next(
+            message
+            for message in reversed(visible_messages)
+            if message.role == MessageRole.ASSISTANT
+        )
+        latest_user = next(
+            message for message in reversed(visible_messages) if message.role == MessageRole.USER
+        )
+        assembler = HarnessPromptAssembler(
+            capability_facade=_FakeCapabilityFacade(),
+            skill_service=_FakeSkillService(),
+            memory_service=HarnessMemoryService(),
+        )
+        assembly = assembler.build(
+            session=session,
+            repository=repository,
+            user_message=latest_user,
+            assistant_message=latest_assistant,
+            branch_id=active_branch.id,
+            total_token_budget=12_000,
+        )
+
+    assert any(
+        conversation_message.content.startswith("## Compacted History")
+        for conversation_message in assembly.conversation_messages
+    )
+    assert assembly.session_state.semantic.active_hypotheses == ["hypothesis:manual-restore"]
+    assert assembly.session_state.semantic.evidence_ids == ["runtime:manual-restore"]
+    assert assembly.session_state.semantic.recent_entities == ["restore.example.internal"]
+    assert assembly.session_state.compaction.mode == "full"
+    assert assembly.session_state.compaction.active_compact_fragment.startswith(
+        "## Compacted History"
+    )
+    assert (
+        assembly.session_state.compaction.durable_artifact_ref
+        == persisted_compaction_state["durable_artifact_ref"]
+    )
+
+    edit_response = client.post(
+        f"/api/sessions/{session_id}/messages/{compacted_history_message.id}/edit",
+        json={"content": "tamper", "attachments": []},
+    )
+    assert edit_response.status_code == 409
+    assert edit_response.json()["detail"] == "Compacted history messages cannot be edited."
 
 
 def test_publish_auto_compaction_events_persists_trace_and_context_window(
@@ -1075,7 +1209,7 @@ def test_publish_auto_compaction_events_persists_trace_and_context_window(
         for event in events
         if event["type"] == "assistant.trace"
         and isinstance(event.get("payload"), dict)
-        and event["payload"].get("state") == "context.compacted"
+        and cast(dict[str, object], event["payload"]).get("state") == "context.compacted"
     )
     trace_payload = cast(dict[str, object], trace_event["payload"])
     assert trace_payload["summary"] == "已压缩对话"

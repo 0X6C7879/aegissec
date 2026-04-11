@@ -764,6 +764,16 @@ async def edit_message(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Only user messages can be edited."
         )
+    target_metadata = (
+        target_message.metadata_json if isinstance(target_message.metadata_json, dict) else {}
+    )
+    if target_metadata.get("compaction_record") is True or isinstance(
+        target_metadata.get("compaction_state"), dict
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Compacted history messages cannot be edited.",
+        )
     branch_id = payload.branch_id or target_message.branch_id
     branch = repository.get_branch(branch_id or "")
     if branch is None:

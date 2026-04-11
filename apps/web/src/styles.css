@@ -1725,6 +1725,66 @@ textarea::placeholder {
   font: 500 0.76rem/1.5 var(--font-code);
 }
 
+.assistant-tool-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-tool-source-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid rgba(0, 217, 255, 0.14);
+  border-radius: var(--pill-radius);
+  background: rgba(0, 217, 255, 0.1);
+  color: var(--accent-strong);
+  font: 600 0.68rem/1.4 var(--font-code);
+  white-space: nowrap;
+}
+
+.assistant-tool-source-chip-node {
+  border-color: rgba(66, 214, 197, 0.18);
+  background: rgba(66, 214, 197, 0.12);
+  color: #8fe7db;
+}
+
+.assistant-skill-orchestration-block .assistant-tool-body {
+  gap: 10px;
+}
+
+.assistant-orchestration-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-orchestration-list-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.assistant-orchestration-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-orchestration-item-title {
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
 .assistant-tool-error-copy,
 .assistant-error-title,
 .management-error-banner {
@@ -2676,19 +2736,31 @@ textarea::placeholder {
   justify-content: flex-end;
 }
 
+.workbench-composer-primary-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .context-window-shell {
   position: relative;
 }
 
 .context-window-trigger {
+  --context-usage-ratio: 0;
+  --context-ring-opacity: 0.2;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--panel-border-soft);
-  border-radius: var(--control-radius);
-  background: var(--surface-subtle);
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: rgba(6, 10, 18, 0.34);
   color: var(--text-secondary);
   transition:
     border-color 160ms ease,
@@ -2698,28 +2770,58 @@ textarea::placeholder {
 
 .context-window-trigger:hover,
 .context-window-trigger[aria-expanded="true"] {
-  border-color: var(--panel-border);
-  background: var(--surface-muted);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
 }
 
-.context-window-trigger-warning {
-  border-color: rgba(255, 184, 77, 0.34);
-  background: rgba(255, 184, 77, 0.08);
-  color: var(--warning);
+.context-window-trigger-compact {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
 }
 
-.context-window-trigger-label,
-.context-window-trigger-value,
+.context-window-trigger-warning {
+  border-color: rgba(255, 184, 77, 0.22);
+  background: rgba(255, 184, 77, 0.08);
+}
+
+.context-window-trigger-ring {
+  --context-usage-angle: calc(var(--context-usage-ratio, 0) * 1turn);
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: conic-gradient(
+    rgba(52, 225, 255, var(--context-ring-opacity, 0.24)) 0turn var(--context-usage-angle),
+    rgba(255, 255, 255, 0.12) var(--context-usage-angle) 1turn
+  );
+  box-shadow: inset 0 0 0 1px rgba(6, 10, 18, 0.32);
+}
+
+.context-window-trigger-warning .context-window-trigger-ring {
+  background: conic-gradient(
+    rgba(255, 184, 77, var(--context-ring-opacity, 0.26)) 0turn var(--context-usage-angle),
+    rgba(255, 255, 255, 0.12) var(--context-usage-angle) 1turn
+  );
+}
+
+.context-window-trigger-ring::after {
+  content: "";
+  position: absolute;
+  inset: 2.4px;
+  border-radius: inherit;
+  background: rgba(7, 12, 22, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
 .context-window-popover-metric,
 .context-window-progress-label,
 .context-window-compact-action,
 .context-window-breakdown-value {
   font: 600 0.72rem/1 var(--font-code);
-}
-
-.context-window-trigger-value {
-  color: var(--text-strong);
 }
 
 .context-window-popover {

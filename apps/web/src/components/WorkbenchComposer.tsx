@@ -405,6 +405,7 @@ export function WorkbenchComposer({
         </div>
 
         <div className="workbench-composer-footer">
+          <div className="workbench-composer-primary-actions">
           <ContextWindowPopover
             usage={contextUsage}
             loading={contextUsageLoading}
@@ -426,7 +427,7 @@ export function WorkbenchComposer({
               </span>
             ) : (
               <span className="workbench-primary-action-send-icon" aria-hidden="true">
-                <svg viewBox="0 0 20 20" focusable="false">
+                <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
                   <path
                     d="M4.25 10h11.5M10 4.25l5.75 5.75L10 15.75"
                     fill="none"
@@ -439,6 +440,7 @@ export function WorkbenchComposer({
               </span>
             )}
           </button>
+          </div>
         </div>
       </form>
     </section>

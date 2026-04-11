@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { SessionContextWindowUsage } from "../types/sessions";
 
 type ContextWindowPopoverProps = {
@@ -87,6 +87,12 @@ export function ContextWindowPopover({
     : usage?.blocking_reason ?? null;
   const usedTokensLabel = usage ? formatTokenCount(usage.used_tokens) : "--";
   const totalTokensLabel = usage ? formatTokenCount(usage.context_window_tokens) : "--";
+  const normalizedUsageRatio = Math.max(0, Math.min(usageRatio, 1));
+  const ringOpacity = usage ? 0.24 + normalizedUsageRatio * 0.58 : loading ? 0.16 : 0.12;
+  const ringStyle = {
+    "--context-usage-ratio": normalizedUsageRatio.toFixed(3),
+    "--context-ring-opacity": ringOpacity.toFixed(3),
+  } as CSSProperties;
   const progressWidth = `${Math.max(0, Math.min(usageRatio, 1)) * 100}%`;
   const lastCompactedLabel = formatDateTime(usage?.last_compacted_at ?? null);
 
@@ -94,16 +100,15 @@ export function ContextWindowPopover({
     <div ref={shellRef} className="context-window-shell">
       <button
         type="button"
-        className={`context-window-trigger${isWarning ? " context-window-trigger-warning" : ""}`}
+        className={`context-window-trigger context-window-trigger-compact${isWarning ? " context-window-trigger-warning" : ""}`}
         aria-label="上下文窗口"
+        aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={popoverId}
+        title="上下文窗口"
         onClick={() => setIsOpen((currentValue) => !currentValue)}
       >
-        <span className="context-window-trigger-label">上下文</span>
-        <span className="context-window-trigger-value">
-          {loading && usage === null ? "读取中" : `${usedTokensLabel} / ${totalTokensLabel}`}
-        </span>
+        <span className="context-window-trigger-ring" style={ringStyle} aria-hidden="true" />
       </button>
 
       {isOpen ? (

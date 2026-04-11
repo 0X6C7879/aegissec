@@ -91,6 +91,7 @@ class HarnessPromptAssembler:
         conversation_messages = self._build_conversation_messages(conversation_history)
         history_text = "\n\n".join(message.content for message in conversation_messages[:-1])
         restored_semantic_state = self._restore_semantic_state(conversation_history)
+        restored_compaction_state = self._restore_compaction_state(conversation_history)
         resolved_active_hypotheses = (
             active_hypotheses
             if active_hypotheses is not None
@@ -157,6 +158,22 @@ class HarnessPromptAssembler:
                 source_labels=[entry.title for entry in memory_context.entries],
                 rendered_retrieval_fragment=retrieval_fragment,
                 rendered_memory_fragment=memory_fragment,
+            ),
+            compaction=harness_state_module.HarnessCompactionState(
+                recent_turns=int(restored_compaction_state.get("recent_turns", 0)),
+                last_compacted_turn=int(restored_compaction_state.get("last_compacted_turn", 0)),
+                active_compact_fragment=str(
+                    restored_compaction_state.get("active_compact_fragment", "")
+                ),
+                durable_artifact_ref=(
+                    str(restored_compaction_state.get("durable_artifact_ref"))
+                    if restored_compaction_state.get("durable_artifact_ref") is not None
+                    else None
+                ),
+                mode=str(restored_compaction_state.get("mode", "none") or "none"),
+                archived_message_count=int(
+                    restored_compaction_state.get("archived_message_count", 0)
+                ),
             ),
             semantic=harness_state_module.HarnessSemanticState(
                 active_hypotheses=resolved_active_hypotheses,
@@ -276,4 +293,36 @@ class HarnessPromptAssembler:
             "recent_entities": [],
             "recent_tools": [],
             "reason": None,
+        }
+
+    def _restore_compaction_state(self, messages: list[Message]) -> dict[str, Any]:
+        for message in reversed(messages):
+            metadata = getattr(message, "metadata_json", {})
+            if not isinstance(metadata, dict):
+                continue
+            compaction_state = metadata.get("compaction_state")
+            if isinstance(compaction_state, dict):
+                return {
+                    "recent_turns": int(compaction_state.get("recent_turns", 0) or 0),
+                    "last_compacted_turn": int(compaction_state.get("last_compacted_turn", 0) or 0),
+                    "active_compact_fragment": str(
+                        compaction_state.get("active_compact_fragment", "") or ""
+                    ),
+                    "durable_artifact_ref": (
+                        str(compaction_state.get("durable_artifact_ref"))
+                        if compaction_state.get("durable_artifact_ref") is not None
+                        else None
+                    ),
+                    "mode": str(compaction_state.get("mode", "none") or "none"),
+                    "archived_message_count": int(
+                        compaction_state.get("archived_message_count", 0) or 0
+                    ),
+                }
+        return {
+            "recent_turns": 0,
+            "last_compacted_turn": 0,
+            "active_compact_fragment": "",
+            "durable_artifact_ref": None,
+            "mode": "none",
+            "archived_message_count": 0,
         }

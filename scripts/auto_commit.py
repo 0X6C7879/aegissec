@@ -7,6 +7,9 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+GIT_ENCODING = "utf-8"
+GIT_DECODE_ERRORS = "replace"
+
 DEFAULT_EXCLUDES = [
     ".env",
     ".env.local",
@@ -25,6 +28,8 @@ def run_git(
         cwd=REPO_ROOT,
         check=True,
         text=True,
+        encoding=GIT_ENCODING,
+        errors=GIT_DECODE_ERRORS,
         capture_output=capture_output,
     )
 
@@ -43,6 +48,8 @@ def push_with_retry(*args: str, attempts: int = 3, delay_seconds: int = 5) -> No
             cwd=REPO_ROOT,
             check=False,
             text=True,
+            encoding=GIT_ENCODING,
+            errors=GIT_DECODE_ERRORS,
             capture_output=True,
         )
         if result.stdout:
@@ -76,7 +83,8 @@ def get_status() -> str:
 
 def get_staged_paths() -> list[str]:
     result = run_git("diff", "--cached", "--name-only", "-z", capture_output=True)
-    return [path for path in result.stdout.split("\0") if path]
+    stdout = result.stdout or ""
+    return [path for path in stdout.split("\0") if path]
 
 
 def should_exclude(path: str) -> bool:
@@ -100,6 +108,8 @@ def is_git_ignored(path: str) -> bool:
         cwd=REPO_ROOT,
         check=False,
         text=True,
+        encoding=GIT_ENCODING,
+        errors=GIT_DECODE_ERRORS,
         capture_output=True,
     )
     if result.returncode == 0:
@@ -132,7 +142,8 @@ def get_candidate_paths() -> list[str]:
         "-z",
         capture_output=True,
     )
-    return [path for path in result.stdout.split("\0") if path]
+    stdout = result.stdout or ""
+    return [path for path in stdout.split("\0") if path]
 
 
 def stage_changes_with_excludes() -> None:
@@ -160,6 +171,8 @@ def has_upstream() -> bool:
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
         cwd=REPO_ROOT,
         text=True,
+        encoding=GIT_ENCODING,
+        errors=GIT_DECODE_ERRORS,
         capture_output=True,
         check=False,
     )

@@ -37,7 +37,6 @@ RUN apt-get update -o Acquire::Retries=5 \
         python3-venv \
         ruby \
         ruby-dev \
-        sudo \
         tini \
         wget \
     && rm -rf /var/lib/apt/lists/*
@@ -55,19 +54,14 @@ RUN if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
 
 RUN apt-get update -o Acquire::Retries=5 \
     && apt-get install -y -o Acquire::Retries=5 --fix-missing \
-        adb \
-        aircrack-ng \
         amass \
         arp-scan \
         arjun \
         awscli \
         azure-cli \
         bloodhound \
-        bully \
-        cewl \
         chisel \
         crackmapexec \
-        crunch \
         default-mysql-client \
         dnsenum \
         dnsrecon \
@@ -77,7 +71,6 @@ RUN apt-get update -o Acquire::Retries=5 \
         feroxbuster \
         gsutil \
         hydra \
-        jadx \
         kismet \
         kubectl \
         ldap-utils \

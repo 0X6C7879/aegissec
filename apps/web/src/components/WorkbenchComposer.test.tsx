@@ -351,7 +351,7 @@ describe("WorkbenchComposer", () => {
     expect(onQueueSend).not.toHaveBeenCalled();
   });
 
-  it("opens the context popover and highlights warning usage", async () => {
+  it("renders a subtle context-window trigger above send and still opens the popover", async () => {
     const user = userEvent.setup();
     const onManualCompact = vi.fn().mockResolvedValue(undefined);
 
@@ -362,7 +362,17 @@ describe("WorkbenchComposer", () => {
     });
 
     const trigger = screen.getByRole("button", { name: "上下文窗口" });
-    expect(trigger).toHaveClass("context-window-trigger-warning");
+    expect(trigger).toHaveClass("context-window-trigger", "context-window-trigger-compact");
+    expect(trigger).toHaveAttribute("title", "上下文窗口");
+    expect(trigger).toHaveTextContent(/^$/);
+    const ring = trigger.querySelector(".context-window-trigger-ring") as HTMLElement | null;
+    expect(ring).not.toBeNull();
+    expect(ring?.getAttribute("style") ?? "").toContain("--context-usage-ratio: 0.800");
+
+    const sendButton = screen.getByRole("button", { name: "发送" });
+    const actionStack = trigger.closest(".workbench-composer-primary-actions");
+    expect(actionStack).toHaveClass("workbench-composer-primary-actions");
+    expect(actionStack?.lastElementChild).toBe(sendButton);
 
     await user.click(trigger);
 
@@ -373,6 +383,61 @@ describe("WorkbenchComposer", () => {
 
     await user.click(screen.getByRole("button", { name: "压缩对话" }));
     await waitFor(() => expect(onManualCompact).toHaveBeenCalledTimes(1));
+  });
+
+  it("updates context usage ratio on the trigger when usage changes", () => {
+    const initialUsage: SessionContextWindowUsage = {
+      ...contextUsage,
+      used_tokens: 128000,
+      usage_ratio: 0.32,
+    };
+    const nextUsage: SessionContextWindowUsage = {
+      ...contextUsage,
+      used_tokens: 188000,
+      usage_ratio: 0.47,
+    };
+    const onQueueSend = vi.fn().mockResolvedValue(undefined);
+    const onInject = vi.fn().mockResolvedValue(undefined);
+    const onInterrupt = vi.fn().mockResolvedValue(undefined);
+    const onManualCompact = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderComposer({
+      sessionId: "session-context-live",
+      contextUsage: initialUsage,
+      onQueueSend,
+      onInject,
+      onInterrupt,
+      onManualCompact,
+    });
+
+    const trigger = screen.getByRole("button", { name: "上下文窗口" });
+    const initialRing = trigger.querySelector(".context-window-trigger-ring") as HTMLElement | null;
+    expect(initialRing).not.toBeNull();
+    expect(initialRing?.getAttribute("style") ?? "").toContain("--context-usage-ratio: 0.320");
+
+    rerender(
+      <WorkbenchComposer
+        sessionId="session-context-live"
+        slashCatalog={[]}
+        disabled={false}
+        isActiveGeneration={false}
+        isPausedGeneration={false}
+        isInterrupting={false}
+        queuedCount={0}
+        contextUsage={nextUsage}
+        contextUsageLoading={false}
+        contextCompacting={false}
+        onQueueSend={onQueueSend}
+        onInject={onInject}
+        onInterrupt={onInterrupt}
+        onManualCompact={onManualCompact}
+      />,
+    );
+
+    const updatedTrigger = screen.getByRole("button", { name: "上下文窗口" });
+    const updatedRing = updatedTrigger.querySelector(".context-window-trigger-ring") as HTMLElement | null;
+    expect(updatedRing).not.toBeNull();
+    expect(updatedRing?.getAttribute("style") ?? "").toContain("--context-usage-ratio: 0.470");
   });
 
   it("disables manual compaction while a generation is active", async () => {

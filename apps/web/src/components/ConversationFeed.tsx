@@ -3,6 +3,9 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { formatBytes } from "../lib/format";
+import {
+  readSkillNodeAttributionFromMetadata,
+} from "../lib/skillOrchestration";
 import type { RuntimeExecutionRun } from "../types/runtime";
 import type {
   AssistantTranscriptSegment,
@@ -88,11 +91,13 @@ type ConversationTurn = {
   userMessage: SessionMessage;
   generationRuns: GenerationRun[];
   supplementalMessages: SessionMessage[];
+  eventNotes: ConversationEventNoteEntry[];
 };
 
 type ConversationEventNoteEntry = {
   id: string;
   summary: string;
+  createdAt: string;
 };
 
 function isVisibleCompactionEvent(event: SessionEventEntry): boolean {
@@ -109,11 +114,24 @@ function isVisibleCompactionEvent(event: SessionEventEntry): boolean {
 function buildVisibleCompactionNotes(events: SessionEventEntry[]): ConversationEventNoteEntry[] {
   return events
     .filter(isVisibleCompactionEvent)
-    .map((event) => ({ id: event.id, summary: event.summary.trim() }));
+    .map((event) => ({ id: event.id, summary: event.summary.trim(), createdAt: event.createdAt }));
 }
 
 function ConversationEventNote({ summary }: { summary: string }) {
   return <p className="conversation-event-note">{summary}</p>;
+}
+
+function isCompactionRecordMessage(message: SessionMessage): boolean {
+  const metadata = message.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+
+  if (metadata["compaction_record"] === true) {
+    return true;
+  }
+
+  return typeof metadata["compaction_state"] === "object" && metadata["compaction_state"] !== null;
 }
 
 function toTimestamp(value: string | null | undefined): number {
@@ -147,6 +165,18 @@ function compareGenerations(left: ChatGeneration, right: ChatGeneration): number
     toTimestamp(left.started_at ?? left.created_at) -
     toTimestamp(right.started_at ?? right.created_at);
 
+  if (timestampDifference !== 0) {
+    return timestampDifference;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function compareEventNotes(
+  left: ConversationEventNoteEntry,
+  right: ConversationEventNoteEntry,
+): number {
+  const timestampDifference = toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
   if (timestampDifference !== 0) {
     return timestampDifference;
   }
@@ -355,10 +385,12 @@ function readGenerationUserMessageId(generation: ChatGeneration): string | null 
 function buildConversationRows(
   messages: SessionMessage[],
   generations: ChatGeneration[],
+  eventNotes: ConversationEventNoteEntry[],
 ): {
   turns: ConversationTurn[];
   orphanMessages: SessionMessage[];
   orphanGenerationRuns: GenerationRun[];
+  orphanEventNotes: ConversationEventNoteEntry[];
 } {
   const sortedMessages = [...messages].sort(compareMessages);
   const sortedGenerations = [...generations].sort(compareGenerations);
@@ -380,6 +412,7 @@ function buildConversationRows(
             ? messageById.get(readGenerationAssistantMessageId(generation)!)
             : null) ?? null,
       })),
+      orphanEventNotes: [...eventNotes].sort(compareEventNotes),
     };
   }
 
@@ -444,6 +477,7 @@ function buildConversationRows(
       userMessage,
       generationRuns,
       supplementalMessages,
+      eventNotes: [],
     } satisfies ConversationTurn;
   });
 
@@ -459,7 +493,79 @@ function buildConversationRows(
           : null) ?? null,
     }));
 
-  return { turns, orphanMessages, orphanGenerationRuns };
+  const orphanEventNotes = [...eventNotes].sort(compareEventNotes);
+
+  return { turns, orphanMessages, orphanGenerationRuns, orphanEventNotes };
+}
+
+type ConversationTimelineEntry =
+  | { kind: "turn"; id: string; timestamp: number; turn: ConversationTurn }
+  | { kind: "generation"; id: string; timestamp: number; run: GenerationRun }
+  | { kind: "message"; id: string; timestamp: number; message: SessionMessage }
+  | { kind: "event"; id: string; timestamp: number; eventNote: ConversationEventNoteEntry };
+
+function readTimelineEntryPriority(entry: ConversationTimelineEntry): number {
+  switch (entry.kind) {
+    case "turn":
+      return 0;
+    case "generation":
+      return 1;
+    case "message":
+      return 2;
+    case "event":
+      return 3;
+  }
+}
+
+function compareTimelineEntries(
+  left: ConversationTimelineEntry,
+  right: ConversationTimelineEntry,
+): number {
+  if (left.timestamp !== right.timestamp) {
+    return left.timestamp - right.timestamp;
+  }
+
+  const priorityDifference = readTimelineEntryPriority(left) - readTimelineEntryPriority(right);
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+type ConversationTurnTimelineEntry =
+  | { kind: "user"; id: string; timestamp: number; message: SessionMessage }
+  | { kind: "generation"; id: string; timestamp: number; run: GenerationRun }
+  | { kind: "message"; id: string; timestamp: number; message: SessionMessage }
+  | { kind: "event"; id: string; timestamp: number; eventNote: ConversationEventNoteEntry };
+
+function readTurnTimelineEntryPriority(entry: ConversationTurnTimelineEntry): number {
+  switch (entry.kind) {
+    case "user":
+      return 0;
+    case "generation":
+      return 1;
+    case "message":
+      return 2;
+    case "event":
+      return 3;
+  }
+}
+
+function compareTurnTimelineEntries(
+  left: ConversationTurnTimelineEntry,
+  right: ConversationTurnTimelineEntry,
+): number {
+  if (left.timestamp !== right.timestamp) {
+    return left.timestamp - right.timestamp;
+  }
+
+  const priorityDifference = readTurnTimelineEntryPriority(left) - readTurnTimelineEntryPriority(right);
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
+
+  return left.id.localeCompare(right.id);
 }
 
 function mergeGenerations(
@@ -749,13 +855,25 @@ function readSkillPayload(segment: AssistantTranscriptSegment): Record<string, u
   return skill ?? null;
 }
 
-function inferSkillTitle(segment: AssistantTranscriptSegment): string | null {
+function inferSkillTitle(segment: AssistantTranscriptSegment | null): string | null {
+  if (!segment) {
+    return null;
+  }
+
   const skill = readSkillPayload(segment);
   const metadata = readSegmentMetadata(segment);
   const argumentsRecord = readNestedRecord(metadata, "arguments");
+  const executeSkillCallText =
+    segment.tool_name === "execute_skill" &&
+    segment.kind === "tool_call" &&
+    typeof segment.text === "string" &&
+    segment.text.trim().length > 0
+      ? segment.text.trim()
+      : null;
   const rawName =
     readFirstString(skill ?? undefined, ["title", "name", "directory_name", "id"]) ??
-    readFirstString(argumentsRecord, ["skill_name_or_id"]);
+    readFirstString(argumentsRecord, ["skill_name_or_id"]) ??
+    executeSkillCallText;
   return rawName ? humanizeIdentifier(rawName) : null;
 }
 
@@ -1436,8 +1554,255 @@ function readInlineToolLabel(
   }
 
   return (
-    inferSkillTitle(reference) ??
+    inferSkillTitle(call) ?? inferSkillTitle(result) ?? inferSkillTitle(error) ??
     (reference.tool_name ? humanizeIdentifier(reference.tool_name) : "Tool")
+  );
+}
+
+type ToolSourceAttribution = {
+  skillLabels: string[];
+  nodeLabels: string[];
+};
+
+function normalizeToolStatusForBadge(status: string | null | undefined): string | null {
+  if (!status) {
+    return null;
+  }
+
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (["succeeded", "passed", "completed", "ok"].includes(normalized)) {
+    return "success";
+  }
+
+  if (["timed_out", "timeout"].includes(normalized)) {
+    return "timeout";
+  }
+
+  if (["cancelled", "canceled", "skipped"].includes(normalized)) {
+    return "paused";
+  }
+
+  if (["failed", "error"].includes(normalized)) {
+    return "failed";
+  }
+
+  if (["running", "queued", "pending"].includes(normalized)) {
+    return "running";
+  }
+
+  return status;
+}
+
+function mergeToolSourceAttribution(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): ToolSourceAttribution {
+  const skillLabels: string[] = [];
+  const nodeLabels: string[] = [];
+  const skillSet = new Set<string>();
+  const nodeSet = new Set<string>();
+
+  for (const segment of [call, result, error]) {
+    const metadata = readSegmentMetadata(segment);
+    const attribution = readSkillNodeAttributionFromMetadata(metadata);
+
+    for (const label of attribution.skillLabels) {
+      if (skillSet.has(label)) {
+        continue;
+      }
+      skillSet.add(label);
+      skillLabels.push(label);
+    }
+
+    for (const label of attribution.nodeLabels) {
+      if (nodeSet.has(label)) {
+        continue;
+      }
+      nodeSet.add(label);
+      nodeLabels.push(label);
+    }
+  }
+
+  return { skillLabels, nodeLabels };
+}
+
+const PATTT_CONTEXT_CANDIDATE_PATHS = [
+  [],
+  ["pattt_context"],
+  ["result"],
+  ["result", "pattt_context"],
+  ["result", "execution"],
+  ["result", "execution", "pattt_context"],
+  ["execution"],
+  ["execution", "pattt_context"],
+  ["payload"],
+  ["payload", "pattt_context"],
+  ["result", "payload"],
+  ["result", "payload", "pattt_context"],
+  ["data"],
+  ["data", "pattt_context"],
+  ["result", "data"],
+  ["result", "data", "pattt_context"],
+] as const;
+
+const PATTT_REPO_MARKER = "knowledge/pattt/repo/";
+
+function collectPatttContextCandidateRecords(
+  segment: AssistantTranscriptSegment | null,
+): Record<string, unknown>[] {
+  const metadata = readSegmentMetadata(segment);
+  if (!metadata) {
+    return [];
+  }
+
+  const records: Record<string, unknown>[] = [];
+  const seen = new Set<Record<string, unknown>>();
+
+  for (const path of PATTT_CONTEXT_CANDIDATE_PATHS) {
+    const candidateRecord =
+      path.length === 0
+        ? metadata
+        : (() => {
+            const candidate = readPathValue(metadata, path);
+            return candidate.found && isRecord(candidate.value) ? candidate.value : null;
+          })();
+
+    if (!candidateRecord || seen.has(candidateRecord)) {
+      continue;
+    }
+
+    seen.add(candidateRecord);
+    records.push(candidateRecord);
+  }
+
+  return records;
+}
+
+function readPatttLoadedDocs(
+  record: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const docs: Record<string, unknown>[] = [];
+  const seen = new Set<Record<string, unknown>>();
+  const containers: Record<string, unknown>[] = [record];
+  const nestedContext = readNestedRecord(record, "pattt_context");
+  if (nestedContext) {
+    containers.push(nestedContext);
+  }
+
+  for (const container of containers) {
+    const loadedDocs = container["loaded_docs"];
+    if (!Array.isArray(loadedDocs)) {
+      continue;
+    }
+
+    for (const entry of loadedDocs) {
+      if (!isRecord(entry) || seen.has(entry)) {
+        continue;
+      }
+
+      seen.add(entry);
+      docs.push(entry);
+    }
+  }
+
+  return docs;
+}
+
+function readPatttDocSourcePath(doc: Record<string, unknown>): string | null {
+  return readFirstString(doc, ["source_path", "path"]);
+}
+
+function extractPatttFamilyName(sourcePath: string): string | null {
+  const normalizedPath = sourcePath.replace(/\\/g, "/").trim();
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const markerIndex = normalizedPath.toLowerCase().indexOf(PATTT_REPO_MARKER);
+  if (markerIndex < 0) {
+    return null;
+  }
+
+  const relativePath = normalizedPath.slice(markerIndex + PATTT_REPO_MARKER.length);
+  const family = relativePath
+    .split("/")
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+
+  return family ?? null;
+}
+
+function readPatttLoadedFamilies(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): string[] {
+  const families: string[] = [];
+  const seenFamilies = new Set<string>();
+
+  for (const segment of [result, call, error]) {
+    for (const record of collectPatttContextCandidateRecords(segment)) {
+      for (const doc of readPatttLoadedDocs(record)) {
+        const sourcePath = readPatttDocSourcePath(doc);
+        if (!sourcePath) {
+          continue;
+        }
+
+        const family = extractPatttFamilyName(sourcePath);
+        if (!family) {
+          continue;
+        }
+
+        const dedupeKey = family.toLowerCase();
+        if (seenFamilies.has(dedupeKey)) {
+          continue;
+        }
+
+        seenFamilies.add(dedupeKey);
+        families.push(family);
+      }
+    }
+  }
+
+  return families;
+}
+
+function AssistantToolSourceBadges({ attribution }: { attribution: ToolSourceAttribution }) {
+  const visibleSkills = attribution.skillLabels.slice(0, 4);
+  const visibleNodes = attribution.nodeLabels.slice(0, 4);
+  const hasHiddenSkills = attribution.skillLabels.length > visibleSkills.length;
+  const hasHiddenNodes = attribution.nodeLabels.length > visibleNodes.length;
+
+  if (visibleSkills.length === 0 && visibleNodes.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="assistant-tool-source-row">
+      {visibleSkills.map((skillLabel) => (
+        <span key={`skill:${skillLabel}`} className="assistant-tool-source-chip">
+          skill · {skillLabel}
+        </span>
+      ))}
+      {hasHiddenSkills ? (
+        <span className="assistant-tool-source-chip">skill · +{attribution.skillLabels.length - visibleSkills.length}</span>
+      ) : null}
+      {visibleNodes.map((nodeLabel) => (
+        <span key={`node:${nodeLabel}`} className="assistant-tool-source-chip assistant-tool-source-chip-node">
+          node · {nodeLabel}
+        </span>
+      ))}
+      {hasHiddenNodes ? (
+        <span className="assistant-tool-source-chip assistant-tool-source-chip-node">
+          node · +{attribution.nodeLabels.length - visibleNodes.length}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -1460,6 +1825,8 @@ function AssistantShellBlock({
   const stderr = readPrioritizedShellDisplayField([result, error, call], ["stderr"]);
   const exitCode = readPrioritizedShellDisplayField([result, call, error], ["exit_code"]);
   const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+  const statusForBadge = normalizeToolStatusForBadge(status);
+  const sourceAttribution = mergeToolSourceAttribution(call, result, error);
   const shellErrorText = readShellErrorText({
     error,
     result,
@@ -1489,9 +1856,10 @@ function AssistantShellBlock({
           <strong className="assistant-tool-title" title={command}>
             {truncateCommand(command, 72)}
           </strong>
+          <AssistantToolSourceBadges attribution={sourceAttribution} />
         </div>
         <div className="assistant-tool-summary-side">
-          {status ? <StatusBadge status={status} /> : null}
+          {statusForBadge ? <StatusBadge status={statusForBadge} /> : null}
         </div>
       </summary>
       <div className="assistant-tool-body">
@@ -1519,6 +1887,52 @@ function AssistantShellBlock({
           </div>
         ) : null}
         {shellErrorText ? <p className="assistant-tool-error-copy">{shellErrorText}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function AssistantPatttToolBlock({
+  call,
+  result,
+  error,
+  loadedFamilies,
+}: {
+  call: AssistantTranscriptSegment | null;
+  result: AssistantTranscriptSegment | null;
+  error: AssistantTranscriptSegment | null;
+  loadedFamilies: string[];
+}) {
+  const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+  const statusForBadge = normalizeToolStatusForBadge(status);
+  const sourceAttribution = mergeToolSourceAttribution(call, result, error);
+
+  return (
+    <details
+      className={`assistant-tool-block assistant-pattt-block${error ? " assistant-shell-block-error" : ""}`}
+      data-status={status ?? undefined}
+    >
+      <summary className="assistant-tool-summary">
+        <div className="assistant-tool-summary-copy">
+          <span className="assistant-tool-eyebrow">PATTT</span>
+          <strong className="assistant-tool-title">加载的 payload</strong>
+          <AssistantToolSourceBadges attribution={sourceAttribution} />
+        </div>
+        <div className="assistant-tool-summary-side">
+          {statusForBadge ? <StatusBadge status={statusForBadge} /> : null}
+        </div>
+      </summary>
+      <div className="assistant-tool-body">
+        <div className="assistant-tool-detail-group">
+          <span className="assistant-tool-detail-label">加载的 payload</span>
+          <ul className="assistant-pattt-family-list">
+            {loadedFamilies.map((family) => (
+              <li key={`pattt-family:${family}`} className="assistant-pattt-family-item">
+                {family}
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </details>
   );
@@ -1633,12 +2047,35 @@ function AssistantToolInvocationBlock({
     return null;
   }
 
+  if (reference.tool_name === "execute_skill") {
+    return (
+      <>
+        {renderInlineSkillLabel(call, result, error)}
+        {error ? <AssistantErrorBlock segment={error} /> : null}
+      </>
+    );
+  }
+
   const command = call ? readSegmentCommand(call) : readSegmentCommand(reference);
   const shellLikeTool =
     reference.tool_name === "execute_kali_command" ||
     reference.tool_name === "bash" ||
     reference.tool_name === "sh" ||
     reference.tool_name === "zsh";
+  const sourceAttribution = mergeToolSourceAttribution(call, result, error);
+  const patttLoadedFamilies = readPatttLoadedFamilies(call, result, error);
+
+  if (patttLoadedFamilies.length > 0) {
+    return (
+      <AssistantPatttToolBlock
+        call={call}
+        result={result}
+        error={error}
+        loadedFamilies={patttLoadedFamilies}
+      />
+    );
+  }
+
   if (shellLikeTool || command) {
     return <AssistantShellBlock call={call} result={result} error={error} />;
   }
@@ -1646,6 +2083,7 @@ function AssistantToolInvocationBlock({
   return (
     <>
       {renderInlineSkillLabel(call, result, error)}
+      <AssistantToolSourceBadges attribution={sourceAttribution} />
       {error ? <AssistantErrorBlock segment={error} /> : null}
     </>
   );
@@ -1675,10 +2113,41 @@ export function ConversationFeed(props: ConversationFeedProps) {
     [activeGeneration, generations, queuedGenerations],
   );
 
-  const { turns, orphanMessages, orphanGenerationRuns } = useMemo(
-    () => buildConversationRows(messages, mergedGenerations),
-    [messages, mergedGenerations],
+  const { turns, orphanMessages, orphanGenerationRuns, orphanEventNotes } = useMemo(
+    () => buildConversationRows(messages, mergedGenerations, compactionNotes),
+    [compactionNotes, messages, mergedGenerations],
   );
+
+  const timelineEntries = useMemo(() => {
+    const entries: ConversationTimelineEntry[] = [
+      ...orphanGenerationRuns.map((run) => ({
+        kind: "generation" as const,
+        id: run.id,
+        timestamp: toTimestamp(run.generation.started_at ?? run.generation.created_at),
+        run,
+      })),
+      ...orphanMessages.map((message) => ({
+        kind: "message" as const,
+        id: message.id,
+        timestamp: toTimestamp(message.created_at),
+        message,
+      })),
+      ...turns.map((turn) => ({
+        kind: "turn" as const,
+        id: turn.id,
+        timestamp: toTimestamp(turn.userMessage.created_at),
+        turn,
+      })),
+      ...orphanEventNotes.map((eventNote) => ({
+        kind: "event" as const,
+        id: eventNote.id,
+        timestamp: toTimestamp(eventNote.createdAt),
+        eventNote,
+      })),
+    ];
+
+    return entries.sort(compareTimelineEntries);
+  }, [orphanEventNotes, orphanGenerationRuns, orphanMessages, turns]);
 
   const lastItemSignature = useMemo(() => {
     const lastMessage = messages[messages.length - 1] ?? null;
@@ -1835,7 +2304,11 @@ export function ConversationFeed(props: ConversationFeedProps) {
 
   function renderUserEditTrigger(message: SessionMessage) {
     const isBusy = messageActionBusyId === message.id;
-    if (message.role !== "user" || typeof onEditMessage !== "function") {
+    if (
+      message.role !== "user" ||
+      typeof onEditMessage !== "function" ||
+      isCompactionRecordMessage(message)
+    ) {
       return null;
     }
 
@@ -1873,6 +2346,9 @@ export function ConversationFeed(props: ConversationFeedProps) {
         <textarea
           ref={editTextareaRef}
           className="field-textarea chat-bubble-inline-editor-input"
+          aria-label="编辑消息内容"
+          title="编辑消息内容"
+          placeholder="请输入要修改的消息内容"
           value={editingContent}
           rows={Math.max(3, message.content.split(/\r?\n/).length)}
           disabled={isBusy}
@@ -2025,13 +2501,55 @@ export function ConversationFeed(props: ConversationFeedProps) {
       : renderAssistantPlaceholder(run.generation);
   }
 
+  function renderTurn(turn: ConversationTurn) {
+    const turnEntries: ConversationTurnTimelineEntry[] = [
+      {
+        kind: "user" as const,
+        id: turn.userMessage.id,
+        timestamp: toTimestamp(turn.userMessage.created_at),
+        message: turn.userMessage,
+      },
+      ...turn.generationRuns.map((run) => ({
+        kind: "generation" as const,
+        id: run.id,
+        timestamp: toTimestamp(run.generation.started_at ?? run.generation.created_at),
+        run,
+      })),
+      ...turn.supplementalMessages.map((message) => ({
+        kind: "message" as const,
+        id: message.id,
+        timestamp: toTimestamp(message.created_at),
+        message,
+      })),
+      ...turn.eventNotes.map((eventNote) => ({
+        kind: "event" as const,
+        id: eventNote.id,
+        timestamp: toTimestamp(eventNote.createdAt),
+        eventNote,
+      })),
+    ].sort(compareTurnTimelineEntries);
+
+    return (
+      <article key={turn.id} className="chat-turn">
+        {turnEntries.map((entry) => {
+          if (entry.kind === "user" || entry.kind === "message") {
+            return renderMessageBubble(entry.message);
+          }
+
+          if (entry.kind === "generation") {
+            return renderGenerationRun(entry.run);
+          }
+
+          return <ConversationEventNote key={entry.eventNote.id} summary={entry.eventNote.summary} />;
+        })}
+      </article>
+    );
+  }
+
   const hasContent =
-    turns.length > 0 ||
-    orphanMessages.length > 0 ||
-    orphanGenerationRuns.length > 0 ||
+    timelineEntries.length > 0 ||
     activeGeneration !== null ||
-    queuedGenerations.length > 0 ||
-    compactionNotes.length > 0;
+    queuedGenerations.length > 0;
 
   if (!hasContent) {
     return (
@@ -2048,20 +2566,21 @@ export function ConversationFeed(props: ConversationFeedProps) {
 
   return (
     <section ref={feedRef} className="conversation-feed conversation-feed-threaded">
-      {orphanGenerationRuns.map((run) => renderGenerationRun(run))}
-      {orphanMessages.map((message) => renderMessageBubble(message))}
+      {timelineEntries.map((entry) => {
+        if (entry.kind === "turn") {
+          return renderTurn(entry.turn);
+        }
 
-      {turns.map((turn) => (
-        <article key={turn.id} className="chat-turn">
-          {renderMessageBubble(turn.userMessage)}
-          {turn.generationRuns.map((run) => renderGenerationRun(run))}
-          {turn.supplementalMessages.map((message) => renderMessageBubble(message))}
-        </article>
-      ))}
+        if (entry.kind === "generation") {
+          return renderGenerationRun(entry.run);
+        }
 
-      {compactionNotes.map((eventNote) => (
-        <ConversationEventNote key={eventNote.id} summary={eventNote.summary} />
-      ))}
+        if (entry.kind === "message") {
+          return renderMessageBubble(entry.message);
+        }
+
+        return <ConversationEventNote key={entry.eventNote.id} summary={entry.eventNote.summary} />;
+      })}
     </section>
   );
 }

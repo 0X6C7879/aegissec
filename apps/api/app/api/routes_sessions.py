@@ -18,6 +18,7 @@ from sqlmodel import Field, SQLModel
 from sqlmodel import Session as DBSession
 
 from app.agent.continuation_store import ContinuationStore
+from app.agent.token_budget import estimate_token_count
 from app.compat.mcp.service import MCPService, get_mcp_service
 from app.compat.skills.service import SkillService, get_skill_service
 from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
@@ -29,15 +30,15 @@ from app.db.models import (
     GenerationStatus,
     GenerationStepRead,
     Message,
-    MessageStatus,
     MessageKind,
     MessageRole,
+    MessageStatus,
     Session,
     SessionCompactRequest,
     SessionCompactResponse,
-    SessionConversationRead,
     SessionContextWindowBreakdownRead,
     SessionContextWindowRead,
+    SessionConversationRead,
     SessionCreate,
     SessionDetail,
     SessionQueueRead,
@@ -70,8 +71,8 @@ from app.harness.continuations import (
 )
 from app.harness.memory.service import HarnessMemoryService
 from app.harness.prompts import HarnessPromptAssembler
-from app.harness.state import HarnessRetrievalManifest, HarnessSessionState
 from app.harness.session_runner import start_worker_if_needed as start_session_worker_if_needed
+from app.harness.state import HarnessRetrievalManifest, HarnessSessionState
 from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import ChatRuntime, get_chat_runtime
 from app.services.runtime import RuntimeService, get_runtime_service
@@ -80,7 +81,6 @@ from app.services.session_generation import (
     SessionGenerationManager,
     get_generation_manager,
 )
-from app.agent.token_budget import estimate_token_count
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -240,7 +240,7 @@ def _coerce_int(value: object, fallback: int) -> int:
 
 
 def _coerce_float(value: object, fallback: float) -> float:
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     if isinstance(value, str):
         try:
@@ -446,6 +446,129 @@ def _find_latest_assistant_message(
     return None
 
 
+def _restore_semantic_state_from_messages(messages: list[Message]) -> dict[str, object] | None:
+    for message in reversed(messages):
+        metadata = getattr(message, "metadata_json", {})
+        if not isinstance(metadata, dict):
+            continue
+        semantic_state = metadata.get("semantic_state")
+        if isinstance(semantic_state, dict):
+            return {
+                "active_hypotheses": [
+                    str(item)
+                    for item in semantic_state.get("active_hypotheses", [])
+                    if isinstance(item, str)
+                ],
+                "evidence_ids": [
+                    str(item)
+                    for item in semantic_state.get("evidence_ids", [])
+                    if isinstance(item, str)
+                ],
+                "graph_hints": [
+                    dict(item)
+                    for item in semantic_state.get("graph_hints", [])
+                    if isinstance(item, dict)
+                ],
+                "artifacts": [
+                    str(item)
+                    for item in semantic_state.get("artifacts", [])
+                    if isinstance(item, str)
+                ],
+                "recent_entities": [
+                    str(item)
+                    for item in semantic_state.get("recent_entities", [])
+                    if isinstance(item, str)
+                ],
+                "recent_tools": [
+                    str(item)
+                    for item in semantic_state.get("recent_tools", [])
+                    if isinstance(item, str)
+                ],
+                "reason": (
+                    str(semantic_state.get("reason"))
+                    if semantic_state.get("reason") is not None
+                    else None
+                ),
+            }
+    return None
+
+
+def _estimate_message_payload_tokens(messages: list[Message]) -> int:
+    return sum(
+        estimate_token_count(
+            json.dumps(
+                {
+                    "role": message.role.value,
+                    "content": message.content,
+                    "attachments": message.attachments_json,
+                },
+                ensure_ascii=False,
+            )
+        )
+        for message in messages
+        if message.message_kind == MessageKind.MESSAGE
+        and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+    )
+
+
+def _persist_manual_compaction_message(
+    repository: SessionRepository,
+    session: Session,
+    *,
+    visible_messages: list[Message],
+    compact_boundary: str,
+    compacted_at: datetime,
+    session_state: HarnessSessionState,
+) -> Message:
+    archived_message_count = session_state.compaction.archived_message_count
+    if archived_message_count <= 0:
+        raise ValueError("Manual compaction did not archive any persisted messages.")
+
+    archived_messages = visible_messages[:archived_message_count]
+    if not archived_messages:
+        raise ValueError("Manual compaction missing archived message set.")
+
+    restored_semantic_state = _restore_semantic_state_from_messages(visible_messages)
+    compact_message_metadata: dict[str, object] = {
+        "summary": "已压缩对话",
+        "compact_boundary": compact_boundary,
+        "compaction_record": True,
+        "compaction_state": {
+            "recent_turns": session_state.compaction.recent_turns,
+            "last_compacted_turn": session_state.compaction.last_compacted_turn,
+            "active_compact_fragment": session_state.compaction.active_compact_fragment,
+            "durable_artifact_ref": session_state.compaction.durable_artifact_ref,
+            "mode": session_state.compaction.mode,
+            "archived_message_count": session_state.compaction.archived_message_count,
+        },
+    }
+    if restored_semantic_state is not None:
+        compact_message_metadata["semantic_state"] = restored_semantic_state
+
+    compact_message = repository.create_message(
+        session=session,
+        role=MessageRole.USER,
+        content=session_state.compaction.active_compact_fragment,
+        attachments=[],
+        branch_id=session.active_branch_id,
+        sequence=archived_messages[0].sequence,
+        turn_index=archived_messages[0].turn_index,
+        metadata_json=compact_message_metadata,
+        commit=False,
+    )
+    compact_message.created_at = compacted_at
+    compact_message.completed_at = compacted_at
+    repository.db_session.add(compact_message)
+
+    for message in archived_messages:
+        message.status = MessageStatus.SUPERSEDED
+        repository.db_session.add(message)
+
+    repository.db_session.commit()
+    repository.db_session.refresh(compact_message)
+    return compact_message
+
+
 def _manual_compaction_result(
     repository: SessionRepository,
     session: Session,
@@ -457,6 +580,12 @@ def _manual_compaction_result(
         branch_id=session.active_branch_id,
         include_superseded=False,
     )
+    visible_messages = [
+        message
+        for message in messages
+        if message.message_kind == MessageKind.MESSAGE
+        and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
+    ]
     message_payloads = [
         {
             "role": message.role.value,
@@ -498,12 +627,30 @@ def _manual_compaction_result(
         turn_count=max(len(message_payloads), 1),
     )
     compacted = session_state.compaction.mode == "full"
-    after_tokens = sum(
-        estimate_token_count(json.dumps(item, ensure_ascii=False)) for item in compacted_messages
-    )
     compact_boundary = (
         f"compact-boundary:{session_state.compaction.last_compacted_turn}" if compacted else None
     )
+    compacted_at = datetime.now(session.updated_at.tzinfo)
+    if compacted and compact_boundary is not None:
+        _persist_manual_compaction_message(
+            repository,
+            session,
+            visible_messages=visible_messages,
+            compact_boundary=compact_boundary,
+            compacted_at=compacted_at,
+            session_state=session_state,
+        )
+        persisted_messages = repository.list_messages(
+            session.id,
+            branch_id=session.active_branch_id,
+            include_superseded=False,
+        )
+        after_tokens = _estimate_message_payload_tokens(persisted_messages)
+    else:
+        after_tokens = sum(
+            estimate_token_count(json.dumps(item, ensure_ascii=False))
+            for item in compacted_messages
+        )
     return SessionCompactResponse(
         session_id=session.id,
         mode="manual",
@@ -513,7 +660,7 @@ def _manual_compaction_result(
         after_tokens=after_tokens,
         reclaimed_tokens=max(before_tokens - after_tokens, 0),
         summary="已压缩对话" if compacted else "当前上下文暂不需要压缩",
-        created_at=datetime.now(session.updated_at.tzinfo),
+        created_at=compacted_at,
     )
 
 

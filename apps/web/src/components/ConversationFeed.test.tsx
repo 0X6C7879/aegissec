@@ -249,7 +249,7 @@ describe("ConversationFeed", () => {
     expect(container.querySelector("details.assistant-reasoning-stream")).toBeNull();
     expect(container.querySelectorAll(".assistant-reasoning-block")).toHaveLength(2);
     expect(screen.getByText("自动选择")).toBeInTheDocument();
-    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getAllByText("ctf-web").length).toBeGreaterThan(0);
     expect(container.querySelectorAll(".assistant-inline-cue")).toHaveLength(1);
     expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(0);
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
@@ -312,11 +312,73 @@ describe("ConversationFeed", () => {
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
   });
 
-  it("renders only compaction event notes near the bottom of the feed", () => {
-    render(
+  it("inserts manual compaction markers into the main timeline by createdAt", () => {
+    const messages: SessionMessage[] = [
+      {
+        id: "message-user-1",
+        session_id: "session-1",
+        role: "user",
+        content: "第一条提问",
+        assistant_transcript: [],
+        attachments: [],
+        created_at: "2026-04-11T18:20:00.000Z",
+      },
+      {
+        id: "message-assistant-1",
+        session_id: "session-1",
+        generation_id: "generation-1",
+        role: "assistant",
+        content: "第一条回答",
+        assistant_transcript: [],
+        attachments: [],
+        created_at: "2026-04-11T18:20:30.000Z",
+      },
+      {
+        id: "message-user-2",
+        session_id: "session-1",
+        role: "user",
+        content: "第二条提问",
+        assistant_transcript: [],
+        attachments: [],
+        created_at: "2026-04-11T18:22:00.000Z",
+      },
+      {
+        id: "message-assistant-2",
+        session_id: "session-1",
+        generation_id: "generation-2",
+        role: "assistant",
+        content: "第二条回答",
+        assistant_transcript: [],
+        attachments: [],
+        created_at: "2026-04-11T18:22:30.000Z",
+      },
+    ];
+
+    const generations: ChatGeneration[] = [
+      buildGeneration({
+        id: "generation-1",
+        user_message_id: "message-user-1",
+        assistant_message_id: "message-assistant-1",
+        created_at: "2026-04-11T18:20:05.000Z",
+        started_at: "2026-04-11T18:20:05.000Z",
+        updated_at: "2026-04-11T18:20:30.000Z",
+        ended_at: "2026-04-11T18:20:30.000Z",
+      }),
+      buildGeneration({
+        id: "generation-2",
+        user_message_id: "message-user-2",
+        assistant_message_id: "message-assistant-2",
+        created_at: "2026-04-11T18:22:05.000Z",
+        started_at: "2026-04-11T18:22:05.000Z",
+        updated_at: "2026-04-11T18:22:30.000Z",
+        ended_at: "2026-04-11T18:22:30.000Z",
+      }),
+    ];
+
+    const { container } = render(
       <ConversationFeed
-        messages={buildMessages()}
-        generations={[buildGeneration()]}
+        messages={messages}
+        generations={generations}
         events={[
           buildCompactionEvent(),
           buildCompactionEvent({
@@ -332,6 +394,22 @@ describe("ConversationFeed", () => {
 
     expect(screen.getByText("已压缩对话")).toBeInTheDocument();
     expect(screen.queryByText("不应显示的普通事件")).not.toBeInTheDocument();
+
+    const timelineEntries = [
+      ...container.querySelector(".conversation-feed-threaded")!.children,
+    ].map((element) => {
+      if (element.classList.contains("chat-turn")) {
+        return element.textContent?.includes("第一条提问") ? "turn-1" : "turn-2";
+      }
+
+      if (element.classList.contains("conversation-event-note")) {
+        return "manual-compaction";
+      }
+
+      return "unknown";
+    });
+
+    expect(timelineEntries).toEqual(["turn-1", "manual-compaction", "turn-2"]);
   });
 
   it("does not render automatic compaction session notes because the transcript cue already covers them", () => {
@@ -351,6 +429,36 @@ describe("ConversationFeed", () => {
     );
 
     expect(screen.queryByText("已压缩对话")).not.toBeInTheDocument();
+  });
+
+  it("does not show the edit trigger for persisted compacted-history messages", () => {
+    render(
+      <ConversationFeed
+        messages={[
+          {
+            id: "message-compacted-history",
+            session_id: "session-1",
+            role: "user",
+            content: "## Compacted History\n- archived turn",
+            metadata: {
+              compaction_record: true,
+              compaction_state: {
+                mode: "full",
+              },
+            },
+            assistant_transcript: [],
+            attachments: [],
+            created_at: "2026-04-11T18:21:02.000Z",
+          },
+        ]}
+        generations={[]}
+        events={[]}
+        runtimeRuns={[]}
+        onEditMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "返回并编辑消息" })).not.toBeInTheDocument();
   });
 
   it("reads shell stdout and stderr from metadata.result without surfacing raw JSON", () => {
@@ -410,6 +518,309 @@ describe("ConversationFeed", () => {
     expect(terminalOutput).toContain("minor warning");
     expect(screen.getByText("退出码：2")).toBeInTheDocument();
     expect(screen.queryByText(/"stdout":/)).not.toBeInTheDocument();
+  });
+
+  it("renders source skill/node badges for shell blocks when metadata carries orchestration attribution", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-source-shell-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-source-shell",
+                text: "whoami",
+                metadata: {
+                  command: "whoami",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-source-shell-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-source-shell",
+                text: "命令执行完成。",
+                metadata: {
+                  result: {
+                    command: "whoami",
+                    stdout: "root",
+                    skill_id: "ctf-web",
+                    role: "supporting",
+                    node_kind: "worker",
+                    step_id: "worker-1",
+                    stage_name: "exploit",
+                  },
+                },
+              }),
+            ],
+            content: "source attribution ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("skill · ctf-web")).toBeInTheDocument();
+    expect(
+      screen.getByText("node · Supporting · worker · worker-1 · stage:exploit"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders PATTT execute_skill calls as inline skill labels", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-pattt-single-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-single",
+                text: "pattt-readme-loader",
+                metadata: {
+                  arguments: {
+                    skill_name_or_id: "pattt-readme-loader",
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-pattt-single-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-single",
+                text: "PATTT 上下文准备完成。",
+                metadata: {
+                  result: {
+                    execution: {
+                      pattt_context: {
+                        loaded_docs: [
+                          {
+                            source_path:
+                              "knowledge/pattt/repo/Server Side Request Forgery/README.md",
+                          },
+                        ],
+                        payload_candidates: [
+                          {
+                            payload: "http://169.254.169.254/latest/meta-data",
+                            section_title: "Cloud metadata",
+                            risk_tier: "verification",
+                            expected_signals: ["metadata"],
+                            tool_hints: ["curl"],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+            ],
+            content: "PATTT family ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(0);
+    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(0);
+    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
+    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
+    expect(screen.queryByText("Server Side Request Forgery")).not.toBeInTheDocument();
+  });
+
+  it("pairs PATTT execute_skill call/result into a single inline skill label", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-pattt-dedupe-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-dedupe",
+                text: "pattt-readme-loader",
+              }),
+              buildTranscriptSegment({
+                id: "segment-pattt-dedupe-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-dedupe",
+                text: "PATTT 上下文准备完成。",
+                metadata: {
+                  result: {
+                    execution: {
+                      pattt_context: {
+                        loaded_docs: [
+                          {
+                            path: "knowledge/pattt/repo/SQL Injection/README.md",
+                          },
+                          {
+                            path: "knowledge/pattt/repo/SQL Injection/MySQL Injection.md",
+                          },
+                          {
+                            path: "knowledge/pattt/repo/SQL Injection/manual/standalone.md",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+            ],
+            content: "PATTT dedupe ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
+    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
+    expect(screen.queryByText("SQL Injection")).not.toBeInTheDocument();
+  });
+
+  it("keeps PATTT metadata hidden even when multiple families are loaded", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-pattt-multi-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-multi",
+                text: "pattt-readme-loader",
+              }),
+              buildTranscriptSegment({
+                id: "segment-pattt-multi-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-multi",
+                text: "PATTT 上下文准备完成。",
+                metadata: {
+                  result: {
+                    execution: {
+                      pattt_context: {
+                        loaded_docs: [
+                          {
+                            path: "knowledge/pattt/repo/Server Side Request Forgery/README.md",
+                          },
+                          {
+                            path: "knowledge/pattt/repo/SQL Injection/README.md",
+                          },
+                          {
+                            path: "knowledge/pattt/repo/Prompt Injection/README.md",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+            ],
+            content: "PATTT multi family ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
+    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
+    expect(screen.queryByText("Server Side Request Forgery")).not.toBeInTheDocument();
+    expect(screen.queryByText("SQL Injection")).not.toBeInTheDocument();
+    expect(screen.queryByText("Prompt Injection")).not.toBeInTheDocument();
+  });
+
+  it("does not leak PATTT raw paths, README content, payload text, or raw JSON keys", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-pattt-redaction-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-redaction",
+                text: "pattt-readme-loader",
+              }),
+              buildTranscriptSegment({
+                id: "segment-pattt-redaction-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-pattt-redaction",
+                text: "PATTT 上下文准备完成。",
+                metadata: {
+                  result: {
+                    execution: {
+                      pattt_context: {
+                        loaded_docs: [
+                          {
+                            path: "knowledge/pattt/repo/Prompt Injection/README.md",
+                            content: "# Prompt Injection\nSensitive README body",
+                          },
+                        ],
+                        payload_candidates: [
+                          {
+                            payload: "UNION SELECT password FROM users",
+                            text: "UNION SELECT password FROM users",
+                            section_title: "Classic SQLi",
+                            risk_tier: "verification",
+                            expected_signals: ["db error"],
+                            tool_hints: ["sqlmap"],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+            ],
+            content: "PATTT redaction ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
+    expect(screen.queryByText("Prompt Injection")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("knowledge/pattt/repo/Prompt Injection/README.md"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Sensitive README body")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("UNION SELECT password FROM users"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/risk_tier|expected_signals|tool_hints|section_title|loaded_docs/),
+    ).not.toBeInTheDocument();
   });
 
   it("reads shell output from legacy transcript metadata_payload fields", () => {
@@ -1110,8 +1521,8 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("工具执行完成，状态：success。")).not.toBeInTheDocument();
   });
 
-  it("renders skill calls as lightweight inline names and keeps errors inline", () => {
-    render(
+  it("renders execute_skill as an inline skill label without orchestration card details", () => {
+    const { container } = render(
       <ConversationFeed
         messages={buildMessages({
           assistant: {
@@ -1135,34 +1546,159 @@ describe("ConversationFeed", () => {
                 sequence: 2,
                 tool_name: "execute_skill",
                 tool_call_id: "tool-skill-1",
-                text: "已准备 movement_tmux 技能上下文。",
+                text: "已准备多技能上下文。",
                 metadata: {
                   result: {
-                    execution: {
-                      status: "prepared",
+                    selected_skills: [
+                      {
+                        id: "ctf-web",
+                        directory_name: "ctf-web",
+                        role: "primary",
+                      },
+                      {
+                        id: "recon-web",
+                        directory_name: "recon-web",
+                        role: "supporting",
+                      },
+                      {
+                        id: "reference-doc",
+                        directory_name: "reference-doc",
+                        role: "reference",
+                      },
+                    ],
+                    prepared_selected_skills: [
+                      {
+                        id: "ctf-web",
+                        directory_name: "ctf-web",
+                        role: "primary",
+                        prepared_for_context: true,
+                        prepared_for_execution: true,
+                      },
+                      {
+                        id: "recon-web",
+                        directory_name: "recon-web",
+                        role: "supporting",
+                        prepared_for_context: true,
+                        prepared_for_execution: false,
+                      },
+                    ],
+                    skill_orchestration_plan: {
+                      active_stage: "exploit",
+                      stages: [
+                        {
+                          stage_name: "exploit",
+                          mode: "primary_with_parallel_supporting",
+                          failure_policy: "best_effort",
+                          steps: [
+                            {
+                              step_id: "primary-1",
+                              name: "ctf-web",
+                              role: "primary",
+                            },
+                            {
+                              step_id: "worker-1",
+                              name: "recon-web",
+                              role: "supporting",
+                              node_kind: "worker",
+                            },
+                            {
+                              step_id: "reduce-1",
+                              name: "Result Reducer",
+                              role: "reducer",
+                              node_kind: "reducer",
+                            },
+                            {
+                              step_id: "verify-1",
+                              name: "Result Verifier",
+                              role: "verifier",
+                              node_kind: "verifier",
+                            },
+                          ],
+                        },
+                      ],
                     },
-                    skill: {
-                      title: "movement_tmux",
-                      description: "Use tmux to move laterally.",
-                      content: "# movement_tmux\nDetailed instructions",
+                    skill_orchestration_execution: {
+                      status: "completed",
+                      duration_ms: 4820,
+                      worker_results: [
+                        {
+                          step_id: "worker-1",
+                          name: "recon-web",
+                          role: "supporting",
+                          node_kind: "worker",
+                          status: "succeeded",
+                          stage_name: "exploit",
+                          summary_for_prompt: "发现新的可利用端点",
+                        },
+                      ],
+                      node_results: [
+                        {
+                          step_id: "worker-1",
+                          name: "recon-web",
+                          role: "supporting",
+                          node_kind: "worker",
+                          status: "succeeded",
+                          stage_name: "exploit",
+                        },
+                        {
+                          step_id: "reduce-1",
+                          name: "Result Reducer",
+                          role: "reducer",
+                          node_kind: "reducer",
+                          status: "succeeded",
+                          stage_name: "exploit",
+                        },
+                        {
+                          step_id: "verify-1",
+                          name: "Result Verifier",
+                          role: "verifier",
+                          node_kind: "verifier",
+                          status: "succeeded",
+                          stage_name: "exploit",
+                        },
+                      ],
+                      reduction_result: {
+                        status: "completed",
+                      },
+                      verification_result: {
+                        status: "passed",
+                        passed: true,
+                        requested_next_stage: "post-exploit",
+                      },
+                      stage_transition: {
+                        from_stage: "exploit",
+                        to_stage: "post-exploit",
+                        replan_required: true,
+                        reasons: ["需要后渗透上下文"],
+                      },
+                    },
+                    skill_stage_transition: {
+                      from_stage: "exploit",
+                      to_stage: "post-exploit",
+                      replan_required: true,
+                      reasons: ["需要后渗透上下文"],
+                    },
+                    replanned_skill_context: {
+                      selected_skills: [
+                        {
+                          id: "post-exploitation",
+                          directory_name: "post-exploitation",
+                          role: "primary",
+                          prepared_for_context: true,
+                          prepared_for_execution: true,
+                        },
+                      ],
+                      skill_orchestration_plan: {
+                        active_stage: "post-exploit",
+                      },
                     },
                   },
                 },
               }),
               buildTranscriptSegment({
-                id: "segment-error",
-                kind: "error",
-                sequence: 3,
-                status: "failed",
-                text: "连接目标失败。",
-                metadata: {
-                  detail: "socket timeout",
-                },
-              }),
-              buildTranscriptSegment({
                 id: "segment-output-final",
                 kind: "output",
-                sequence: 4,
+                sequence: 3,
                 text: "最终建议在下一跳前重新确认权限。",
               }),
             ],
@@ -1175,11 +1711,14 @@ describe("ConversationFeed", () => {
       />,
     );
 
+    expect(screen.queryByText("Skill Orchestration")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
     expect(screen.getByText("Movement Tmux")).toBeInTheDocument();
-    expect(screen.queryByText("Use tmux to move laterally.")).not.toBeInTheDocument();
-    expect(screen.queryByText("# movement_tmux\nDetailed instructions")).not.toBeInTheDocument();
-    expect(screen.queryByText("Read skill content for movement_tmux.")).not.toBeInTheDocument();
-    expect(screen.getByText("连接目标失败。")).toBeInTheDocument();
+    expect(screen.queryByText("Selected skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result Reducer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Result Verifier")).not.toBeInTheDocument();
+    expect(screen.queryByText(/post-exploit/)).not.toBeInTheDocument();
+    expect(screen.queryByText("post-exploitation")).not.toBeInTheDocument();
     expect(screen.getByText("最终建议在下一跳前重新确认权限。")).toBeInTheDocument();
   });
 
