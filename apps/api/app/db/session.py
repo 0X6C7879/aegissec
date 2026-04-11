@@ -33,11 +33,35 @@ def _ensure_sqlite_parent_dir(database_url: str) -> None:
     Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
 
 
+def _is_sqlite_memory_url(database_url: str) -> bool:
+    normalized_url = database_url.replace("sqlite+pysqlite://", "sqlite://", 1)
+    return normalized_url in {"sqlite://", "sqlite:///:memory:"} or normalized_url.startswith(
+        "sqlite:///:memory:?"
+    )
+
+
+def _build_engine_options(database_url: str) -> dict[str, object]:
+    options: dict[str, object] = {
+        "connect_args": _sqlite_connect_args(database_url),
+    }
+    if _is_sqlite_memory_url(database_url):
+        return options
+
+    options.update(
+        {
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "pool_timeout": settings.db_pool_timeout_seconds,
+            "pool_recycle": settings.db_pool_recycle_seconds,
+            "pool_pre_ping": settings.db_pool_pre_ping,
+        }
+    )
+    return options
+
+
 settings = get_settings()
 _ensure_sqlite_parent_dir(settings.database_url)
-engine = create_engine(
-    settings.database_url, connect_args=_sqlite_connect_args(settings.database_url)
-)
+engine = create_engine(settings.database_url, **_build_engine_options(settings.database_url))
 
 _PHASE6_SQLITE_TABLES = ("graph_edge", "graph_node", "task_node", "workflow_run")
 _PHASE6_REQUIRED_COLUMNS: dict[str, set[str]] = {

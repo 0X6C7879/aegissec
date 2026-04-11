@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+import logging
 import threading
 import time
 from collections.abc import Coroutine
@@ -2025,6 +2026,145 @@ def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClien
         graph_updates = [event for event in events if event["type"] == "graph.updated"]
         assert graph_updates
         assert any(event["payload"].get("graph_type") == "attack" for event in graph_updates)
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_failure_logs_runtime_error_to_backend_logger(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    class FailingChatRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+                callbacks,
+            )
+            raise ChatRuntimeError("synthetic failure")
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: FailingChatRuntime()
+
+    caplog.set_level(logging.ERROR, logger="aegissec.api")
+    caplog.clear()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Failure Log Session"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "break", "attachments": [], "wait_for_completion": True},
+        )
+
+        assert chat_response.status_code == 502
+
+        conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+        assert conversation_response.status_code == 200
+        generation_id = api_data(conversation_response)["generations"][0]["id"]
+
+        matching_records = [
+            record
+            for record in caplog.records
+            if record.name == "aegissec.api"
+            and "Session worker generation failed during model/runtime execution"
+            in record.getMessage()
+        ]
+
+        assert matching_records
+        assert any(
+            getattr(record, "session_id", None) == session_id
+            and getattr(record, "generation_id", None) == generation_id
+            and "synthetic failure" in record.getMessage()
+            for record in matching_records
+        )
+    finally:
+        app.dependency_overrides[get_chat_runtime] = original_override
+
+
+def test_chat_unexpected_exception_closes_running_generation(client: TestClient) -> None:
+    class UnexpectedFailureRuntime:
+        async def generate_reply(
+            self,
+            content: str,
+            attachments: list[object],
+            conversation_messages: list[object] | None = None,
+            available_skills: list[object] | None = None,
+            skill_context_prompt: str | None = None,
+            execute_tool: ToolExecutor | None = None,
+            callbacks: GenerationCallbacks | None = None,
+        ) -> str:
+            del (
+                content,
+                attachments,
+                conversation_messages,
+                available_skills,
+                skill_context_prompt,
+                execute_tool,
+            )
+            assert callbacks is not None
+            assert callbacks.on_text_delta is not None
+            await callbacks.on_text_delta("partial ")
+            raise RuntimeError("unexpected runtime failure")
+
+    original_override = app.dependency_overrides[get_chat_runtime]
+    app.dependency_overrides[get_chat_runtime] = lambda: UnexpectedFailureRuntime()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "Unexpected Failure"})
+        session_id = api_data(session_response)["id"]
+
+        chat_response = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"content": "trigger failure", "attachments": [], "wait_for_completion": True},
+        )
+        assert chat_response.status_code == 502
+        assert chat_response.json()["detail"] == "unexpected runtime failure"
+
+        conversation_payload = None
+        for _ in range(int(TEST_EVENTUAL_TIMEOUT_SECONDS / TEST_POLL_INTERVAL_SECONDS)):
+            conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
+            assert conversation_response.status_code == 200
+            conversation_payload = api_data(conversation_response)
+            if (
+                conversation_payload["session"]["status"] == "error"
+                and conversation_payload["active_generation_id"] is None
+                and conversation_payload["generations"]
+                and conversation_payload["generations"][0]["status"] == "failed"
+            ):
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+        assert conversation_payload is not None
+        assert conversation_payload["session"]["status"] == "error"
+        assert conversation_payload["active_generation_id"] is None
+        assert conversation_payload["queued_generation_count"] == 0
+        assert conversation_payload["generations"][0]["status"] == "failed"
+
+        assistant_message = next(
+            message
+            for message in reversed(conversation_payload["messages"])
+            if message["role"] == "assistant"
+        )
+        assert assistant_message["status"] == "failed"
+        assert assistant_message["content"].startswith("partial")
+
+        queue_payload = api_data(client.get(f"/api/sessions/{session_id}/queue"))
+        assert queue_payload["active_generation"] is None
+        assert queue_payload["active_generation_id"] is None
     finally:
         app.dependency_overrides[get_chat_runtime] = original_override
 

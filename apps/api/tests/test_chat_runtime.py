@@ -1373,6 +1373,24 @@ def test_openai_request_completion_includes_response_body_on_400(
     assert "tool message must include name" in str(excinfo.value)
 
 
+def test_openai_response_body_excerpt_returns_none_when_stream_is_closed() -> None:
+    class _ClosedStreamResponse:
+        @property
+        def text(self) -> str:
+            raise httpx.ResponseNotRead()
+
+        async def aread(self) -> bytes:
+            raise httpx.StreamClosed()
+
+    excerpt = asyncio.run(
+        OpenAICompatibleChatRuntime._response_body_excerpt(
+            cast(httpx.Response, _ClosedStreamResponse())
+        )
+    )
+
+    assert excerpt is None
+
+
 def test_anthropic_stream_completion_retries_on_429(monkeypatch: MonkeyPatch) -> None:
     reset_llm_rate_limiter_cache()
     settings = Settings.model_construct(

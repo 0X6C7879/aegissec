@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -79,6 +80,8 @@ _SKILL_AUTOROUTE_DESCRIPTION_STOP_TOKENS = {
 }
 _SKILL_AUTOROUTE_HIGH_CONFIDENCE_SCORE = 70
 _SKILL_AUTOROUTE_MARGIN = 10
+
+logger = logging.getLogger("aegissec.api")
 
 
 @dataclass(slots=True)
@@ -509,7 +512,9 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload if isinstance(skill_payload, dict) else None
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(
@@ -904,6 +909,98 @@ async def _mark_queued_generations_failed(
                     metadata_json={"generation_id": generation.id, "error": error_message},
                 )
             repository.close_open_generation_steps(generation.id, status="failed", state="failed")
+
+
+async def _finalize_running_generation_failure(
+    db_engine: Engine,
+    *,
+    session_id: str,
+    generation_id: str,
+    error_message: str,
+    event_broker: SessionEventBroker,
+) -> None:
+    with DBSession(db_engine) as worker_db_session:
+        repository = SessionRepository(worker_db_session)
+        generation = repository.get_generation(generation_id)
+        if generation is None or generation.session_id != session_id:
+            return
+        if generation.status != GenerationStatus.RUNNING:
+            return
+
+        assistant_message = repository.get_message(generation.assistant_message_id)
+        clear_generation_continuation_state(
+            repository,
+            generation,
+            assistant_message,
+            abort_reason=error_message,
+        )
+        repository.mark_generation_failed(generation, error_message)
+
+        if assistant_message is not None:
+            repository.update_message(
+                assistant_message,
+                status=MessageStatus.FAILED,
+                error_message=error_message,
+            )
+            transcript_segments = harness_transcript.message_transcript_segments(
+                repository,
+                assistant_message,
+            )
+            output_segment = harness_transcript.find_transcript_segment(
+                transcript_segments,
+                kind=AssistantTranscriptSegmentKind.OUTPUT,
+            )
+            if output_segment is not None:
+                harness_transcript.update_transcript_segment(
+                    repository,
+                    assistant_message=assistant_message,
+                    segment=output_segment,
+                    status="failed",
+                )
+            semantic_snapshot = harness_semantic.drain_semantic_snapshot(
+                repository,
+                assistant_message=assistant_message,
+                session_state=None,
+            )
+            await harness_trace.publish_assistant_trace(
+                repository,
+                event_broker,
+                session_id=session_id,
+                assistant_message=assistant_message,
+                entry={
+                    "state": "generation.failed",
+                    "generation_id": generation_id,
+                    "error": error_message,
+                    **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
+                },
+            )
+            await harness_generation_events.publish_attack_graph_updated(
+                event_broker,
+                session_id=session_id,
+                assistant_message=assistant_message,
+                semantic_snapshot=semantic_snapshot,
+            )
+            harness_trace.record_generation_step(
+                repository,
+                assistant_message=assistant_message,
+                kind="status",
+                phase="failed",
+                status="failed",
+                state="failed",
+                label="Generation failed",
+                safe_summary=error_message,
+                ended_at=utc_now(),
+                metadata_json={"generation_id": generation_id, "error": error_message},
+            )
+            await harness_generation_events.publish_generation_failed(
+                event_broker,
+                session_id=session_id,
+                generation_id=generation_id,
+                assistant_message_id=assistant_message.id,
+                error_message=error_message,
+            )
+
+        repository.close_open_generation_steps(generation_id, status="failed", state="failed")
 
 
 async def process_generation(
@@ -1560,7 +1657,23 @@ async def run_session_worker(
                 await generation_manager.reject_future(session_id, generation.id, exc)
                 continue
             except ChatRuntimeConfigurationError as exc:
+                logger.error(
+                    "Session worker generation failed due to runtime configuration error "
+                    "[session_id=%s generation_id=%s]: %s",
+                    session_id,
+                    generation.id,
+                    exc,
+                    extra={"session_id": session_id, "generation_id": generation.id},
+                    exc_info=exc,
+                )
                 terminal_error = exc
+                await _finalize_running_generation_failure(
+                    db_engine,
+                    session_id=session_id,
+                    generation_id=generation.id,
+                    error_message=str(exc),
+                    event_broker=event_broker,
+                )
                 await generation_manager.reject_continuation_futures(session_id, exc)
                 await generation_manager.reject_future(session_id, generation.id, exc)
                 await generation_manager.reject_pending(session_id, exc)
@@ -1571,7 +1684,23 @@ async def run_session_worker(
                 )
                 break
             except ChatRuntimeError as exc:
+                logger.error(
+                    "Session worker generation failed during model/runtime execution "
+                    "[session_id=%s generation_id=%s]: %s",
+                    session_id,
+                    generation.id,
+                    exc,
+                    extra={"session_id": session_id, "generation_id": generation.id},
+                    exc_info=exc,
+                )
                 terminal_error = exc
+                await _finalize_running_generation_failure(
+                    db_engine,
+                    session_id=session_id,
+                    generation_id=generation.id,
+                    error_message=str(exc),
+                    event_broker=event_broker,
+                )
                 await generation_manager.reject_continuation_futures(session_id, exc)
                 await generation_manager.reject_future(session_id, generation.id, exc)
                 await generation_manager.reject_pending(session_id, exc)
@@ -1582,7 +1711,20 @@ async def run_session_worker(
                 )
                 break
             except Exception as exc:
+                logger.exception(
+                    "Session worker crashed during generation [session_id=%s generation_id=%s]",
+                    session_id,
+                    generation.id,
+                    extra={"session_id": session_id, "generation_id": generation.id},
+                )
                 terminal_error = ChatRuntimeError(str(exc))
+                await _finalize_running_generation_failure(
+                    db_engine,
+                    session_id=session_id,
+                    generation_id=generation.id,
+                    error_message=str(exc),
+                    event_broker=event_broker,
+                )
                 await generation_manager.reject_continuation_futures(session_id, terminal_error)
                 await generation_manager.reject_future(session_id, generation.id, terminal_error)
                 await generation_manager.reject_pending(session_id, terminal_error)

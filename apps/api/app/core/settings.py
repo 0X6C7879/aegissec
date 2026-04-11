@@ -111,11 +111,24 @@ class Settings(BaseSettings):
         alias="AEGISSEC_SKILL_COMPATIBILITY_SCAN_ENABLED",
     )
     database_url: str = Field(default_factory=_default_database_url, alias="AEGISSEC_DATABASE_URL")
+    db_pool_size: int = Field(default=20, alias="AEGISSEC_DB_POOL_SIZE", ge=1)
+    db_max_overflow: int = Field(default=40, alias="AEGISSEC_DB_MAX_OVERFLOW", ge=0)
+    db_pool_timeout_seconds: int = Field(
+        default=30,
+        alias="AEGISSEC_DB_POOL_TIMEOUT_SECONDS",
+        gt=0,
+    )
+    db_pool_recycle_seconds: int = Field(
+        default=1800,
+        alias="AEGISSEC_DB_POOL_RECYCLE_SECONDS",
+        gt=0,
+    )
+    db_pool_pre_ping: bool = Field(default=True, alias="AEGISSEC_DB_POOL_PRE_PING")
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
     llm_api_base_url: str | None = Field(default=None, alias="LLM_API_BASE_URL")
     llm_default_model: str | None = Field(default=None, alias="LLM_DEFAULT_MODEL")
     llm_request_timeout_seconds: int = Field(
-        default=120,
+        default=600,
         alias="AEGISSEC_LLM_REQUEST_TIMEOUT_SECONDS",
         gt=0,
     )

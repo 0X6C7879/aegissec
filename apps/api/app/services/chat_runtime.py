@@ -765,8 +765,10 @@ class OpenAICompatibleChatRuntime:
             try:
                 await response.aread()
                 response_text = response.text
-            except httpx.HTTPError:
+            except (httpx.StreamError, httpx.HTTPError):
                 return None
+        except httpx.StreamError:
+            return None
 
         normalized_text = response_text.strip()
         if not normalized_text:

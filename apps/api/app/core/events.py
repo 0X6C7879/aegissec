@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
 from sqlmodel import Field, SQLModel
 from sqlmodel import Session as DBSession
 
 from app.db.models import utc_now
+
+logger = logging.getLogger("aegissec.api")
 
 
 class SessionEventType(str, Enum):
@@ -125,14 +129,24 @@ class SessionEventBroker:
 
         from app.db.repositories import SessionRepository
 
-        with self._session_factory() as db_session:
-            repository = SessionRepository(db_session)
-            persisted = repository.create_session_event(
-                session_id=event.session_id,
-                event_type=event.type.value,
-                payload=dict(event.payload),
-                timestamp=event.timestamp,
+        try:
+            with self._session_factory() as db_session:
+                repository = SessionRepository(db_session)
+                persisted = repository.create_session_event(
+                    session_id=event.session_id,
+                    event_type=event.type.value,
+                    payload=dict(event.payload),
+                    timestamp=event.timestamp,
+                )
+        except SQLAlchemyPoolTimeoutError:
+            logger.warning(
+                "Session event persistence skipped due DB pool timeout "
+                "[session_id=%s event_type=%s]",
+                event.session_id,
+                event.type.value,
             )
+            return event
+
         return SessionEvent(
             type=event.type,
             session_id=event.session_id,
