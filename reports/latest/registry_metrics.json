@@ -1,18 +1,18 @@
 {
   "cost_metrics": {
-    "average_injected_tokens": 2236.622807017544,
+    "average_injected_tokens": 2235.238938053097,
     "average_reference_load_count": 0.375,
-    "body_token_p50": 1812.0,
+    "body_token_p50": 1805.0,
     "body_token_p95": 5272.0,
     "description_token_p50": 52.0,
-    "description_token_p95": 130.0,
+    "description_token_p95": 129.0,
     "reference_token_p50": 0.0,
-    "reference_token_p95": 13711.0
+    "reference_token_p95": 11112.0
   },
-  "family_total": 49,
+  "family_total": 48,
   "governance_metrics": {
     "deprecated_candidates": [],
-    "duplicate_content_ratio": 0.04553807281497645,
+    "duplicate_content_ratio": 0.04530301226336469,
     "obsolescence_top": [
       {
         "obsolescence_score": 0.75,
@@ -97,7 +97,7 @@
         "skill_id": "static-analysis/semgrep"
       }
     ],
-    "uninvoked_30d_count": 110,
+    "uninvoked_30d_count": 109,
     "watch_candidates": []
   },
   "quality_metrics": {
@@ -107,11 +107,11 @@
     "selective_restore_trigger_rate": 0.375,
     "task_pass_rate": 1.0
   },
-  "skill_total": 114,
+  "skill_total": 113,
   "status_counts": {
     "active": 4,
     "deprecated": 0,
-    "incubating": 110,
+    "incubating": 109,
     "retired": 0,
     "watch": 0
   }

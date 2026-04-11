@@ -37,6 +37,7 @@ TOOL_CALL_BLOCK_PATTERN = re.compile(
 TOOL_CALL_TAG_PATTERN = re.compile(r"</?(?:[\w-]+:)?tool_call\b[^>]*>", re.IGNORECASE)
 INVOKE_TAG_PATTERN = re.compile(r"</?invoke\b[^>]*>", re.IGNORECASE)
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
+HTTP_ERROR_BODY_PREVIEW_LIMIT = 1500
 
 
 def strip_tool_protocol_markup(content: str) -> str:
@@ -393,7 +394,7 @@ class OpenAICompatibleChatRuntime:
                 if is_rate_limit:
                     raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
-                    f"LLM API request failed with status {exc.response.status_code}."
+                    await OpenAICompatibleChatRuntime._format_status_error_message(exc)
                 ) from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
@@ -575,7 +576,7 @@ class OpenAICompatibleChatRuntime:
                 if is_rate_limit:
                     raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
-                    f"LLM API request failed with status {exc.response.status_code}."
+                    await OpenAICompatibleChatRuntime._format_status_error_message(exc)
                 ) from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
@@ -652,114 +653,6 @@ class OpenAICompatibleChatRuntime:
         return definitions
 
     @staticmethod
-    def _execute_kali_command_definition() -> dict[str, object]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "execute_kali_command",
-                "description": (
-                    "Run a command inside the retained Kali container for authorized defensive "
-                    "security validation and return the captured stdout, stderr, exit code, and "
-                    "registered artifact paths."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Shell command to execute inside the Kali runtime.",
-                        },
-                        "timeout_seconds": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Optional timeout in seconds.",
-                        },
-                        "artifact_paths": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": (
-                                "Optional runtime-workspace-relative artifact paths to "
-                                "register after "
-                                "the command finishes."
-                            ),
-                        },
-                    },
-                    "required": ["command"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    @staticmethod
-    def _list_available_skills_definition() -> dict[str, object]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "list_available_skills",
-                "description": (
-                    "List the currently loaded project skills with concise summaries. Use this "
-                    "when the user asks which skills exist or when you need to confirm the "
-                    "available catalog before choosing one."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    @staticmethod
-    def _read_skill_content_definition() -> dict[str, object]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "read_skill_content",
-                "description": (
-                    "Read the real SKILL.md content for a loaded skill by its directory slug, "
-                    "display name, or id. Use this before explaining or applying a specific "
-                    "skill."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "skill_name_or_id": {
-                            "type": "string",
-                            "description": "Loaded skill directory slug, skill name, or skill id.",
-                        }
-                    },
-                    "required": ["skill_name_or_id"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    @staticmethod
-    def _execute_skill_definition() -> dict[str, object]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "execute_skill",
-                "description": (
-                    "Execute the minimal runtime skill facade for a loaded skill by its directory "
-                    "slug, display name, or id. Use this when you want to apply a skill and record "
-                    "a real tool execution instead of only reading SKILL.md."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "skill_name_or_id": {
-                            "type": "string",
-                            "description": "Loaded skill directory slug, skill name, or skill id.",
-                        }
-                    },
-                    "required": ["skill_name_or_id"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    @staticmethod
     def _extract_message_payload(response_payload: object) -> dict[str, object]:
         if not isinstance(response_payload, dict):
             raise ChatRuntimeError("LLM API returned an unexpected response shape.")
@@ -780,8 +673,11 @@ class OpenAICompatibleChatRuntime:
 
     @staticmethod
     def _assistant_message_for_history(message: dict[str, object]) -> dict[str, object]:
-        tool_calls = message.get("tool_calls", [])
-        has_tool_calls = isinstance(tool_calls, list) and len(tool_calls) > 0
+        raw_tool_calls = message.get("tool_calls")
+        tool_calls = OpenAICompatibleChatRuntime._canonicalize_tool_calls_for_history(
+            raw_tool_calls
+        )
+        has_tool_calls = len(tool_calls) > 0
         content = message.get("content", "")
         if isinstance(content, str):
             if has_tool_calls:
@@ -789,11 +685,102 @@ class OpenAICompatibleChatRuntime:
                 content = sanitized_content or None
             else:
                 content = OpenAICompatibleChatRuntime._sanitize_assistant_content(content)
-        return {
+        history_message: dict[str, object] = {
             "role": "assistant",
             "content": content,
-            "tool_calls": tool_calls,
         }
+        if isinstance(raw_tool_calls, list):
+            history_message["tool_calls"] = tool_calls
+        return history_message
+
+    @staticmethod
+    def _canonicalize_tool_calls_for_history(tool_calls: object) -> list[dict[str, object]]:
+        if not isinstance(tool_calls, list):
+            return []
+
+        canonical_tool_calls: list[dict[str, object]] = []
+        for raw_tool_call in tool_calls:
+            if not isinstance(raw_tool_call, dict):
+                continue
+
+            tool_call_id = raw_tool_call.get("id")
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise ChatRuntimeError(
+                    "LLM assistant tool_calls entry is missing a valid id for history replay."
+                )
+
+            function_payload = raw_tool_call.get("function")
+            if not isinstance(function_payload, dict):
+                raise ChatRuntimeError(
+                    "LLM assistant tool_calls entry is missing a valid function payload for "
+                    "history replay."
+                )
+
+            function_name = function_payload.get("name")
+            if not isinstance(function_name, str) or not function_name.strip():
+                raise ChatRuntimeError(
+                    "LLM assistant tool_calls entry is missing a valid function name for "
+                    "history replay."
+                )
+
+            tool_call_type = raw_tool_call.get("type")
+            canonical_type = (
+                tool_call_type.strip()
+                if isinstance(tool_call_type, str) and tool_call_type.strip()
+                else "function"
+            )
+
+            canonical_tool_calls.append(
+                {
+                    "id": tool_call_id,
+                    "type": canonical_type,
+                    "function": {
+                        "name": function_name.strip(),
+                        "arguments": OpenAICompatibleChatRuntime._canonicalize_tool_arguments(
+                            function_payload.get("arguments")
+                        ),
+                    },
+                }
+            )
+
+        return canonical_tool_calls
+
+    @staticmethod
+    def _canonicalize_tool_arguments(arguments: object) -> str:
+        if isinstance(arguments, str):
+            return arguments
+        if isinstance(arguments, dict | list):
+            return json.dumps(arguments, ensure_ascii=False)
+        raise ChatRuntimeError(
+            "LLM assistant tool_calls entry has unsupported function.arguments for history "
+            "replay."
+        )
+
+    @staticmethod
+    async def _format_status_error_message(exc: httpx.HTTPStatusError) -> str:
+        message = f"LLM API request failed with status {exc.response.status_code}."
+        response_text = await OpenAICompatibleChatRuntime._response_body_excerpt(exc.response)
+        if response_text is None:
+            return message
+        return f"{message} Response body: {response_text}"
+
+    @staticmethod
+    async def _response_body_excerpt(response: httpx.Response) -> str | None:
+        try:
+            response_text = response.text
+        except httpx.ResponseNotRead:
+            try:
+                await response.aread()
+                response_text = response.text
+            except httpx.HTTPError:
+                return None
+
+        normalized_text = response_text.strip()
+        if not normalized_text:
+            return None
+        if len(normalized_text) <= HTTP_ERROR_BODY_PREVIEW_LIMIT:
+            return normalized_text
+        return f"{normalized_text[:HTTP_ERROR_BODY_PREVIEW_LIMIT]}..."
 
     @staticmethod
     def _extract_message_content(content: object) -> str | None:
@@ -1410,101 +1397,6 @@ class AnthropicChatRuntime:
                 }
             )
         return definitions
-
-    @staticmethod
-    def _execute_kali_command_definition() -> dict[str, object]:
-        return {
-            "name": "execute_kali_command",
-            "description": (
-                "Run a command inside the retained Kali container for authorized defensive "
-                "security validation and return the captured stdout, stderr, exit code, and "
-                "registered artifact paths."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to execute inside the Kali runtime.",
-                    },
-                    "timeout_seconds": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Optional timeout in seconds.",
-                    },
-                    "artifact_paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Optional runtime-workspace-relative artifact paths to "
-                            "register after the command finishes."
-                        ),
-                    },
-                },
-                "required": ["command"],
-                "additionalProperties": False,
-            },
-        }
-
-    @staticmethod
-    def _list_available_skills_definition() -> dict[str, object]:
-        return {
-            "name": "list_available_skills",
-            "description": (
-                "List the currently loaded project skills with concise summaries. Use this "
-                "when the user asks which skills exist or when you need to confirm the "
-                "available catalog before choosing one."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            },
-        }
-
-    @staticmethod
-    def _read_skill_content_definition() -> dict[str, object]:
-        return {
-            "name": "read_skill_content",
-            "description": (
-                "Read the real SKILL.md content for a loaded skill by its directory slug, "
-                "display name, or id. Use this before explaining or applying a specific "
-                "skill."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "skill_name_or_id": {
-                        "type": "string",
-                        "description": "Loaded skill directory slug, skill name, or skill id.",
-                    }
-                },
-                "required": ["skill_name_or_id"],
-                "additionalProperties": False,
-            },
-        }
-
-    @staticmethod
-    def _execute_skill_definition() -> dict[str, object]:
-        return {
-            "name": "execute_skill",
-            "description": (
-                "Execute the minimal runtime skill facade for a loaded skill by its directory "
-                "slug, display name, or id. Use this when you want to apply a skill and record "
-                "a real tool execution instead of only reading SKILL.md."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "skill_name_or_id": {
-                        "type": "string",
-                        "description": "Loaded skill directory slug, skill name, or skill id.",
-                    }
-                },
-                "required": ["skill_name_or_id"],
-                "additionalProperties": False,
-            },
-        }
 
     @staticmethod
     def _extract_response_content(

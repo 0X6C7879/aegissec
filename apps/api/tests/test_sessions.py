@@ -1664,8 +1664,10 @@ def test_chat_structured_slash_action_executes_governed_tool_with_openai_history
         assert assistant_index < tool_index
         tool_call = assistant_message["tool_calls"][0]
         assert tool_call["function"]["name"] == "list_available_skills"
+        assert tool_call["type"] == "function"
         assert json.loads(tool_call["function"]["arguments"]) == {}
         assert tool_message["tool_call_id"] == tool_call["id"]
+        assert tool_message["name"] == tool_call["function"]["name"]
         assert tool_message["content"]
         assert callbacks.on_text_delta is not None
         await callbacks.on_text_delta("slash openai ok")

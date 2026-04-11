@@ -125,9 +125,35 @@ class BaseTool[InputModelT: BaseModel](ABC):
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.input_schema(),
+                "parameters": self._normalize_openai_input_schema(self.input_schema()),
             },
         }
+
+    @classmethod
+    def _normalize_openai_input_schema(cls, schema: Any) -> Any:
+        if isinstance(schema, dict):
+            normalized: dict[str, Any] = {}
+            for key, value in schema.items():
+                if key == "type" and isinstance(value, list):
+                    normalized_type = cls._normalize_openai_nullable_type(value)
+                    if normalized_type is not None:
+                        normalized[key] = normalized_type
+                        continue
+                normalized[key] = cls._normalize_openai_input_schema(value)
+            return normalized
+        if isinstance(schema, list):
+            return [cls._normalize_openai_input_schema(item) for item in schema]
+        return schema
+
+    @staticmethod
+    def _normalize_openai_nullable_type(type_value: list[Any]) -> str | None:
+        non_null_types = [item for item in type_value if item != "null"]
+        if "null" not in type_value or len(non_null_types) != 1:
+            return None
+        normalized_type = non_null_types[0]
+        if not isinstance(normalized_type, str) or not normalized_type:
+            return None
+        return normalized_type
 
     def to_anthropic_tool_schema(self) -> dict[str, Any]:
         return {

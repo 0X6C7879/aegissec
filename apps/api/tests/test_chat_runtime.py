@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
 import httpx
+import pytest
 from pytest import MonkeyPatch
 
 from app.core.settings import Settings
@@ -17,6 +18,7 @@ from app.harness.query_loop import QueryLoop
 from app.services.chat_runtime import (
     MAX_TOOL_STEPS,
     AnthropicChatRuntime,
+    ChatRuntimeError,
     ConversationMessage,
     GenerationCallbacks,
     OpenAICompatibleChatRuntime,
@@ -63,7 +65,15 @@ def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
             '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
             '{"task":"demo"}</invoke></minimax:tool_call>最终答复'
         ),
-        "tool_calls": [{"id": "call-1"}],
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {
+                    "name": "execute_kali_command",
+                    "arguments": json.dumps({"command": "pwd"}),
+                },
+            }
+        ],
     }
 
     history_message = OpenAICompatibleChatRuntime._assistant_message_for_history(message)
@@ -71,7 +81,16 @@ def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
     assert history_message == {
         "role": "assistant",
         "content": "最终答复",
-        "tool_calls": [{"id": "call-1"}],
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "execute_kali_command",
+                    "arguments": json.dumps({"command": "pwd"}),
+                },
+            }
+        ],
     }
 
 
@@ -97,6 +116,45 @@ def test_assistant_message_for_history_uses_null_content_for_tool_only_turn() ->
         "role": "assistant",
         "content": None,
         "tool_calls": tool_calls,
+    }
+
+
+def test_assistant_message_for_history_canonicalizes_tool_calls() -> None:
+    message: dict[str, object] = {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "index": 0,
+                "function": {
+                    "name": "execute_kali_command",
+                    "arguments": {
+                        "command": "pwd",
+                        "artifact_paths": ["reports/out.txt"],
+                    },
+                },
+            }
+        ],
+    }
+
+    history_message = OpenAICompatibleChatRuntime._assistant_message_for_history(message)
+
+    assert history_message == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "execute_kali_command",
+                    "arguments": json.dumps(
+                        {"command": "pwd", "artifact_paths": ["reports/out.txt"]},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+        ],
     }
 
 
@@ -211,12 +269,16 @@ def test_openai_tool_definitions_include_mcp_tools_and_safe_schema_fallback() ->
 
     openai_functions = [cast(dict[str, object], item["function"]) for item in definitions]
     function_names = [str(item["name"]) for item in openai_functions]
+    execute_kali_parameters = cast(dict[str, object], openai_functions[0]["parameters"])
+    execute_kali_properties = cast(dict[str, object], execute_kali_parameters["properties"])
+    timeout_schema = cast(dict[str, object], execute_kali_properties["timeout_seconds"])
 
     assert function_names[:3] == [
         "execute_kali_command",
         "list_available_skills",
         "execute_skill",
     ]
+    assert timeout_schema["type"] == "integer"
     assert function_names[3] == "read_skill_content"
     assert function_names[4] == "mcp__burp_suite__scan_target"
     assert openai_functions[4]["parameters"] == {
@@ -1272,6 +1334,42 @@ def test_openai_request_completion_retries_on_429(monkeypatch: MonkeyPatch) -> N
     assert sleeps[0] >= 0.05
 
 
+def test_openai_request_completion_includes_response_body_on_400(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    responses = [
+        httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+            text='{"error":{"message":"tool message must include name"}}',
+        )
+    ]
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses),
+    )
+
+    with pytest.raises(ChatRuntimeError) as excinfo:
+        asyncio.run(
+            runtime._request_completion(
+                "https://example.test/v1/chat/completions",
+                {"authorization": "Bearer test-key"},
+                {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": False},
+            )
+        )
+
+    assert "status 400" in str(excinfo.value)
+    assert "tool message must include name" in str(excinfo.value)
+
+
 def test_anthropic_stream_completion_retries_on_429(monkeypatch: MonkeyPatch) -> None:
     reset_llm_rate_limiter_cache()
     settings = Settings.model_construct(
@@ -1416,6 +1514,43 @@ def test_openai_stream_completion_preserves_tool_call_type(monkeypatch: MonkeyPa
     assert json.loads(cast(str, function_payload["arguments"])) == {"command": "pwd"}
 
 
+def test_openai_stream_completion_includes_response_body_on_400(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    responses = [
+        httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+            text='{"error":{"message":"assistant.tool_calls.0.function.arguments must be string"}}',
+        )
+    ]
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses, stream_lines=[[]]),
+    )
+
+    with pytest.raises(ChatRuntimeError) as excinfo:
+        asyncio.run(
+            runtime._stream_completion(
+                "https://example.test/v1/chat/completions",
+                {"authorization": "Bearer test-key"},
+                {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": True},
+                GenerationCallbacks(),
+            )
+        )
+
+    assert "status 400" in str(excinfo.value)
+    assert "arguments must be string" in str(excinfo.value)
+
+
 def test_openai_runtime_streams_when_tools_are_enabled() -> None:
     settings = Settings.model_construct(
         llm_api_key="test-key",
@@ -1520,6 +1655,117 @@ def test_openai_runtime_streams_when_tools_are_enabled() -> None:
             }
         ],
     }
+
+
+def test_openai_runtime_second_round_payload_uses_canonical_tool_history() -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+    )
+
+    class StubRuntime(OpenAICompatibleChatRuntime):
+        def __init__(self) -> None:
+            super().__init__(settings=settings)
+            self.payloads: list[dict[str, object]] = []
+
+        async def _request_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del endpoint, headers
+            self.payloads.append(payload)
+            if len(self.payloads) == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "index": 0,
+                                        "function": {
+                                            "name": "execute_kali_command",
+                                            "arguments": {
+                                                "command": "pwd",
+                                                "artifact_paths": ["reports/out.txt"],
+                                            },
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+
+            messages = cast(list[dict[str, object]], payload["messages"])
+            assistant_message = next(
+                message
+                for message in messages
+                if message.get("role") == "assistant" and message.get("tool_calls")
+            )
+            tool_message = next(
+                message for message in messages if message.get("role") == "tool"
+            )
+
+            assert assistant_message == {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "execute_kali_command",
+                            "arguments": json.dumps(
+                                {
+                                    "command": "pwd",
+                                    "artifact_paths": ["reports/out.txt"],
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                ],
+            }
+            assert tool_message["tool_call_id"] == "call-1"
+            assert tool_message["name"] == "execute_kali_command"
+            assert json.loads(cast(str, tool_message["content"])) == {
+                "tool": "execute_kali_command",
+                "payload": {"status": "ok"},
+            }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Final answer",
+                        }
+                    }
+                ]
+            }
+
+    runtime = StubRuntime()
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        assert tool_request.tool_name == "execute_kali_command"
+        assert tool_request.arguments == {
+            "command": "pwd",
+            "timeout_seconds": None,
+            "artifact_paths": ["reports/out.txt"],
+        }
+        return ToolCallResult(tool_name=tool_request.tool_name, payload={"status": "ok"})
+
+    result = asyncio.run(
+        runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool)
+    )
+
+    assert result == "Final answer"
+    assert len(runtime.payloads) == 2
 
 
 def test_anthropic_runtime_streams_when_tools_are_enabled() -> None:

@@ -249,6 +249,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.tool_call_id,
+                    "name": tool_call.tool_name,
                     "content": json.dumps(
                         {"tool": tool_result.tool_name, "payload": tool_result.payload},
                         ensure_ascii=False,
