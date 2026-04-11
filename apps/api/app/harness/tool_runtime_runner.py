@@ -256,6 +256,14 @@ class ToolRuntimeLifecycleRunner:
             kind=AssistantTranscriptSegmentKind.TOOL_CALL,
             tool_call_id=tool_request.tool_call_id,
         )
+        result_metadata = {
+            **(
+                dict(tool_result.transcript_result_metadata)
+                if tool_result.transcript_result_metadata
+                else {"result": tool_result.payload}
+            ),
+            **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
+        }
         if tool_call_segment is not None:
             update_transcript_segment(
                 self.repository,
@@ -268,24 +276,17 @@ class ToolRuntimeLifecycleRunner:
                     else None
                 ),
             )
-        append_transcript_segment(
-            self.repository,
-            assistant_message=self.assistant_message,
-            kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
-            status=tool_result.status,
-            title=tool_request.tool_name,
-            text=None,
-            tool_name=tool_request.tool_name,
-            tool_call_id=tool_request.tool_call_id,
-            metadata_json={
-                **(
-                    dict(tool_result.transcript_result_metadata)
-                    if tool_result.transcript_result_metadata
-                    else {"result": tool_result.payload}
-                ),
-                **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
-            },
-        )
+            append_transcript_segment(
+                self.repository,
+                assistant_message=self.assistant_message,
+                kind=AssistantTranscriptSegmentKind.TOOL_RESULT,
+                status=tool_result.status,
+                title=tool_request.tool_name,
+                text=None,
+                tool_name=tool_request.tool_name,
+                tool_call_id=tool_request.tool_call_id,
+                metadata_json=result_metadata,
+            )
         await self.publish_assistant_trace(
             self.repository,
             self.event_broker,
@@ -295,6 +296,7 @@ class ToolRuntimeLifecycleRunner:
                 "state": "tool.finished",
                 "tool": tool_request.tool_name,
                 "tool_call_id": tool_request.tool_call_id,
+                "orphan_tool_result": tool_call_segment is None,
                 **dict(tool_result.trace_entry),
                 **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
             },
@@ -346,10 +348,16 @@ class ToolRuntimeLifecycleRunner:
                     metadata_json={
                         **dict(tool_step.metadata_json),
                         **dict(tool_result.step_metadata),
+                        "orphan_tool_result": tool_call_segment is None,
                         **({"semantic_state": semantic_snapshot} if semantic_snapshot else {}),
                     },
                 )
-        return ToolCallResult(tool_name=tool_request.tool_name, payload=tool_result.payload)
+        return ToolCallResult(
+            tool_name=tool_request.tool_name,
+            payload=tool_result.payload,
+            tool_call_id=tool_request.tool_call_id,
+            safe_summary=tool_result.safe_summary,
+        )
 
     async def execute_readonly_parallel_phase(
         self,

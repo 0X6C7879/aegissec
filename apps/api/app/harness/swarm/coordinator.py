@@ -475,7 +475,12 @@ class InProcessSwarmCoordinator:
                     agent_session_state,
                     tool_result.semantic_deltas,
                 )
-            return ToolCallResult(tool_name=tool_request.tool_name, payload=tool_result.payload)
+            return ToolCallResult(
+                tool_name=tool_request.tool_name,
+                payload=tool_result.payload,
+                tool_call_id=tool_request.tool_call_id,
+                safe_summary=getattr(tool_result, "safe_summary", None),
+            )
 
         async def batch_execute(tool_requests: list[Any]) -> list[Any]:
             prepared_executions = [

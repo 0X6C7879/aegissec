@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -164,4 +165,139 @@ def test_harness_compact_service_creates_compact_boundary(tmp_path: Path) -> Non
         isinstance(message.get("content"), str)
         and "active_hypotheses: hypothesis:service-account" in message["content"]
         for message in compacted
+    )
+
+
+def test_harness_compact_service_keeps_tool_result_with_matching_assistant(tmp_path: Path) -> None:
+    memory_service = HarnessMemoryService(base_dir=tmp_path)
+    session_state = HarnessSessionState(
+        session_id="sess-tool-pair",
+        memory_key=memory_service.memory_key_for_session("sess-tool-pair", None),
+        current_phase="analysis",
+        goal="Keep tool replay pairs intact.",
+    )
+    memory_service.ensure_layout(session_state.memory_key)
+    compact_service = HarnessCompactService(memory_service=memory_service, retained_tail=3)
+    messages = [
+        {"role": "system", "content": "system instructions"},
+        *[
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"message-{index} " + ("x" * 3000),
+            }
+            for index in range(8)
+        ],
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "execute_kali_command",
+                        "arguments": json.dumps({"command": "curl -s https://target.test"}),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "execute_kali_command",
+            "content": json.dumps(
+                {"tool": "execute_kali_command", "payload": {"stdout": "ok"}},
+                ensure_ascii=False,
+            ),
+        },
+        {"role": "assistant", "content": "Continue analysis."},
+        {"role": "user", "content": "What next?"},
+    ]
+
+    compacted = compact_service.maybe_compact(
+        messages=messages,
+        session_state=session_state,
+        render_compact_message=lambda fragment: {"role": "user", "content": fragment},
+        turn_count=3,
+    )
+
+    tool_index = next(
+        index for index, message in enumerate(compacted) if message.get("role") == "tool"
+    )
+    assistant_message = compacted[tool_index - 1]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message.get("tool_calls")
+
+
+def test_harness_compact_service_keeps_anthropic_tool_result_with_matching_assistant(
+    tmp_path: Path,
+) -> None:
+    memory_service = HarnessMemoryService(base_dir=tmp_path)
+    session_state = HarnessSessionState(
+        session_id="sess-anthropic-pair",
+        memory_key=memory_service.memory_key_for_session("sess-anthropic-pair", None),
+        current_phase="analysis",
+        goal="Keep Anthropic tool replay pairs intact.",
+    )
+    memory_service.ensure_layout(session_state.memory_key)
+    compact_service = HarnessCompactService(memory_service=memory_service, retained_tail=3)
+    messages = [
+        {"role": "system", "content": "system instructions"},
+        *[
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"message-{index} " + ("x" * 3000),
+            }
+            for index in range(8)
+        ],
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "execute_kali_command",
+                    "input": {"command": "curl -s https://target.test"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call-1",
+                    "content": json.dumps(
+                        {"tool": "execute_kali_command", "payload": {"stdout": "ok"}},
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Continue analysis."},
+        {"role": "user", "content": "What next?"},
+    ]
+
+    compacted = compact_service.maybe_compact(
+        messages=messages,
+        session_state=session_state,
+        render_compact_message=lambda fragment: {"role": "user", "content": fragment},
+        turn_count=4,
+    )
+
+    tool_result_index = next(
+        index
+        for index, message in enumerate(compacted)
+        if message.get("role") == "user"
+        and isinstance(message.get("content"), list)
+        and any(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in message["content"]
+        )
+    )
+    assistant_message = compacted[tool_result_index - 1]
+    assert assistant_message["role"] == "assistant"
+    assert any(
+        isinstance(block, dict) and block.get("type") == "tool_use"
+        for block in assistant_message["content"]
     )

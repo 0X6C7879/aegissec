@@ -35,8 +35,12 @@ class HarnessCompactService:
         leading_messages, history_messages = self._split_leading_messages(compacted_messages)
         if len(history_messages) <= self._retained_tail:
             return compacted_messages
-        archived_messages = history_messages[: -self._retained_tail]
-        retained_messages = history_messages[-self._retained_tail :]
+        retained_start = self._adjust_retained_start_for_tool_pairs(
+            history_messages,
+            max(len(history_messages) - self._retained_tail, 0),
+        )
+        archived_messages = history_messages[:retained_start]
+        retained_messages = history_messages[retained_start:]
         compact_fragment = self._build_compact_fragment(
             archived_messages=archived_messages,
             session_state=session_state,
@@ -118,6 +122,50 @@ class HarnessCompactService:
                 continue
             break
         return leading_messages, messages[history_start:]
+
+    @staticmethod
+    def _adjust_retained_start_for_tool_pairs(
+        history_messages: list[dict[str, Any]],
+        retained_start: int,
+    ) -> int:
+        if retained_start <= 0 or retained_start >= len(history_messages):
+            return retained_start
+        current_message = history_messages[retained_start]
+        if current_message.get("role") == "tool":
+            for index in range(retained_start - 1, -1, -1):
+                candidate = history_messages[index]
+                if candidate.get("role") == "assistant" and candidate.get("tool_calls"):
+                    if all(
+                        message.get("role") == "tool"
+                        for message in history_messages[index + 1 : retained_start + 1]
+                    ):
+                        return index
+                    break
+                if candidate.get("role") != "tool":
+                    break
+        if current_message.get(
+            "role"
+        ) == "user" and HarnessCompactService._has_anthropic_tool_result_blocks(current_message):
+            candidate = history_messages[retained_start - 1]
+            if candidate.get(
+                "role"
+            ) == "assistant" and HarnessCompactService._has_anthropic_tool_use_blocks(candidate):
+                return retained_start - 1
+        return retained_start
+
+    @staticmethod
+    def _has_anthropic_tool_use_blocks(message: dict[str, Any]) -> bool:
+        content = message.get("content")
+        return isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "tool_use" for block in content
+        )
+
+    @staticmethod
+    def _has_anthropic_tool_result_blocks(message: dict[str, Any]) -> bool:
+        content = message.get("content")
+        return isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "tool_result" for block in content
+        )
 
     def _build_compact_fragment(
         self,

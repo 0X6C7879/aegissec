@@ -28,6 +28,8 @@ class ToolCallRequest(BaseModel):
 class ToolCallResult(BaseModel):
     tool_name: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
+    tool_call_id: str | None = None
+    safe_summary: str | None = None
 
 
 @dataclass(slots=True)

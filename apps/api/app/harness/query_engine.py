@@ -18,6 +18,110 @@ from .messages import (
     ToolCallResult,
 )
 
+_TOOL_RESULT_HISTORY_MAX_CHARS = 4_000
+_TOOL_RESULT_TEXT_PREVIEW_CHARS = 500
+_TOOL_RESULT_LIST_PREVIEW_ITEMS = 10
+
+
+def _assistant_tool_call_ids(assistant_payload: Mapping[str, Any]) -> list[str]:
+    raw_tool_calls = assistant_payload.get("tool_calls")
+    if raw_tool_calls is None:
+        return []
+    if not isinstance(raw_tool_calls, list):
+        raise ChatRuntimeError("Assistant tool_calls payload is invalid for history replay.")
+
+    tool_call_ids: list[str] = []
+    for raw_tool_call in raw_tool_calls:
+        if not isinstance(raw_tool_call, Mapping):
+            raise ChatRuntimeError("Assistant tool_calls payload is invalid for history replay.")
+        tool_call_id = raw_tool_call.get("id")
+        if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+            raise ChatRuntimeError("Assistant tool_calls payload is missing a valid tool_call id.")
+        tool_call_ids.append(tool_call_id)
+    return tool_call_ids
+
+
+def _anthropic_tool_use_ids(assistant_payload: Mapping[str, Any]) -> list[str]:
+    raw_content = assistant_payload.get("content")
+    if not isinstance(raw_content, list):
+        raise ChatRuntimeError("Anthropic assistant content is invalid for tool replay.")
+
+    tool_use_ids: list[str] = []
+    for block in raw_content:
+        if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+            continue
+        tool_use_id = block.get("id")
+        if not isinstance(tool_use_id, str) or not tool_use_id.strip():
+            raise ChatRuntimeError("Anthropic assistant tool_use block is missing a valid id.")
+        tool_use_ids.append(tool_use_id)
+    return tool_use_ids
+
+
+def _preview_text(value: Any) -> tuple[str | None, int | None, bool]:
+    if not isinstance(value, str):
+        return None, None, False
+    truncated = len(value) > _TOOL_RESULT_TEXT_PREVIEW_CHARS
+    return value[:_TOOL_RESULT_TEXT_PREVIEW_CHARS], len(value), truncated
+
+
+def _summarize_tool_payload(
+    payload: Mapping[str, Any], *, safe_summary: str | None
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "truncated": True,
+        "keys": sorted(str(key) for key in payload.keys()),
+    }
+    if safe_summary:
+        summary["summary"] = safe_summary
+    for field_name in ("status", "command", "exit_code"):
+        field_value = payload.get(field_name)
+        if isinstance(field_value, str | int | float | bool) or field_value is None:
+            if field_value is not None:
+                summary[field_name] = field_value
+
+    artifacts = payload.get("artifacts")
+    if isinstance(artifacts, list):
+        summary["artifacts"] = [str(item) for item in artifacts[:_TOOL_RESULT_LIST_PREVIEW_ITEMS]]
+        summary["artifact_count"] = len(artifacts)
+
+    stdout_preview, stdout_chars, stdout_truncated = _preview_text(payload.get("stdout"))
+    if stdout_preview is not None:
+        summary["stdout_preview"] = stdout_preview
+        summary["stdout_chars"] = stdout_chars
+        summary["stdout_truncated"] = stdout_truncated
+
+    stderr_preview, stderr_chars, stderr_truncated = _preview_text(payload.get("stderr"))
+    if stderr_preview is not None:
+        summary["stderr_preview"] = stderr_preview
+        summary["stderr_chars"] = stderr_chars
+        summary["stderr_truncated"] = stderr_truncated
+
+    return summary
+
+
+def _render_tool_result_history_content(tool_result: ToolCallResult) -> str:
+    history_payload = {"tool": tool_result.tool_name, "payload": tool_result.payload}
+    serialized_payload = json.dumps(history_payload, ensure_ascii=False)
+    if len(serialized_payload) <= _TOOL_RESULT_HISTORY_MAX_CHARS:
+        return serialized_payload
+
+    payload_summary: dict[str, Any] = {
+        "tool": tool_result.tool_name,
+        "payload_summary": {
+            "original_char_length": len(serialized_payload),
+            **(
+                _summarize_tool_payload(tool_result.payload, safe_summary=tool_result.safe_summary)
+                if isinstance(tool_result.payload, Mapping)
+                else {
+                    "truncated": True,
+                    "summary": tool_result.safe_summary,
+                    "preview": str(tool_result.payload)[:_TOOL_RESULT_TEXT_PREVIEW_CHARS],
+                }
+            ),
+        },
+    }
+    return json.dumps(payload_summary, ensure_ascii=False)
+
 
 class BaseQueryEngine(ABC):
     def __init__(
@@ -203,14 +307,15 @@ class OpenAIQueryEngine(BaseQueryEngine):
         allow_tools: bool,
         callbacks: GenerationCallbacks | None,
     ) -> ProviderTurnResult:
+        stream = callbacks is not None
         payload = self._provider._build_payload(
             self._model,
             self.messages,
             mcp_tools=self._mcp_tools,
             allow_tools=allow_tools,
-            stream=callbacks is not None,
+            stream=stream,
         )
-        if callbacks is not None:
+        if stream:
             response_payload = await self._provider._stream_completion(
                 self._endpoint,
                 self._headers,
@@ -243,17 +348,31 @@ class OpenAIQueryEngine(BaseQueryEngine):
         tool_calls: Sequence[ToolCallRequest],
         tool_results: Sequence[ToolCallResult],
     ) -> None:
+        if len(tool_calls) != len(tool_results):
+            raise ChatRuntimeError("Tool result count mismatch during assistant history replay.")
+
+        assistant_tool_call_ids = _assistant_tool_call_ids(assistant_payload)
+        requested_tool_call_ids = [tool_call.tool_call_id for tool_call in tool_calls]
+        if assistant_tool_call_ids != requested_tool_call_ids:
+            raise ChatRuntimeError(
+                "Assistant tool_call ids do not match tool execution results during history replay."
+            )
+
+        for tool_call, tool_result in zip(tool_calls, tool_results, strict=True):
+            result_tool_call_id = tool_result.tool_call_id or tool_call.tool_call_id
+            if result_tool_call_id != tool_call.tool_call_id:
+                raise ChatRuntimeError(
+                    "Tool result tool_call_id does not match the originating assistant tool call."
+                )
+
         self.append_assistant_response_to_history(assistant_payload)
-        for tool_call, tool_result in zip(tool_calls, tool_results, strict=False):
+        for tool_call, tool_result in zip(tool_calls, tool_results, strict=True):
             self.messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.tool_call_id,
                     "name": tool_call.tool_name,
-                    "content": json.dumps(
-                        {"tool": tool_result.tool_name, "payload": tool_result.payload},
-                        ensure_ascii=False,
-                    ),
+                    "content": _render_tool_result_history_content(tool_result),
                 }
             )
 
@@ -391,17 +510,32 @@ class AnthropicQueryEngine(BaseQueryEngine):
         tool_calls: Sequence[ToolCallRequest],
         tool_results: Sequence[ToolCallResult],
     ) -> None:
+        if len(tool_calls) != len(tool_results):
+            raise ChatRuntimeError("Tool result count mismatch during Anthropic history replay.")
+
+        assistant_tool_use_ids = _anthropic_tool_use_ids(assistant_payload)
+        requested_tool_call_ids = [tool_call.tool_call_id for tool_call in tool_calls]
+        if assistant_tool_use_ids != requested_tool_call_ids:
+            raise ChatRuntimeError(
+                "Anthropic assistant tool_use ids do not match tool execution results "
+                "during history replay."
+            )
+
+        for tool_call, tool_result in zip(tool_calls, tool_results, strict=True):
+            result_tool_call_id = tool_result.tool_call_id or tool_call.tool_call_id
+            if result_tool_call_id != tool_call.tool_call_id:
+                raise ChatRuntimeError(
+                    "Tool result tool_call_id does not match the originating Anthropic tool call."
+                )
+
         self.append_assistant_response_to_history(assistant_payload)
         user_content = []
-        for tool_call, tool_result in zip(tool_calls, tool_results, strict=False):
+        for tool_call, tool_result in zip(tool_calls, tool_results, strict=True):
             user_content.append(
                 {
                     "type": "tool_result",
                     "tool_use_id": tool_call.tool_call_id,
-                    "content": json.dumps(
-                        {"tool": tool_result.tool_name, "payload": tool_result.payload},
-                        ensure_ascii=False,
-                    ),
+                    "content": _render_tool_result_history_content(tool_result),
                 }
             )
         self.messages.append({"role": "user", "content": user_content})

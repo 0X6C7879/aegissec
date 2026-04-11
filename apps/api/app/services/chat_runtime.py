@@ -85,6 +85,8 @@ class ToolCallRequest:
 class ToolCallResult:
     tool_name: str
     payload: dict[str, Any] = field(default_factory=dict)
+    tool_call_id: str | None = None
+    safe_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,8 +503,10 @@ class OpenAICompatibleChatRuntime:
                             if not isinstance(delta, dict):
                                 continue
 
-                            content_delta = OpenAICompatibleChatRuntime._coerce_stream_content_delta_text(
-                                delta.get("content")
+                            content_delta = (
+                                OpenAICompatibleChatRuntime._coerce_stream_content_delta_text(
+                                    delta.get("content")
+                                )
                             )
                             if content_delta:
                                 message["content"] = f"{message['content']}{content_delta}"
@@ -745,8 +749,7 @@ class OpenAICompatibleChatRuntime:
         if isinstance(arguments, dict | list):
             return json.dumps(arguments, ensure_ascii=False)
         raise ChatRuntimeError(
-            "LLM assistant tool_calls entry has unsupported function.arguments for history "
-            "replay."
+            "LLM assistant tool_calls entry has unsupported function.arguments for history replay."
         )
 
     @staticmethod
@@ -1283,7 +1286,12 @@ class AnthropicChatRuntime:
                                 if not isinstance(delta, dict):
                                     continue
                                 delta_type = delta.get("type")
-                                if delta_type in {"text_delta", "text", "thinking_delta", "thinking"}:
+                                if delta_type in {
+                                    "text_delta",
+                                    "text",
+                                    "thinking_delta",
+                                    "thinking",
+                                }:
                                     text = delta.get("text")
                                     if not isinstance(text, str):
                                         text = delta.get("thinking")

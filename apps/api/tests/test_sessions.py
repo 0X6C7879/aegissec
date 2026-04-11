@@ -4330,6 +4330,7 @@ Create and edit Word documents.
             conversation_response = client.get(f"/api/sessions/{session_id}/conversation")
             assert conversation_response.status_code == 200
             conversation_payload = api_data(conversation_response)
+            assert conversation_payload is not None
 
             generations = cast(list[dict[str, object]], conversation_payload["generations"])
             if generations:
