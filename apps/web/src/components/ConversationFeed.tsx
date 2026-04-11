@@ -161,15 +161,11 @@ function normalizeForBoilerplateCheck(content: string | null | undefined): strin
 }
 
 function normalizeMarkdownSpacing(content: string | null | undefined): string | null {
-  if (!content) {
+  if (content === null || content === undefined) {
     return null;
   }
-  const normalized = content
-    .replace(/<think\b[^>]*>/gi, "\n<think>\n")
-    .replace(/<\/think>/gi, "\n</think>\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return normalized.length > 0 ? normalized : null;
+
+  return content.length > 0 ? content : null;
 }
 
 function normalizeAssistantPrimaryText(content: string | null | undefined): string | null {

@@ -1228,9 +1228,7 @@ async def process_generation(
                 ),
                 **generate_reply_kwargs,
             )
-            final_content = harness_transcript.sanitize_persisted_assistant_text(final_content) or (
-                "模型已完成分析，但没有返回可展示的最终答复。"
-            )
+            final_content = harness_transcript.sanitize_persisted_assistant_text(final_content)
 
             if cancel_event.is_set():
                 raise asyncio.CancelledError

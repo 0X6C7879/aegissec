@@ -64,7 +64,7 @@ def test_chat_hidden_stream_tag_names_always_keep_think_visible() -> None:
     assert hidden_stream_tag_names() == {"invoke", "tool_call"}
 
 
-def test_chat_sanitize_persisted_assistant_text_keeps_think_and_strips_protocol() -> None:
+def test_chat_sanitize_persisted_assistant_text_preserves_full_model_output() -> None:
     content = (
         '<minimax:tool_call><invoke name="agent-browser">{"task":"demo"}'
         "</invoke></minimax:tool_call><think>private</think>最终答复"
@@ -72,12 +72,10 @@ def test_chat_sanitize_persisted_assistant_text_keeps_think_and_strips_protocol(
 
     sanitized = sanitize_persisted_assistant_text(content)
 
-    assert sanitized == "<think>private</think>最终答复"
-    assert "invoke" not in sanitized
-    assert "tool_call" not in sanitized
+    assert sanitized == content
 
 
-def test_chat_project_visible_stream_content_keeps_think_and_hides_tool_protocol() -> None:
+def test_chat_project_visible_stream_content_preserves_full_model_output() -> None:
     raw_streamed_content = (
         "<think>hidden</think>"
         '<minimax:tool_call><invoke name="agent-browser">{"task":"demo"}'
@@ -86,9 +84,7 @@ def test_chat_project_visible_stream_content_keeps_think_and_hides_tool_protocol
 
     projected = project_visible_stream_content(raw_streamed_content)
 
-    assert projected == "<think>hidden</think>最终"
-    assert "invoke" not in projected
-    assert "tool_call" not in projected
+    assert projected == raw_streamed_content
 
 
 def test_session_lifecycle_and_history(client: TestClient) -> None:

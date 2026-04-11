@@ -82,48 +82,7 @@ def pop_hidden_stream_tag(hidden_stack: list[str], tag_name: str) -> None:
 
 
 def project_visible_stream_content(content: str) -> str:
-    visible_parts: list[str] = []
-    index = 0
-    hidden_stack: list[str] = []
-
-    while index < len(content):
-        if content[index] == "<":
-            tag_end = content.find(">", index)
-            next_index = index + 1
-            if tag_end == -1 and next_index < len(content):
-                next_char = content[next_index]
-                if next_char in {"/", "!", "?"} or next_char.isalpha() or next_char == "_":
-                    break
-            tag_fragment = content[index:] if tag_end == -1 else content[index : tag_end + 1]
-            hidden_tag = match_hidden_stream_tag(tag_fragment)
-
-            if hidden_tag is not None:
-                tag_name, is_closing, is_complete, is_self_closing = hidden_tag
-                if not is_complete:
-                    break
-
-                if is_closing:
-                    pop_hidden_stream_tag(hidden_stack, tag_name)
-                elif not is_self_closing:
-                    hidden_stack.append(tag_name)
-
-                index += len(tag_fragment)
-                continue
-
-            if hidden_stack:
-                if tag_end == -1:
-                    break
-                index = tag_end + 1
-                continue
-
-        if hidden_stack:
-            index += 1
-            continue
-
-        visible_parts.append(content[index])
-        index += 1
-
-    return sanitize_persisted_assistant_text("".join(visible_parts))
+    return content
 
 
 def message_transcript_segments(

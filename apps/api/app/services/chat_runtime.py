@@ -41,15 +41,7 @@ HTTP_ERROR_BODY_PREVIEW_LIMIT = 1500
 
 
 def strip_tool_protocol_markup(content: str) -> str:
-    cleaned_content = content
-    for pattern in (
-        TOOL_CALL_BLOCK_PATTERN,
-        INVOKE_BLOCK_PATTERN,
-        TOOL_CALL_TAG_PATTERN,
-        INVOKE_TAG_PATTERN,
-    ):
-        cleaned_content = pattern.sub("", cleaned_content)
-    return cleaned_content.strip()
+    return content
 
 
 def strip_think_blocks(content: str) -> str:
@@ -64,10 +56,9 @@ def sanitize_assistant_content(
     strip_thinking: bool = False,
     fallback_text: str = "",
 ) -> str:
-    cleaned_content = strip_tool_protocol_markup(content)
+    cleaned_content = content
     if strip_thinking:
         cleaned_content = THINK_BLOCK_PATTERN.sub("", cleaned_content)
-    cleaned_content = cleaned_content.strip()
     if cleaned_content:
         return cleaned_content
     return fallback_text
@@ -510,8 +501,10 @@ class OpenAICompatibleChatRuntime:
                             if not isinstance(delta, dict):
                                 continue
 
-                            content_delta = delta.get("content")
-                            if isinstance(content_delta, str) and content_delta:
+                            content_delta = OpenAICompatibleChatRuntime._coerce_stream_content_delta_text(
+                                delta.get("content")
+                            )
+                            if content_delta:
                                 message["content"] = f"{message['content']}{content_delta}"
                                 if callbacks.on_text_delta is not None:
                                     await callbacks.on_text_delta(content_delta)
@@ -783,6 +776,38 @@ class OpenAICompatibleChatRuntime:
         return f"{normalized_text[:HTTP_ERROR_BODY_PREVIEW_LIMIT]}..."
 
     @staticmethod
+    def _extract_text_fragment(item: object) -> str | None:
+        if isinstance(item, str):
+            return item
+
+        if not isinstance(item, dict):
+            return None
+
+        for key in ("text", "thinking", "reasoning"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        return None
+
+    @staticmethod
+    def _coerce_stream_content_delta_text(content_delta: object) -> str:
+        fragment = OpenAICompatibleChatRuntime._extract_text_fragment(content_delta)
+        if fragment is not None:
+            return fragment
+
+        if not isinstance(content_delta, list):
+            return ""
+
+        parts: list[str] = []
+        for item in content_delta:
+            item_fragment = OpenAICompatibleChatRuntime._extract_text_fragment(item)
+            if item_fragment is not None:
+                parts.append(item_fragment)
+
+        return "".join(parts)
+
+    @staticmethod
     def _extract_message_content(content: object) -> str | None:
         if isinstance(content, str):
             normalized_content = OpenAICompatibleChatRuntime._sanitize_assistant_content(content)
@@ -791,14 +816,9 @@ class OpenAICompatibleChatRuntime:
         if isinstance(content, list):
             parts: list[str] = []
             for item in content:
-                if not isinstance(item, dict):
-                    continue
-
-                text = item.get("text")
-                if item.get("type") == "text" and isinstance(text, str):
-                    normalized_text = text.strip()
-                    if normalized_text:
-                        parts.append(normalized_text)
+                fragment = OpenAICompatibleChatRuntime._extract_text_fragment(item)
+                if fragment is not None:
+                    parts.append(fragment)
 
             if parts:
                 return OpenAICompatibleChatRuntime._sanitize_assistant_content("\n".join(parts))
@@ -810,7 +830,7 @@ class OpenAICompatibleChatRuntime:
         return sanitize_assistant_content(
             content,
             strip_thinking=False,
-            fallback_text="模型已完成分析，但没有返回可展示的最终答复。",
+            fallback_text="",
         )
 
     @staticmethod
@@ -1261,8 +1281,10 @@ class AnthropicChatRuntime:
                                 if not isinstance(delta, dict):
                                     continue
                                 delta_type = delta.get("type")
-                                if delta_type in {"text_delta", "text"}:
+                                if delta_type in {"text_delta", "text", "thinking_delta", "thinking"}:
                                     text = delta.get("text")
+                                    if not isinstance(text, str):
+                                        text = delta.get("thinking")
                                     if isinstance(text, str) and text:
                                         text_parts.append(text)
                                         if callbacks.on_text_delta is not None:
@@ -1283,7 +1305,19 @@ class AnthropicChatRuntime:
                                     content_block, dict
                                 ):
                                     continue
-                                if content_block.get("type") != "tool_use":
+
+                                content_block_type = content_block.get("type")
+                                if content_block_type in {"text", "thinking"}:
+                                    initial_text = content_block.get("text")
+                                    if not isinstance(initial_text, str):
+                                        initial_text = content_block.get("thinking")
+                                    if isinstance(initial_text, str) and initial_text:
+                                        text_parts.append(initial_text)
+                                        if callbacks.on_text_delta is not None:
+                                            await callbacks.on_text_delta(initial_text)
+                                    continue
+
+                                if content_block_type != "tool_use":
                                     continue
                                 tool_use_fragments[index] = {
                                     "type": "tool_use",
@@ -1414,8 +1448,16 @@ class AnthropicChatRuntime:
                 continue
 
             block_type = block.get("type")
-            if block_type == "text":
+            if block_type in {"text", "thinking", "redacted_thinking"}:
                 text = block.get("text")
+                if not isinstance(text, str):
+                    text = block.get("thinking")
+                if not isinstance(text, str):
+                    data = block.get("data")
+                    if isinstance(data, str):
+                        text = data
+                    elif isinstance(data, dict | list):
+                        text = json.dumps(data, ensure_ascii=False)
                 if isinstance(text, str):
                     normalized = AnthropicChatRuntime._sanitize_assistant_content(text)
                     if normalized:

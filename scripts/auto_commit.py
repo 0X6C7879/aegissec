@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXCLUDES = [
     ".env",
     ".env.local",
+    ".omx/",
     "apps/api/data/*.db",
     "apps/api/data/memory/",
     "apps/api/data/runtime-workspace/",
@@ -79,13 +80,37 @@ def get_staged_paths() -> list[str]:
 
 
 def should_exclude(path: str) -> bool:
-    return path in {".env", ".env.local"} or (
-        path.startswith("apps/api/data/")
-        and (
-            path.endswith(".db")
-            or path.startswith("apps/api/data/memory/")
-            or path.startswith("apps/api/data/runtime-workspace/")
+    return (
+        path in {".env", ".env.local"}
+        or path.startswith(".omx/")
+        or (
+            path.startswith("apps/api/data/")
+            and (
+                path.endswith(".db")
+                or path.startswith("apps/api/data/memory/")
+                or path.startswith("apps/api/data/runtime-workspace/")
+            )
         )
+    )
+
+
+def is_git_ignored(path: str) -> bool:
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "--quiet", "--", path],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        ["git", "check-ignore", "--no-index", "--quiet", "--", path],
+        output=result.stdout,
+        stderr=result.stderr,
     )
 
 
@@ -112,7 +137,9 @@ def get_candidate_paths() -> list[str]:
 
 def stage_changes_with_excludes() -> None:
     candidate_paths = [
-        path for path in get_candidate_paths() if not should_exclude(path)
+        path
+        for path in get_candidate_paths()
+        if not should_exclude(path) and not is_git_ignored(path)
     ]
     if not candidate_paths:
         return

@@ -48,7 +48,7 @@ def test_extract_message_content_preserves_think_blocks_from_text_parts() -> Non
     assert result == "<think>internal reasoning</think>\n最终答复"
 
 
-def test_extract_message_content_strips_tool_protocol_markup_from_string_payload() -> None:
+def test_extract_message_content_preserves_tool_protocol_markup_from_string_payload() -> None:
     content = (
         '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
         '{"task":"demo"}</invoke></minimax:tool_call>\n\n最终答复'
@@ -56,10 +56,10 @@ def test_extract_message_content_strips_tool_protocol_markup_from_string_payload
 
     result = OpenAICompatibleChatRuntime._extract_message_content(content)
 
-    assert result == "最终答复"
+    assert result == content
 
 
-def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
+def test_assistant_message_for_history_preserves_tool_protocol_markup() -> None:
     message: dict[str, object] = {
         "content": (
             '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
@@ -80,7 +80,10 @@ def test_assistant_message_for_history_strips_tool_protocol_markup() -> None:
 
     assert history_message == {
         "role": "assistant",
-        "content": "最终答复",
+        "content": (
+            '<minimax:tool_call id="tool-1"><invoke name="agent-browser">'
+            '{"task":"demo"}</invoke></minimax:tool_call>最终答复'
+        ),
         "tool_calls": [
             {
                 "id": "call-1",
