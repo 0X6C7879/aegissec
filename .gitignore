@@ -14,6 +14,7 @@ apps/web/*.tsbuildinfo
 pytest-of-ASUS/
 test-results/
 apps/api/data/*.db
+apps/api/data/memory/
 apps/api/data/runtime-workspace/
 .playwright-mcp/
 .sisyphus/

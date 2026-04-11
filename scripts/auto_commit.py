@@ -11,6 +11,7 @@ DEFAULT_EXCLUDES = [
     ".env",
     ".env.local",
     "apps/api/data/*.db",
+    "apps/api/data/memory/",
     "apps/api/data/runtime-workspace/",
 ]
 
@@ -81,7 +82,9 @@ def should_exclude(path: str) -> bool:
     return path in {".env", ".env.local"} or (
         path.startswith("apps/api/data/")
         and (
-            path.endswith(".db") or path.startswith("apps/api/data/runtime-workspace/")
+            path.endswith(".db")
+            or path.startswith("apps/api/data/memory/")
+            or path.startswith("apps/api/data/runtime-workspace/")
         )
     )
 
@@ -92,6 +95,29 @@ def unstage_excluded_paths() -> None:
         return
 
     run_git("restore", "--staged", "--source=HEAD", "--", *excluded_paths)
+
+
+def get_candidate_paths() -> list[str]:
+    result = run_git(
+        "ls-files",
+        "--modified",
+        "--deleted",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        capture_output=True,
+    )
+    return [path for path in result.stdout.split("\0") if path]
+
+
+def stage_changes_with_excludes() -> None:
+    candidate_paths = [
+        path for path in get_candidate_paths() if not should_exclude(path)
+    ]
+    if not candidate_paths:
+        return
+
+    run_git("add", "-A", "--", *candidate_paths)
 
 
 def get_current_branch() -> str:
@@ -127,7 +153,7 @@ def main() -> int:
         return 0
 
     print("Staging changes...")
-    run_git("add", "-A", "--", ".")
+    stage_changes_with_excludes()
     unstage_excluded_paths()
 
     if not get_staged_paths():
