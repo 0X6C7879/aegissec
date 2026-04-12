@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import re
 from collections.abc import Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -310,6 +311,39 @@ def _catalog_item_trigger(name: str) -> str:
     return name.replace(" ", "-").replace("_", "-")
 
 
+_MCP_TRIGGER_SANITIZE_PATTERN = re.compile(r"[^a-z0-9_-]+")
+
+
+def _catalog_mcp_tool_trigger(name: str) -> str:
+    normalized = _MCP_TRIGGER_SANITIZE_PATTERN.sub("_", name.strip().casefold()).strip("_")
+    return normalized or _catalog_item_trigger(name)
+
+
+def _ensure_unique_trigger(
+    base_trigger: str,
+    *,
+    used_triggers: set[str],
+    fallback_suffix: str,
+) -> str:
+    if base_trigger not in used_triggers:
+        used_triggers.add(base_trigger)
+        return base_trigger
+
+    if fallback_suffix:
+        fallback_trigger = f"{base_trigger}-{fallback_suffix}"
+        if fallback_trigger not in used_triggers:
+            used_triggers.add(fallback_trigger)
+            return fallback_trigger
+
+    index = 2
+    while True:
+        candidate = f"{base_trigger}-{index}"
+        if candidate not in used_triggers:
+            used_triggers.add(candidate)
+            return candidate
+        index += 1
+
+
 def _catalog_skill_identifier(skill: SkillAgentSummaryRead) -> str:
     relative_path = skill.resolved_identity.get("relative_path")
     if isinstance(relative_path, str) and relative_path.strip():
@@ -408,11 +442,16 @@ def _build_skill_slash_catalog_items(
     return items
 
 
-def _build_mcp_slash_catalog_items(capability_facade: CapabilityFacade) -> list[SlashCatalogItem]:
+def _build_mcp_slash_catalog_items(
+    capability_facade: CapabilityFacade,
+    *,
+    reserved_triggers: set[str] | None = None,
+) -> list[SlashCatalogItem]:
     servers = {
         server.id: server for server in capability_facade.list_mcp_servers() if server.enabled
     }
     items: list[SlashCatalogItem] = []
+    used_triggers = set(reserved_triggers or ())
     for binding in capability_facade.build_mcp_tool_inventory():
         raw_server_id = binding.get("server_id")
         raw_tool_alias = binding.get("tool_alias")
@@ -432,7 +471,11 @@ def _build_mcp_slash_catalog_items(capability_facade: CapabilityFacade) -> list[
         disabled = server.status.value != "connected" or _tool_has_required_arguments(
             input_schema if isinstance(input_schema, Mapping) else None
         )
-        trigger = _catalog_item_trigger(tool_alias)
+        trigger = _ensure_unique_trigger(
+            _catalog_mcp_tool_trigger(tool_name),
+            used_triggers=used_triggers,
+            fallback_suffix=_catalog_item_trigger(server.name.casefold()),
+        )
         title = (
             binding.get("tool_title")
             if isinstance(binding.get("tool_title"), str) and str(binding.get("tool_title")).strip()
@@ -480,10 +523,17 @@ def _build_session_slash_catalog(
     mcp_service: MCPService,
 ) -> list[SlashCatalogItem]:
     capability_facade = CapabilityFacade(skill_service=skill_service, mcp_service=mcp_service)
+    builtin_items = _build_builtin_slash_catalog_items()
+    skill_items = _build_skill_slash_catalog_items(skill_service, session_id=session_id)
+    reserved_triggers = {item.trigger for item in [*builtin_items, *skill_items]}
+    mcp_items = _build_mcp_slash_catalog_items(
+        capability_facade,
+        reserved_triggers=reserved_triggers,
+    )
     ordered_items = [
-        *_build_builtin_slash_catalog_items(),
-        *_build_skill_slash_catalog_items(skill_service, session_id=session_id),
-        *_build_mcp_slash_catalog_items(capability_facade),
+        *builtin_items,
+        *skill_items,
+        *mcp_items,
     ]
     deduped: list[SlashCatalogItem] = []
     seen_triggers: set[str] = set()

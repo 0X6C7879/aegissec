@@ -9,7 +9,7 @@
       }
     },
     "pentest-challenge-platform": {
-      "url": "http://10.0.0.44:8000/mcp",
+      "url": "http://10.0.0.44:8000/mcp/",
       "headers": {
         "Authorization": "Bearer 86720e50d260bcb3c0eb9ee9240a6f717830d1ad337e6b405f1b3a7aad3c46bc"
       }

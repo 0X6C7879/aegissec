@@ -368,6 +368,59 @@ def test_anthropic_extract_tool_request_supports_terminal_tools() -> None:
     assert stop_request.arguments == {"job_id": "job-1"}
 
 
+def test_extract_tool_calls_rejects_non_boolean_detach_flag() -> None:
+    message: dict[str, object] = {
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {
+                    "name": "execute_terminal_command",
+                    "arguments": json.dumps(
+                        {
+                            "terminal_id": "term-a",
+                            "command": "pwd",
+                            "detach": "false",
+                        }
+                    ),
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ChatRuntimeError, match="invalid detach flag"):
+        OpenAICompatibleChatRuntime._extract_tool_calls(message)
+
+
+def test_extract_tool_calls_normalizes_terminal_buffer_stream() -> None:
+    message: dict[str, object] = {
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {
+                    "name": "read_terminal_buffer",
+                    "arguments": json.dumps(
+                        {
+                            "terminal_id": "term-a",
+                            "job_id": "job-1",
+                            "stream": "STDOUT",
+                            "lines": 25,
+                        }
+                    ),
+                },
+            }
+        ]
+    }
+
+    tool_calls = OpenAICompatibleChatRuntime._extract_tool_calls(message)
+
+    assert tool_calls[0].arguments == {
+        "terminal_id": "term-a",
+        "job_id": "job-1",
+        "stream": "stdout",
+        "lines": 25,
+    }
+
+
 def test_extract_tool_calls_coerces_loaded_skill_name_to_execute_skill() -> None:
     message: dict[str, object] = {
         "tool_calls": [

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
 
 harness_messages = importlib.import_module("app.harness.messages")
 QueryLoop = importlib.import_module("app.harness.query_loop").QueryLoop
@@ -13,6 +16,10 @@ ToolCallRequest = harness_messages.ToolCallRequest
 ToolCallResult = harness_messages.ToolCallResult
 MutatingTargetClass = importlib.import_module("app.harness.tools.base").MutatingTargetClass
 ToolRiskLevel = importlib.import_module("app.harness.tools.base").ToolRiskLevel
+ToolRuntimeLifecycleRunner = importlib.import_module(
+    "app.harness.tool_runtime_runner"
+).ToolRuntimeLifecycleRunner
+ChatRuntimeError = importlib.import_module("app.services.chat_runtime").ChatRuntimeError
 
 
 class _FakeEngine:
@@ -217,3 +224,123 @@ def test_build_tool_schedule_keeps_attached_terminal_and_legacy_runtime_serial()
     )
 
     assert [phase.lane for phase in phases] == ["serial_high_risk", "serial_high_risk"]
+
+
+def test_build_tool_runtime_excludes_terminal_tools_for_swarm() -> None:
+    class _SkillService:
+        def list_loaded_skills_for_agent(self, *, session_id: str) -> list[Any]:
+            del session_id
+            return []
+
+    runtime = importlib.import_module("app.harness.executor").build_tool_runtime(
+        skill_service=_SkillService(),
+        session_id="session-1",
+        include_swarm_tools=True,
+    )
+
+    assert runtime.tool_registry.get("create_terminal_session") is None
+    assert runtime.tool_registry.get("list_terminal_sessions") is None
+    assert runtime.tool_registry.get("execute_terminal_command") is None
+    assert runtime.tool_registry.get("read_terminal_buffer") is None
+    assert runtime.tool_registry.get("stop_terminal_job") is None
+    assert runtime.tool_registry.get("execute_kali_command") is not None
+
+
+@pytest.mark.anyio
+async def test_execute_constrained_parallel_phase_persists_success_before_failure() -> None:
+    persisted_orders: list[int] = []
+    failed_ids: list[str] = []
+
+    async def publish_assistant_trace(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    lifecycle = ToolRuntimeLifecycleRunner(
+        session=cast(Any, SimpleNamespace(id="session-1")),
+        assistant_message=cast(Any, SimpleNamespace(id="assistant-1", generation_id=None)),
+        repository=cast(Any, SimpleNamespace()),
+        event_broker=cast(Any, SimpleNamespace()),
+        session_state=None,
+        publish_assistant_trace=publish_assistant_trace,
+    )
+
+    async def fake_publish_tool_started(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    async def fake_persist_tool_success(
+        tool_request: Any,
+        *,
+        tool_result: Any,
+        started_payload: dict[str, Any],
+    ) -> Any:
+        del tool_result, started_payload
+        persisted_orders.append(int(tool_request.tool_call_id.split("-")[1]))
+        return ToolCallResult(tool_name=tool_request.tool_name, payload={})
+
+    async def fake_publish_tool_failed(
+        tool_request: Any,
+        *,
+        started_payload: dict[str, Any],
+        error_message: str,
+        error_artifacts: Any,
+    ) -> None:
+        del started_payload, error_message, error_artifacts
+        failed_ids.append(tool_request.tool_call_id)
+
+    lifecycle.publish_tool_started = fake_publish_tool_started
+    lifecycle.persist_tool_success = fake_persist_tool_success
+    lifecycle.publish_tool_failed = fake_publish_tool_failed
+
+    tool_requests = [
+        ToolCallRequest(tool_call_id="tool-1", tool_name="execute_terminal_command", arguments={}),
+        ToolCallRequest(tool_call_id="tool-2", tool_name="execute_terminal_command", arguments={}),
+    ]
+    prepared_items = [
+        SimpleNamespace(
+            order=index,
+            tool_request=tool_request,
+            prepared=SimpleNamespace(
+                started_payload={},
+                tool_call_metadata={},
+                governance_metadata=None,
+                trace_entry={},
+            ),
+        )
+        for index, tool_request in enumerate(tool_requests)
+    ]
+    phase = SimpleNamespace(lane="terminal_detached_parallel", items=prepared_items)
+
+    async def apply_pre_tool_hooks(*, runtime: Any, prepared: Any, tool_request: Any) -> Any:
+        del runtime, tool_request
+        return prepared
+
+    async def run_tool_with_hooks(*, runtime: Any, prepared: Any, tool_request: Any) -> Any:
+        del runtime, prepared
+        if tool_request.tool_call_id == "tool-2":
+            raise RuntimeError("boom")
+        return {"status": "ok"}
+
+    async def notify_tool_execution_error(
+        *, runtime: Any, prepared: Any, tool_request: Any, error: Exception
+    ) -> dict[str, Any]:
+        del runtime, prepared, tool_request, error
+        return {}
+
+    executor_module = SimpleNamespace(
+        apply_pre_tool_hooks=apply_pre_tool_hooks,
+        run_tool_with_hooks=run_tool_with_hooks,
+        notify_tool_execution_error=notify_tool_execution_error,
+    )
+    scheduling_module = SimpleNamespace(
+        build_parallel_groups=lambda _: [[prepared_items[0]], [prepared_items[1]]]
+    )
+
+    with pytest.raises(ChatRuntimeError, match="boom"):
+        await lifecycle.execute_constrained_parallel_phase(
+            phase=phase,
+            runtime=SimpleNamespace(),
+            executor_module=executor_module,
+            scheduling_module=scheduling_module,
+        )
+
+    assert persisted_orders == [1]
+    assert failed_ids == ["tool-2"]

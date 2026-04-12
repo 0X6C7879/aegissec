@@ -3080,7 +3080,18 @@ Use when performing Active Directory pentest orchestration.
                                 "required": ["target"],
                                 "additionalProperties": False,
                             },
-                        )
+                        ),
+                        MCPCapabilityRead(
+                            kind=MCPCapabilityKind.TOOL,
+                            name="list_challenges",
+                            title="List Challenges",
+                            description="List available challenges from MCP.",
+                            input_schema={
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": False,
+                            },
+                        ),
                     ],
                 )
             ]
@@ -3099,6 +3110,7 @@ Use when performing Active Directory pentest orchestration.
         assert any(item["id"] == "builtin:list_available_skills" for item in catalog)
         assert any(item["id"] == "skill:adscan" for item in catalog)
         assert any(item["id"] == "mcp:server-1:scan-target" for item in catalog)
+        assert any(item["id"] == "mcp:server-1:list_challenges" for item in catalog)
 
         builtin_item = next(
             item for item in catalog if item["id"] == "builtin:list_available_skills"
@@ -3132,12 +3144,101 @@ Use when performing Active Directory pentest orchestration.
         mcp_item = next(item for item in catalog if item["id"] == "mcp:server-1:scan-target")
         assert mcp_item["badge"] == "Burp Suite"
         assert mcp_item["disabled"] is True
+        assert mcp_item["trigger"] == "scan-target"
+        assert mcp_item["action"]["trigger"] == "scan-target"
+        assert mcp_item["action"]["display_text"] == "/scan-target"
         assert mcp_item["action"]["invocation"] == {
             "tool_name": "mcp__burp_suite__scan_target",
             "arguments": {},
             "mcp_server_id": "server-1",
             "mcp_tool_name": "scan-target",
         }
+
+        mcp_underscore_item = next(
+            item for item in catalog if item["id"] == "mcp:server-1:list_challenges"
+        )
+        assert mcp_underscore_item["trigger"] == "list_challenges"
+        assert mcp_underscore_item["action"]["trigger"] == "list_challenges"
+        assert mcp_underscore_item["action"]["display_text"] == "/list_challenges"
+        assert mcp_underscore_item["action"]["invocation"] == {
+            "tool_name": "mcp__burp_suite__list_challenges",
+            "arguments": {},
+            "mcp_server_id": "server-1",
+            "mcp_tool_name": "list_challenges",
+        }
+    finally:
+        if original_mcp_override is None:
+            app.dependency_overrides.pop(get_mcp_service, None)
+        else:
+            app.dependency_overrides[get_mcp_service] = original_mcp_override
+
+
+def test_session_slash_catalog_keeps_same_name_mcp_tools_with_unique_triggers(
+    client: TestClient,
+) -> None:
+    class FakeMCPService:
+        def list_servers(self) -> list[MCPServerRead]:
+            shared_capability = MCPCapabilityRead(
+                kind=MCPCapabilityKind.TOOL,
+                name="list_challenges",
+                title="List Challenges",
+                description="List available challenges from MCP.",
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            )
+            return [
+                MCPServerRead(
+                    id="server-1",
+                    name="Burp Suite",
+                    source=CompatibilitySource.LOCAL,
+                    scope=CompatibilityScope.PROJECT,
+                    transport=MCPTransport.STDIO,
+                    enabled=True,
+                    timeout_ms=30_000,
+                    status=MCPServerStatus.CONNECTED,
+                    config_path="mcp.json",
+                    imported_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+                    capabilities=[shared_capability],
+                ),
+                MCPServerRead(
+                    id="server-2",
+                    name="Nuclei",
+                    source=CompatibilitySource.LOCAL,
+                    scope=CompatibilityScope.PROJECT,
+                    transport=MCPTransport.STDIO,
+                    enabled=True,
+                    timeout_ms=30_000,
+                    status=MCPServerStatus.CONNECTED,
+                    config_path="mcp.json",
+                    imported_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+                    capabilities=[shared_capability],
+                ),
+            ]
+
+    original_mcp_override = app.dependency_overrides.get(get_mcp_service)
+    app.dependency_overrides[get_mcp_service] = lambda: FakeMCPService()
+
+    try:
+        session_response = client.post("/api/sessions", json={"title": "MCP Trigger Collision"})
+        session_id = api_data(session_response)["id"]
+
+        catalog = api_data(client.get(f"/api/sessions/{session_id}/slash-catalog"))
+        mcp_items = [
+            item
+            for item in catalog
+            if item.get("type") == "mcp"
+            and item.get("action", {}).get("invocation", {}).get("mcp_tool_name")
+            == "list_challenges"
+        ]
+
+        assert len(mcp_items) == 2
+        triggers = {item["trigger"] for item in mcp_items}
+        assert len(triggers) == 2
+        assert "list_challenges" in triggers
+        assert any(trigger.startswith("list_challenges-") for trigger in triggers)
     finally:
         if original_mcp_override is None:
             app.dependency_overrides.pop(get_mcp_service, None)

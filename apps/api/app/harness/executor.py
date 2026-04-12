@@ -119,6 +119,7 @@ def build_tool_runtime(
         tool_registry=tools_defaults.build_default_tool_registry(
             mcp_tools=mcp_tool_inventory,
             include_swarm_tools=include_swarm_tools,
+            include_terminal_tools=not include_swarm_tools,
         ),
     )
 

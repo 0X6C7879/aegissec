@@ -2269,6 +2269,150 @@ textarea::placeholder {
   line-height: 1.6;
 }
 
+.shell-workbench {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(7, 12, 21, 0.96), rgba(5, 9, 16, 0.98));
+}
+
+.shell-workbench-header,
+.shell-jobs-header,
+.shell-job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shell-workbench-header,
+.shell-jobs-header {
+  align-items: flex-start;
+}
+
+.shell-section-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.shell-section-copy {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.shell-workbench-status,
+.shell-job-status,
+.shell-job-row-secondary {
+  color: var(--text-secondary);
+  font: 600 0.72rem/1.4 var(--font-code);
+}
+
+.shell-workbench-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shell-workbench-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shell-workbench-tab-shell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shell-workbench-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  font: 600 0.76rem/1 var(--font-code);
+}
+
+.shell-workbench-tab-active {
+  border-color: rgba(0, 217, 255, 0.28);
+  background: linear-gradient(180deg, rgba(0, 217, 255, 0.16), rgba(0, 217, 255, 0.06));
+}
+
+.shell-workbench-tab-title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-workbench-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 700 0.9rem/1 var(--font-code);
+  padding: 0;
+}
+
+.shell-terminal-pane {
+  min-height: 240px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #07111d;
+  overflow: hidden;
+}
+
+.shell-jobs-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.shell-jobs-list {
+  display: grid;
+  gap: 10px;
+}
+
+.shell-job-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shell-job-command {
+  overflow-wrap: anywhere;
+}
+
+.shell-job-row-secondary {
+  font-size: 0.7rem;
+}
+
+.shell-job-row-actions {
+  justify-content: flex-end;
+}
+
+.shell-empty-state {
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
 .management-search-input {
   padding-inline: 14px;
 }

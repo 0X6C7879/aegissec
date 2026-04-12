@@ -462,22 +462,12 @@ class ToolRuntimeLifecycleRunner:
             *[run_group(group) for group in scheduling_module.build_parallel_groups(phase)]
         )
 
+        group_failures: list[tuple[Any, Exception]] = []
+
         for group_result in raw_group_results:
             if isinstance(group_result, tuple):
-                scheduled, error = group_result
-                error_artifacts = await executor_module.notify_tool_execution_error(
-                    runtime=runtime,
-                    prepared=scheduled.prepared,
-                    tool_request=scheduled.tool_request,
-                    error=error,
-                )
-                await self.publish_tool_failed(
-                    scheduled.tool_request,
-                    started_payload=scheduled.prepared.started_payload,
-                    error_message=str(error),
-                    error_artifacts=error_artifacts,
-                )
-                raise ChatRuntimeError(str(error)) from error
+                group_failures.append(group_result)
+                continue
             for scheduled, raw_result in group_result:
                 phase_results.append(
                     (
@@ -489,5 +479,21 @@ class ToolRuntimeLifecycleRunner:
                         ),
                     )
                 )
+
+        if group_failures:
+            scheduled, error = group_failures[0]
+            error_artifacts = await executor_module.notify_tool_execution_error(
+                runtime=runtime,
+                prepared=scheduled.prepared,
+                tool_request=scheduled.tool_request,
+                error=error,
+            )
+            await self.publish_tool_failed(
+                scheduled.tool_request,
+                started_payload=scheduled.prepared.started_payload,
+                error_message=str(error),
+                error_artifacts=error_artifacts,
+            )
+            raise ChatRuntimeError(str(error)) from error
 
         return phase_results

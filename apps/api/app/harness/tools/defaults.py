@@ -993,17 +993,19 @@ def build_default_tool_registry(
     *,
     mcp_tools: Sequence[Mapping[str, Any]] | None = None,
     include_swarm_tools: bool = False,
+    include_terminal_tools: bool = True,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(ExecuteKaliCommandTool())
     registry.register(ListAvailableSkillsTool())
     registry.register(ExecuteSkillTool())
     registry.register(ReadSkillContentTool())
-    registry.register(CreateTerminalSessionTool())
-    registry.register(ListTerminalSessionsTool())
-    registry.register(ExecuteTerminalCommandTool())
-    registry.register(ReadTerminalBufferTool())
-    registry.register(StopTerminalJobTool())
+    if include_terminal_tools:
+        registry.register(CreateTerminalSessionTool())
+        registry.register(ListTerminalSessionsTool())
+        registry.register(ExecuteTerminalCommandTool())
+        registry.register(ReadTerminalBufferTool())
+        registry.register(StopTerminalJobTool())
     if include_swarm_tools:
         registry.register(SpawnSubagentTool())
         registry.register(SendSubagentMessageTool())

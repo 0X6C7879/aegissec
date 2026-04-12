@@ -145,6 +145,10 @@ vi.mock("./WorkbenchComposer", () => ({
   ),
 }));
 
+vi.mock("./runtime/ShellWorkbench", () => ({
+  ShellWorkbench: () => <div data-testid="shell-workbench" />,
+}));
+
 vi.mock("./AttackGraphCanvas", () => ({
   AttackGraphCanvas: ({
     graph,

@@ -1103,13 +1103,16 @@ class OpenAICompatibleChatRuntime:
             tool_call_id,
             parsed_arguments,
         )
+        detach = parsed_arguments.get("detach", False)
+        if not isinstance(detach, bool):
+            raise ChatRuntimeError("LLM terminal tool call included an invalid detach flag.")
         return ToolCallRequest(
             tool_call_id=tool_call_id,
             tool_name="execute_terminal_command",
             arguments={
                 "terminal_id": terminal_id.strip(),
                 **request.arguments,
-                "detach": bool(parsed_arguments.get("detach", False)),
+                "detach": detach,
             },
         )
 
@@ -1125,10 +1128,13 @@ class OpenAICompatibleChatRuntime:
         if not isinstance(job_id, str) or not job_id.strip():
             raise ChatRuntimeError("LLM terminal buffer call did not include a valid job_id.")
         stream = parsed_arguments.get("stream", "stdout")
-        if not isinstance(stream, str) or stream not in {"stdout", "stderr"}:
+        if not isinstance(stream, str):
+            raise ChatRuntimeError("LLM terminal buffer call included an invalid stream.")
+        normalized_stream = stream.strip().lower()
+        if normalized_stream not in {"stdout", "stderr"}:
             raise ChatRuntimeError("LLM terminal buffer call included an invalid stream.")
         lines = parsed_arguments.get("lines", 200)
-        if not isinstance(lines, int) or lines <= 0:
+        if not isinstance(lines, int) or lines <= 0 or lines > 2000:
             raise ChatRuntimeError("LLM terminal buffer call included an invalid line count.")
         return ToolCallRequest(
             tool_call_id=tool_call_id,
@@ -1136,7 +1142,7 @@ class OpenAICompatibleChatRuntime:
             arguments={
                 "terminal_id": terminal_id.strip(),
                 "job_id": job_id.strip(),
-                "stream": stream,
+                "stream": normalized_stream,
                 "lines": lines,
             },
         )

@@ -34,6 +34,13 @@ import type {
 import type { ModelApiSettings, ModelApiSettingsUpdate } from "../types/settings";
 import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import type { SkillContent, SkillContext, SkillRecord } from "../types/skills";
+import type {
+  TerminalExecuteResponse,
+  TerminalJob,
+  TerminalJobsCleanupResult,
+  TerminalJobTail,
+  TerminalSession,
+} from "../types/terminals";
 
 function resolveDefaultApiBaseUrl(): string {
   if (typeof window === "undefined") {
@@ -643,6 +650,153 @@ export function getSessionEventsUrl(sessionId: string, cursor?: number | null): 
   }
 
   return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/events${buildQueryString(queryParams)}`;
+}
+
+export async function listSessionTerminals(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<TerminalSession[]> {
+  return apiRequest<TerminalSession[]>(`/api/sessions/${sessionId}/terminals`, { signal });
+}
+
+export async function createSessionTerminal(
+  sessionId: string,
+  payload: {
+    title?: string;
+    shell?: string;
+    cwd?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<TerminalSession> {
+  return apiRequest<TerminalSession>(`/api/sessions/${sessionId}/terminals`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getSessionTerminal(
+  sessionId: string,
+  terminalId: string,
+  signal?: AbortSignal,
+): Promise<TerminalSession> {
+  return apiRequest<TerminalSession>(`/api/sessions/${sessionId}/terminals/${terminalId}`, {
+    signal,
+  });
+}
+
+export async function closeSessionTerminal(
+  sessionId: string,
+  terminalId: string,
+): Promise<TerminalSession> {
+  return apiRequest<TerminalSession>(
+    `/api/sessions/${sessionId}/terminals/${terminalId}/close`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function sendTerminalInput(
+  sessionId: string,
+  terminalId: string,
+  data: string,
+): Promise<void> {
+  return apiRequest<void>(`/api/sessions/${sessionId}/terminals/${terminalId}/input`, {
+    method: "POST",
+    body: JSON.stringify({ data }),
+  });
+}
+
+export async function resizeTerminal(
+  sessionId: string,
+  terminalId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  return apiRequest<void>(`/api/sessions/${sessionId}/terminals/${terminalId}/resize`, {
+    method: "POST",
+    body: JSON.stringify({ cols, rows }),
+  });
+}
+
+export async function interruptTerminal(
+  sessionId: string,
+  terminalId: string,
+): Promise<void> {
+  return apiRequest<void>(`/api/sessions/${sessionId}/terminals/${terminalId}/interrupt`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function executeTerminalCommand(
+  sessionId: string,
+  terminalId: string,
+  payload: {
+    command: string;
+    detach?: boolean;
+    timeout_seconds?: number | null;
+    artifact_paths?: string[];
+  },
+): Promise<TerminalExecuteResponse> {
+  return apiRequest<TerminalExecuteResponse>(
+    `/api/sessions/${sessionId}/terminals/${terminalId}/execute`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function listSessionTerminalJobs(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<TerminalJob[]> {
+  return apiRequest<TerminalJob[]>(`/api/sessions/${sessionId}/terminal-jobs`, { signal });
+}
+
+export async function getSessionTerminalJob(
+  sessionId: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<TerminalJob> {
+  return apiRequest<TerminalJob>(`/api/sessions/${sessionId}/terminal-jobs/${jobId}`, { signal });
+}
+
+export async function tailSessionTerminalJob(
+  sessionId: string,
+  jobId: string,
+  params: { stream?: "stdout" | "stderr"; lines?: number } = {},
+  signal?: AbortSignal,
+): Promise<TerminalJobTail> {
+  return apiRequest<TerminalJobTail>(
+    `/api/sessions/${sessionId}/terminal-jobs/${jobId}/tail${buildQueryString(params)}`,
+    { signal },
+  );
+}
+
+export async function stopSessionTerminalJob(
+  sessionId: string,
+  jobId: string,
+): Promise<TerminalJob> {
+  return apiRequest<TerminalJob>(`/api/sessions/${sessionId}/terminal-jobs/${jobId}/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function cleanupSessionTerminalJobs(
+  sessionId: string,
+  payload: { limit?: number | null } = {},
+): Promise<TerminalJobsCleanupResult> {
+  return apiRequest<TerminalJobsCleanupResult>(`/api/sessions/${sessionId}/terminal-jobs/cleanup`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getSessionTerminalStreamUrl(sessionId: string, terminalId: string): string {
+  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/terminals/${terminalId}/stream`;
 }
 
 export async function listSkills(signal?: AbortSignal): Promise<SkillRecord[]> {

@@ -46,6 +46,7 @@ import type { SlashAction } from "../types/slash";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
 import { ConversationFeed } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { ShellWorkbench } from "./runtime/ShellWorkbench";
 import { WorkbenchComposer } from "./WorkbenchComposer";
 
 type InvalidSessionState = {
@@ -1279,6 +1280,10 @@ export function SessionWorkspaceWorkbench() {
                 id="workspace-chat-panel"
               >
                 <section className="workspace-message-panel workspace-terminal-panel">
+                  <ShellWorkbench
+                    sessionId={activeSession.id}
+                    disabled={activeSession.deleted_at !== null}
+                  />
                   <ConversationFeed
                     messages={activeConversation.messages}
                     generations={activeConversation.generations}
