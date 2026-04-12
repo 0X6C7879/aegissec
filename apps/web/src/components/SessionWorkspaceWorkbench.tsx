@@ -31,6 +31,7 @@ import {
   sortSessions,
   upsertSession,
 } from "../lib/sessionUtils";
+import { generateClientId } from "../lib/uuid";
 import { useUiStore } from "../store/uiStore";
 import type { SessionGraphNode } from "../types/graphs";
 import type {
@@ -90,7 +91,7 @@ function buildOptimisticUserMessage(
   slashAction: SlashAction | null = null,
 ): SessionMessage {
   return {
-    id: `optimistic-user-${crypto.randomUUID()}`,
+    id: `optimistic-user-${generateClientId()}`,
     session_id: sessionId,
     role: "user" as const,
     content,
@@ -113,7 +114,7 @@ function buildOptimisticAssistantMessage(
   queuePosition: number,
 ): SessionMessage {
   return {
-    id: `optimistic-assistant-${crypto.randomUUID()}`,
+    id: `optimistic-assistant-${generateClientId()}`,
     session_id: sessionId,
     branch_id: branchId,
     generation_id: generationId,
@@ -123,7 +124,7 @@ function buildOptimisticAssistantMessage(
     content: "",
     assistant_transcript: [
       {
-        id: `optimistic-transcript-${crypto.randomUUID()}`,
+        id: `optimistic-transcript-${generateClientId()}`,
         sequence: 1,
         kind: "status",
         status: "queued",
@@ -150,8 +151,8 @@ function buildOptimisticGeneration(
   queuePosition: number,
 ): ChatGeneration {
   const queuedStep: GenerationStep = {
-    id: `optimistic-step-${crypto.randomUUID()}`,
-    generation_id: `optimistic-generation-${crypto.randomUUID()}`,
+    id: `optimistic-step-${generateClientId()}`,
+    generation_id: `optimistic-generation-${generateClientId()}`,
     session_id: sessionId,
     message_id: assistantMessageId,
     sequence: 1,
@@ -510,7 +511,7 @@ export function SessionWorkspaceWorkbench() {
     },
     onError: (error, variables) => {
       appendEvent(variables.id, {
-        id: crypto.randomUUID(),
+        id: generateClientId(),
         sessionId: variables.id,
         type: "assistant.trace",
         createdAt: new Date().toISOString(),
@@ -568,7 +569,7 @@ export function SessionWorkspaceWorkbench() {
         id,
         branchId,
         optimisticMessage.id,
-        `optimistic-assistant-${crypto.randomUUID()}`,
+        `optimistic-assistant-${generateClientId()}`,
         createdAt,
         queuedGenerationCount + 1,
       );
@@ -799,7 +800,7 @@ export function SessionWorkspaceWorkbench() {
 
       if (!isCancelledError) {
         appendEvent(variables.id, {
-          id: crypto.randomUUID(),
+          id: generateClientId(),
           sessionId: variables.id,
           type: "assistant.trace",
           createdAt: new Date().toISOString(),
@@ -825,7 +826,7 @@ export function SessionWorkspaceWorkbench() {
     },
     onError: (error, variables) => {
       appendEvent(variables.id, {
-        id: crypto.randomUUID(),
+        id: generateClientId(),
         sessionId: variables.id,
         type: "assistant.trace",
         createdAt: new Date().toISOString(),

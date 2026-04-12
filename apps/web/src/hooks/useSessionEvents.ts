@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getSessionEventsUrl } from "../lib/api";
+import { generateClientId } from "../lib/uuid";
 import {
   buildEventSummary,
   isRecord,
@@ -79,7 +80,7 @@ function createRealtimeEventId(
     return `${sessionId}:${cursor}`;
   }
 
-  return `${sessionId}:${type}:${createdAt}:${crypto.randomUUID()}`;
+  return `${sessionId}:${type}:${createdAt}:${generateClientId()}`;
 }
 
 function updateSessionLists(
@@ -300,7 +301,7 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
           }
         } catch {
           appendEvent(targetSessionId, {
-            id: crypto.randomUUID(),
+            id: generateClientId(),
             sessionId: targetSessionId,
             cursor: null,
             type: "event.parse_error",

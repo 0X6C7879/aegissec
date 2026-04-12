@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { generateClientId } from "../lib/uuid";
 import type { SessionContextWindowUsage } from "../types/sessions";
 
 type ContextWindowPopoverProps = {
@@ -51,7 +52,7 @@ export function ContextWindowPopover({
 }: ContextWindowPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const shellRef = useRef<HTMLDivElement | null>(null);
-  const popoverId = useMemo(() => `context-window-popover-${crypto.randomUUID()}`, []);
+  const popoverId = useMemo(() => `context-window-popover-${generateClientId()}`, []);
 
   useEffect(() => {
     if (!isOpen) {

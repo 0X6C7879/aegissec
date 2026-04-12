@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { mergeSessionEventEntries } from "../lib/sessionUtils";
+import { generateClientId } from "../lib/uuid";
 import type { AttachmentMetadata, SessionEventEntry } from "../types/sessions";
 
 type DraftAttachmentForm = {
@@ -204,7 +205,7 @@ export const useUiStore = create<UiState>((set) => ({
             attachments: [
               ...draftState.attachments,
               {
-                id: crypto.randomUUID(),
+                id: generateClientId(),
                 name,
                 content_type: contentType,
                 size_bytes: sizeBytes,
