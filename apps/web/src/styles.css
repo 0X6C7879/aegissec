@@ -1560,6 +1560,13 @@ textarea::placeholder {
   color: var(--text-secondary);
 }
 
+.assistant-inline-cue-skill-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
 .assistant-inline-skill-tag {
   color: var(--accent-strong);
   font: 600 0.82rem/1 var(--font-code);
@@ -1752,6 +1759,12 @@ textarea::placeholder {
 
 .assistant-skill-orchestration-block .assistant-tool-body {
   gap: 10px;
+}
+
+.assistant-orchestration-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .assistant-orchestration-list {

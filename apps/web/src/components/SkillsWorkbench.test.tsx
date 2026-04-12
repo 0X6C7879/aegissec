@@ -247,6 +247,18 @@ describe("SkillsWorkbench", () => {
     mockToggleSkill.mockResolvedValue(skillRecord);
   });
 
+  it("does not render global orchestration overview in the main workbench", async () => {
+    renderWorkbench("/skills");
+
+    expect(await screen.findByText("技能列表")).toBeInTheDocument();
+    expect(screen.queryByText("多 Skill Orchestration 视图")).not.toBeInTheDocument();
+    expect(screen.queryByText("Selected Skills（全量）")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worker / Node Results")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stage Transition")).not.toBeInTheDocument();
+    expect(screen.queryByText("Replanned Skill Context")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("shows complete multi-skill orchestration details in the skill detail modal", async () => {
     renderWorkbench();
 

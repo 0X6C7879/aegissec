@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2024  # redirects target user-owned log file, not sudo
-# Bootstrap common tooling for the solve-challenge skill.
+# Bootstrap competition-focused tooling for Kali runtime.
 #
 # Usage:
 #   bash scripts/install_ctf_tools.sh [OPTIONS] MODE
@@ -104,38 +104,12 @@ gem_installed() {
 # ---------------------------------------------------------------------------
 
 PIP_PACKAGES=(
-  "pwntools==4.15.0:pwn"
-  "pycryptodome==3.23.0:Crypto"
-  "z3-solver==4.13.0.0:z3"
-  "sympy==1.14.0:sympy"
-  "gmpy2==2.3.0:gmpy2"
-  "hashpumpy==1.2:hashpumpy"
-  "fpylll==0.6.4:fpylll"
-  "py_ecc==8.0.0:py_ecc"
-  "angr==9.2.193:angr"
-  "frida-tools==14.8.0:frida"
-  "qiling==1.4.6:qiling"
   "requests==2.32.5:requests"
   "flask-unsign==1.2.1:flask_unsign"
   "sqlmap==1.10.3:sqlmap"
-  "ropper==1.13.13:ropper"
-  "ROPgadget==7.7:ropgadget"
-  "volatility3==2.27.0:volatility3"
-  "yara-python==4.5.4:yara"
-  "pefile==2024.8.26:pefile"
-  "capstone==5.0.3:capstone"
-  "oletools==0.60.2:oletools"
-  "unicorn==2.1.2:unicorn"
   "scapy==2.7.0:scapy"
-  "Pillow==11.3.0:PIL"
-  "numpy==2.2.6:numpy"
-  "matplotlib==3.10.8:matplotlib"
-  "shodan==1.31.0:shodan"
-  "uncompyle6==3.9.3:uncompyle6"
-  "lief==0.17.6:lief"
   "dnspython==2.8.0:dns"
   "dnslib==0.9.26:dnslib"
-  "dissect.cobaltstrike==1.2.1:dissect.cobaltstrike"
 )
 
 # ---------------------------------------------------------------------------
@@ -243,12 +217,9 @@ install_apt() {
   require_cmd apt-get || return 1
 
   local packages=(
-    gdb radare2 binutils binwalk foremost libimage-exiftool-perl
-    tshark sleuthkit ffmpeg steghide testdisk john pcapfix
-    nmap whois dnsutils hashcat strace ltrace imagemagick curl jq
-    apktool upx qemu-system-x86 qrencode
+    nmap whois dnsutils tshark john hashcat curl jq
   )
-  local optional_packages=(sagemath)
+  local optional_packages=()
 
   # Collect packages that need installing
   local to_install=()
@@ -321,9 +292,7 @@ install_brew() {
   require_cmd brew || return 1
 
   local packages=(
-    gdb radare2 binutils binwalk exiftool wireshark sleuthkit
-    ffmpeg testdisk john-jumbo nmap whois bind hashcat ghidra
-    imagemagick curl jq apktool upx qemu qrencode
+    nmap whois bind wireshark john-jumbo hashcat curl jq
   )
 
   # Collect packages that need installing
@@ -361,11 +330,11 @@ install_brew() {
 install_gems() {
   if ! command -v gem >/dev/null 2>&1; then
     log_warn "gem not found — skipping Ruby gem installs (install Ruby to enable)"
-    SKIPPED+=(gem:one_gadget gem:seccomp-tools gem:zsteg)
+    SKIPPED+=(gem:wpscan)
     return 0
   fi
 
-  local packages=(one_gadget seccomp-tools zsteg)
+  local packages=(wpscan)
 
   local to_install=()
   for pkg in "${packages[@]}"; do
@@ -428,16 +397,9 @@ install_go() {
 print_manual() {
   cat <<'EOF'
 Manual installs (cannot be automated reliably):
-  pwndbg     — Linux: https://github.com/pwndbg/pwndbg
-               macOS: brew install pwndbg/tap/pwndbg-gdb
-  RsaCtfTool — git clone https://github.com/RsaCtfTool/RsaCtfTool
-  SageMath   — Linux: apt install sagemath
-               macOS: brew install --cask sage
-  steghide   — Linux: apt install steghide
-               Homebrew not available
-  pycdc      — git clone https://github.com/zrax/pycdc && cmake . && make
-               (Python 3.9+ bytecode decompiler; uncompyle6 only supports <=3.8)
-  dnSpy      — https://github.com/dnSpy/dnSpy (Windows/.NET only)
+  Burp Suite Community — https://portswigger.net/burp/communitydownload
+  Ligolo-ng            — https://github.com/nicocha30/ligolo-ng
+  Neo4j Desktop        — https://neo4j.com/download/ (for local BloodHound analysis)
 EOF
 }
 
@@ -456,9 +418,7 @@ verify() {
   fi
 
   local -a checks=(
-    python3 gdb r2 objdump binwalk exiftool tshark fls ffmpeg
-    testdisk john nmap whois hashcat strace ltrace convert curl jq
-    apktool upx qemu-system-x86_64 qrencode ffuf gem go
+    python3 nmap whois dig tshark john hashcat curl jq ffuf gem go
   )
 
   log_info "Verifying tool availability"

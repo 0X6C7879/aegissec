@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-PROFILE="${1:-core}"
+PROFILE="${1:-lean}"
 SKILL_VENV="${SKILL_VENV:-/root/.aegissec-skill-tools/venv}"
 LOCAL_BIN_DIR="${LOCAL_BIN_DIR:-/usr/local/bin}"
 KUBEAUDIT_VERSION="${KUBEAUDIT_VERSION:-0.22.2}"
@@ -250,20 +250,23 @@ prewarm_tool_state() {
   fi
 }
 
-core_apt=(
+lean_apt=(
   feroxbuster
   gobuster
 )
 
-core_pip=(
+lean_pip=(
   dirsearch
   kube-hunter
-  objection
   roadrecon
   semgrep
   wafw00f
   xsstrike
 )
+
+core_apt=("${lean_apt[@]}")
+
+core_pip=("${lean_pip[@]}")
 
 core_go=(
   github.com/aquasecurity/kubectl-who-can/cmd/kubectl-who-can@latest
@@ -279,17 +282,9 @@ core_cargo=(
   rustscan
 )
 
-full_apt=(
-  amass
-)
+full_apt=()
 
-full_pip=(
-  jsonschema
-  mythril
-  pysarif
-  sarif-tools
-  slither-analyzer
-)
+full_pip=()
 
 full_go=(
   github.com/d3mondev/puredns/v2@latest
@@ -299,6 +294,10 @@ full_go=(
 )
 
 case "${PROFILE}" in
+  lean)
+    install_apt_packages "${lean_apt[@]}"
+    install_pip_packages "${lean_pip[@]}"
+    ;;
   core)
     install_apt_packages "${core_apt[@]}"
     install_pip_packages "${core_pip[@]}"

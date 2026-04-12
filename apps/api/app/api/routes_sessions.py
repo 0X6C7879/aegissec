@@ -46,6 +46,9 @@ from app.db.models import (
     SessionReplayRead,
     SessionStatus,
     SessionUpdate,
+    TerminalJobRead,
+    TerminalSessionCreateRequest,
+    TerminalSessionRead,
     to_chat_generation_read,
     to_conversation_branch_read,
     to_generation_step_read,
@@ -60,6 +63,7 @@ from app.db.repositories import (
     RunLogRepository,
     RuntimeRepository,
     SessionRepository,
+    TerminalRepository,
 )
 from app.db.session import get_db_session, get_websocket_db_session
 from app.harness.compact.service import HarnessCompactService
@@ -81,6 +85,7 @@ from app.services.session_generation import (
     SessionGenerationManager,
     get_generation_manager,
 )
+from app.services.terminal_sessions import SessionShellService, terminal_audit_payload
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -1375,6 +1380,136 @@ async def get_session_artifacts(
         pagination=PaginationMeta(page=page, page_size=page_size, total=total),
         sort=SortMeta(by=sort_by, direction=sort_order),
     )
+
+
+@router.get(
+    "/{session_id}/terminals",
+    response_model=list[TerminalSessionRead],
+    summary="List session terminals",
+    description="Return persisted terminal-session metadata for the session.",
+)
+async def list_session_terminals(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    terminals = service.list_terminals(session_id=session_id)
+    return ok_response([terminal.model_dump(mode="json", by_alias=True) for terminal in terminals])
+
+
+@router.post(
+    "/{session_id}/terminals",
+    response_model=TerminalSessionRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create session terminal",
+    description="Persist terminal-session metadata for later shell workbench phases.",
+)
+async def create_session_terminal(
+    session_id: str,
+    payload: TerminalSessionCreateRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    result = service.create_terminal(session=session, payload=payload)
+    await event_broker.publish(
+        SessionEvent(
+            type=SessionEventType.TERMINAL_SESSION_CREATED,
+            session_id=session.id,
+            payload=terminal_audit_payload(result.terminal),
+        )
+    )
+    return ok_response(result.terminal.model_dump(mode="json", by_alias=True), status_code=201)
+
+
+@router.get(
+    "/{session_id}/terminals/{terminal_id}",
+    response_model=TerminalSessionRead,
+    summary="Get session terminal",
+    description="Return terminal-session metadata by id.",
+)
+async def get_session_terminal(
+    session_id: str,
+    terminal_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    terminal = service.get_terminal(session_id=session_id, terminal_id=terminal_id)
+    if terminal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    return ok_response(terminal.model_dump(mode="json", by_alias=True))
+
+
+@router.post(
+    "/{session_id}/terminals/{terminal_id}/close",
+    response_model=TerminalSessionRead,
+    summary="Close session terminal",
+    description="Mark terminal-session metadata as closed without simulating PTY persistence.",
+)
+async def close_session_terminal(
+    session_id: str,
+    terminal_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    result = service.close_terminal(session=session, terminal_id=terminal_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    if result.changed:
+        await event_broker.publish(
+            SessionEvent(
+                type=SessionEventType.TERMINAL_SESSION_CLOSED,
+                session_id=session.id,
+                payload=terminal_audit_payload(result.terminal),
+            )
+        )
+    return ok_response(result.terminal.model_dump(mode="json", by_alias=True))
+
+
+@router.get(
+    "/{session_id}/terminal-jobs",
+    response_model=list[TerminalJobRead],
+    summary="List session terminal jobs",
+    description="Return persisted terminal-job metadata for the session.",
+)
+async def list_session_terminal_jobs(
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    jobs = service.list_terminal_jobs(session_id=session_id)
+    return ok_response([job.model_dump(mode="json", by_alias=True) for job in jobs])
+
+
+@router.get(
+    "/{session_id}/terminal-jobs/{job_id}",
+    response_model=TerminalJobRead,
+    summary="Get session terminal job",
+    description="Return terminal-job metadata by id.",
+)
+async def get_session_terminal_job(
+    session_id: str,
+    job_id: str,
+    db_session: DBSession = Depends(get_db_session),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    job = service.get_terminal_job(session_id=session_id, job_id=job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")
+    return ok_response(job.model_dump(mode="json", by_alias=True))
 
 
 @router.websocket("/{session_id}/events")

@@ -4,8 +4,8 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, inspect
 
-from alembic import command
-from alembic.config import Config
+from alembic import command  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
+from alembic.config import Config  # pyright: ignore[reportMissingImports]
 
 
 def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
@@ -27,6 +27,8 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
         "message",
         "runtime_artifact",
         "runtime_execution_run",
+        "runtime_terminal_jobs",
+        "runtime_terminal_sessions",
         "run_log",
         "session_event_log",
     }.issubset(table_names)
@@ -72,3 +74,28 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
     assert {"cursor", "session_id", "event_type", "timestamp", "payload"}.issubset(
         session_event_columns
     )
+    terminal_session_columns = {
+        column["name"] for column in inspector.get_columns("runtime_terminal_sessions")
+    }
+    assert {
+        "session_id",
+        "title",
+        "status",
+        "shell",
+        "cwd",
+        "metadata",
+        "closed_at",
+    }.issubset(terminal_session_columns)
+    terminal_job_columns = {
+        column["name"] for column in inspector.get_columns("runtime_terminal_jobs")
+    }
+    assert {
+        "terminal_session_id",
+        "session_id",
+        "status",
+        "command",
+        "exit_code",
+        "started_at",
+        "ended_at",
+        "metadata",
+    }.issubset(terminal_job_columns)

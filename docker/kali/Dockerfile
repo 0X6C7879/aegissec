@@ -1,9 +1,11 @@
 FROM kalilinux/kali-rolling
 
 ARG INSTALL_CTF_TOOLS=1
-ARG CTF_INSTALL_MODE=all
+ARG CTF_INSTALL_MODE=python
 ARG INSTALL_SKILL_TOOLS=1
-ARG SKILL_TOOL_PROFILE=core
+ARG SKILL_TOOL_PROFILE=lean
+ARG INSTALL_GCP_TOOLS=0
+ARG INSTALL_BROWSER_TOOLS=0
 ARG CTF_INSTALLER_SHA=unknown
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,33 +15,26 @@ LABEL aegissec.install_ctf_tools="${INSTALL_CTF_TOOLS}"
 LABEL aegissec.ctf_install_mode="${CTF_INSTALL_MODE}"
 LABEL aegissec.install_skill_tools="${INSTALL_SKILL_TOOLS}"
 LABEL aegissec.skill_tool_profile="${SKILL_TOOL_PROFILE}"
+LABEL aegissec.install_gcp_tools="${INSTALL_GCP_TOOLS}"
+LABEL aegissec.install_browser_tools="${INSTALL_BROWSER_TOOLS}"
 LABEL aegissec.ctf_installer_sha="${CTF_INSTALLER_SHA}"
 
 RUN apt-get update -o Acquire::Retries=5 \
-    && apt-get install -y -o Acquire::Retries=5 --fix-missing \
+    && apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
         bash \
-        build-essential \
         ca-certificates \
-        cargo \
         curl \
         git \
-        golang-go \
         gnupg \
         jq \
         libcap2-bin \
-        libffi-dev \
-        libssl-dev \
-        pkg-config \
         procps \
         python3 \
-        python3-dev \
         python3-pip \
         python3-venv \
-        ruby \
-        ruby-dev \
         tini \
         wget \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 RUN if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
         sed -i 's|http://http.kali.org/kali|https://kali.download/kali|g' /etc/apt/sources.list.d/kali.sources; \
@@ -50,10 +45,10 @@ RUN if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
     && apt-get update -o Acquire::Retries=5 \
     && apt-get install -y -o Acquire::Retries=5 --fix-missing \
         kali-linux-default \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 RUN apt-get update -o Acquire::Retries=5 \
-    && apt-get install -y -o Acquire::Retries=5 --fix-missing \
+    && apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
         amass \
         arp-scan \
         arjun \
@@ -61,35 +56,25 @@ RUN apt-get update -o Acquire::Retries=5 \
         azure-cli \
         bloodhound \
         chisel \
-        crackmapexec \
-        default-mysql-client \
         dnsenum \
         dnsrecon \
         enum4linux \
         evil-winrm \
         exploitdb \
         feroxbuster \
-        gsutil \
         hydra \
-        kismet \
         kubectl \
         ldap-utils \
-        medusa \
         mitmproxy \
-        mongodb-clients \
-        mongo-tools \
         mimikatz \
         netdiscover \
         netexec \
         nfs-common \
         nikto \
         onesixtyone \
-        postgresql-client \
         powershell \
         python3-impacket \
-        reaver \
         recon-ng \
-        redis-tools \
         rubeus \
         sharphound \
         smbclient \
@@ -99,26 +84,31 @@ RUN apt-get update -o Acquire::Retries=5 \
         theharvester \
         whatweb \
         wfuzz \
-        wifite \
-        yara \
-        zbar-tools \
-    && install -d -m 0755 /etc/apt/keyrings \
-    && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg \
-    && chmod a+r /etc/apt/keyrings/google-linux.gpg \
-    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        printf 'Types: deb\nURIs: https://dl.google.com/linux/chrome/deb/\nSuites: stable\nComponents: main\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/google-linux.gpg\n' > /etc/apt/sources.list.d/google-chrome.sources; \
-       fi \
-    && wget -qO- https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/google-cloud.gpg \
-    && chmod a+r /etc/apt/keyrings/google-cloud.gpg \
-    && printf 'deb [signed-by=/etc/apt/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main\n' > /etc/apt/sources.list.d/google-cloud-cli.list \
-    && apt-get update -o Acquire::Retries=5 \
-    && apt-get install -y -o Acquire::Retries=5 --fix-missing google-cloud-cli \
-    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        apt-get install -y -o Acquire::Retries=5 --fix-missing google-chrome-stable; \
+    && if [ "${INSTALL_GCP_TOOLS}" = "1" ]; then \
+        install -d -m 0755 /etc/apt/keyrings \
+        && wget -qO- https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/google-cloud.gpg \
+        && chmod a+r /etc/apt/keyrings/google-cloud.gpg \
+        && printf 'deb [signed-by=/etc/apt/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main\n' > /etc/apt/sources.list.d/google-cloud-cli.list \
+        && apt-get update -o Acquire::Retries=5 \
+        && apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends google-cloud-cli; \
        else \
-        printf '[aegissec-kali] Skip Google Chrome install on unsupported arch: %s\n' "$(dpkg --print-architecture)"; \
+        echo "[aegissec-kali] Skip Google Cloud CLI installation"; \
        fi \
-    && rm -rf /var/lib/apt/lists/*
+    && if [ "${INSTALL_BROWSER_TOOLS}" = "1" ]; then \
+        install -d -m 0755 /etc/apt/keyrings \
+        && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg \
+        && chmod a+r /etc/apt/keyrings/google-linux.gpg \
+        && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+            printf 'Types: deb\nURIs: https://dl.google.com/linux/chrome/deb/\nSuites: stable\nComponents: main\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/google-linux.gpg\n' > /etc/apt/sources.list.d/google-chrome.sources \
+            && apt-get update -o Acquire::Retries=5 \
+            && apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends google-chrome-stable; \
+           else \
+            printf '[aegissec-kali] Skip Google Chrome install on unsupported arch: %s\n' "$(dpkg --print-architecture)"; \
+           fi; \
+       else \
+        echo "[aegissec-kali] Skip browser tooling installation"; \
+       fi \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 WORKDIR /opt/aegissec
 

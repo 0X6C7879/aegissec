@@ -17,9 +17,11 @@ WEB_HOST="${AEGISSEC_WEB_HOST:-0.0.0.0}"
 WEB_PORT="${AEGISSEC_WEB_PORT:-5173}"
 KALI_IMAGE_TAG="${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}"
 KALI_INSTALL_CTF_TOOLS="${AEGISSEC_KALI_INSTALL_CTF_TOOLS:-1}"
-KALI_CTF_INSTALL_MODE="${AEGISSEC_KALI_CTF_INSTALL_MODE:-all}"
+KALI_CTF_INSTALL_MODE="${AEGISSEC_KALI_CTF_INSTALL_MODE:-python}"
 KALI_INSTALL_SKILL_TOOLS="${AEGISSEC_KALI_INSTALL_SKILL_TOOLS:-1}"
-KALI_SKILL_TOOL_PROFILE="${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-core}"
+KALI_SKILL_TOOL_PROFILE="${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-lean}"
+KALI_INSTALL_GCP_TOOLS="${AEGISSEC_KALI_INSTALL_GCP_TOOLS:-0}"
+KALI_INSTALL_BROWSER_TOOLS="${AEGISSEC_KALI_INSTALL_BROWSER_TOOLS:-0}"
 KALI_FORCE_REBUILD="${AEGISSEC_KALI_FORCE_REBUILD:-0}"
 KALI_DOCKERFILE_PATH="$REPO_ROOT/docker/kali/Dockerfile"
 KALI_INSTALL_SCRIPT_PATH="$REPO_ROOT/scripts/install_ctf_tools.sh"
@@ -65,9 +67,11 @@ Environment overrides:
   AEGISSEC_WEB_PORT   Web bind port (default: 5173)
   AEGISSEC_KALI_IMAGE                 Kali image tag (default: aegissec-kali:latest)
   AEGISSEC_KALI_INSTALL_CTF_TOOLS     Install scripts/install_ctf_tools.sh in image build (default: 1)
-  AEGISSEC_KALI_CTF_INSTALL_MODE      install_ctf_tools mode (default: all)
+  AEGISSEC_KALI_CTF_INSTALL_MODE      install_ctf_tools mode (default: python)
   AEGISSEC_KALI_INSTALL_SKILL_TOOLS   Install additional tools for existing skills (default: 1)
-  AEGISSEC_KALI_SKILL_TOOL_PROFILE    Skill tool profile: core|full (default: core)
+  AEGISSEC_KALI_SKILL_TOOL_PROFILE    Skill tool profile: lean|core|full (default: lean)
+  AEGISSEC_KALI_INSTALL_GCP_TOOLS     Install Google Cloud CLI in image build (default: 0)
+  AEGISSEC_KALI_INSTALL_BROWSER_TOOLS Install browser tooling (Google Chrome) in image build (default: 0)
   AEGISSEC_KALI_FORCE_REBUILD         Always rebuild Kali image (default: 0)
 EOF
 }
@@ -267,18 +271,24 @@ kali_image_matches_requested_profile() {
   local image_ctf_mode
   local image_skill_tools
   local image_skill_profile
+  local image_install_gcp_tools
+  local image_install_browser_tools
   local image_installer_sha
 
   image_ctf_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_ctf_tools")"
   image_ctf_mode="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.ctf_install_mode")"
   image_skill_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_skill_tools")"
   image_skill_profile="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.skill_tool_profile")"
+  image_install_gcp_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_gcp_tools")"
+  image_install_browser_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_browser_tools")"
   image_installer_sha="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.ctf_installer_sha")"
 
   [[ "$image_ctf_tools" == "$KALI_INSTALL_CTF_TOOLS" ]] || return 1
   [[ "$image_ctf_mode" == "$KALI_CTF_INSTALL_MODE" ]] || return 1
   [[ "$image_skill_tools" == "$KALI_INSTALL_SKILL_TOOLS" ]] || return 1
   [[ "$image_skill_profile" == "$KALI_SKILL_TOOL_PROFILE" ]] || return 1
+  [[ "$image_install_gcp_tools" == "$KALI_INSTALL_GCP_TOOLS" ]] || return 1
+  [[ "$image_install_browser_tools" == "$KALI_INSTALL_BROWSER_TOOLS" ]] || return 1
 
   if [[ "$KALI_INSTALL_CTF_TOOLS" == "1" ]]; then
     [[ "$image_installer_sha" == "$desired_installer_sha" ]] || return 1
@@ -330,7 +340,7 @@ ensure_kali_image() {
   fi
 
   log "Building Kali image $KALI_IMAGE_TAG"
-  log "Kali preinstall config: ctf_tools=$KALI_INSTALL_CTF_TOOLS, ctf_mode=$KALI_CTF_INSTALL_MODE, skill_tools=$KALI_INSTALL_SKILL_TOOLS, skill_profile=$KALI_SKILL_TOOL_PROFILE"
+  log "Kali preinstall config: ctf_tools=$KALI_INSTALL_CTF_TOOLS, ctf_mode=$KALI_CTF_INSTALL_MODE, skill_tools=$KALI_INSTALL_SKILL_TOOLS, skill_profile=$KALI_SKILL_TOOL_PROFILE, gcp_tools=$KALI_INSTALL_GCP_TOOLS, browser_tools=$KALI_INSTALL_BROWSER_TOOLS"
   (
     cd "$REPO_ROOT"
     sudo docker build \
@@ -338,6 +348,8 @@ ensure_kali_image() {
       --build-arg CTF_INSTALL_MODE="$KALI_CTF_INSTALL_MODE" \
       --build-arg INSTALL_SKILL_TOOLS="$KALI_INSTALL_SKILL_TOOLS" \
       --build-arg SKILL_TOOL_PROFILE="$KALI_SKILL_TOOL_PROFILE" \
+      --build-arg INSTALL_GCP_TOOLS="$KALI_INSTALL_GCP_TOOLS" \
+      --build-arg INSTALL_BROWSER_TOOLS="$KALI_INSTALL_BROWSER_TOOLS" \
       --build-arg CTF_INSTALLER_SHA="$installer_sha" \
       -t "$KALI_IMAGE_TAG" \
       -f "$KALI_DOCKERFILE_PATH" \

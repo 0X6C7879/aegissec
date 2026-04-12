@@ -4,7 +4,10 @@ import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { formatBytes } from "../lib/format";
 import {
+  extractSkillOrchestrationSnapshotFromMetadata,
+  readSkillDisplayName,
   readSkillNodeAttributionFromMetadata,
+  type SkillOrchestrationSnapshot,
 } from "../lib/skillOrchestration";
 import type { RuntimeExecutionRun } from "../types/runtime";
 import type {
@@ -1559,6 +1562,206 @@ function readInlineToolLabel(
   );
 }
 
+function readSkillOrchestrationSnapshotFromSegments(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): SkillOrchestrationSnapshot | null {
+  for (const segment of [result, call, error]) {
+    const snapshot = extractSkillOrchestrationSnapshotFromMetadata(readSegmentMetadata(segment));
+    if (snapshot) {
+      return snapshot;
+    }
+  }
+
+  return null;
+}
+
+function readOrchestrationSelectedSkillLabels(
+  snapshot: SkillOrchestrationSnapshot | null,
+): string[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const labels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const skill of snapshot.selectedSkills) {
+    if (!isRecord(skill)) {
+      continue;
+    }
+
+    const label = readSkillDisplayName(skill).trim();
+    if (!label) {
+      continue;
+    }
+
+    const dedupeKey = label.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    labels.push(label);
+  }
+
+  return labels;
+}
+
+function normalizeSkillSelectionSignatureLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function dedupeSkillLabels(labels: string[]): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+
+  for (const label of labels) {
+    const normalized = normalizeSkillSelectionSignatureLabel(label);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    deduped.push(label);
+  }
+
+  return deduped;
+}
+
+function buildNormalizedSkillSelection(labels: string[]): string[] {
+  return dedupeSkillLabels(labels)
+    .map((label) => normalizeSkillSelectionSignatureLabel(label))
+    .filter((label) => label.length > 0);
+}
+
+function isSkillSelectionSubset(supersetLabels: string[], subsetLabels: string[]): boolean {
+  const normalizedSuperset = new Set(buildNormalizedSkillSelection(supersetLabels));
+  const normalizedSubset = buildNormalizedSkillSelection(subsetLabels);
+
+  if (normalizedSuperset.size === 0 || normalizedSubset.length === 0) {
+    return false;
+  }
+
+  return normalizedSubset.every((label) => normalizedSuperset.has(label));
+}
+
+function readSelectedSkillLabelsFromStatusSegment(segment: AssistantTranscriptSegment): string[] {
+  const snapshot = extractSkillOrchestrationSnapshotFromMetadata(readSegmentMetadata(segment));
+  const selectedSkillLabels = readOrchestrationSelectedSkillLabels(snapshot);
+  const skillName = readAutoroutedSkillName(segment);
+  const fallbackText = normalizeMarkdownSpacing(segment.text) ?? normalizeForBoilerplateCheck(segment.text);
+
+  return dedupeSkillLabels(
+    selectedSkillLabels.length > 0
+      ? selectedSkillLabels
+      : (skillName && skillName.trim().length > 0 ? [skillName.trim()] : fallbackText ? [fallbackText] : []),
+  );
+}
+
+function readSelectedSkillLabelsFromToolInvocation(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): string[] {
+  const selectedSkills = readOrchestrationSelectedSkillLabels(
+    readSkillOrchestrationSnapshotFromSegments(call, result, error),
+  );
+
+  const directLabel = inferSkillTitle(call) ?? inferSkillTitle(result) ?? inferSkillTitle(error);
+  const fallbackLabel = readInlineToolLabel(call, result, error);
+
+  return dedupeSkillLabels(
+    selectedSkills.length > 0
+      ? selectedSkills
+      : directLabel && directLabel.trim().length > 0
+        ? [directLabel.trim()]
+        : fallbackLabel.trim().length > 0
+          ? [fallbackLabel]
+          : [],
+  );
+}
+
+function isExecuteSkillInvocation(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): boolean {
+  const reference = result ?? error ?? call;
+  return reference?.tool_name === "execute_skill";
+}
+
+function shouldSuppressExecuteSkillLabel(
+  cueSegment: AssistantTranscriptSegment | null,
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+): boolean {
+  if (!cueSegment || readSegmentState(cueSegment) !== "skill.autoroute.selected") {
+    return false;
+  }
+
+  return isSkillSelectionSubset(
+    readSelectedSkillLabelsFromStatusSegment(cueSegment),
+    readSelectedSkillLabelsFromToolInvocation(call, result, error),
+  );
+}
+
+function findNearestPreviousSelectedCueSegment(
+  blocks: TranscriptRenderableBlock[],
+  index: number,
+): AssistantTranscriptSegment | null {
+  for (let pointer = index - 1; pointer >= 0; pointer -= 1) {
+    const previousBlock = blocks[pointer];
+    if (!previousBlock) {
+      continue;
+    }
+
+    if (previousBlock.type === "cue") {
+      if (readSegmentState(previousBlock.segment) === "skill.autoroute.selected") {
+        return previousBlock.segment;
+      }
+      continue;
+    }
+
+    if (
+      previousBlock.type === "tool" ||
+      previousBlock.type === "output" ||
+      previousBlock.type === "error"
+    ) {
+      break;
+    }
+  }
+
+  return null;
+}
+
+function shouldSuppressAutorouteSelectedCue(
+  blocks: TranscriptRenderableBlock[],
+  index: number,
+  segment: AssistantTranscriptSegment,
+): boolean {
+  if (readSegmentState(segment) !== "skill.autoroute.selected") {
+    return false;
+  }
+
+  const currentSelectedSkills = readSelectedSkillLabelsFromStatusSegment(segment);
+  if (currentSelectedSkills.length === 0) {
+    return false;
+  }
+
+  const previousSelectedCue = findNearestPreviousSelectedCueSegment(blocks, index);
+  if (!previousSelectedCue) {
+    return false;
+  }
+
+  return isSkillSelectionSubset(
+    readSelectedSkillLabelsFromStatusSegment(previousSelectedCue),
+    currentSelectedSkills,
+  );
+}
+
 type ToolSourceAttribution = {
   skillLabels: string[];
   nodeLabels: string[];
@@ -1979,11 +2182,15 @@ function AssistantInlineCue({ segment }: { segment: AssistantTranscriptSegment }
 
   const state = readSegmentState(segment);
   if (state === "skill.autoroute.selected") {
-    const skillName = readAutoroutedSkillName(segment);
+    const visibleSkills = readSelectedSkillLabelsFromStatusSegment(segment);
+
     return (
       <div className="assistant-inline-cue assistant-inline-cue-skill">
-        <span className="assistant-inline-cue-prefix">自动选择</span>
-        <AssistantInlineSkillTag label={skillName ?? text} />
+        <span className="assistant-inline-cue-skill-list">
+          {visibleSkills.map((label) => (
+            <AssistantInlineSkillTag key={`inline-cue-skill:${label}`} label={label} />
+          ))}
+        </span>
       </div>
     );
   }
@@ -2002,6 +2209,28 @@ function renderInlineSkillLabel(
   }
 
   return <AssistantInlineSkillTag label={readInlineToolLabel(call, result, error)} />;
+}
+
+function renderInlineSelectedSkillsLabel(
+  call: AssistantTranscriptSegment | null,
+  result: AssistantTranscriptSegment | null,
+  error: AssistantTranscriptSegment | null,
+) {
+  const selectedSkills = readSelectedSkillLabelsFromToolInvocation(call, result, error);
+
+  if (selectedSkills.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="assistant-inline-cue assistant-inline-cue-skill">
+      <span className="assistant-inline-cue-skill-list">
+        {selectedSkills.map((label) => (
+          <AssistantInlineSkillTag key={`selected-skill:${label}`} label={label} />
+        ))}
+      </span>
+    </div>
+  );
 }
 
 function AssistantErrorBlock({ segment }: { segment: AssistantTranscriptSegment }) {
@@ -2037,32 +2266,18 @@ function AssistantToolInvocationBlock({
   call,
   result,
   error,
+  suppressExecuteSkillLabel = false,
 }: {
   call: AssistantTranscriptSegment | null;
   result: AssistantTranscriptSegment | null;
   error: AssistantTranscriptSegment | null;
+  suppressExecuteSkillLabel?: boolean;
 }) {
   const reference = result ?? error ?? call;
   if (!reference) {
     return null;
   }
 
-  if (reference.tool_name === "execute_skill") {
-    return (
-      <>
-        {renderInlineSkillLabel(call, result, error)}
-        {error ? <AssistantErrorBlock segment={error} /> : null}
-      </>
-    );
-  }
-
-  const command = call ? readSegmentCommand(call) : readSegmentCommand(reference);
-  const shellLikeTool =
-    reference.tool_name === "execute_kali_command" ||
-    reference.tool_name === "bash" ||
-    reference.tool_name === "sh" ||
-    reference.tool_name === "zsh";
-  const sourceAttribution = mergeToolSourceAttribution(call, result, error);
   const patttLoadedFamilies = readPatttLoadedFamilies(call, result, error);
 
   if (patttLoadedFamilies.length > 0) {
@@ -2075,6 +2290,27 @@ function AssistantToolInvocationBlock({
       />
     );
   }
+
+  if (reference.tool_name === "execute_skill") {
+    if (suppressExecuteSkillLabel) {
+      return error ? <AssistantErrorBlock segment={error} /> : null;
+    }
+
+    return (
+      <>
+        {renderInlineSelectedSkillsLabel(call, result, error)}
+        {error ? <AssistantErrorBlock segment={error} /> : null}
+      </>
+    );
+  }
+
+  const command = call ? readSegmentCommand(call) : readSegmentCommand(reference);
+  const shellLikeTool =
+    reference.tool_name === "execute_kali_command" ||
+    reference.tool_name === "bash" ||
+    reference.tool_name === "sh" ||
+    reference.tool_name === "zsh";
+  const sourceAttribution = mergeToolSourceAttribution(call, result, error);
 
   if (shellLikeTool || command) {
     return <AssistantShellBlock call={call} result={result} error={error} />;
@@ -2237,12 +2473,24 @@ export function ConversationFeed(props: ConversationFeedProps) {
       <div className="assistant-transcript">
         {blocks.map((block, index) => {
           if (block.type === "tool") {
+            const nearestPreviousCue = findNearestPreviousSelectedCueSegment(blocks, index);
+
+            const suppressExecuteSkillLabel =
+              isExecuteSkillInvocation(block.call, block.result, block.error) &&
+              shouldSuppressExecuteSkillLabel(
+                nearestPreviousCue,
+                block.call,
+                block.result,
+                block.error,
+              );
+
             return (
               <AssistantToolInvocationBlock
                 key={block.key}
                 call={block.call}
                 result={block.result}
                 error={block.error}
+                suppressExecuteSkillLabel={suppressExecuteSkillLabel}
               />
             );
           }
@@ -2252,6 +2500,10 @@ export function ConversationFeed(props: ConversationFeedProps) {
           }
 
           if (block.type === "cue") {
+            if (shouldSuppressAutorouteSelectedCue(blocks, index, block.segment)) {
+              return null;
+            }
+
             return <AssistantInlineCue key={block.key} segment={block.segment} />;
           }
 

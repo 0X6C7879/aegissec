@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ctf-install-mode",
         default=None,
-        help="Mode passed to install_ctf_tools.sh (default: all).",
+        help="Mode passed to install_ctf_tools.sh (default: python).",
     )
     parser.add_argument(
         "--install-skill-tools",
@@ -81,9 +81,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--skill-tool-profile",
-        choices=["core", "full"],
+        choices=["lean", "core", "full"],
         default=None,
-        help="Skill extra tool profile (core or full).",
+        help="Skill extra tool profile (lean, core, or full).",
+    )
+    parser.add_argument(
+        "--install-gcp-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable Google Cloud CLI installation during image build.",
+    )
+    parser.add_argument(
+        "--install-browser-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable browser tooling (Google Chrome) during image build.",
     )
     return parser
 
@@ -140,13 +152,29 @@ def main() -> int:
     ctf_install_mode = (
         args.ctf_install_mode
         or os.environ.get("AEGISSEC_KALI_CTF_INSTALL_MODE")
-        or env_defaults.get("AEGISSEC_KALI_CTF_INSTALL_MODE", "all")
+        or env_defaults.get("AEGISSEC_KALI_CTF_INSTALL_MODE", "python")
     )
     skill_tool_profile = (
         args.skill_tool_profile
         or os.environ.get("AEGISSEC_KALI_SKILL_TOOL_PROFILE")
-        or env_defaults.get("AEGISSEC_KALI_SKILL_TOOL_PROFILE", "core")
+        or env_defaults.get("AEGISSEC_KALI_SKILL_TOOL_PROFILE", "lean")
     )
+
+    install_gcp_tools = args.install_gcp_tools
+    if install_gcp_tools is None:
+        install_gcp_tools = parse_env_bool(
+            os.environ.get("AEGISSEC_KALI_INSTALL_GCP_TOOLS")
+            or env_defaults.get("AEGISSEC_KALI_INSTALL_GCP_TOOLS"),
+            default=False,
+        )
+
+    install_browser_tools = args.install_browser_tools
+    if install_browser_tools is None:
+        install_browser_tools = parse_env_bool(
+            os.environ.get("AEGISSEC_KALI_INSTALL_BROWSER_TOOLS")
+            or env_defaults.get("AEGISSEC_KALI_INSTALL_BROWSER_TOOLS"),
+            default=False,
+        )
 
     installer_sha = "unknown"
     if install_ctf_tools:
@@ -164,6 +192,11 @@ def main() -> int:
     command.extend(["--build-arg", f"CTF_INSTALL_MODE={ctf_install_mode}"])
     command.extend(["--build-arg", f"INSTALL_SKILL_TOOLS={1 if install_skill_tools else 0}"])
     command.extend(["--build-arg", f"SKILL_TOOL_PROFILE={skill_tool_profile}"])
+    command.extend(["--build-arg", f"INSTALL_GCP_TOOLS={1 if install_gcp_tools else 0}"])
+    command.extend([
+        "--build-arg",
+        f"INSTALL_BROWSER_TOOLS={1 if install_browser_tools else 0}",
+    ])
     command.extend(["--build-arg", f"CTF_INSTALLER_SHA={installer_sha}"])
     if args.pull:
         command.append("--pull")

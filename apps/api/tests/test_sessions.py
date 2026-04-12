@@ -33,8 +33,9 @@ from app.db.models import (
     MCPTransport,
     MessageRole,
     MessageStatus,
+    RuntimeTerminalJobStatus,
 )
-from app.db.repositories import SessionRepository
+from app.db.repositories import RunLogRepository, SessionRepository, TerminalRepository
 from app.db.session import get_websocket_db_session
 from app.harness import session_runner as harness_session_runner
 from app.harness.session_runner import _publish_auto_compaction_events_if_needed
@@ -286,6 +287,313 @@ def test_session_history_and_artifact_endpoints_support_filters(client: TestClie
     runtime_runs_response = client.get("/api/runtime/runs", params={"session_id": session_id})
     assert runtime_runs_response.status_code == 200
     assert api_data(runtime_runs_response)[0]["session_id"] == session_id
+
+
+def test_session_terminal_endpoints_persist_history_and_emit_events(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Session"})
+    session_id = api_data(session_response)["id"]
+
+    create_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={
+            "title": "Ops Shell",
+            "shell": "/bin/bash",
+            "cwd": "/workspace/sessions/demo",
+            "metadata": {"origin": "test"},
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_terminal = api_data(create_response)
+    terminal_id = created_terminal["id"]
+    assert created_terminal["session_id"] == session_id
+    assert created_terminal["title"] == "Ops Shell"
+    assert created_terminal["status"] == "open"
+    assert created_terminal["shell"] == "/bin/bash"
+    assert created_terminal["cwd"] == "/workspace/sessions/demo"
+    assert created_terminal["metadata"] == {"origin": "test"}
+    assert created_terminal["closed_at"] is None
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert [terminal["id"] for terminal in api_data(list_response)] == [terminal_id]
+
+    detail_response = client.get(f"/api/sessions/{session_id}/terminals/{terminal_id}")
+    assert detail_response.status_code == 200
+    assert api_data(detail_response)["id"] == terminal_id
+
+    history_response = client.get(
+        f"/api/sessions/{session_id}/history",
+        params={"source": "terminal"},
+    )
+    assert history_response.status_code == 200
+    history_entries = api_data(history_response)
+    assert history_entries[0]["event_type"] == "terminal.session.created"
+    assert history_entries[0]["payload"]["id"] == terminal_id
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/events") as websocket:
+        close_response = client.post(f"/api/sessions/{session_id}/terminals/{terminal_id}/close")
+        assert close_response.status_code == 200
+        closed_terminal = api_data(close_response)
+        assert closed_terminal["status"] == "closed"
+        assert closed_terminal["closed_at"] is not None
+
+        event = websocket.receive_json()
+        assert event["type"] == "terminal.session.closed"
+        assert event["session_id"] == session_id
+        assert event["payload"]["id"] == terminal_id
+        assert event["payload"]["status"] == "closed"
+
+    repeat_close_response = client.post(f"/api/sessions/{session_id}/terminals/{terminal_id}/close")
+    assert repeat_close_response.status_code == 200
+    assert api_data(repeat_close_response)["id"] == terminal_id
+    assert api_data(repeat_close_response)["status"] == "closed"
+
+    history_after_close = client.get(
+        f"/api/sessions/{session_id}/history",
+        params={"source": "terminal", "sort_order": "asc"},
+    )
+    assert history_after_close.status_code == 200
+    assert [entry["event_type"] for entry in api_data(history_after_close)] == [
+        "terminal.session.created",
+        "terminal.session.closed",
+    ]
+
+
+def test_session_terminal_job_endpoints_return_session_scoped_metadata(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Job Session"})
+    session_id = api_data(session_response)["id"]
+    other_session_response = client.post("/api/sessions", json={"title": "Other Session"})
+    other_session_id = api_data(other_session_response)["id"]
+
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Job Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    other_terminal_response = client.post(
+        f"/api/sessions/{other_session_id}/terminals",
+        json={"title": "Other Job Shell"},
+    )
+    other_terminal_id = api_data(other_terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        job = repository.create_terminal_job(
+            terminal_session_id=terminal_id,
+            session_id=session_id,
+            command="sleep 10",
+            status=RuntimeTerminalJobStatus.QUEUED,
+            metadata={"detach": False, "phase": "skeleton"},
+        )
+        other_job = repository.create_terminal_job(
+            terminal_session_id=other_terminal_id,
+            session_id=other_session_id,
+            command="echo hidden",
+            status=RuntimeTerminalJobStatus.RUNNING,
+            metadata={"detach": True},
+        )
+        job_id = job.id
+        other_job_id = other_job.id
+
+    jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    assert jobs_response.status_code == 200
+    jobs_payload = api_data(jobs_response)
+    assert [entry["id"] for entry in jobs_payload] == [job_id]
+    assert jobs_payload[0]["session_id"] == session_id
+    assert jobs_payload[0]["terminal_session_id"] == terminal_id
+    assert jobs_payload[0]["command"] == "sleep 10"
+    assert jobs_payload[0]["status"] == "queued"
+    assert jobs_payload[0]["metadata"] == {"detach": False, "phase": "skeleton"}
+
+    job_detail_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+    assert job_detail_response.status_code == 200
+    assert api_data(job_detail_response)["id"] == job_id
+
+    missing_job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/does-not-exist")
+    assert missing_job_response.status_code == 404
+    assert missing_job_response.json()["detail"] == "Terminal job not found"
+
+    foreign_job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{other_job_id}")
+    assert foreign_job_response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("shell", "   "), ("cwd", "\n\t  ")],
+)
+def test_session_terminal_create_rejects_blank_shell_or_cwd(
+    client: TestClient,
+    field: str,
+    value: str,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Validation Session"})
+    session_id = api_data(session_response)["id"]
+
+    payload = {
+        "title": "Validated Shell",
+        "shell": "/bin/bash",
+        "cwd": "/workspace/demo",
+        "metadata": {"origin": "test"},
+    }
+    payload[field] = value
+
+    create_response = client.post(f"/api/sessions/{session_id}/terminals", json=payload)
+
+    assert create_response.status_code == 422
+    assert create_response.json()["detail"] == "Request validation failed"
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert api_data(list_response) == []
+
+
+def test_session_terminal_create_rejects_oversized_metadata(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Metadata Limits"})
+    session_id = api_data(session_response)["id"]
+
+    create_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={
+            "title": "Oversized Metadata Shell",
+            "shell": "/bin/bash",
+            "cwd": "/workspace/demo",
+            "metadata": {"payload": "x" * 5000},
+        },
+    )
+
+    assert create_response.status_code == 422
+    assert create_response.json()["detail"] == "Request validation failed"
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert api_data(list_response) == []
+
+
+def test_terminal_repository_rejects_job_session_mismatch(client: TestClient) -> None:
+    session_response = client.post(
+        "/api/sessions", json={"title": "Terminal Job Integrity Session"}
+    )
+    session_id = api_data(session_response)["id"]
+    other_session_response = client.post("/api/sessions", json={"title": "Other Integrity Session"})
+    other_session_id = api_data(other_session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        with pytest.raises(ValueError, match="does not belong to the provided session"):
+            repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=other_session_id,
+                command="echo mismatch",
+                status=RuntimeTerminalJobStatus.QUEUED,
+            )
+
+
+def test_terminal_repository_rejects_job_for_closed_terminal(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Closed Terminal Job Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    close_response = client.post(f"/api/sessions/{session_id}/terminals/{terminal_id}/close")
+    assert close_response.status_code == 200
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        with pytest.raises(ValueError, match="closed and cannot accept new jobs"):
+            repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=session_id,
+                command="echo closed",
+                status=RuntimeTerminalJobStatus.QUEUED,
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cwd", "/workspace/../../etc"),
+        ("shell", "/bin/bash\n--noprofile"),
+    ],
+)
+def test_session_terminal_create_rejects_unsafe_shell_or_cwd(
+    client: TestClient,
+    field: str,
+    value: str,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Safety Session"})
+    session_id = api_data(session_response)["id"]
+
+    payload = {
+        "title": "Safe Shell",
+        "shell": "/bin/bash",
+        "cwd": "/workspace/demo",
+        "metadata": {"origin": "test"},
+    }
+    payload[field] = value
+
+    create_response = client.post(f"/api/sessions/{session_id}/terminals", json=payload)
+
+    assert create_response.status_code == 422
+    assert create_response.json()["detail"] == "Request validation failed"
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert api_data(list_response) == []
+
+
+def test_session_terminal_create_rejects_non_finite_metadata(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Metadata JSON"})
+    session_id = api_data(session_response)["id"]
+
+    create_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        content=(
+            '{"title":"Non Finite Metadata Shell","shell":"/bin/bash",'
+            '"cwd":"/workspace/demo","metadata":{"score":NaN}}'
+        ),
+        headers={"content-type": "application/json"},
+    )
+
+    assert create_response.status_code == 422
+    assert create_response.json()["detail"] == "Request validation failed"
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert api_data(list_response) == []
+
+
+def test_session_terminal_create_rolls_back_when_run_log_write_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Rollback Session"})
+    session_id = api_data(session_response)["id"]
+
+    def fail_create_log(self: RunLogRepository, **kwargs: object) -> None:
+        del self, kwargs
+        raise RuntimeError("forced terminal run-log failure")
+
+    monkeypatch.setattr(RunLogRepository, "create_log", fail_create_log)
+
+    with pytest.raises(RuntimeError, match="forced terminal run-log failure"):
+        client.post(
+            f"/api/sessions/{session_id}/terminals",
+            json={
+                "title": "Rollback Shell",
+                "shell": "/bin/bash",
+                "cwd": "/workspace/demo",
+            },
+        )
+
+    list_response = client.get(f"/api/sessions/{session_id}/terminals")
+    assert list_response.status_code == 200
+    assert api_data(list_response) == []
 
 
 def test_chat_persists_messages_and_attachments(client: TestClient) -> None:

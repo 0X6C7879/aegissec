@@ -52,10 +52,22 @@ const ATTRIBUTION_RECORD_PATHS = [
   ["result", "payload"],
   ["data"],
   ["result", "data"],
+  ["source"],
+  ["result", "source"],
+  ["attribution"],
+  ["result", "attribution"],
+  ["metadata"],
+  ["result", "metadata"],
   ["skill"],
   ["result", "skill"],
   ["node"],
   ["result", "node"],
+  ["node_result"],
+  ["result", "node_result"],
+  ["worker_result"],
+  ["result", "worker_result"],
+  ["current_node"],
+  ["result", "current_node"],
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -263,13 +275,25 @@ function readSkillNameFromUnknown(value: unknown): string | null {
   return null;
 }
 
+function readSkillNamesFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => readSkillNameFromUnknown(item))
+      .filter((item): item is string => item !== null);
+  }
+
+  const single = readSkillNameFromUnknown(value);
+  return single ? [single] : [];
+}
+
 function readNodeLabel(record: Record<string, unknown>): string | null {
   const role = readString(record, ["role"]);
-  const nodeKind = readString(record, ["node_kind"]);
-  const stepId = readString(record, ["step_id"]);
+  const nodeKind = readString(record, ["node_kind", "node_type"]);
+  const stepId = readString(record, ["step_id", "node_id"]);
   const stageName = readString(record, ["stage_name"]);
+  const nodeName = readString(record, ["node_name", "node_label", "name"]);
 
-  if (!role && !nodeKind && !stepId && !stageName) {
+  if (!role && !nodeKind && !stepId && !stageName && !nodeName) {
     return null;
   }
 
@@ -286,7 +310,32 @@ function readNodeLabel(record: Record<string, unknown>): string | null {
   if (stageName) {
     parts.push(`stage:${stageName}`);
   }
+  if (nodeName && !parts.includes(nodeName)) {
+    parts.push(nodeName);
+  }
   return parts.join(" · ");
+}
+
+function readNodeLabelFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => readNodeLabelFromUnknown(item));
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return [value.trim()];
+  }
+
+  if (isRecord(value)) {
+    const label = readNodeLabel(value);
+    if (label) {
+      return [label];
+    }
+
+    const fallback = readString(value, ["node", "node_name", "node_label", "node_id"]);
+    return fallback ? [fallback] : [];
+  }
+
+  return [];
 }
 
 function collectAttributionRecords(
@@ -337,10 +386,35 @@ export function readSkillNodeAttributionFromMetadata(
   };
 
   for (const record of collectAttributionRecords(metadata)) {
-    pushSkill(readSkillNameFromUnknown(record["skill"]));
-    pushSkill(
-      readString(record, ["skill_name_or_id", "skill_id", "skill_name", "directory_name"]),
-    );
+    for (const label of [
+      ...readSkillNamesFromUnknown(record["skill"]),
+      ...readSkillNamesFromUnknown(record["source_skill"]),
+      ...readSkillNamesFromUnknown(record["sourceSkill"]),
+      ...readSkillNamesFromUnknown(record["source_skill_id"]),
+      ...readSkillNamesFromUnknown(record["source_skill_name"]),
+      ...readSkillNamesFromUnknown(record["skill_name_or_id"]),
+      ...readSkillNamesFromUnknown(record["skill_id"]),
+      ...readSkillNamesFromUnknown(record["skill_name"]),
+      ...readSkillNamesFromUnknown(record["directory_name"]),
+      ...readSkillNamesFromUnknown(record["selected_skill_ids"]),
+      ...readSkillNamesFromUnknown(record["source_skills"]),
+      ...readSkillNamesFromUnknown(record["skills"]),
+    ]) {
+      pushSkill(label);
+    }
+
+    for (const label of [
+      ...readNodeLabelFromUnknown(record["node"]),
+      ...readNodeLabelFromUnknown(record["source_node"]),
+      ...readNodeLabelFromUnknown(record["sourceNode"]),
+      ...readNodeLabelFromUnknown(record["source_nodes"]),
+      ...readNodeLabelFromUnknown(record["nodes"]),
+      ...readNodeLabelFromUnknown(record["current_node"]),
+      ...readNodeLabelFromUnknown(record["node_result"]),
+      ...readNodeLabelFromUnknown(record["worker_result"]),
+    ]) {
+      pushNode(label);
+    }
 
     const selectedSkillEntries = [
       ...readArrayRecords(record["selected_skills"]),

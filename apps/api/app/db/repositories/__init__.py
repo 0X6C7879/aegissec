@@ -5,6 +5,7 @@ from app.db.repositories.run_logs import RunLogRepository
 from app.db.repositories.runtime import RuntimeRepository
 from app.db.repositories.sessions import SessionRepository
 from app.db.repositories.skills import SkillRepository
+from app.db.repositories.terminal_repository import TerminalRepository
 from app.db.repositories.workflows import GraphRepository, WorkflowRepository
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "RuntimeRepository",
     "SessionRepository",
     "SkillRepository",
+    "TerminalRepository",
     "WorkflowRepository",
 ]

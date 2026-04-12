@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import math
+import posixpath
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 from uuid import uuid4
 
+from pydantic import field_validator
 from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
 
@@ -81,6 +85,19 @@ class ExecutionStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     TIMEOUT = "timeout"
+
+
+class RuntimeTerminalSessionStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class RuntimeTerminalJobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RuntimePolicy(SQLModel):
@@ -370,6 +387,51 @@ class RuntimeExecutionRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
     started_at: datetime = Field(default_factory=utc_now, nullable=False)
     ended_at: datetime = Field(default_factory=utc_now, nullable=False)
+
+
+class RuntimeTerminalSession(SQLModel, table=True):
+    __tablename__ = "runtime_terminal_sessions"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    title: str = Field(default="Terminal", nullable=False, max_length=200)
+    status: RuntimeTerminalSessionStatus = Field(
+        default=RuntimeTerminalSessionStatus.OPEN,
+        nullable=False,
+        index=True,
+    )
+    shell: str = Field(default="/bin/zsh", nullable=False, max_length=200)
+    cwd: str = Field(default="/workspace", nullable=False, max_length=1000)
+    metadata_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
+    closed_at: datetime | None = Field(default=None, nullable=True, index=True)
+
+
+class RuntimeTerminalJob(SQLModel, table=True):
+    __tablename__ = "runtime_terminal_jobs"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    terminal_session_id: str = Field(foreign_key="runtime_terminal_sessions.id", index=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    status: RuntimeTerminalJobStatus = Field(
+        default=RuntimeTerminalJobStatus.QUEUED,
+        nullable=False,
+        index=True,
+    )
+    command: str = Field(nullable=False)
+    exit_code: int | None = Field(default=None, nullable=True)
+    started_at: datetime | None = Field(default=None, nullable=True, index=True)
+    ended_at: datetime | None = Field(default=None, nullable=True)
+    metadata_json: dict[str, object] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, nullable=False, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, nullable=False)
 
 
 class RuntimeArtifact(SQLModel, table=True):
@@ -947,6 +1009,153 @@ class RuntimeExecuteRequest(SQLModel):
 class RuntimeProfileRead(SQLModel):
     name: str
     policy: RuntimePolicy
+
+
+TERMINAL_METADATA_MAX_BYTES = 4_096
+TERMINAL_METADATA_MAX_DEPTH = 4
+TERMINAL_METADATA_MAX_ITEMS = 32
+TERMINAL_ALLOWED_SHELLS = frozenset({"/bin/zsh", "/bin/bash", "/bin/sh"})
+TERMINAL_ALLOWED_CWD_PREFIX = "/workspace"
+
+
+def _contains_control_characters(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def _normalize_terminal_metadata_value(value: object, *, depth: int = 0) -> object:
+    if depth > TERMINAL_METADATA_MAX_DEPTH:
+        raise ValueError(
+            f"Terminal metadata exceeds max nesting depth of {TERMINAL_METADATA_MAX_DEPTH}."
+        )
+
+    if value is None or isinstance(value, bool | int | str):
+        return value
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Terminal metadata must not contain NaN or Infinity.")
+        return value
+
+    if isinstance(value, list):
+        if len(value) > TERMINAL_METADATA_MAX_ITEMS:
+            raise ValueError(
+                f"Terminal metadata lists may not exceed {TERMINAL_METADATA_MAX_ITEMS} items."
+            )
+        return [_normalize_terminal_metadata_value(item, depth=depth + 1) for item in value]
+
+    if isinstance(value, dict):
+        if len(value) > TERMINAL_METADATA_MAX_ITEMS:
+            raise ValueError(
+                f"Terminal metadata objects may not exceed {TERMINAL_METADATA_MAX_ITEMS} keys."
+            )
+
+        normalized: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("Terminal metadata keys must be strings.")
+            normalized[key] = _normalize_terminal_metadata_value(item, depth=depth + 1)
+        return normalized
+
+    raise ValueError(
+        "Terminal metadata values must be JSON-serializable primitives, lists, or objects."
+    )
+
+
+class TerminalSessionCreateRequest(SQLModel):
+    title: str | None = Field(default=None, max_length=200)
+    shell: str = Field(default="/bin/zsh", min_length=1, max_length=200)
+    cwd: str = Field(default="/workspace", min_length=1, max_length=1000)
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+
+    @field_validator("title")
+    @classmethod
+    def _normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if normalized and _contains_control_characters(normalized):
+            raise ValueError("must not contain control characters")
+        return normalized or None
+
+    @field_validator("shell")
+    @classmethod
+    def _validate_shell(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        if _contains_control_characters(normalized):
+            raise ValueError("must not contain control characters")
+        if any(character.isspace() for character in normalized):
+            raise ValueError("must not contain whitespace")
+        if normalized not in TERMINAL_ALLOWED_SHELLS:
+            raise ValueError(f"must be one of: {', '.join(sorted(TERMINAL_ALLOWED_SHELLS))}")
+        return normalized
+
+    @field_validator("cwd")
+    @classmethod
+    def _validate_cwd(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        if _contains_control_characters(normalized):
+            raise ValueError("must not contain control characters")
+        normalized_path = posixpath.normpath(normalized)
+        if not normalized_path.startswith("/"):
+            raise ValueError("must be an absolute POSIX path")
+        if normalized_path != TERMINAL_ALLOWED_CWD_PREFIX and not normalized_path.startswith(
+            f"{TERMINAL_ALLOWED_CWD_PREFIX}/"
+        ):
+            raise ValueError(f"must stay within {TERMINAL_ALLOWED_CWD_PREFIX}")
+        if "/../" in f"{normalized_path}/" or normalized_path.endswith("/.."):
+            raise ValueError("must not contain traversal segments")
+        return normalized_path
+
+    @field_validator("metadata_payload")
+    @classmethod
+    def _validate_metadata_payload(cls, value: dict[str, object]) -> dict[str, object]:
+        normalized = _normalize_terminal_metadata_value(value)
+        if not isinstance(normalized, dict):
+            raise ValueError("Terminal metadata must be an object.")
+
+        encoded = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded) > TERMINAL_METADATA_MAX_BYTES:
+            raise ValueError(
+                f"Terminal metadata exceeds max size of {TERMINAL_METADATA_MAX_BYTES} bytes."
+            )
+
+        return normalized
+
+
+class TerminalSessionRead(SQLModel):
+    id: str
+    session_id: str
+    title: str
+    status: RuntimeTerminalSessionStatus
+    shell: str
+    cwd: str
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+
+class TerminalJobRead(SQLModel):
+    id: str
+    terminal_session_id: str
+    session_id: str
+    status: RuntimeTerminalJobStatus
+    command: str
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
+    created_at: datetime
+    updated_at: datetime
 
 
 class SkillRecordRead(SQLModel):
@@ -1593,6 +1802,41 @@ def to_runtime_execution_run_read(
         started_at=run.started_at,
         ended_at=run.ended_at,
         artifacts=[to_runtime_artifact_read(artifact) for artifact in artifacts],
+    )
+
+
+def to_terminal_session_read(terminal_session: RuntimeTerminalSession) -> TerminalSessionRead:
+    return TerminalSessionRead.model_validate(
+        {
+            "id": terminal_session.id,
+            "session_id": terminal_session.session_id,
+            "title": terminal_session.title,
+            "status": terminal_session.status,
+            "shell": terminal_session.shell,
+            "cwd": terminal_session.cwd,
+            "metadata": dict(terminal_session.metadata_json),
+            "created_at": terminal_session.created_at,
+            "updated_at": terminal_session.updated_at,
+            "closed_at": terminal_session.closed_at,
+        }
+    )
+
+
+def to_terminal_job_read(terminal_job: RuntimeTerminalJob) -> TerminalJobRead:
+    return TerminalJobRead.model_validate(
+        {
+            "id": terminal_job.id,
+            "terminal_session_id": terminal_job.terminal_session_id,
+            "session_id": terminal_job.session_id,
+            "status": terminal_job.status,
+            "command": terminal_job.command,
+            "exit_code": terminal_job.exit_code,
+            "started_at": terminal_job.started_at,
+            "ended_at": terminal_job.ended_at,
+            "metadata": dict(terminal_job.metadata_json),
+            "created_at": terminal_job.created_at,
+            "updated_at": terminal_job.updated_at,
+        }
     )
 
 

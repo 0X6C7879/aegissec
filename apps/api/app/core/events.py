@@ -21,6 +21,8 @@ class SessionEventType(str, Enum):
     SESSION_UPDATED = "session.updated"
     SESSION_DELETED = "session.deleted"
     SESSION_RESTORED = "session.restored"
+    TERMINAL_SESSION_CREATED = "terminal.session.created"
+    TERMINAL_SESSION_CLOSED = "terminal.session.closed"
     SESSION_CONTEXT_WINDOW_UPDATED = "session.context_window.updated"
     SESSION_COMPACTION_COMPLETED = "session.compaction.completed"
     SESSION_COMPACTION_FAILED = "session.compaction.failed"

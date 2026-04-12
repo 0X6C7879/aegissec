@@ -248,7 +248,7 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("思考过程")).not.toBeInTheDocument();
     expect(container.querySelector("details.assistant-reasoning-stream")).toBeNull();
     expect(container.querySelectorAll(".assistant-reasoning-block")).toHaveLength(2);
-    expect(screen.getByText("自动选择")).toBeInTheDocument();
+    expect(screen.queryByText("Selected Skills")).not.toBeInTheDocument();
     expect(screen.getAllByText("ctf-web").length).toBeGreaterThan(0);
     expect(container.querySelectorAll(".assistant-inline-cue")).toHaveLength(1);
     expect(container.querySelectorAll(".assistant-status-note")).toHaveLength(0);
@@ -310,6 +310,53 @@ describe("ConversationFeed", () => {
 
     expect(shellBlock?.open).toBe(true);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
+  });
+
+  it("renders all selected skills in autoroute cue without prefix text", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-cue-selected-skills",
+                kind: "status",
+                sequence: 1,
+                text: "自动选择 ctf-web",
+                metadata: {
+                  state: "skill.autoroute.selected",
+                  selected_skills: [
+                    { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    { id: "recon-web", directory_name: "recon-web", role: "supporting" },
+                    {
+                      id: "verification-helper",
+                      directory_name: "verification-helper",
+                      role: "verifier",
+                    },
+                  ],
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-output",
+                kind: "output",
+                sequence: 2,
+                text: "已同步多技能编排。",
+              }),
+            ],
+            content: "已同步多技能编排。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.queryByText("Selected Skills")).not.toBeInTheDocument();
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getByText("recon-web")).toBeInTheDocument();
+    expect(screen.getByText("verification-helper")).toBeInTheDocument();
+    expect(document.querySelectorAll(".assistant-inline-cue-skill-list .assistant-inline-skill-tag")).toHaveLength(3);
   });
 
   it("inserts manual compaction markers into the main timeline by createdAt", () => {
@@ -572,7 +619,59 @@ describe("ConversationFeed", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders PATTT execute_skill calls as inline skill labels", () => {
+  it("renders source badges when shell metadata uses source_skill/source_node keys", () => {
+    render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-source-key-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-source-key",
+                text: "cat /etc/passwd",
+                metadata: {
+                  command: "cat /etc/passwd",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-source-key-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-source-key",
+                text: "命令执行完成。",
+                metadata: {
+                  result: {
+                    command: "cat /etc/passwd",
+                    stdout: "root:x:0:0:root:/root:/bin/bash",
+                    source_skill: "post-exploitation",
+                    source_node: {
+                      role: "worker",
+                      node_kind: "worker",
+                      step_id: "worker-9",
+                      stage_name: "post-exploit",
+                    },
+                  },
+                },
+              }),
+            ],
+            content: "source attribution from source_* keys",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("skill · post-exploitation")).toBeInTheDocument();
+    expect(screen.getByText("node · Worker · worker · worker-9 · stage:post-exploit")).toBeInTheDocument();
+  });
+
+  it("shows a PATTT card with a single loaded family name", () => {
     const { container } = render(
       <ConversationFeed
         messages={buildMessages({
@@ -632,14 +731,17 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(0);
-    expect(container.querySelectorAll(".assistant-tool-block")).toHaveLength(0);
-    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
-    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
-    expect(screen.queryByText("Server Side Request Forgery")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(1);
+    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(0);
+    expect(screen.queryByText("Pattt Readme Loader")).not.toBeInTheDocument();
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getAllByText("加载的 payload").length).toBeGreaterThan(0);
+    expect(screen.getByText("Server Side Request Forgery")).toBeInTheDocument();
   });
 
-  it("pairs PATTT execute_skill call/result into a single inline skill label", () => {
+  it("deduplicates repeated PATTT loaded docs from the same family", () => {
     const { container } = render(
       <ConversationFeed
         messages={buildMessages({
@@ -690,12 +792,16 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
-    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
-    expect(screen.queryByText("SQL Injection")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const familyItems = container.querySelectorAll(".assistant-pattt-family-item");
+    expect(familyItems).toHaveLength(1);
+    expect(familyItems[0]?.textContent).toBe("SQL Injection");
   });
 
-  it("keeps PATTT metadata hidden even when multiple families are loaded", () => {
+  it("renders multiple distinct PATTT families when multiple docs are loaded", () => {
     const { container } = render(
       <ConversationFeed
         messages={buildMessages({
@@ -746,15 +852,19 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
-    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
-    expect(screen.queryByText("Server Side Request Forgery")).not.toBeInTheDocument();
-    expect(screen.queryByText("SQL Injection")).not.toBeInTheDocument();
-    expect(screen.queryByText("Prompt Injection")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const familyItems = container.querySelectorAll(".assistant-pattt-family-item");
+    expect(familyItems).toHaveLength(3);
+    expect(screen.getByText("Server Side Request Forgery")).toBeInTheDocument();
+    expect(screen.getByText("SQL Injection")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Injection")).toBeInTheDocument();
   });
 
   it("does not leak PATTT raw paths, README content, payload text, or raw JSON keys", () => {
-    render(
+    const { container } = render(
       <ConversationFeed
         messages={buildMessages({
           assistant: {
@@ -809,8 +919,11 @@ describe("ConversationFeed", () => {
       />,
     );
 
-    expect(screen.getByText("Pattt Readme Loader")).toBeInTheDocument();
-    expect(screen.queryByText("Prompt Injection")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-pattt-block")).toHaveLength(1);
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    expect(screen.getByText("Prompt Injection")).toBeInTheDocument();
     expect(
       screen.queryByText("knowledge/pattt/repo/Prompt Injection/README.md"),
     ).not.toBeInTheDocument();
@@ -1521,8 +1634,8 @@ describe("ConversationFeed", () => {
     expect(screen.queryByText("工具执行完成，状态：success。")).not.toBeInTheDocument();
   });
 
-  it("renders execute_skill as an inline skill label without orchestration card details", () => {
-    const { container } = render(
+  it("renders non-PATTT execute_skill as inline selected skill names without orchestration card", () => {
+    render(
       <ConversationFeed
         messages={buildMessages({
           assistant: {
@@ -1712,14 +1825,242 @@ describe("ConversationFeed", () => {
     );
 
     expect(screen.queryByText("Skill Orchestration")).not.toBeInTheDocument();
-    expect(container.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(1);
-    expect(screen.getByText("Movement Tmux")).toBeInTheDocument();
-    expect(screen.queryByText("Selected skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Selected Skills")).not.toBeInTheDocument();
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getByText("recon-web")).toBeInTheDocument();
+    expect(screen.getByText("reference-doc")).toBeInTheDocument();
+    expect(document.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(3);
+    expect(screen.queryByText("Prepared Selected Skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worker / Node Results")).not.toBeInTheDocument();
     expect(screen.queryByText("Result Reducer")).not.toBeInTheDocument();
     expect(screen.queryByText("Result Verifier")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stage Transition")).not.toBeInTheDocument();
+    expect(screen.queryByText("Replanned Skill Context")).not.toBeInTheDocument();
     expect(screen.queryByText(/post-exploit/)).not.toBeInTheDocument();
     expect(screen.queryByText("post-exploitation")).not.toBeInTheDocument();
     expect(screen.getByText("最终建议在下一跳前重新确认权限。")).toBeInTheDocument();
+  });
+
+  it("does not duplicate skill chips when execute_skill only returns a subset of autoroute-selected skills", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-skill-dedupe-cue",
+                kind: "status",
+                sequence: 1,
+                text: "自动选择 ctf-web",
+                metadata: {
+                  state: "skill.autoroute.selected",
+                  selected_skills: [
+                    { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    {
+                      id: "php-audit-pipeline",
+                      directory_name: "php-audit-pipeline",
+                      role: "supporting",
+                    },
+                    {
+                      id: "initial-access-recon",
+                      directory_name: "initial-access-recon",
+                      role: "supporting",
+                    },
+                  ],
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-skill-dedupe-call",
+                kind: "tool_call",
+                sequence: 2,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-dedupe-1",
+                text: "ctf-web",
+              }),
+              buildTranscriptSegment({
+                id: "segment-skill-dedupe-result",
+                kind: "tool_result",
+                sequence: 3,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-dedupe-1",
+                text: "技能执行完成。",
+                metadata: {
+                  result: {
+                    selected_skills: [
+                      { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    ],
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-skill-dedupe-output",
+                kind: "output",
+                sequence: 4,
+                text: "去重校验完成。",
+              }),
+            ],
+            content: "去重校验完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.queryByText("Selected Skills")).not.toBeInTheDocument();
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getByText("php-audit-pipeline")).toBeInTheDocument();
+    expect(screen.getByText("initial-access-recon")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-inline-cue-skill")).toHaveLength(1);
+    expect(document.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(3);
+  });
+
+  it("suppresses a redundant autoroute selected cue when it is a subset of the previous selected cue", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-cue-redundant-1",
+                kind: "status",
+                sequence: 1,
+                text: "自动选择 ctf-web",
+                metadata: {
+                  state: "skill.autoroute.selected",
+                  selected_skills: [
+                    { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    {
+                      id: "php-audit-pipeline",
+                      directory_name: "php-audit-pipeline",
+                      role: "supporting",
+                    },
+                    {
+                      id: "initial-access-recon",
+                      directory_name: "initial-access-recon",
+                      role: "supporting",
+                    },
+                  ],
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-redundant-2",
+                kind: "status",
+                sequence: 2,
+                text: "自动选择 ctf-web",
+                metadata: {
+                  state: "skill.autoroute.selected",
+                  selected_skills: [
+                    { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                  ],
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-redundant-output",
+                kind: "output",
+                sequence: 3,
+                text: "去重后的 cue 渲染完成。",
+              }),
+            ],
+            content: "去重后的 cue 渲染完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getByText("php-audit-pipeline")).toBeInTheDocument();
+    expect(screen.getByText("initial-access-recon")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-inline-cue-skill")).toHaveLength(1);
+    expect(document.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(3);
+  });
+
+  it("suppresses execute_skill label when a non-selected cue exists between selected cue and tool block", () => {
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-cue-intermediate-1",
+                kind: "status",
+                sequence: 1,
+                text: "自动选择 ctf-web",
+                metadata: {
+                  state: "skill.autoroute.selected",
+                  selected_skills: [
+                    { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    {
+                      id: "php-audit-pipeline",
+                      directory_name: "php-audit-pipeline",
+                      role: "supporting",
+                    },
+                    {
+                      id: "initial-access-recon",
+                      directory_name: "initial-access-recon",
+                      role: "supporting",
+                    },
+                  ],
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-intermediate-nonselected",
+                kind: "status",
+                sequence: 2,
+                text: "正在准备技能执行…",
+                metadata: {
+                  state: "skill.autoroute.preparing",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-intermediate-call",
+                kind: "tool_call",
+                sequence: 3,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-intermediate-1",
+                text: "ctf-web",
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-intermediate-result",
+                kind: "tool_result",
+                sequence: 4,
+                tool_name: "execute_skill",
+                tool_call_id: "tool-skill-intermediate-1",
+                text: "技能执行完成。",
+                metadata: {
+                  result: {
+                    selected_skills: [
+                      { id: "ctf-web", directory_name: "ctf-web", role: "primary" },
+                    ],
+                  },
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-cue-intermediate-output",
+                kind: "output",
+                sequence: 5,
+                text: "跨 cue 去重校验完成。",
+              }),
+            ],
+            content: "跨 cue 去重校验完成。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText("ctf-web")).toBeInTheDocument();
+    expect(screen.getByText("php-audit-pipeline")).toBeInTheDocument();
+    expect(screen.getByText("initial-access-recon")).toBeInTheDocument();
+    expect(screen.getByText("正在准备技能执行…")).toBeInTheDocument();
+    expect(container.querySelectorAll(".assistant-inline-cue-skill")).toHaveLength(1);
+    expect(document.querySelectorAll(".assistant-inline-skill-tag")).toHaveLength(3);
   });
 
   it("falls back to generation lifecycle text when status steps exist but carry no visible text", () => {

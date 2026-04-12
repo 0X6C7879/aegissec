@@ -318,6 +318,7 @@ export function SkillsWorkbench() {
         : refreshMutation.isError
           ? refreshMutation.error.message
           : null;
+  const showGlobalOrchestrationOverview = false;
 
   const detailContent =
     !selectedSkillId || !activeSkill
@@ -788,6 +789,195 @@ export function SkillsWorkbench() {
 
           {mutationErrorMessage ? (
             <div className="management-error-banner">{mutationErrorMessage}</div>
+          ) : null}
+
+          {showGlobalOrchestrationOverview ? (
+            <section className="management-section-card management-section-card-compact">
+            <div className="management-section-header">
+              <h3 className="management-section-title">多 Skill Orchestration 视图</h3>
+              <span className="management-status-badge tone-neutral">
+                {selectedOrchestrationSkills.length} 个 selected
+              </span>
+            </div>
+
+            {skillContextQuery.isLoading ? (
+              <div className="management-inline-notice">正在加载全局编排快照。</div>
+            ) : null}
+            {skillContextQuery.isError ? (
+              <div className="management-error-banner">{skillContextQuery.error.message}</div>
+            ) : null}
+
+            {orchestrationSnapshot ? (
+              <>
+                <div className="management-info-grid">
+                  <div className="management-info-card">
+                    <span className="management-info-label">已选技能</span>
+                    <strong className="management-info-value">{selectedOrchestrationSkills.length}</strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">Prepared 技能</span>
+                    <strong className="management-info-value">{preparedOrchestrationSkills.length}</strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">Worker 结果</span>
+                    <strong className="management-info-value">{orchestrationWorkerResults.length}</strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">Node 结果</span>
+                    <strong className="management-info-value">{orchestrationNodeResults.length}</strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">当前 Stage</span>
+                    <strong className="management-info-value">
+                      {readFirstString(orchestrationPlan ?? {}, ["active_stage"]) ?? "-"}
+                    </strong>
+                  </div>
+                  <div className="management-info-card">
+                    <span className="management-info-label">执行状态</span>
+                    <strong className="management-info-value">
+                      {readFirstString(orchestrationExecution ?? {}, ["status"]) ?? "-"}
+                    </strong>
+                  </div>
+                </div>
+
+                {selectedOrchestrationSkills.length > 0 ? (
+                  <div className="management-subcard">
+                    <span className="management-info-label">Selected Skills（全量）</span>
+                    <ul className="assistant-orchestration-list">
+                      {selectedOrchestrationSkills.map((skill, index) => (
+                        <li
+                          key={`global-skill-orchestration-selected-${String(skill["id"] ?? skill["directory_name"] ?? index)}`}
+                          className="assistant-orchestration-list-item"
+                        >
+                          <div className="assistant-orchestration-item-head">
+                            <span className="assistant-tool-source-chip">
+                              {formatOrchestrationRole(readFirstString(skill, ["role"]))}
+                            </span>
+                            <strong className="assistant-orchestration-item-title">
+                              {readSkillDisplayName(skill)}
+                            </strong>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {preparedOrchestrationSkills.length > 0 ? (
+                  <div className="management-subcard">
+                    <span className="management-info-label">Prepared Selected Skills</span>
+                    <ul className="assistant-orchestration-list">
+                      {preparedOrchestrationSkills.map((skill, index) => (
+                        <li
+                          key={`global-skill-orchestration-prepared-${String(skill["id"] ?? skill["directory_name"] ?? index)}`}
+                          className="assistant-orchestration-list-item"
+                        >
+                          <div className="assistant-orchestration-item-head">
+                            <span className="assistant-tool-source-chip">
+                              {formatOrchestrationRole(readFirstString(skill, ["role"]))}
+                            </span>
+                            <strong className="assistant-orchestration-item-title">
+                              {readSkillDisplayName(skill)}
+                            </strong>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {orchestrationWorkerResults.length > 0 || orchestrationNodeResults.length > 0 ? (
+                  <div className="management-subcard">
+                    <span className="management-info-label">Worker / Node Results</span>
+                    <ul className="assistant-orchestration-list">
+                      {[...orchestrationWorkerResults, ...orchestrationNodeResults].map(
+                        (result, index) => (
+                          <li
+                            key={`global-skill-orchestration-node-${String(result["step_id"] ?? result["name"] ?? index)}`}
+                            className="assistant-orchestration-list-item"
+                          >
+                            <div className="assistant-orchestration-item-head">
+                              <span className="assistant-tool-source-chip">
+                                {formatOrchestrationRole(readFirstString(result, ["role"]))}
+                              </span>
+                              {readFirstString(result, ["status"]) ? (
+                                <span className="assistant-tool-source-chip">
+                                  {readFirstString(result, ["status"])}
+                                </span>
+                              ) : null}
+                              <strong className="assistant-orchestration-item-title">
+                                {readFirstString(result, [
+                                  "name",
+                                  "directory_name",
+                                  "skill_id",
+                                  "step_id",
+                                ]) ?? "unknown"}
+                              </strong>
+                            </div>
+                            <p className="assistant-tool-inline-meta">
+                              {readFirstString(result, ["node_kind"]) ?? "node"}
+                              {" · "}
+                              {readFirstString(result, ["stage_name"]) ?? "stage:-"}
+                            </p>
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {orchestrationStageTransition ? (
+                  <div className="management-subcard">
+                    <span className="management-info-label">Stage Transition</span>
+                    <p className="assistant-tool-inline-meta">
+                      {readFirstString(orchestrationStageTransition, ["from_stage"]) ?? "-"} →
+                      {" "}
+                      {readFirstString(orchestrationStageTransition, ["to_stage"]) ?? "-"}
+                      {" · replan="}
+                      {String(orchestrationStageTransition["replan_required"])}
+                    </p>
+                    {Array.isArray(orchestrationStageTransition["reasons"]) &&
+                    orchestrationStageTransition["reasons"].length > 0 ? (
+                      <p className="assistant-tool-inline-meta">
+                        reasons: {(orchestrationStageTransition["reasons"] as unknown[])
+                          .map((item) => String(item))
+                          .join("; ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {replannedSkillContext ? (
+                  <div className="management-subcard">
+                    <span className="management-info-label">Replanned Skill Context</span>
+                    {replannedSelectedSkills.length > 0 ? (
+                      <ul className="assistant-orchestration-list">
+                        {replannedSelectedSkills.map((skill, index) => (
+                          <li
+                            key={`global-skill-orchestration-replanned-${String(skill["id"] ?? skill["directory_name"] ?? index)}`}
+                            className="assistant-orchestration-list-item"
+                          >
+                            <div className="assistant-orchestration-item-head">
+                              <span className="assistant-tool-source-chip">
+                                {formatOrchestrationRole(readFirstString(skill, ["role"]))}
+                              </span>
+                              <strong className="assistant-orchestration-item-title">
+                                {readSkillDisplayName(skill)}
+                              </strong>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="assistant-tool-inline-meta">暂无 replanned selected skills。</p>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            ) : !skillContextQuery.isLoading && !skillContextQuery.isError ? (
+              <div className="management-inline-notice">当前没有可展示的 multi-skill orchestration 快照。</div>
+            ) : null}
+            </section>
           ) : null}
 
           {skillsQuery.isLoading && !activeSkill ? (
