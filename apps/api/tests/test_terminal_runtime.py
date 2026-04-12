@@ -13,6 +13,7 @@ from app.services.terminal_runtime import (
     LiveTerminalJobRegistry,
     LiveTerminalRegistry,
     TerminalAlreadyAttachedError,
+    TerminalJobAlreadyRunningError,
     TerminalNotFoundError,
     TerminalRuntimeService,
 )
@@ -237,3 +238,65 @@ async def test_terminal_runtime_service_rejects_detached_handle_reuse_from_forei
 
     await service.shutdown()
     await asyncio.wait_for(handle.closed.wait(), timeout=1)
+
+
+@pytest.mark.anyio
+async def test_terminal_runtime_service_serializes_concurrent_detached_start_per_terminal(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id, terminal_id = _create_session_and_terminal(
+        client, title="Concurrent Detached Start"
+    )
+    service = _build_service()
+    backend = app.state.terminal_backend
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    open_calls = 0
+    original_open_terminal = backend.open_terminal
+
+    async def delayed_open_terminal(**kwargs: object) -> object:
+        nonlocal open_calls
+        terminal_key = kwargs.get("terminal_id")
+        if isinstance(terminal_key, str) and ":job:" in terminal_key:
+            open_calls += 1
+            started.set()
+            await release.wait()
+        return await original_open_terminal(**kwargs)
+
+    monkeypatch.setattr(backend, "open_terminal", delayed_open_terminal)
+
+    first_task = asyncio.create_task(
+        service.start_background_job(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            command="sleep 60",
+            timeout_seconds=60,
+            artifact_paths=[],
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    with pytest.raises(TerminalJobAlreadyRunningError):
+        await service.start_background_job(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            command="sleep 30",
+            timeout_seconds=60,
+            artifact_paths=[],
+        )
+
+    release.set()
+    first_job_id = await asyncio.wait_for(first_task, timeout=1)
+
+    assert open_calls == 1
+    with DBSession(app.state.database_engine) as db_session:
+        jobs = TerminalRepository(db_session).list_terminal_jobs(
+            session_id=session_id,
+            terminal_session_id=terminal_id,
+        )
+        assert len(jobs) == 1
+        assert jobs[0].id == first_job_id
+
+    await service.shutdown()

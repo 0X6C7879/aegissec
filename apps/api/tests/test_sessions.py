@@ -640,6 +640,51 @@ def test_session_terminal_execute_detach_rejects_second_running_job(
     assert len(jobs_payload) == 1
 
 
+def test_session_terminal_execute_detach_allows_running_interactive_shell(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Interactive Plus Detached"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Interactive Plus Detached Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=120&rows=40"
+    with client.websocket_connect(stream_path) as websocket:
+        ready_frame = websocket.receive_json()
+        assert ready_frame["type"] == "ready"
+
+        execute_response = client.post(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+            json={"command": "printf 'bg'", "detach": True, "timeout_seconds": 30},
+        )
+        assert execute_response.status_code == 200
+        detached_job_id = api_data(execute_response)["job_id"]
+        assert detached_job_id is not None
+
+        deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+        jobs_payload: list[dict[str, object]] = []
+        while time.time() < deadline:
+            jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+            assert jobs_response.status_code == 200
+            jobs_payload = api_data(jobs_response)
+            if len(jobs_payload) >= 2 and any(
+                job["id"] == detached_job_id and job["status"] == "completed"
+                for job in jobs_payload
+            ):
+                break
+            time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+        assert len(jobs_payload) >= 2
+        assert any(job["id"] == detached_job_id for job in jobs_payload)
+
+        websocket.send_json({"type": "close"})
+        assert websocket.receive_json()["type"] == "exit"
+        assert websocket.receive_json()["type"] == "closed"
+
+
 def test_session_terminal_stop_endpoint_cancels_live_detached_job(
     client: TestClient,
     monkeypatch: MonkeyPatch,

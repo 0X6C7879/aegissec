@@ -235,6 +235,30 @@ class TerminalRepository:
         )
         return self.db_session.exec(statement).first()
 
+    def get_running_detached_terminal_job(
+        self,
+        *,
+        session_id: str,
+        terminal_session_id: str,
+    ) -> RuntimeTerminalJob | None:
+        statement = (
+            select(RuntimeTerminalJob)
+            .where(
+                RuntimeTerminalJob.session_id == session_id,
+                RuntimeTerminalJob.terminal_session_id == terminal_session_id,
+                RuntimeTerminalJob.status == RuntimeTerminalJobStatus.RUNNING,
+            )
+            .order_by(
+                col(RuntimeTerminalJob.created_at).desc(),
+                col(RuntimeTerminalJob.id).desc(),
+            )
+        )
+        running_jobs = self.db_session.exec(statement).all()
+        for job in running_jobs:
+            if job.metadata_json.get("detach") is True:
+                return job
+        return None
+
     def finalize_terminal_job(
         self,
         terminal_job: RuntimeTerminalJob,

@@ -239,6 +239,7 @@ class SessionShellService:
         terminal_id: str,
         command: str,
         metadata: object | None = None,
+        detached_conflict_only: bool = False,
     ) -> TerminalJobMutationResult:
         existing_terminal = self._terminal_repository.get_terminal_session(
             session_id=session.id,
@@ -247,9 +248,16 @@ class SessionShellService:
         if existing_terminal is None:
             raise ValueError("Terminal session not found.")
 
-        running_job = self._terminal_repository.get_running_terminal_job(
-            session_id=session.id,
-            terminal_session_id=terminal_id,
+        running_job = (
+            self._terminal_repository.get_running_detached_terminal_job(
+                session_id=session.id,
+                terminal_session_id=terminal_id,
+            )
+            if detached_conflict_only
+            else self._terminal_repository.get_running_terminal_job(
+                session_id=session.id,
+                terminal_session_id=terminal_id,
+            )
         )
         if running_job is not None:
             return TerminalJobMutationResult(job=to_terminal_job_read(running_job), changed=False)

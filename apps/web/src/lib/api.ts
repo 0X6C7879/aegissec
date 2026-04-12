@@ -35,7 +35,23 @@ import type { ModelApiSettings, ModelApiSettingsUpdate } from "../types/settings
 import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import type { SkillContent, SkillContext, SkillRecord } from "../types/skills";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000").replace(
+function resolveDefaultApiBaseUrl(): string {
+  if (typeof window === "undefined") {
+    return "http://0.0.0.0:8000";
+  }
+
+  const { protocol, hostname } = window.location;
+  const normalizedHostname = hostname.trim();
+  const resolvedHostname =
+    normalizedHostname.length === 0 || normalizedHostname === "localhost"
+      ? "127.0.0.1"
+      : normalizedHostname;
+  const resolvedProtocol = protocol === "https:" ? "https:" : "http:";
+
+  return `${resolvedProtocol}//${resolvedHostname}:8000`;
+}
+
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? resolveDefaultApiBaseUrl()).replace(
   /\/$/,
   "",
 );
