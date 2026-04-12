@@ -41,7 +41,11 @@ HTTP_ERROR_BODY_PREVIEW_LIMIT = 1500
 
 
 def strip_tool_protocol_markup(content: str) -> str:
-    return content
+    cleaned_content = TOOL_CALL_BLOCK_PATTERN.sub("", content)
+    cleaned_content = INVOKE_BLOCK_PATTERN.sub("", cleaned_content)
+    cleaned_content = TOOL_CALL_TAG_PATTERN.sub("", cleaned_content)
+    cleaned_content = INVOKE_TAG_PATTERN.sub("", cleaned_content)
+    return cleaned_content
 
 
 def strip_think_blocks(content: str) -> str:
@@ -56,9 +60,10 @@ def sanitize_assistant_content(
     strip_thinking: bool = False,
     fallback_text: str = "",
 ) -> str:
-    cleaned_content = content
+    cleaned_content = strip_tool_protocol_markup(content)
     if strip_thinking:
         cleaned_content = THINK_BLOCK_PATTERN.sub("", cleaned_content)
+    cleaned_content = cleaned_content.strip()
     if cleaned_content:
         return cleaned_content
     return fallback_text

@@ -102,6 +102,7 @@ terminal_runtime = import_module("app.services.terminal_runtime")
 TerminalAlreadyAttachedError = terminal_runtime.TerminalAlreadyAttachedError
 TerminalBackendUnavailableError = terminal_runtime.TerminalBackendUnavailableError
 TerminalClosedError = terminal_runtime.TerminalClosedError
+TerminalJobAlreadyRunningError = terminal_runtime.TerminalJobAlreadyRunningError
 TerminalNotFoundError = terminal_runtime.TerminalNotFoundError
 TerminalNotAttachedError = terminal_runtime.TerminalNotAttachedError
 TerminalRuntimeError = terminal_runtime.TerminalRuntimeError
@@ -1607,6 +1608,8 @@ async def execute_session_terminal(
             ) from exc
         if isinstance(exc, TerminalClosedError | TerminalNotAttachedError):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        if isinstance(exc, TerminalJobAlreadyRunningError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     response = TerminalExecuteResponse(
         terminal_id=terminal_id,
@@ -1845,13 +1848,12 @@ async def tail_session_terminal_job(
         lines=lines,
     )
     if live_tail is None:
-        metadata = dict(job.metadata_payload)
-        persisted_tail = metadata.get(f"{stream}_tail")
-        if isinstance(persisted_tail, str) and persisted_tail:
-            persisted_lines = persisted_tail.splitlines()
-            live_tail = "\n".join(persisted_lines[-lines:])
-        else:
-            live_tail = ""
+        live_tail = service.get_persisted_terminal_job_tail(
+            session_id=session_id,
+            job_id=job_id,
+            stream=stream,
+            lines=lines,
+        )
     tail = service.build_terminal_job_tail(job=job, stream=stream, lines=lines, content=live_tail)
     return ok_response(tail.model_dump(mode="json", by_alias=True))
 
@@ -1878,7 +1880,14 @@ async def stop_session_terminal_job(
     terminal_runtime_service = build_terminal_runtime_service(
         app=request.app, event_broker=event_broker
     )
-    await terminal_runtime_service.stop_background_job(session_id=session_id, job_id=job_id)
+    stopped = await terminal_runtime_service.stop_background_job(
+        session_id=session_id, job_id=job_id
+    )
+    if not stopped:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Terminal job is not currently live",
+        )
     refreshed_job = service.get_terminal_job(session_id=session_id, job_id=job_id)
     if refreshed_job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")

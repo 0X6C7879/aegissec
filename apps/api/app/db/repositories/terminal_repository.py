@@ -290,6 +290,7 @@ class TerminalRepository:
         *,
         session_id: str,
         job_ids: set[str],
+        commit: bool = True,
     ) -> int:
         if not job_ids:
             return 0
@@ -298,5 +299,6 @@ class TerminalRepository:
         )
         statement = statement.where(col(RuntimeTerminalJob.id).in_(job_ids))
         result = self.db_session.exec(statement)
-        self.db_session.commit()
+        if commit:
+            self.db_session.commit()
         return int(result.rowcount or 0)

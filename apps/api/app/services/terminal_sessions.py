@@ -212,6 +212,26 @@ class SessionShellService:
             return None
         return to_terminal_job_read(terminal_job)
 
+    def get_persisted_terminal_job_tail(
+        self,
+        *,
+        session_id: str,
+        job_id: str,
+        stream: str,
+        lines: int,
+    ) -> str:
+        terminal_job = self._terminal_repository.get_terminal_job(
+            terminal_job_id=job_id,
+            session_id=session_id,
+        )
+        if terminal_job is None:
+            return ""
+        persisted_tail = terminal_job.metadata_json.get(f"{stream}_tail")
+        if not isinstance(persisted_tail, str) or not persisted_tail:
+            return ""
+        persisted_lines = persisted_tail.splitlines()
+        return "\n".join(persisted_lines[-lines:])
+
     def start_terminal_job(
         self,
         *,
@@ -362,26 +382,34 @@ class SessionShellService:
         if limit is not None:
             deletable_ids = deletable_ids[:limit]
 
-        deleted = self._terminal_repository.delete_terminal_jobs(
-            session_id=session.id,
-            job_ids=set(deletable_ids),
-        )
-        kept = len(finished_jobs) - deleted
-        self._run_log_repository.create_log(
-            session_id=session.id,
-            project_id=session.project_id,
-            run_id=None,
-            level="info",
-            source=TERMINAL_RUN_LOG_SOURCE,
-            event_type=TERMINAL_JOB_CLEANUP_EVENT_TYPE,
-            message="Cleaned finished terminal jobs.",
-            payload={
-                "deleted_jobs": deleted,
-                "kept_jobs": kept,
-                "active_job_ids": sorted(active_job_ids),
-                "limit": limit,
-            },
-        )
+        db_session = self._terminal_repository.db_session
+        try:
+            deleted = self._terminal_repository.delete_terminal_jobs(
+                session_id=session.id,
+                job_ids=set(deletable_ids),
+                commit=False,
+            )
+            kept = len(finished_jobs) - deleted
+            self._run_log_repository.create_log(
+                session_id=session.id,
+                project_id=session.project_id,
+                run_id=None,
+                level="info",
+                source=TERMINAL_RUN_LOG_SOURCE,
+                event_type=TERMINAL_JOB_CLEANUP_EVENT_TYPE,
+                message="Cleaned finished terminal jobs.",
+                payload={
+                    "deleted_jobs": deleted,
+                    "kept_jobs": kept,
+                    "active_job_ids": sorted(active_job_ids),
+                    "limit": limit,
+                },
+                commit=False,
+            )
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            raise
         return TerminalJobsCleanupResult(deleted_jobs=deleted, kept_jobs=kept)
 
 

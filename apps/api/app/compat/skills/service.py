@@ -227,25 +227,8 @@ class SkillService:
         available_tools: list[str] | None = None,
         invocation_arguments: dict[str, object] | None = None,
     ) -> list[SkillAgentSummaryRead]:
-        payload = self.build_skill_context_payload(
-            touched_paths=touched_paths,
-            workspace_path=workspace_path,
-            session_id=session_id,
-            top_k=top_k,
-            user_goal=user_goal,
-            current_prompt=current_prompt,
-            scenario_type=scenario_type,
-            agent_role=agent_role,
-            workflow_stage=workflow_stage,
-            available_tools=available_tools,
-            invocation_arguments=invocation_arguments,
-        )
-        summaries: list[SkillAgentSummaryRead] = []
-        skill_items = (
-            payload.get("prepared_selected_skills") or payload.get("selected_skills") or []
-        )
-        if not skill_items:
-            skill_items = self.list_ranked_skill_candidates(
+        try:
+            payload = self.build_skill_context_payload(
                 touched_paths=touched_paths,
                 workspace_path=workspace_path,
                 session_id=session_id,
@@ -258,6 +241,29 @@ class SkillService:
                 available_tools=available_tools,
                 invocation_arguments=invocation_arguments,
             )
+        except SkillServiceError:
+            payload = {}
+        summaries: list[SkillAgentSummaryRead] = []
+        skill_items = (
+            payload.get("prepared_selected_skills") or payload.get("selected_skills") or []
+        )
+        if not skill_items:
+            try:
+                skill_items = self.list_ranked_skill_candidates(
+                    touched_paths=touched_paths,
+                    workspace_path=workspace_path,
+                    session_id=session_id,
+                    top_k=top_k,
+                    user_goal=user_goal,
+                    current_prompt=current_prompt,
+                    scenario_type=scenario_type,
+                    agent_role=agent_role,
+                    workflow_stage=workflow_stage,
+                    available_tools=available_tools,
+                    invocation_arguments=invocation_arguments,
+                )
+            except SkillServiceError:
+                skill_items = []
         if isinstance(skill_items, list):
             for item in skill_items:
                 if isinstance(item, dict):

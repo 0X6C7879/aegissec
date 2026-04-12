@@ -139,18 +139,23 @@ def synchronize_registry_entries(
     )
 
     existing_by_path = index_registry_by_path(entries)
+    existing_by_skill_id = index_registry_by_skill_id(entries)
+    consumed_skill_ids: set[str] = set()
     synchronized: list[SkillRegistryEntry] = []
     for skill in sorted(skills, key=lambda item: item.relative_path.casefold()):
+        skill_id = stable_governance_skill_id(skill.relative_path)
         token_summary = build_skill_token_summary(skill)
         existing_entry = existing_by_path.get(skill.relative_path.casefold())
         if existing_entry is None:
+            existing_entry = existing_by_skill_id.get(skill_id)
+        if existing_entry is None:
             inferred_family = _infer_registry_family(
-                skill_id=stable_governance_skill_id(skill.relative_path),
+                skill_id=skill_id,
                 discovered_family=skill.family,
             )
             synchronized.append(
                 SkillRegistryEntry(
-                    skill_id=stable_governance_skill_id(skill.relative_path),
+                    skill_id=skill_id,
                     path=skill.relative_path,
                     family=inferred_family,
                     owner=default_owner,
@@ -162,6 +167,7 @@ def synchronize_registry_entries(
                 )
             )
             continue
+        consumed_skill_ids.add(existing_entry.skill_id)
         synchronized.append(
             replace(
                 existing_entry,
@@ -176,6 +182,12 @@ def synchronize_registry_entries(
                 reference_tokens=token_summary["reference_tokens"],
             )
         )
+
+    for entry in entries:
+        if entry.skill_id in consumed_skill_ids:
+            continue
+        synchronized.append(entry)
+
     return _populate_neighbor_defaults(synchronized)
 
 

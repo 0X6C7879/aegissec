@@ -57,6 +57,10 @@ class TerminalNotAttachedError(TerminalRuntimeError):
     pass
 
 
+class TerminalJobAlreadyRunningError(TerminalRuntimeError):
+    pass
+
+
 TERMINAL_CLIENT_FRAME_MAX_BYTES = 16 * 1024
 TERMINAL_CLIENT_QUEUE_MAXSIZE = 256
 TERMINAL_BACKEND_EVENT_QUEUE_MAXSIZE = 256
@@ -913,6 +917,8 @@ class TerminalRuntimeService:
                     "stderr_tail": "",
                 },
             )
+            if not job_result.changed:
+                raise TerminalJobAlreadyRunningError("Terminal already has a running detached job")
             job_id = job_result.job.id
             shell = terminal.shell
             cwd = terminal.cwd

@@ -193,9 +193,7 @@ class Project(ProjectBase, table=True):
 
 
 class ProjectSettings(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "project_settings"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "project_settings"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     project_id: str = Field(foreign_key="project.id", index=True, unique=True)
@@ -255,9 +253,7 @@ class Session(SessionBase, table=True):
 
 
 class ConversationBranch(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "conversation_branch"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "conversation_branch"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -304,9 +300,7 @@ class Message(SQLModel, table=True):
 
 
 class ChatGeneration(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "chat_generation"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "chat_generation"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -338,9 +332,7 @@ class ChatGeneration(SQLModel, table=True):
 
 
 class GenerationStep(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "generation_step"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "generation_step"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     generation_id: str = Field(foreign_key="chat_generation.id", index=True)
@@ -368,9 +360,7 @@ class GenerationStep(SQLModel, table=True):
 
 
 class SessionEventLog(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "session_event_log"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "session_event_log"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     cursor: int | None = Field(default=None, primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -383,9 +373,7 @@ class SessionEventLog(SQLModel, table=True):
 
 
 class RuntimeExecutionRun(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "runtime_execution_run"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "runtime_execution_run"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str | None = Field(default=None, foreign_key="session.id", index=True)
@@ -402,9 +390,7 @@ class RuntimeExecutionRun(SQLModel, table=True):
 
 
 class RuntimeTerminalSession(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "runtime_terminal_sessions"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "runtime_terminal_sessions"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -426,9 +412,7 @@ class RuntimeTerminalSession(SQLModel, table=True):
 
 
 class RuntimeTerminalJob(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "runtime_terminal_jobs"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "runtime_terminal_jobs"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     terminal_session_id: str = Field(foreign_key="runtime_terminal_sessions.id", index=True)
@@ -451,9 +435,7 @@ class RuntimeTerminalJob(SQLModel, table=True):
 
 
 class RuntimeArtifact(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "runtime_artifact"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "runtime_artifact"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     run_id: str = Field(foreign_key="runtime_execution_run.id", index=True)
@@ -482,9 +464,7 @@ class RunLog(SQLModel, table=True):
 
 
 class SkillRecord(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "skill_record"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "skill_record"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(primary_key=True)
     source: CompatibilitySource = Field(nullable=False, index=True)
@@ -518,9 +498,7 @@ class SkillRecord(SQLModel, table=True):
 
 
 class MCPServer(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "mcp_server"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "mcp_server"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(primary_key=True)
     name: str = Field(nullable=False, index=True)
@@ -552,9 +530,7 @@ class MCPServer(SQLModel, table=True):
 
 
 class MCPCapability(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "mcp_capability"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "mcp_capability"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(primary_key=True)
     server_id: str = Field(foreign_key="mcp_server.id", index=True)
@@ -578,9 +554,7 @@ class MCPCapability(SQLModel, table=True):
 
 
 class WorkflowRun(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "workflow_run"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "workflow_run"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -607,9 +581,7 @@ class WorkflowRun(SQLModel, table=True):
 
 
 class TaskNode(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "task_node"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "task_node"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     workflow_run_id: str = Field(foreign_key="workflow_run.id", index=True)
@@ -626,9 +598,7 @@ class TaskNode(SQLModel, table=True):
 
 
 class GraphNode(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "graph_node"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "graph_node"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -645,9 +615,7 @@ class GraphNode(SQLModel, table=True):
 
 
 class GraphEdge(SQLModel, table=True):
-    __tablename__: ClassVar[str] = (
-        "graph_edge"  # pyright: ignore[reportIncompatibleVariableOverride]
-    )
+    __tablename__: ClassVar[str] = "graph_edge"  # pyright: ignore[reportIncompatibleVariableOverride]
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="session.id", index=True)
@@ -1048,6 +1016,9 @@ TERMINAL_METADATA_MAX_DEPTH = 4
 TERMINAL_METADATA_MAX_ITEMS = 32
 TERMINAL_ALLOWED_SHELLS = frozenset({"/bin/zsh", "/bin/bash", "/bin/sh"})
 TERMINAL_ALLOWED_CWD_PREFIX = "/workspace"
+TERMINAL_JOB_PRIVATE_METADATA_KEYS = frozenset(
+    {"stdout_tail", "stderr_tail", "artifact_paths", "run_id"}
+)
 
 
 def _contains_control_characters(value: str) -> bool:
@@ -1091,6 +1062,14 @@ def _normalize_terminal_metadata_value(value: object, *, depth: int = 0) -> obje
     raise ValueError(
         "Terminal metadata values must be JSON-serializable primitives, lists, or objects."
     )
+
+
+def sanitize_terminal_job_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in TERMINAL_JOB_PRIVATE_METADATA_KEYS
+    }
 
 
 class TerminalSessionCreateRequest(SQLModel):
@@ -1937,7 +1916,7 @@ def to_terminal_job_read(terminal_job: RuntimeTerminalJob) -> TerminalJobRead:
             "exit_code": terminal_job.exit_code,
             "started_at": terminal_job.started_at,
             "ended_at": terminal_job.ended_at,
-            "metadata": dict(terminal_job.metadata_json),
+            "metadata": sanitize_terminal_job_metadata(dict(terminal_job.metadata_json)),
             "created_at": terminal_job.created_at,
             "updated_at": terminal_job.updated_at,
         }

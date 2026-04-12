@@ -7,7 +7,7 @@ from hashlib import blake2b
 from typing import Any, cast
 
 from app.compat.mcp.service import MCPService
-from app.compat.skills.service import SkillService
+from app.compat.skills.service import SkillService, SkillServiceError
 from app.db.models import (
     MCPCapabilityKind,
     MCPServerRead,
@@ -289,16 +289,54 @@ class CapabilityFacade:
         agent_role: str | None = None,
         workflow_stage: str | None = None,
     ) -> dict[str, object]:
-        payload = self._skill_service.build_skill_context_payload(
-            touched_paths=touched_paths,
-            workspace_path=workspace_path,
-            session_id=session_id,
-            user_goal=user_goal,
-            current_prompt=current_prompt,
-            scenario_type=scenario_type,
-            agent_role=agent_role,
-            workflow_stage=workflow_stage,
-        )
+        try:
+            payload = self._skill_service.build_skill_context_payload(
+                touched_paths=touched_paths,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                user_goal=user_goal,
+                current_prompt=current_prompt,
+                scenario_type=scenario_type,
+                agent_role=agent_role,
+                workflow_stage=workflow_stage,
+            )
+        except SkillServiceError as exc:
+            try:
+                fallback_skills = self._skill_service.list_ranked_skill_candidates(
+                    touched_paths=touched_paths,
+                    workspace_path=workspace_path,
+                    session_id=session_id,
+                    user_goal=user_goal,
+                    current_prompt=current_prompt,
+                    scenario_type=scenario_type,
+                    agent_role=agent_role,
+                    workflow_stage=workflow_stage,
+                    include_reference_only=True,
+                )
+            except SkillServiceError:
+                fallback_skills = []
+
+            payload = {
+                "skills": fallback_skills,
+                "selected_skills": fallback_skills,
+                "prepared_selected_skills": fallback_skills,
+                "primary_skill": None,
+                "selected_skill": None,
+                "selected_skill_id": None,
+                "selected_skill_ids": [],
+                "supporting_skills": [],
+                "reference_skills": [],
+                "rejected_skills": [],
+                "skill_budget": {},
+                "skill_set_plan": {},
+                "skill_runtime_usage": [],
+                "suppressed_skills": [],
+                "suppression_reasons": {},
+                "prepared_supporting_skills": [],
+                "prepared_primary_skill": None,
+                "prepared_context_prompt": "",
+                "degraded_reason": str(exc),
+            }
         skills = payload.get("prepared_selected_skills") or payload.get("skills")
         self._log_capability_event(
             event_type="capability.skills.context",

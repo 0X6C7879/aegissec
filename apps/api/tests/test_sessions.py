@@ -57,6 +57,7 @@ from app.services.chat_runtime import (
     get_chat_runtime,
 )
 from app.services.session_generation import get_generation_manager, recover_abandoned_generations
+from app.services.terminal_sessions import SessionShellService
 from tests.utils import api_data
 
 terminal_runtime = importlib.import_module("app.services.terminal_runtime")
@@ -542,6 +543,12 @@ def test_session_terminal_execute_detach_tail_and_cleanup_are_session_scoped(
         time.sleep(TEST_POLL_INTERVAL_SECONDS)
     assert completed_job is not None
     assert completed_job["status"] == "completed"
+    metadata = cast(dict[str, object], completed_job["metadata"])
+    assert metadata["detach"] is True
+    assert "stdout_tail" not in metadata
+    assert "stderr_tail" not in metadata
+    assert "artifact_paths" not in metadata
+    assert "run_id" not in metadata
 
     tail_response = client.get(
         f"/api/sessions/{session_id}/terminal-jobs/{job_id}/tail",
@@ -568,6 +575,69 @@ def test_session_terminal_execute_detach_tail_and_cleanup_are_session_scoped(
 
     deleted_job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
     assert deleted_job_response.status_code == 404
+
+
+def test_session_terminal_execute_detach_rejects_second_running_job(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Detached Conflict"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Detached Conflict Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+    backend = app.state.terminal_backend
+    original_open_terminal = backend.open_terminal
+
+    class HangingTerminalProcess:
+        def __init__(self) -> None:
+            self.events: asyncio.Queue[object] = asyncio.Queue()
+
+        async def send_input(self, data: bytes) -> None:
+            del data
+
+        async def resize(self, cols: int, rows: int) -> None:
+            del cols, rows
+
+        async def send_signal(self, signal_name: str) -> None:
+            del signal_name
+
+        async def send_eof(self) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=0, reason="eof")
+            )
+
+        async def close(self, *, reason: str) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=None, reason=reason)
+            )
+
+    async def open_terminal_for_conflict(**kwargs: object) -> object:
+        terminal_key = kwargs.get("terminal_id")
+        if isinstance(terminal_key, str) and ":job:" in terminal_key:
+            return HangingTerminalProcess()
+        return await original_open_terminal(**kwargs)
+
+    monkeypatch.setattr(backend, "open_terminal", open_terminal_for_conflict)
+
+    first_execute = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={"command": "sleep 60", "detach": True, "timeout_seconds": 60},
+    )
+    assert first_execute.status_code == 200
+
+    second_execute = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={"command": "sleep 30", "detach": True, "timeout_seconds": 60},
+    )
+    assert second_execute.status_code == 409
+    assert second_execute.json()["detail"] == "Terminal already has a running detached job"
+
+    jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    jobs_payload = api_data(jobs_response)
+    assert len(jobs_payload) == 1
 
 
 def test_session_terminal_stop_endpoint_cancels_live_detached_job(
@@ -642,6 +712,90 @@ def test_session_terminal_stop_endpoint_cancels_live_detached_job(
         time.sleep(TEST_POLL_INTERVAL_SECONDS)
     assert stopped_job is not None
     assert stopped_job["status"] == "cancelled"
+
+
+def test_session_terminal_stop_endpoint_rejects_non_live_job(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Detached Stop Non Live"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Detached Stop Non Live Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    execute_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={"command": "printf 'done'", "detach": True, "timeout_seconds": 30},
+    )
+    assert execute_response.status_code == 200
+    job_id = api_data(execute_response)["job_id"]
+    assert job_id is not None
+
+    deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+        assert job_response.status_code == 200
+        if api_data(job_response)["status"] == "completed":
+            break
+        time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+    stop_response = client.post(f"/api/sessions/{session_id}/terminal-jobs/{job_id}/stop")
+    assert stop_response.status_code == 409
+    assert stop_response.json()["detail"] == "Terminal job is not currently live"
+
+
+def test_cleanup_finished_jobs_rolls_back_when_run_log_write_fails(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Cleanup Atomicity"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Cleanup Atomicity Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        session_repository = SessionRepository(db_session)
+        session = session_repository.get_session(session_id)
+        assert session is not None
+        terminal_repository = TerminalRepository(db_session)
+        shell_service = SessionShellService(terminal_repository, RunLogRepository(db_session))
+        job_result = shell_service.start_terminal_job(
+            session=session,
+            terminal_id=terminal_id,
+            command="printf 'cleanup'",
+            metadata={"detach": True},
+        )
+        shell_service.finish_terminal_job(
+            session=session,
+            job_id=job_result.job.id,
+            status=RuntimeTerminalJobStatus.COMPLETED,
+            exit_code=0,
+            metadata_updates={"stdout_tail": "cleanup"},
+        )
+
+    def fail_create_log(self: RunLogRepository, **kwargs: object) -> None:
+        del self, kwargs
+        raise RuntimeError("forced cleanup log failure")
+
+    monkeypatch.setattr(RunLogRepository, "create_log", fail_create_log)
+
+    with DBSession(app.state.database_engine) as db_session:
+        session_repository = SessionRepository(db_session)
+        session = session_repository.get_session(session_id)
+        assert session is not None
+        shell_service = SessionShellService(
+            TerminalRepository(db_session), RunLogRepository(db_session)
+        )
+        with pytest.raises(RuntimeError, match="forced cleanup log failure"):
+            shell_service.cleanup_finished_jobs(session=session, active_job_ids=set())
+
+    remaining_job = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    assert remaining_job.status_code == 200
+    remaining_payload = api_data(remaining_job)
+    assert len(remaining_payload) == 1
 
 
 def test_session_terminal_stream_rejects_second_active_attach(client: TestClient) -> None:

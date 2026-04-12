@@ -82,7 +82,47 @@ def pop_hidden_stream_tag(hidden_stack: list[str], tag_name: str) -> None:
 
 
 def project_visible_stream_content(content: str) -> str:
-    return content
+    if not content:
+        return ""
+
+    visible_chunks: list[str] = []
+    hidden_stack: list[str] = []
+    cursor = 0
+    content_length = len(content)
+
+    while cursor < content_length:
+        tag_start = content.find("<", cursor)
+        if tag_start < 0:
+            if not hidden_stack:
+                visible_chunks.append(content[cursor:])
+            break
+
+        if not hidden_stack and tag_start > cursor:
+            visible_chunks.append(content[cursor:tag_start])
+
+        tag_end = content.find(">", tag_start + 1)
+        if tag_end < 0:
+            trailing_fragment = content[tag_start:]
+            hidden_match = match_hidden_stream_tag(trailing_fragment)
+            if hidden_match is None and not hidden_stack:
+                visible_chunks.append(trailing_fragment)
+            break
+
+        tag_fragment = content[tag_start : tag_end + 1]
+        hidden_match = match_hidden_stream_tag(tag_fragment)
+        if hidden_match is None:
+            if not hidden_stack:
+                visible_chunks.append(tag_fragment)
+        else:
+            tag_name, is_closing, _is_complete, is_self_closing = hidden_match
+            if is_closing:
+                pop_hidden_stream_tag(hidden_stack, tag_name)
+            elif not is_self_closing:
+                hidden_stack.append(tag_name)
+
+        cursor = tag_end + 1
+
+    return "".join(visible_chunks)
 
 
 def message_transcript_segments(
