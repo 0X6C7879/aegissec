@@ -6,10 +6,13 @@ from typing import Any
 
 harness_messages = importlib.import_module("app.harness.messages")
 QueryLoop = importlib.import_module("app.harness.query_loop").QueryLoop
+tool_scheduling = importlib.import_module("app.harness.tool_scheduling")
 ProviderTurnResult = harness_messages.ProviderTurnResult
 QueryUsage = harness_messages.QueryUsage
 ToolCallRequest = harness_messages.ToolCallRequest
 ToolCallResult = harness_messages.ToolCallResult
+MutatingTargetClass = importlib.import_module("app.harness.tools.base").MutatingTargetClass
+ToolRiskLevel = importlib.import_module("app.harness.tools.base").ToolRiskLevel
 
 
 class _FakeEngine:
@@ -96,6 +99,40 @@ class _BatchExecutor:
         ]
 
 
+class _FakeDecision:
+    allowed = True
+
+
+class _FakeTool:
+    def __init__(
+        self,
+        *,
+        name: str,
+        read_only: bool = False,
+        risk_level: Any = ToolRiskLevel.LOW,
+        mutating_target_class: Any = MutatingTargetClass.NONE,
+    ) -> None:
+        self.name = name
+        self._read_only = read_only
+        self._risk_level = risk_level
+        self._mutating_target_class = mutating_target_class
+
+    def is_read_only(self) -> bool:
+        return self._read_only
+
+    def risk_level(self) -> Any:
+        return self._risk_level
+
+    def mutating_target_class(self) -> Any:
+        return self._mutating_target_class
+
+
+class _FakePrepared:
+    def __init__(self, tool: _FakeTool) -> None:
+        self.tool = tool
+        self.decision = _FakeDecision()
+
+
 def test_query_loop_uses_batch_executor_for_tool_rounds() -> None:
     engine = _FakeEngine()
     executor = _BatchExecutor()
@@ -110,3 +147,73 @@ def test_query_loop_uses_batch_executor_for_tool_rounds() -> None:
     assert engine.usage.model_turns == 2
     assert engine.usage.tool_rounds == 1
     assert engine.usage.tool_calls == 2
+
+
+def test_build_tool_schedule_serializes_same_terminal_and_groups_distinct_terminals() -> None:
+    detached_tool = _FakeTool(
+        name="execute_terminal_command",
+        risk_level=ToolRiskLevel.HIGH,
+        mutating_target_class=MutatingTargetClass.RUNTIME,
+    )
+    tool_requests = [
+        ToolCallRequest(
+            tool_call_id="tool-1",
+            tool_name="execute_terminal_command",
+            arguments={"terminal_id": "term-a", "command": "pwd", "detach": True},
+        ),
+        ToolCallRequest(
+            tool_call_id="tool-2",
+            tool_name="execute_terminal_command",
+            arguments={"terminal_id": "term-a", "command": "whoami", "detach": True},
+        ),
+        ToolCallRequest(
+            tool_call_id="tool-3",
+            tool_name="execute_terminal_command",
+            arguments={"terminal_id": "term-b", "command": "id", "detach": True},
+        ),
+    ]
+
+    phases = tool_scheduling.build_tool_schedule(
+        tool_requests,
+        [_FakePrepared(detached_tool) for _ in tool_requests],
+    )
+
+    assert len(phases) == 1
+    assert phases[0].lane == "terminal_detached_parallel"
+    grouped_ids = [
+        [item.tool_request.tool_call_id for item in group]
+        for group in tool_scheduling.build_parallel_groups(phases[0])
+    ]
+    assert grouped_ids == [["tool-1", "tool-2"], ["tool-3"]]
+
+
+def test_build_tool_schedule_keeps_attached_terminal_and_legacy_runtime_serial() -> None:
+    attached_terminal_tool = _FakeTool(
+        name="execute_terminal_command",
+        risk_level=ToolRiskLevel.HIGH,
+        mutating_target_class=MutatingTargetClass.RUNTIME,
+    )
+    legacy_runtime_tool = _FakeTool(
+        name="execute_kali_command",
+        risk_level=ToolRiskLevel.HIGH,
+        mutating_target_class=MutatingTargetClass.RUNTIME,
+    )
+    tool_requests = [
+        ToolCallRequest(
+            tool_call_id="tool-1",
+            tool_name="execute_terminal_command",
+            arguments={"terminal_id": "term-a", "command": "pwd", "detach": False},
+        ),
+        ToolCallRequest(
+            tool_call_id="tool-2",
+            tool_name="execute_kali_command",
+            arguments={"command": "pwd"},
+        ),
+    ]
+
+    phases = tool_scheduling.build_tool_schedule(
+        tool_requests,
+        [_FakePrepared(attached_terminal_tool), _FakePrepared(legacy_runtime_tool)],
+    )
+
+    assert [phase.lane for phase in phases] == ["serial_high_risk", "serial_high_risk"]

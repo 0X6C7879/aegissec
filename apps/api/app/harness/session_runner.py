@@ -32,7 +32,7 @@ from app.db.models import (
     attachments_from_storage,
     utc_now,
 )
-from app.db.repositories import SessionRepository
+from app.db.repositories import RunLogRepository, SessionRepository, TerminalRepository
 from app.harness.continuations import clear_generation_continuation_state
 from app.services.capabilities import CapabilityFacade
 from app.services.chat_runtime import (
@@ -53,6 +53,7 @@ from app.services.session_generation import (
     GenerationCancelledError,
     SessionGenerationManager,
 )
+from app.services.terminal_sessions import SessionShellService
 
 from . import generation_events as harness_generation_events
 from . import semantic as harness_semantic
@@ -730,7 +731,9 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload if isinstance(skill_payload, dict) else None
+        else skill_payload
+        if isinstance(skill_payload, dict)
+        else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(
@@ -825,6 +828,8 @@ def build_tool_executor(
     session_state: Any | None = None,
     swarm_coordinator: Any | None = None,
 ) -> Any:
+    terminal_runtime_module = importlib.import_module("app.services.terminal_runtime")
+    app_module = importlib.import_module("app.main")
     executor_runtime = importlib.import_module("app.harness.executor").build_tool_runtime(
         skill_service=skill_service,
         session_id=session.id,
@@ -833,6 +838,14 @@ def build_tool_executor(
     )
     harness_executor = importlib.import_module("app.harness.executor")
     harness_tool_scheduling = importlib.import_module("app.harness.tool_scheduling")
+    terminal_session_service = SessionShellService(
+        TerminalRepository(repository.db_session),
+        RunLogRepository(repository.db_session),
+    )
+    terminal_runtime_service = terminal_runtime_module.build_terminal_runtime_service(
+        app=app_module.app,
+        event_broker=event_broker,
+    )
     lifecycle = ToolRuntimeLifecycleRunner(
         session=session,
         assistant_message=assistant_message,
@@ -851,6 +864,8 @@ def build_tool_executor(
             runtime_service=runtime_service,
             skill_service=skill_service,
             mcp_service=mcp_service,
+            terminal_session_service=terminal_session_service,
+            terminal_runtime_service=terminal_runtime_service,
             session_state=session_state,
             swarm_coordinator=swarm_coordinator,
         )
@@ -1021,6 +1036,8 @@ def build_tool_executor(
                 runtime_service=runtime_service,
                 skill_service=skill_service,
                 mcp_service=mcp_service,
+                terminal_session_service=terminal_session_service,
+                terminal_runtime_service=terminal_runtime_service,
                 session_state=session_state,
                 swarm_coordinator=swarm_coordinator,
             )
@@ -1030,16 +1047,29 @@ def build_tool_executor(
         results: list[ToolCallResult | None] = [None] * len(tool_requests)
 
         for phase in phases:
-            if phase.lane != "readonly_parallel" or len(phase.items) <= 1:
+            if phase.lane == "readonly_parallel" and len(phase.items) > 1:
+                for order, result in await lifecycle.execute_readonly_parallel_phase(
+                    phase=phase,
+                    runtime=executor_runtime,
+                    executor_module=harness_executor,
+                ):
+                    results[order] = result
+                continue
+            if phase.lane == "terminal_detached_parallel" and len(phase.items) > 1:
+                for order, result in await lifecycle.execute_constrained_parallel_phase(
+                    phase=phase,
+                    runtime=executor_runtime,
+                    executor_module=harness_executor,
+                    scheduling_module=harness_tool_scheduling,
+                ):
+                    results[order] = result
+                continue
+            if phase.lane != "readonly_parallel":
                 for scheduled in phase.items:
                     results[scheduled.order] = await execute_tool(scheduled.tool_request)
                 continue
-            for order, result in await lifecycle.execute_readonly_parallel_phase(
-                phase=phase,
-                runtime=executor_runtime,
-                executor_module=harness_executor,
-            ):
-                results[order] = result
+            for scheduled in phase.items:
+                results[scheduled.order] = await execute_tool(scheduled.tool_request)
 
         return [result for result in results if result is not None]
 

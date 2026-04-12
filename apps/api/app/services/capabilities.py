@@ -707,9 +707,11 @@ class CapabilityFacade:
                     "its invocation metadata, and use read_skill_content with the skill slug, "
                     "name, or id when you only need SKILL.md content. Callable tools always "
                     "include the fixed tools execute_kali_command, list_available_skills, "
-                    "execute_skill, and read_skill_content, plus any MCP tool aliases listed "
-                    "above in the format mcp__{server}__{tool}. MCP resources, prompts, and "
-                    "templates are visible for context but are not callable tools."
+                    "execute_skill, read_skill_content, create_terminal_session, "
+                    "list_terminal_sessions, execute_terminal_command, read_terminal_buffer, "
+                    "and stop_terminal_job, plus any MCP tool aliases listed above in the "
+                    "format mcp__{server}__{tool}. MCP resources, prompts, and templates are "
+                    "visible for context but are not callable tools."
                 ),
             ]
         )

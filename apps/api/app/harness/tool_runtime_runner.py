@@ -420,3 +420,74 @@ class ToolRuntimeLifecycleRunner:
             )
 
         return phase_results
+
+    async def execute_constrained_parallel_phase(
+        self,
+        *,
+        phase: Any,
+        runtime: Any,
+        executor_module: Any,
+        scheduling_module: Any,
+    ) -> list[tuple[int, ToolCallResult]]:
+        phase_results: list[tuple[int, ToolCallResult]] = []
+        for scheduled in phase.items:
+            scheduled.prepared = await executor_module.apply_pre_tool_hooks(
+                runtime=runtime,
+                prepared=scheduled.prepared,
+                tool_request=scheduled.tool_request,
+            )
+            await self.publish_tool_started(
+                scheduled.tool_request,
+                tool_call_metadata=scheduled.prepared.tool_call_metadata,
+                governance_metadata=scheduled.prepared.governance_metadata,
+                started_payload=scheduled.prepared.started_payload,
+                trace_entry=scheduled.prepared.trace_entry,
+            )
+
+        async def run_group(group: list[Any]) -> list[tuple[Any, Any]] | tuple[Any, Exception]:
+            group_results: list[tuple[Any, Any]] = []
+            for scheduled in group:
+                try:
+                    raw_result = await executor_module.run_tool_with_hooks(
+                        runtime=runtime,
+                        prepared=scheduled.prepared,
+                        tool_request=scheduled.tool_request,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return scheduled, exc
+                group_results.append((scheduled, raw_result))
+            return group_results
+
+        raw_group_results = await asyncio.gather(
+            *[run_group(group) for group in scheduling_module.build_parallel_groups(phase)]
+        )
+
+        for group_result in raw_group_results:
+            if isinstance(group_result, tuple):
+                scheduled, error = group_result
+                error_artifacts = await executor_module.notify_tool_execution_error(
+                    runtime=runtime,
+                    prepared=scheduled.prepared,
+                    tool_request=scheduled.tool_request,
+                    error=error,
+                )
+                await self.publish_tool_failed(
+                    scheduled.tool_request,
+                    started_payload=scheduled.prepared.started_payload,
+                    error_message=str(error),
+                    error_artifacts=error_artifacts,
+                )
+                raise ChatRuntimeError(str(error)) from error
+            for scheduled, raw_result in group_result:
+                phase_results.append(
+                    (
+                        scheduled.order,
+                        await self.persist_tool_success(
+                            scheduled.tool_request,
+                            tool_result=raw_result,
+                            started_payload=scheduled.prepared.started_payload,
+                        ),
+                    )
+                )
+
+        return phase_results

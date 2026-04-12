@@ -23,7 +23,7 @@ KALI_SKILL_TOOL_PROFILE="${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-lean}"
 KALI_INSTALL_GCP_TOOLS="${AEGISSEC_KALI_INSTALL_GCP_TOOLS:-0}"
 KALI_INSTALL_BROWSER_TOOLS="${AEGISSEC_KALI_INSTALL_BROWSER_TOOLS:-0}"
 KALI_INSTALL_AZURE_TOOLS="${AEGISSEC_KALI_INSTALL_AZURE_TOOLS:-0}"
-KALI_APT_MIRROR="${AEGISSEC_KALI_APT_MIRROR:-https://mirrors.ustc.edu.cn/kali}"
+KALI_APT_MIRROR="${AEGISSEC_KALI_APT_MIRROR:-http://mirrors.aliyun.com/kali}"
 KALI_APT_MIRROR="${KALI_APT_MIRROR%/}"
 KALI_MAX_IMAGE_SIZE_GB="${AEGISSEC_KALI_MAX_IMAGE_SIZE_GB:-20}"
 KALI_FORCE_REBUILD="${AEGISSEC_KALI_FORCE_REBUILD:-0}"
@@ -86,7 +86,7 @@ Environment overrides:
   AEGISSEC_KALI_INSTALL_GCP_TOOLS     Install Google Cloud CLI in image build (default: 0)
   AEGISSEC_KALI_INSTALL_BROWSER_TOOLS Install browser tooling (Google Chrome) in image build (default: 0)
   AEGISSEC_KALI_INSTALL_AZURE_TOOLS   Install Azure CLI in image build (default: 0)
-  AEGISSEC_KALI_APT_MIRROR            Kali apt mirror (default: https://mirrors.ustc.edu.cn/kali)
+  AEGISSEC_KALI_APT_MIRROR            Kali apt mirror (default: http://mirrors.aliyun.com/kali)
   AEGISSEC_KALI_MAX_IMAGE_SIZE_GB     Maximum allowed Kali image size in GiB (default: 20)
   AEGISSEC_KALI_FORCE_REBUILD         Always rebuild Kali image (default: 0)
 EOF

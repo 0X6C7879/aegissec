@@ -132,6 +132,8 @@ def prepare_tool_execution(
     runtime_service: Any,
     skill_service: Any,
     mcp_service: Any,
+    terminal_session_service: Any | None = None,
+    terminal_runtime_service: Any | None = None,
     session_state: Any | None = None,
     swarm_coordinator: Any | None = None,
 ) -> PreparedToolExecution:
@@ -144,6 +146,8 @@ def prepare_tool_execution(
         skill_service=skill_service,
         mcp_service=mcp_service,
         available_skills=runtime.available_skills,
+        terminal_session_service=terminal_session_service,
+        terminal_runtime_service=terminal_runtime_service,
         session_state=session_state,
         swarm_coordinator=swarm_coordinator,
     )
@@ -188,6 +192,27 @@ def prepare_tool_execution(
                 "artifact_paths": tool_request.arguments.get("artifact_paths", []),
             }
         )
+    elif tool_request.tool_name == "execute_terminal_command":
+        started_payload.update(
+            {
+                "terminal_id": tool_request.arguments.get("terminal_id"),
+                "command": tool_request.arguments.get("command"),
+                "detach": tool_request.arguments.get("detach", False),
+                "timeout_seconds": tool_request.arguments.get("timeout_seconds"),
+                "artifact_paths": tool_request.arguments.get("artifact_paths", []),
+            }
+        )
+    elif tool_request.tool_name == "read_terminal_buffer":
+        started_payload.update(
+            {
+                "terminal_id": tool_request.arguments.get("terminal_id"),
+                "job_id": tool_request.arguments.get("job_id"),
+                "stream": tool_request.arguments.get("stream", "stdout"),
+                "lines": tool_request.arguments.get("lines"),
+            }
+        )
+    elif tool_request.tool_name == "stop_terminal_job":
+        started_payload.update({"job_id": tool_request.arguments.get("job_id")})
     if tool_request.mcp_server_id is not None and tool_request.mcp_tool_name is not None:
         started_payload.update(
             {

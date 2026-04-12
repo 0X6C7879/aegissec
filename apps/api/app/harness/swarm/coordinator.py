@@ -449,6 +449,8 @@ class InProcessSwarmCoordinator:
                 runtime_service=self._runtime_service,
                 skill_service=self._skill_service,
                 mcp_service=self._mcp_service,
+                terminal_session_service=None,
+                terminal_runtime_service=None,
                 session_state=agent_session_state,
                 swarm_coordinator=None,
             )
@@ -492,6 +494,8 @@ class InProcessSwarmCoordinator:
                     runtime_service=self._runtime_service,
                     skill_service=self._skill_service,
                     mcp_service=self._mcp_service,
+                    terminal_session_service=None,
+                    terminal_runtime_service=None,
                     session_state=agent_session_state,
                     swarm_coordinator=None,
                 )
@@ -509,6 +513,26 @@ class InProcessSwarmCoordinator:
                     resolved = await asyncio.gather(*(run_parallel(item) for item in phase.items))
                     for order, result in resolved:
                         ordered_results[order] = result
+                    continue
+                if phase.lane == "terminal_detached_parallel" and len(phase.items) > 1:
+
+                    async def run_group(group: list[Any]) -> list[tuple[int, Any]]:
+                        group_results: list[tuple[int, Any]] = []
+                        for item in group:
+                            group_results.append(
+                                (item.order, await execute_tool(item.tool_request))
+                            )
+                        return group_results
+
+                    resolved_groups = await asyncio.gather(
+                        *(
+                            run_group(group)
+                            for group in scheduling_module.build_parallel_groups(phase)
+                        )
+                    )
+                    for group_results in resolved_groups:
+                        for order, result in group_results:
+                            ordered_results[order] = result
                     continue
                 for item in phase.items:
                     ordered_results[item.order] = await execute_tool(item.tool_request)

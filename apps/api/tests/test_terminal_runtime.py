@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session as DBSession
 
+import app.services.terminal_runtime as terminal_runtime
 from app.core.events import SessionEventBroker
 from app.db.models import RuntimeTerminalJobStatus
 from app.db.repositories import TerminalRepository
@@ -256,6 +257,29 @@ async def test_terminal_runtime_service_serializes_concurrent_detached_start_per
     open_calls = 0
     original_open_terminal = backend.open_terminal
 
+    class HangingTerminalProcess:
+        def __init__(self) -> None:
+            self.events: asyncio.Queue[object] = asyncio.Queue()
+
+        async def send_input(self, data: bytes) -> None:
+            del data
+
+        async def resize(self, cols: int, rows: int) -> None:
+            del cols, rows
+
+        async def send_signal(self, signal_name: str) -> None:
+            del signal_name
+
+        async def send_eof(self) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=0, reason="eof")
+            )
+
+        async def close(self, *, reason: str) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=None, reason=reason)
+            )
+
     async def delayed_open_terminal(**kwargs: object) -> object:
         nonlocal open_calls
         terminal_key = kwargs.get("terminal_id")
@@ -263,6 +287,7 @@ async def test_terminal_runtime_service_serializes_concurrent_detached_start_per
             open_calls += 1
             started.set()
             await release.wait()
+            return HangingTerminalProcess()
         return await original_open_terminal(**kwargs)
 
     monkeypatch.setattr(backend, "open_terminal", delayed_open_terminal)
@@ -278,17 +303,21 @@ async def test_terminal_runtime_service_serializes_concurrent_detached_start_per
     )
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    with pytest.raises(TerminalJobAlreadyRunningError):
-        await service.start_background_job(
+    second_task = asyncio.create_task(
+        service.start_background_job(
             session_id=session_id,
             terminal_id=terminal_id,
             command="sleep 30",
             timeout_seconds=60,
             artifact_paths=[],
         )
-
+    )
+    await asyncio.sleep(0)
     release.set()
     first_job_id = await asyncio.wait_for(first_task, timeout=1)
+
+    with pytest.raises(TerminalJobAlreadyRunningError):
+        await asyncio.wait_for(second_task, timeout=1)
 
     assert open_calls == 1
     with DBSession(app.state.database_engine) as db_session:

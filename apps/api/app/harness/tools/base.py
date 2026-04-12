@@ -33,6 +33,8 @@ class ToolExecutionContext:
     skill_service: Any
     mcp_service: Any
     available_skills: list[Any]
+    terminal_session_service: Any | None = None
+    terminal_runtime_service: Any | None = None
     session_state: Any | None = None
     swarm_coordinator: Any | None = None
 

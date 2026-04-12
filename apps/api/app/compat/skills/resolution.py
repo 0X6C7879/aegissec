@@ -22,6 +22,11 @@ _FIXED_RUNTIME_TOOLS = {
     "list_available_skills",
     "execute_skill",
     "read_skill_content",
+    "create_terminal_session",
+    "list_terminal_sessions",
+    "execute_terminal_command",
+    "read_terminal_buffer",
+    "stop_terminal_job",
     "call_mcp_tool",
 }
 _SOURCE_KIND_SCORES: dict[skill_models.SkillSourceKind, int] = {

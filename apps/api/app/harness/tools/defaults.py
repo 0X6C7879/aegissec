@@ -8,7 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.compat.mcp.service import MCPDisabledServerError, MCPInvalidToolError
 from app.compat.skills.service import SkillContentReadError, SkillLookupError
-from app.db.models import RuntimeExecuteRequest, RuntimePolicy
+from app.db.models import (
+    RuntimeExecuteRequest,
+    RuntimePolicy,
+    TerminalExecuteRequest,
+    TerminalSessionCreateRequest,
+)
 from app.services.runtime import (
     RuntimeArtifactPathError,
     RuntimeOperationError,
@@ -115,6 +120,61 @@ class StopSubagentInput(BaseModel):
     agent_id: str = Field(min_length=1)
     reason: str | None = None
     force: bool = False
+
+
+class CreateTerminalSessionInput(TerminalSessionCreateRequest):
+    pass
+
+
+class ExecuteTerminalCommandInput(TerminalExecuteRequest):
+    terminal_id: str = Field(min_length=1)
+
+    @field_validator("terminal_id")
+    @classmethod
+    def _validate_terminal_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Tool execute_terminal_command requires a non-empty terminal_id.")
+        return normalized
+
+
+class ReadTerminalBufferInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    terminal_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    stream: str = "stdout"
+    lines: int = Field(default=200, ge=1, le=2_000)
+
+    @field_validator("terminal_id", "job_id")
+    @classmethod
+    def _validate_identifier(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Terminal identifiers must not be blank.")
+        return normalized
+
+    @field_validator("stream")
+    @classmethod
+    def _validate_stream(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"stdout", "stderr"}:
+            raise ValueError("Tool read_terminal_buffer requires stream to be stdout or stderr.")
+        return normalized
+
+
+class StopTerminalJobInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str = Field(min_length=1)
+
+    @field_validator("job_id")
+    @classmethod
+    def _validate_job_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Tool stop_terminal_job requires a non-empty job_id.")
+        return normalized
 
 
 class ExecuteKaliCommandTool(BaseTool[ExecuteKaliCommandInput]):
@@ -246,6 +306,269 @@ class ExecuteKaliCommandTool(BaseTool[ExecuteKaliCommandInput]):
                     },
                 }
             ],
+        )
+
+
+class CreateTerminalSessionTool(BaseTool[CreateTerminalSessionInput]):
+    name = "create_terminal_session"
+    description = "Create a new terminal session inside the current chat session."
+    input_model = CreateTerminalSessionInput
+
+    def risk_level(self) -> ToolRiskLevel:
+        return ToolRiskLevel.MEDIUM
+
+    def capability_tags(self) -> tuple[str, ...]:
+        return ("terminal", "session")
+
+    def mutating_target_class(self) -> MutatingTargetClass:
+        return MutatingTargetClass.SESSION
+
+    async def execute(
+        self,
+        context: ToolExecutionContext,
+        arguments: Mapping[str, Any],
+    ) -> ToolResult:
+        terminal_session_service = context.terminal_session_service
+        if terminal_session_service is None:
+            raise ChatRuntimeError("Terminal session service is unavailable for this session.")
+        parsed = self.parse_arguments(arguments)
+        result = terminal_session_service.create_terminal(session=context.session, payload=parsed)
+        payload = {"terminal": result.terminal.model_dump(mode="json", by_alias=True)}
+        return ToolResult(
+            tool_name=self.name,
+            payload=payload,
+            safe_summary=f"已创建终端 {result.terminal.title}。",
+            transcript_result_metadata={"result": payload},
+            event_payload=payload,
+            trace_entry={"terminal_id": result.terminal.id},
+            step_metadata={"result": payload},
+        )
+
+
+class ListTerminalSessionsTool(BaseTool[_NoArgumentsInput]):
+    name = "list_terminal_sessions"
+    description = "List terminal sessions available in the current chat session."
+    input_model = _NoArgumentsInput
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def capability_tags(self) -> tuple[str, ...]:
+        return ("terminal", "inventory")
+
+    async def execute(
+        self,
+        context: ToolExecutionContext,
+        arguments: Mapping[str, Any],
+    ) -> ToolResult:
+        terminal_session_service = context.terminal_session_service
+        if terminal_session_service is None:
+            raise ChatRuntimeError("Terminal session service is unavailable for this session.")
+        self.parse_arguments(arguments)
+        terminals = terminal_session_service.list_terminals(session_id=context.session.id)
+        payload = {
+            "terminals": [terminal.model_dump(mode="json", by_alias=True) for terminal in terminals]
+        }
+        return ToolResult(
+            tool_name=self.name,
+            payload=payload,
+            safe_summary="已列出当前会话的终端。",
+            transcript_result_metadata={"result": payload},
+            event_payload=payload,
+            step_metadata={"result": payload},
+        )
+
+
+class ExecuteTerminalCommandTool(BaseTool[ExecuteTerminalCommandInput]):
+    name = "execute_terminal_command"
+    description = "Run a command in a terminal session, attached or as a detached background job."
+    input_model = ExecuteTerminalCommandInput
+    scope_sensitive = True
+    evidence_effects = True
+
+    def risk_level(self) -> ToolRiskLevel:
+        return ToolRiskLevel.HIGH
+
+    def capability_tags(self) -> tuple[str, ...]:
+        return ("terminal", "command")
+
+    def mutating_target_class(self) -> MutatingTargetClass:
+        return MutatingTargetClass.RUNTIME
+
+    async def execute(
+        self,
+        context: ToolExecutionContext,
+        arguments: Mapping[str, Any],
+    ) -> ToolResult:
+        terminal_session_service = context.terminal_session_service
+        terminal_runtime_service = context.terminal_runtime_service
+        if terminal_session_service is None or terminal_runtime_service is None:
+            raise ChatRuntimeError("Terminal runtime services are unavailable for this session.")
+        parsed = self.parse_arguments(arguments)
+        terminal = terminal_session_service.get_terminal(
+            session_id=context.session.id,
+            terminal_id=parsed.terminal_id,
+        )
+        if terminal is None:
+            raise ChatRuntimeError("Terminal not found.")
+        terminal_runtime = importlib.import_module("app.services.terminal_runtime")
+        try:
+            job_id, status = await terminal_runtime_service.execute_in_terminal(
+                session_id=context.session.id,
+                terminal_id=parsed.terminal_id,
+                command=parsed.command,
+                detach=parsed.detach,
+                timeout_seconds=(
+                    parsed.timeout_seconds
+                    or context.runtime_service.resolve_policy_for_session(
+                        context.session
+                    ).max_execution_seconds
+                ),
+                artifact_paths=list(parsed.artifact_paths),
+                runtime_policy=context.runtime_service.resolve_policy_for_session(context.session),
+            )
+        except (
+            RuntimePolicyViolationError,
+            terminal_runtime.TerminalRuntimeError,
+        ) as exc:
+            raise ChatRuntimeError(str(exc)) from exc
+        payload = {
+            "terminal_id": parsed.terminal_id,
+            "detach": parsed.detach,
+            "job_id": job_id,
+            "status": status,
+        }
+        return ToolResult(
+            tool_name=self.name,
+            payload=payload,
+            status=status,
+            safe_summary=(
+                f"已在终端 {terminal.title} 中启动后台命令。"
+                if parsed.detach
+                else f"已在终端 {terminal.title} 中发送命令。"
+            ),
+            transcript_result_metadata={"arguments": dict(arguments), "result": payload},
+            event_payload=payload,
+            trace_entry={"terminal_id": parsed.terminal_id, "job_id": job_id, "status": status},
+            step_metadata={"result": payload},
+        )
+
+
+class ReadTerminalBufferTool(BaseTool[ReadTerminalBufferInput]):
+    name = "read_terminal_buffer"
+    description = "Read the latest buffered output for a detached terminal job."
+    input_model = ReadTerminalBufferInput
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def capability_tags(self) -> tuple[str, ...]:
+        return ("terminal", "buffer")
+
+    async def execute(
+        self,
+        context: ToolExecutionContext,
+        arguments: Mapping[str, Any],
+    ) -> ToolResult:
+        terminal_session_service = context.terminal_session_service
+        terminal_runtime_service = context.terminal_runtime_service
+        if terminal_session_service is None or terminal_runtime_service is None:
+            raise ChatRuntimeError("Terminal runtime services are unavailable for this session.")
+        parsed = self.parse_arguments(arguments)
+        terminal = terminal_session_service.get_terminal(
+            session_id=context.session.id,
+            terminal_id=parsed.terminal_id,
+        )
+        if terminal is None:
+            raise ChatRuntimeError("Terminal not found.")
+        job = terminal_session_service.get_terminal_job(
+            session_id=context.session.id,
+            job_id=parsed.job_id,
+        )
+        if job is None or job.terminal_session_id != parsed.terminal_id:
+            raise ChatRuntimeError("Terminal job not found.")
+        live_tail = await terminal_runtime_service.get_background_job_tail(
+            session_id=context.session.id,
+            job_id=parsed.job_id,
+            stream=parsed.stream,
+            lines=parsed.lines,
+        )
+        if live_tail is None:
+            live_tail = terminal_session_service.get_persisted_terminal_job_tail(
+                session_id=context.session.id,
+                job_id=parsed.job_id,
+                stream=parsed.stream,
+                lines=parsed.lines,
+            )
+        tail = terminal_session_service.build_terminal_job_tail(
+            job=job,
+            stream=parsed.stream,
+            lines=parsed.lines,
+            content=live_tail,
+        )
+        payload = tail.model_dump(mode="json", by_alias=True)
+        return ToolResult(
+            tool_name=self.name,
+            payload=payload,
+            safe_summary=f"已读取终端任务 {parsed.job_id} 的输出缓冲。",
+            transcript_result_metadata={"result": payload},
+            event_payload=payload,
+            trace_entry={"terminal_id": parsed.terminal_id, "job_id": parsed.job_id},
+            step_metadata={"result": payload},
+        )
+
+
+class StopTerminalJobTool(BaseTool[StopTerminalJobInput]):
+    name = "stop_terminal_job"
+    description = "Stop a detached terminal job that is still running."
+    input_model = StopTerminalJobInput
+
+    def risk_level(self) -> ToolRiskLevel:
+        return ToolRiskLevel.DESTRUCTIVE
+
+    def capability_tags(self) -> tuple[str, ...]:
+        return ("terminal", "stop")
+
+    def mutating_target_class(self) -> MutatingTargetClass:
+        return MutatingTargetClass.RUNTIME
+
+    async def execute(
+        self,
+        context: ToolExecutionContext,
+        arguments: Mapping[str, Any],
+    ) -> ToolResult:
+        terminal_session_service = context.terminal_session_service
+        terminal_runtime_service = context.terminal_runtime_service
+        if terminal_session_service is None or terminal_runtime_service is None:
+            raise ChatRuntimeError("Terminal runtime services are unavailable for this session.")
+        parsed = self.parse_arguments(arguments)
+        existing_job = terminal_session_service.get_terminal_job(
+            session_id=context.session.id,
+            job_id=parsed.job_id,
+        )
+        if existing_job is None:
+            raise ChatRuntimeError("Terminal job not found.")
+        stopped = await terminal_runtime_service.stop_background_job(
+            session_id=context.session.id,
+            job_id=parsed.job_id,
+        )
+        if not stopped:
+            raise ChatRuntimeError("Terminal job is not currently live.")
+        refreshed_job = terminal_session_service.get_terminal_job(
+            session_id=context.session.id,
+            job_id=parsed.job_id,
+        )
+        if refreshed_job is None:
+            raise ChatRuntimeError("Terminal job not found.")
+        payload = {"job": refreshed_job.model_dump(mode="json", by_alias=True)}
+        return ToolResult(
+            tool_name=self.name,
+            payload=payload,
+            safe_summary=f"已停止终端任务 {parsed.job_id}。",
+            transcript_result_metadata={"result": payload},
+            event_payload=payload,
+            trace_entry={"job_id": parsed.job_id},
+            step_metadata={"result": payload},
         )
 
 
@@ -676,6 +999,11 @@ def build_default_tool_registry(
     registry.register(ListAvailableSkillsTool())
     registry.register(ExecuteSkillTool())
     registry.register(ReadSkillContentTool())
+    registry.register(CreateTerminalSessionTool())
+    registry.register(ListTerminalSessionsTool())
+    registry.register(ExecuteTerminalCommandTool())
+    registry.register(ReadTerminalBufferTool())
+    registry.register(StopTerminalJobTool())
     if include_swarm_tools:
         registry.register(SpawnSubagentTool())
         registry.register(SendSubagentMessageTool())

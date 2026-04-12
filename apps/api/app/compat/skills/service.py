@@ -191,6 +191,11 @@ class SkillService:
         "list_available_skills",
         "execute_skill",
         "read_skill_content",
+        "create_terminal_session",
+        "list_terminal_sessions",
+        "execute_terminal_command",
+        "read_terminal_buffer",
+        "stop_terminal_job",
         "call_mcp_tool",
     )
 
@@ -2089,12 +2094,12 @@ class SkillService:
         lines.append(
             "Never call a skill slug or skill name directly as a tool alias unless the runtime "
             "explicitly exposes it. The fixed callable tool names are execute_kali_command, "
-            "list_available_skills, execute_skill, and read_skill_content. Use execute_skill "
-            "when you want the server-side skill executor facade to resolve and prepare a "
-            "specific skill context, including invocation metadata and pending approval hints, "
-            "and use "
-            "read_skill_content "
-            "when you only need the raw SKILL.md body."
+            "list_available_skills, execute_skill, read_skill_content, create_terminal_session, "
+            "list_terminal_sessions, execute_terminal_command, read_terminal_buffer, and "
+            "stop_terminal_job. Use execute_skill when you want the server-side skill executor "
+            "facade to resolve and prepare a specific skill context, including invocation "
+            "metadata and pending approval hints, and use read_skill_content when you only "
+            "need the raw SKILL.md body."
         )
         lines.append(
             "When the intent profile indicates a remote challenge, keep the dispatcher and the "

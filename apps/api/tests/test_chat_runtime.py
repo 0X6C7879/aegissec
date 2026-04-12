@@ -161,7 +161,7 @@ def test_assistant_message_for_history_canonicalizes_tool_calls() -> None:
     }
 
 
-def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
+def test_extract_tool_calls_supports_shell_skill_and_terminal_tools() -> None:
     message: dict[str, object] = {
         "tool_calls": [
             {
@@ -198,6 +198,57 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
                     "arguments": {"skill_name_or_id": "adscan"},
                 },
             },
+            {
+                "id": "call-5",
+                "function": {
+                    "name": "create_terminal_session",
+                    "arguments": {
+                        "title": "Ops",
+                        "shell": "/bin/zsh",
+                        "cwd": "/workspace",
+                        "metadata": {"origin": "chat"},
+                    },
+                },
+            },
+            {
+                "id": "call-6",
+                "function": {
+                    "name": "list_terminal_sessions",
+                    "arguments": {},
+                },
+            },
+            {
+                "id": "call-7",
+                "function": {
+                    "name": "execute_terminal_command",
+                    "arguments": {
+                        "terminal_id": "term-a",
+                        "command": "pwd",
+                        "detach": True,
+                        "timeout_seconds": 30,
+                        "artifact_paths": ["reports/out.txt"],
+                    },
+                },
+            },
+            {
+                "id": "call-8",
+                "function": {
+                    "name": "read_terminal_buffer",
+                    "arguments": {
+                        "terminal_id": "term-a",
+                        "job_id": "job-1",
+                        "stream": "stderr",
+                        "lines": 25,
+                    },
+                },
+            },
+            {
+                "id": "call-9",
+                "function": {
+                    "name": "stop_terminal_job",
+                    "arguments": {"job_id": "job-1"},
+                },
+            },
         ]
     }
 
@@ -208,6 +259,11 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
         ("call-2", "list_available_skills"),
         ("call-3", "execute_skill"),
         ("call-4", "read_skill_content"),
+        ("call-5", "create_terminal_session"),
+        ("call-6", "list_terminal_sessions"),
+        ("call-7", "execute_terminal_command"),
+        ("call-8", "read_terminal_buffer"),
+        ("call-9", "stop_terminal_job"),
     ]
     assert tool_calls[0].arguments == {
         "command": "pwd",
@@ -217,6 +273,99 @@ def test_extract_tool_calls_supports_shell_and_skill_tools() -> None:
     assert tool_calls[1].arguments == {}
     assert tool_calls[2].arguments == {"skill_name_or_id": "adscan"}
     assert tool_calls[3].arguments == {"skill_name_or_id": "adscan"}
+    assert tool_calls[4].arguments == {
+        "title": "Ops",
+        "shell": "/bin/zsh",
+        "cwd": "/workspace",
+        "metadata": {"origin": "chat"},
+    }
+    assert tool_calls[5].arguments == {}
+    assert tool_calls[6].arguments == {
+        "terminal_id": "term-a",
+        "command": "pwd",
+        "detach": True,
+        "timeout_seconds": 30,
+        "artifact_paths": ["reports/out.txt"],
+    }
+    assert tool_calls[7].arguments == {
+        "terminal_id": "term-a",
+        "job_id": "job-1",
+        "stream": "stderr",
+        "lines": 25,
+    }
+    assert tool_calls[8].arguments == {"job_id": "job-1"}
+
+
+def test_anthropic_extract_tool_request_supports_terminal_tools() -> None:
+    create_request = AnthropicChatRuntime._extract_tool_request_from_use(
+        {
+            "id": "tool-1",
+            "name": "create_terminal_session",
+            "input": {
+                "title": "Ops",
+                "shell": "/bin/zsh",
+                "cwd": "/workspace",
+                "metadata": {"origin": "chat"},
+            },
+        }
+    )
+    execute_request = AnthropicChatRuntime._extract_tool_request_from_use(
+        {
+            "id": "tool-2",
+            "name": "execute_terminal_command",
+            "input": {
+                "terminal_id": "term-a",
+                "command": "pwd",
+                "detach": True,
+                "timeout_seconds": 30,
+                "artifact_paths": ["reports/out.txt"],
+            },
+        }
+    )
+    read_request = AnthropicChatRuntime._extract_tool_request_from_use(
+        {
+            "id": "tool-3",
+            "name": "read_terminal_buffer",
+            "input": {
+                "terminal_id": "term-a",
+                "job_id": "job-1",
+                "stream": "stdout",
+                "lines": 50,
+            },
+        }
+    )
+    stop_request = AnthropicChatRuntime._extract_tool_request_from_use(
+        {
+            "id": "tool-4",
+            "name": "stop_terminal_job",
+            "input": {"job_id": "job-1"},
+        }
+    )
+
+    assert create_request.tool_name == "create_terminal_session"
+    assert create_request.arguments == {
+        "title": "Ops",
+        "shell": "/bin/zsh",
+        "cwd": "/workspace",
+        "metadata": {"origin": "chat"},
+    }
+    assert execute_request.tool_name == "execute_terminal_command"
+    assert execute_request.arguments == {
+        "terminal_id": "term-a",
+        "command": "pwd",
+        "detach": True,
+        "timeout_seconds": 30,
+        "artifact_paths": ["reports/out.txt"],
+    }
+    assert read_request.tool_name == "read_terminal_buffer"
+    assert read_request.arguments == {
+        "terminal_id": "term-a",
+        "job_id": "job-1",
+        "stream": "stdout",
+        "lines": 50,
+    }
+    assert stop_request.tool_name == "stop_terminal_job"
+    assert stop_request.arguments == {"job_id": "job-1"}
 
 
 def test_extract_tool_calls_coerces_loaded_skill_name_to_execute_skill() -> None:
@@ -276,15 +425,20 @@ def test_openai_tool_definitions_include_mcp_tools_and_safe_schema_fallback() ->
     execute_kali_properties = cast(dict[str, object], execute_kali_parameters["properties"])
     timeout_schema = cast(dict[str, object], execute_kali_properties["timeout_seconds"])
 
-    assert function_names[:3] == [
+    assert function_names[:9] == [
         "execute_kali_command",
         "list_available_skills",
         "execute_skill",
+        "read_skill_content",
+        "create_terminal_session",
+        "list_terminal_sessions",
+        "execute_terminal_command",
+        "read_terminal_buffer",
+        "stop_terminal_job",
     ]
     assert timeout_schema["type"] == "integer"
-    assert function_names[3] == "read_skill_content"
-    assert function_names[4] == "mcp__burp_suite__scan_target"
-    assert openai_functions[4]["parameters"] == {
+    assert function_names[9] == "mcp__burp_suite__scan_target"
+    assert openai_functions[9]["parameters"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": True,
@@ -309,14 +463,19 @@ def test_anthropic_tool_definitions_include_mcp_tools_and_safe_schema_fallback()
         ]
     )
 
-    assert [item["name"] for item in definitions[:4]] == [
+    assert [item["name"] for item in definitions[:9]] == [
         "execute_kali_command",
         "list_available_skills",
         "execute_skill",
         "read_skill_content",
+        "create_terminal_session",
+        "list_terminal_sessions",
+        "execute_terminal_command",
+        "read_terminal_buffer",
+        "stop_terminal_job",
     ]
-    assert definitions[4]["name"] == "mcp__burp_suite__scan_target"
-    assert definitions[4]["input_schema"] == {
+    assert definitions[9]["name"] == "mcp__burp_suite__scan_target"
+    assert definitions[9]["input_schema"] == {
         "type": "object",
         "properties": {},
         "additionalProperties": True,

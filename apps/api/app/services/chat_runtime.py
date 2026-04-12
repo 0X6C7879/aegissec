@@ -38,6 +38,7 @@ TOOL_CALL_TAG_PATTERN = re.compile(r"</?(?:[\w-]+:)?tool_call\b[^>]*>", re.IGNOR
 INVOKE_TAG_PATTERN = re.compile(r"</?invoke\b[^>]*>", re.IGNORECASE)
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 HTTP_ERROR_BODY_PREVIEW_LIMIT = 1500
+_FIXED_NO_ARGUMENT_TOOL_NAMES = {"list_available_skills", "list_terminal_sessions"}
 
 
 def strip_tool_protocol_markup(content: str) -> str:
@@ -60,7 +61,7 @@ def sanitize_assistant_content(
     strip_thinking: bool = False,
     fallback_text: str = "",
 ) -> str:
-    cleaned_content = strip_tool_protocol_markup(content)
+    cleaned_content = content
     if strip_thinking:
         cleaned_content = THINK_BLOCK_PATTERN.sub("", cleaned_content)
     cleaned_content = cleaned_content.strip()
@@ -921,14 +922,23 @@ class OpenAICompatibleChatRuntime:
                 )
                 continue
 
-            if function_name == "list_available_skills":
+            if function_name in _FIXED_NO_ARGUMENT_TOOL_NAMES:
                 if parsed_arguments:
                     raise ChatRuntimeError(
-                        "LLM list_available_skills tool call included unexpected arguments."
+                        f"LLM {function_name} tool call included unexpected arguments."
                     )
                 tool_calls.append(
                     ToolCallRequest(
                         tool_call_id=tool_call_id, tool_name=function_name, arguments={}
+                    )
+                )
+                continue
+
+            if function_name == "create_terminal_session":
+                tool_calls.append(
+                    OpenAICompatibleChatRuntime._build_create_terminal_session_request(
+                        tool_call_id,
+                        parsed_arguments,
                     )
                 )
                 continue
@@ -963,6 +973,33 @@ class OpenAICompatibleChatRuntime:
                         tool_call_id=tool_call_id,
                         tool_name=function_name,
                         arguments={"skill_name_or_id": raw_identifier.strip()},
+                    )
+                )
+                continue
+
+            if function_name == "execute_terminal_command":
+                tool_calls.append(
+                    OpenAICompatibleChatRuntime._build_execute_terminal_command_request(
+                        tool_call_id,
+                        parsed_arguments,
+                    )
+                )
+                continue
+
+            if function_name == "read_terminal_buffer":
+                tool_calls.append(
+                    OpenAICompatibleChatRuntime._build_read_terminal_buffer_request(
+                        tool_call_id,
+                        parsed_arguments,
+                    )
+                )
+                continue
+
+            if function_name == "stop_terminal_job":
+                tool_calls.append(
+                    OpenAICompatibleChatRuntime._build_stop_terminal_job_request(
+                        tool_call_id,
+                        parsed_arguments,
                     )
                 )
                 continue
@@ -1026,6 +1063,96 @@ class OpenAICompatibleChatRuntime:
                 "timeout_seconds": timeout_seconds,
                 "artifact_paths": normalized_artifact_paths,
             },
+        )
+
+    @staticmethod
+    def _build_create_terminal_session_request(
+        tool_call_id: str,
+        parsed_arguments: dict[str, Any],
+    ) -> ToolCallRequest:
+        payload: dict[str, Any] = {}
+        for key in ("title", "shell", "cwd"):
+            value = parsed_arguments.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ChatRuntimeError(f"LLM {tool_call_id} included an invalid {key} value.")
+            payload[key] = value
+        metadata = parsed_arguments.get("metadata")
+        if metadata is None:
+            payload["metadata"] = {}
+        elif isinstance(metadata, dict):
+            payload["metadata"] = metadata
+        else:
+            raise ChatRuntimeError("LLM tool call included invalid terminal metadata.")
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="create_terminal_session",
+            arguments=payload,
+        )
+
+    @staticmethod
+    def _build_execute_terminal_command_request(
+        tool_call_id: str,
+        parsed_arguments: dict[str, Any],
+    ) -> ToolCallRequest:
+        terminal_id = parsed_arguments.get("terminal_id")
+        if not isinstance(terminal_id, str) or not terminal_id.strip():
+            raise ChatRuntimeError("LLM terminal tool call did not include a valid terminal_id.")
+        request = OpenAICompatibleChatRuntime._build_execute_kali_command_request(
+            tool_call_id,
+            parsed_arguments,
+        )
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="execute_terminal_command",
+            arguments={
+                "terminal_id": terminal_id.strip(),
+                **request.arguments,
+                "detach": bool(parsed_arguments.get("detach", False)),
+            },
+        )
+
+    @staticmethod
+    def _build_read_terminal_buffer_request(
+        tool_call_id: str,
+        parsed_arguments: dict[str, Any],
+    ) -> ToolCallRequest:
+        terminal_id = parsed_arguments.get("terminal_id")
+        job_id = parsed_arguments.get("job_id")
+        if not isinstance(terminal_id, str) or not terminal_id.strip():
+            raise ChatRuntimeError("LLM terminal buffer call did not include a valid terminal_id.")
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise ChatRuntimeError("LLM terminal buffer call did not include a valid job_id.")
+        stream = parsed_arguments.get("stream", "stdout")
+        if not isinstance(stream, str) or stream not in {"stdout", "stderr"}:
+            raise ChatRuntimeError("LLM terminal buffer call included an invalid stream.")
+        lines = parsed_arguments.get("lines", 200)
+        if not isinstance(lines, int) or lines <= 0:
+            raise ChatRuntimeError("LLM terminal buffer call included an invalid line count.")
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="read_terminal_buffer",
+            arguments={
+                "terminal_id": terminal_id.strip(),
+                "job_id": job_id.strip(),
+                "stream": stream,
+                "lines": lines,
+            },
+        )
+
+    @staticmethod
+    def _build_stop_terminal_job_request(
+        tool_call_id: str,
+        parsed_arguments: dict[str, Any],
+    ) -> ToolCallRequest:
+        job_id = parsed_arguments.get("job_id")
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise ChatRuntimeError("LLM stop_terminal_job call did not include a valid job_id.")
+        return ToolCallRequest(
+            tool_call_id=tool_call_id,
+            tool_name="stop_terminal_job",
+            arguments={"job_id": job_id.strip()},
         )
 
     @staticmethod
@@ -1508,12 +1635,14 @@ class AnthropicChatRuntime:
             return AnthropicChatRuntime._build_execute_kali_command_request(
                 tool_use_id, parsed_arguments
             )
-        elif tool_name == "list_available_skills":
+        elif tool_name in _FIXED_NO_ARGUMENT_TOOL_NAMES:
             if parsed_arguments:
-                raise ChatRuntimeError(
-                    "LLM list_available_skills tool call included unexpected arguments."
-                )
+                raise ChatRuntimeError(f"LLM {tool_name} tool call included unexpected arguments.")
             return ToolCallRequest(tool_call_id=tool_use_id, tool_name=tool_name, arguments={})
+        elif tool_name == "create_terminal_session":
+            return OpenAICompatibleChatRuntime._build_create_terminal_session_request(
+                tool_use_id, parsed_arguments
+            )
         elif tool_name == "read_skill_content":
             raw_identifier = parsed_arguments.get(
                 "skill_name_or_id", parsed_arguments.get("skill_id")
@@ -1539,6 +1668,18 @@ class AnthropicChatRuntime:
                 tool_call_id=tool_use_id,
                 tool_name=tool_name,
                 arguments={"skill_name_or_id": raw_identifier.strip()},
+            )
+        elif tool_name == "execute_terminal_command":
+            return OpenAICompatibleChatRuntime._build_execute_terminal_command_request(
+                tool_use_id, parsed_arguments
+            )
+        elif tool_name == "read_terminal_buffer":
+            return OpenAICompatibleChatRuntime._build_read_terminal_buffer_request(
+                tool_use_id, parsed_arguments
+            )
+        elif tool_name == "stop_terminal_job":
+            return OpenAICompatibleChatRuntime._build_stop_terminal_job_request(
+                tool_use_id, parsed_arguments
             )
         else:
             mcp_binding = _find_mcp_tool_binding(tool_name, mcp_tools)
@@ -1636,8 +1777,10 @@ class AnthropicChatRuntime:
             "call the skills tools before asking broad clarification questions. "
             "Skill names in this catalog are reference entries unless coerced into "
             "execute_skill by the runtime. Fixed callable tool names are "
-            "execute_kali_command, list_available_skills, execute_skill, and "
-            "read_skill_content. Additional callable MCP tool aliases may appear in the "
+            "execute_kali_command, list_available_skills, execute_skill, read_skill_content, "
+            "create_terminal_session, list_terminal_sessions, execute_terminal_command, "
+            "read_terminal_buffer, and stop_terminal_job. Additional callable MCP tool aliases "
+            "may appear in the "
             "capability context."
         )
         return "\n".join(lines)
