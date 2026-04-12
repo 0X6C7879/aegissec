@@ -5,7 +5,7 @@ from datetime import datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session as DBSession
-from sqlmodel import col, select
+from sqlmodel import col, delete, select
 
 from app.db.models import (
     TERMINAL_METADATA_MAX_BYTES,
@@ -266,3 +266,37 @@ class TerminalRepository:
         if commit:
             _commit_and_refresh(self.db_session, terminal_job)
         return terminal_job
+
+    def list_finished_terminal_jobs(
+        self,
+        *,
+        session_id: str,
+    ) -> list[RuntimeTerminalJob]:
+        statement = (
+            select(RuntimeTerminalJob)
+            .where(
+                RuntimeTerminalJob.session_id == session_id,
+                col(RuntimeTerminalJob.ended_at).is_not(None),
+            )
+            .order_by(
+                col(RuntimeTerminalJob.updated_at).desc(),
+                col(RuntimeTerminalJob.id).desc(),
+            )
+        )
+        return list(self.db_session.exec(statement).all())
+
+    def delete_terminal_jobs(
+        self,
+        *,
+        session_id: str,
+        job_ids: set[str],
+    ) -> int:
+        if not job_ids:
+            return 0
+        statement = delete(RuntimeTerminalJob).where(
+            RuntimeTerminalJob.session_id == session_id,
+            col(RuntimeTerminalJob.id).in_(job_ids),
+        )
+        result = self.db_session.exec(statement)
+        self.db_session.commit()
+        return int(result.rowcount or 0)

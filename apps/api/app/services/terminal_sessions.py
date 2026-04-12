@@ -7,6 +7,8 @@ from app.db.models import (
     RuntimeTerminalJobStatus,
     Session,
     TerminalJobRead,
+    TerminalJobTailRead,
+    TerminalJobsCleanupResult,
     TerminalSessionCreateRequest,
     TerminalSessionRead,
     to_terminal_job_read,
@@ -21,6 +23,7 @@ TERMINAL_JOB_STARTED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_STARTED.value
 TERMINAL_JOB_COMPLETED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_COMPLETED.value
 TERMINAL_JOB_FAILED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_FAILED.value
 TERMINAL_JOB_CANCELLED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_CANCELLED.value
+TERMINAL_JOB_CLEANUP_EVENT_TYPE = "terminal.job.cleanup"
 
 
 @dataclass(slots=True)
@@ -325,6 +328,61 @@ class SessionShellService:
             raise
 
         return TerminalJobMutationResult(job=to_terminal_job_read(updated_job), changed=True)
+
+    def build_terminal_job_tail(
+        self,
+        *,
+        job: TerminalJobRead,
+        stream: str,
+        lines: int,
+        content: str,
+    ) -> TerminalJobTailRead:
+        normalized_stream = "stderr" if stream == "stderr" else "stdout"
+        return TerminalJobTailRead(
+            job_id=job.id,
+            session_id=job.session_id,
+            terminal_session_id=job.terminal_session_id,
+            status=job.status,
+            stream=normalized_stream,
+            lines=lines,
+            tail=content,
+            ended_at=job.ended_at,
+            updated_at=job.updated_at,
+        )
+
+    def cleanup_finished_jobs(
+        self,
+        *,
+        session: Session,
+        active_job_ids: set[str],
+        limit: int | None = None,
+    ) -> TerminalJobsCleanupResult:
+        finished_jobs = self._terminal_repository.list_finished_terminal_jobs(session_id=session.id)
+        deletable_ids: list[str] = [job.id for job in finished_jobs if job.id not in active_job_ids]
+        if limit is not None:
+            deletable_ids = deletable_ids[:limit]
+
+        deleted = self._terminal_repository.delete_terminal_jobs(
+            session_id=session.id,
+            job_ids=set(deletable_ids),
+        )
+        kept = len(finished_jobs) - deleted
+        self._run_log_repository.create_log(
+            session_id=session.id,
+            project_id=session.project_id,
+            run_id=None,
+            level="info",
+            source=TERMINAL_RUN_LOG_SOURCE,
+            event_type=TERMINAL_JOB_CLEANUP_EVENT_TYPE,
+            message="Cleaned finished terminal jobs.",
+            payload={
+                "deleted_jobs": deleted,
+                "kept_jobs": kept,
+                "active_job_ids": sorted(active_job_ids),
+                "limit": limit,
+            },
+        )
+        return TerminalJobsCleanupResult(deleted_jobs=deleted, kept_jobs=kept)
 
 
 TerminalSessionService = SessionShellService

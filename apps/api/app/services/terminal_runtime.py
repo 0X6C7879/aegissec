@@ -4,8 +4,10 @@ import asyncio
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
 from threading import Thread
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 import docker
 from docker.errors import DockerException, NotFound
@@ -16,9 +18,14 @@ from sqlmodel import Session as DBSession
 
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType
 from app.core.settings import Settings
-from app.db.models import RuntimeTerminalJobStatus
-from app.db.repositories import RunLogRepository, SessionRepository, TerminalRepository
-from app.services.runtime import DockerRuntimeBackend, RuntimeOperationError
+from app.db.models import ExecutionStatus, RuntimePolicy, RuntimeTerminalJobStatus, utc_now
+from app.db.repositories import (
+    RunLogRepository,
+    RuntimeRepository,
+    SessionRepository,
+    TerminalRepository,
+)
+from app.services.runtime import DockerRuntimeBackend, RuntimeOperationError, RuntimeService
 from app.services.terminal_sessions import (
     SessionShellService,
     terminal_audit_payload,
@@ -46,11 +53,16 @@ class TerminalBackendUnavailableError(TerminalRuntimeError):
     pass
 
 
+class TerminalNotAttachedError(TerminalRuntimeError):
+    pass
+
+
 TERMINAL_CLIENT_FRAME_MAX_BYTES = 16 * 1024
 TERMINAL_CLIENT_QUEUE_MAXSIZE = 256
 TERMINAL_BACKEND_EVENT_QUEUE_MAXSIZE = 256
 TERMINAL_ALLOWED_SIGNALS = frozenset({"HUP", "INT", "KILL", "QUIT", "TERM"})
 TERMINAL_CLOSE_WAIT_SECONDS = 1.0
+TERMINAL_JOB_OUTPUT_MAX_CHARS = 8_192
 
 
 def normalize_terminal_signal_name(signal_name: str) -> str:
@@ -130,6 +142,26 @@ class LiveTerminalHandle:
     detach_generation: int = 0
 
 
+@dataclass(slots=True)
+class LiveTerminalJobHandle:
+    session_id: str
+    terminal_id: str
+    job_id: str
+    command: str
+    timeout_seconds: int
+    artifact_paths: list[str]
+    started_at: datetime
+    process: TerminalProcess | None = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    finalized: bool = False
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+    finalize_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    timeout_task: asyncio.Task[None] | None = None
+    timeout_handle: asyncio.TimerHandle | None = None
+    pump_task: asyncio.Task[None] | None = None
+
+
 class LiveTerminalRegistry:
     def __init__(self) -> None:
         self._handles: dict[str, LiveTerminalHandle] = {}
@@ -201,6 +233,36 @@ class LiveTerminalRegistry:
             self._handles.pop(terminal_id, None)
 
     async def list_handles(self) -> list[LiveTerminalHandle]:
+        async with self._lock:
+            return list(self._handles.values())
+
+
+class LiveTerminalJobRegistry:
+    def __init__(self) -> None:
+        self._handles: dict[str, LiveTerminalJobHandle] = {}
+        self._lock = asyncio.Lock()
+
+    async def put(self, handle: LiveTerminalJobHandle) -> None:
+        async with self._lock:
+            self._handles[handle.job_id] = handle
+
+    async def get(self, *, job_id: str) -> LiveTerminalJobHandle | None:
+        async with self._lock:
+            return self._handles.get(job_id)
+
+    async def remove(self, *, job_id: str) -> None:
+        async with self._lock:
+            self._handles.pop(job_id, None)
+
+    async def active_job_ids_for_session(self, *, session_id: str) -> set[str]:
+        async with self._lock:
+            return {
+                job_id
+                for job_id, handle in self._handles.items()
+                if handle.session_id == session_id and not handle.finalized
+            }
+
+    async def list_handles(self) -> list[LiveTerminalJobHandle]:
         async with self._lock:
             return list(self._handles.values())
 
@@ -404,12 +466,14 @@ class TerminalRuntimeService:
         event_broker: SessionEventBroker,
         backend: TerminalBackend,
         registry: LiveTerminalRegistry,
+        job_registry: LiveTerminalJobRegistry,
     ) -> None:
         self._settings = settings
         self._database_engine = database_engine
         self._event_broker = event_broker
         self._backend = backend
         self._registry = registry
+        self._job_registry = job_registry
 
     async def _queue_frame(
         self,
@@ -437,6 +501,105 @@ class TerminalRuntimeService:
             if handle.process is not None and not handle.finalized:
                 asyncio.create_task(handle.process.close(reason=overflow_reason))
             return False
+
+    @staticmethod
+    def _append_tail(existing: str, chunk: str) -> str:
+        merged = existing + chunk
+        if len(merged) <= TERMINAL_JOB_OUTPUT_MAX_CHARS:
+            return merged
+        return merged[-TERMINAL_JOB_OUTPUT_MAX_CHARS:]
+
+    @staticmethod
+    def _slice_tail_lines(content: str, lines: int) -> str:
+        if not content:
+            return ""
+        tail_lines = content.splitlines()
+        if len(tail_lines) <= lines:
+            return "\n".join(tail_lines)
+        return "\n".join(tail_lines[-lines:])
+
+    async def _get_live_terminal_handle(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+    ) -> LiveTerminalHandle:
+        handle = await self._registry.get(terminal_id=terminal_id)
+        if handle is None or handle.session_id != session_id:
+            raise TerminalNotFoundError("Terminal not found")
+        if handle.process is None or handle.finalized or handle.closed.is_set():
+            raise TerminalClosedError("Terminal is already closed")
+        if not handle.attached:
+            raise TerminalNotAttachedError("Terminal is not currently attached")
+        return handle
+
+    async def send_terminal_input(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+        data: str,
+    ) -> None:
+        handle = await self._get_live_terminal_handle(
+            session_id=session_id, terminal_id=terminal_id
+        )
+        await self.handle_client_frame(handle, {"type": "input", "data": data})
+
+    async def resize_terminal(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+        cols: int,
+        rows: int,
+    ) -> None:
+        handle = await self._get_live_terminal_handle(
+            session_id=session_id, terminal_id=terminal_id
+        )
+        await self.handle_client_frame(handle, {"type": "resize", "cols": cols, "rows": rows})
+
+    async def interrupt_terminal(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+    ) -> None:
+        handle = await self._get_live_terminal_handle(
+            session_id=session_id, terminal_id=terminal_id
+        )
+        await self.handle_client_frame(handle, {"type": "interrupt"})
+
+    async def execute_in_terminal(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+        command: str,
+        detach: bool,
+        timeout_seconds: int,
+        artifact_paths: list[str],
+        runtime_policy: RuntimePolicy,
+    ) -> tuple[str | None, str]:
+        RuntimeService._enforce_runtime_policy(
+            command=command,
+            timeout_seconds=timeout_seconds,
+            policy=runtime_policy,
+        )
+        if detach:
+            job_id = await self.start_background_job(
+                session_id=session_id,
+                terminal_id=terminal_id,
+                command=command,
+                timeout_seconds=timeout_seconds,
+                artifact_paths=artifact_paths,
+            )
+            return job_id, RuntimeTerminalJobStatus.RUNNING.value
+
+        handle = await self._get_live_terminal_handle(
+            session_id=session_id, terminal_id=terminal_id
+        )
+        await self.handle_client_frame(handle, {"type": "input", "data": f"{command}\n"})
+        return handle.job_id, RuntimeTerminalJobStatus.RUNNING.value
 
     async def close_live_terminal(
         self,

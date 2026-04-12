@@ -1158,6 +1158,78 @@ class TerminalJobRead(SQLModel):
     updated_at: datetime
 
 
+class TerminalInputRequest(SQLModel):
+    data: str = Field(min_length=1, max_length=16_384)
+
+
+class TerminalResizeRequest(SQLModel):
+    cols: int = Field(ge=1, le=1_000)
+    rows: int = Field(ge=1, le=1_000)
+
+
+class TerminalExecuteRequest(SQLModel):
+    command: str = Field(min_length=1, max_length=4_000)
+    detach: bool = False
+    timeout_seconds: int | None = Field(default=None, gt=0, le=86_400)
+    artifact_paths: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("command")
+    @classmethod
+    def _validate_command(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        if _contains_control_characters(normalized):
+            raise ValueError("must not contain control characters")
+        return normalized
+
+    @field_validator("artifact_paths")
+    @classmethod
+    def _validate_artifact_paths(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            cleaned = item.strip()
+            if not cleaned:
+                raise ValueError("artifact paths must not be blank")
+            if _contains_control_characters(cleaned):
+                raise ValueError("artifact paths must not contain control characters")
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+        return normalized
+
+
+class TerminalExecuteResponse(SQLModel):
+    terminal_id: str
+    accepted: bool = True
+    detach: bool
+    job_id: str | None = None
+    status: str
+
+
+class TerminalJobTailRead(SQLModel):
+    job_id: str
+    session_id: str
+    terminal_session_id: str
+    status: RuntimeTerminalJobStatus
+    stream: Literal["stdout", "stderr"]
+    lines: int = Field(ge=1)
+    tail: str = ""
+    ended_at: datetime | None = None
+    updated_at: datetime
+
+
+class TerminalJobsCleanupRequest(SQLModel):
+    limit: int | None = Field(default=None, ge=1, le=1_000)
+
+
+class TerminalJobsCleanupResult(SQLModel):
+    deleted_jobs: int = Field(ge=0)
+    kept_jobs: int = Field(ge=0)
+
+
 class SkillRecordRead(SQLModel):
     id: str
     source: CompatibilitySource
