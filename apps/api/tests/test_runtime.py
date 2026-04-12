@@ -190,7 +190,7 @@ def test_runtime_execute_remains_on_one_shot_backend_seam(
             "interactive terminal backend must not be used by /api/runtime/execute"
         )
 
-    terminal_backend.open_terminal = fail_if_called  # type: ignore[method-assign]
+    terminal_backend.open_terminal = fail_if_called
 
     runtime_backend.queue_result(
         status=ExecutionStatus.SUCCESS,
