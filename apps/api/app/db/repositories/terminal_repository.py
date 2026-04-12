@@ -120,6 +120,17 @@ class TerminalRepository:
         )
         return list(self.db_session.exec(statement).all())
 
+    def list_open_terminal_sessions(self) -> list[RuntimeTerminalSession]:
+        statement = (
+            select(RuntimeTerminalSession)
+            .where(RuntimeTerminalSession.status == RuntimeTerminalSessionStatus.OPEN)
+            .order_by(
+                col(RuntimeTerminalSession.created_at).desc(),
+                col(RuntimeTerminalSession.id).desc(),
+            )
+        )
+        return list(self.db_session.exec(statement).all())
+
     def get_terminal_session(
         self,
         *,
@@ -131,6 +142,76 @@ class TerminalRepository:
             RuntimeTerminalSession.session_id == session_id,
         )
         return self.db_session.exec(statement).first()
+
+    def get_focused_terminal_session(
+        self,
+        *,
+        session_id: str,
+    ) -> RuntimeTerminalSession | None:
+        terminals = self.list_terminal_sessions(session_id=session_id, include_closed=False)
+        for terminal in terminals:
+            if terminal.metadata_json.get("focused") is True:
+                return terminal
+        return terminals[0] if len(terminals) == 1 else None
+
+    def set_focused_terminal_session(
+        self,
+        *,
+        session_id: str,
+        terminal_session_id: str,
+        commit: bool = True,
+    ) -> RuntimeTerminalSession:
+        terminals = self.list_terminal_sessions(session_id=session_id)
+        target: RuntimeTerminalSession | None = None
+        now = utc_now()
+        for terminal in terminals:
+            metadata = dict(terminal.metadata_json)
+            should_focus = (
+                terminal.id == terminal_session_id
+                and terminal.status == RuntimeTerminalSessionStatus.OPEN
+            )
+            if terminal.id == terminal_session_id:
+                target = terminal
+            if metadata.get("focused") is should_focus:
+                continue
+            metadata["focused"] = should_focus
+            terminal.metadata_json = metadata
+            terminal.updated_at = now
+            self.db_session.add(terminal)
+
+        if target is None:
+            raise ValueError("Terminal session not found.")
+        if target.status != RuntimeTerminalSessionStatus.OPEN:
+            raise ValueError("Terminal session is closed and cannot be focused.")
+
+        _flush_pending(self.db_session)
+        if commit:
+            _commit_and_refresh(self.db_session, target)
+        return target
+
+    def clear_terminal_focus(
+        self,
+        *,
+        session_id: str,
+        commit: bool = True,
+    ) -> None:
+        changed = False
+        now = utc_now()
+        terminals = self.list_terminal_sessions(session_id=session_id)
+        for terminal in terminals:
+            if terminal.metadata_json.get("focused") is not True:
+                continue
+            metadata = dict(terminal.metadata_json)
+            metadata["focused"] = False
+            terminal.metadata_json = metadata
+            terminal.updated_at = now
+            self.db_session.add(terminal)
+            changed = True
+        if not changed:
+            return
+        _flush_pending(self.db_session)
+        if commit:
+            self.db_session.commit()
 
     def close_terminal_session(
         self,
@@ -145,6 +226,9 @@ class TerminalRepository:
         terminal_session.status = RuntimeTerminalSessionStatus.CLOSED
         terminal_session.closed_at = closed_at
         terminal_session.updated_at = closed_at
+        metadata = dict(terminal_session.metadata_json)
+        metadata["focused"] = False
+        terminal_session.metadata_json = metadata
         self.db_session.add(terminal_session)
         _flush_pending(self.db_session)
         if commit:
@@ -200,6 +284,17 @@ class TerminalRepository:
         statement = statement.order_by(
             col(RuntimeTerminalJob.created_at).desc(),
             col(RuntimeTerminalJob.id).desc(),
+        )
+        return list(self.db_session.exec(statement).all())
+
+    def list_running_terminal_jobs(self) -> list[RuntimeTerminalJob]:
+        statement = (
+            select(RuntimeTerminalJob)
+            .where(RuntimeTerminalJob.status == RuntimeTerminalJobStatus.RUNNING)
+            .order_by(
+                col(RuntimeTerminalJob.created_at).desc(),
+                col(RuntimeTerminalJob.id).desc(),
+            )
         )
         return list(self.db_session.exec(statement).all())
 

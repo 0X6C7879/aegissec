@@ -232,7 +232,7 @@ def test_settings(tmp_path: Path) -> Settings:
             "runtime_default_timeout_seconds": 300,
             "runtime_recent_runs_limit": 10,
             "runtime_recent_artifacts_limit": 20,
-            "terminal_disconnect_grace_seconds": 0.01,
+            "terminal_disconnect_grace_seconds": 0.05,
             "mcp_import_paths": [],
             "database_url": database_url,
             "llm_api_key": None,

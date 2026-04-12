@@ -44,7 +44,7 @@ import type {
 } from "../types/sessions";
 import type { SlashAction } from "../types/slash";
 import { AttackGraphWorkbench } from "./AttackGraphWorkbench";
-import { ConversationFeed } from "./ConversationFeed";
+import { ConversationFeed, type ShellFocusPayload } from "./ConversationFeed";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ShellWorkbench } from "./runtime/ShellWorkbench";
 import { WorkbenchComposer } from "./WorkbenchComposer";
@@ -52,6 +52,10 @@ import { WorkbenchComposer } from "./WorkbenchComposer";
 type InvalidSessionState = {
   sessionId: string;
   message: string;
+};
+
+type WorkspaceShellFocusRequest = ShellFocusPayload & {
+  requestId: number;
 };
 
 const EMPTY_SESSION_EVENTS: ReturnType<typeof useUiStore.getState>["eventsBySession"][string] = [];
@@ -191,6 +195,10 @@ export function SessionWorkspaceWorkbench() {
   );
   const [selectedAttackNodeId, setSelectedAttackNodeId] = useState<string | null>(null);
   const [messageActionBusyId, setMessageActionBusyId] = useState<string | null>(null);
+  const [isShellFocusPanelOpen, setIsShellFocusPanelOpen] = useState(false);
+  const [shellFocusRequest, setShellFocusRequest] = useState<WorkspaceShellFocusRequest | null>(
+    null,
+  );
   const [invalidSessionState, setInvalidSessionState] = useState<InvalidSessionState | null>(null);
   const suppressRouteAutonavigateRef = useRef(false);
   const workspaceSplitPane = useWorkspaceSplitPane({
@@ -1053,6 +1061,14 @@ export function SessionWorkspaceWorkbench() {
     setSelectedAttackNodeId(nodeId);
   }
 
+  const handleFocusShellFromConversation = useCallback((payload: ShellFocusPayload): void => {
+    setIsShellFocusPanelOpen(true);
+    setShellFocusRequest((currentValue) => ({
+      ...payload,
+      requestId: (currentValue?.requestId ?? 0) + 1,
+    }));
+  }, []);
+
   async function handleEditAttackNode(node: SessionGraphNode): Promise<void> {
     if (!activeSession) {
       return;
@@ -1161,6 +1177,11 @@ export function SessionWorkspaceWorkbench() {
     }
   }
 
+  useEffect(() => {
+    setIsShellFocusPanelOpen(false);
+    setShellFocusRequest(null);
+  }, [activeSessionId]);
+
   if (sessionsQuery.isLoading && sessionsQuery.data === undefined && !activeSession) {
     return (
       <main className="conversation-workbench">
@@ -1249,16 +1270,32 @@ export function SessionWorkspaceWorkbench() {
               style={workspaceSplitPane.gridStyle}
             >
               <section className="workspace-graph-main-column workspace-stage-panel">
-                <AttackGraphWorkbench
-                  graph={attackGraph}
-                  selectedNodeId={selectedAttackNodeId}
-                  actionBusyId={messageActionBusyId}
-                  onSelectNode={handleSelectNode}
-                  onEditNode={handleEditAttackNode}
-                  onRegenerateNode={handleRegenerateAttackNode}
-                  onForkNode={handleForkAttackNode}
-                  onRollbackNode={handleRollbackAttackNode}
-                />
+                <section className="workspace-graph-main-shell">
+                  <AttackGraphWorkbench
+                    graph={attackGraph}
+                    selectedNodeId={selectedAttackNodeId}
+                    actionBusyId={messageActionBusyId}
+                    onSelectNode={handleSelectNode}
+                    onEditNode={handleEditAttackNode}
+                    onRegenerateNode={handleRegenerateAttackNode}
+                    onForkNode={handleForkAttackNode}
+                    onRollbackNode={handleRollbackAttackNode}
+                  />
+                </section>
+                {isShellFocusPanelOpen ? (
+                  <section
+                    className="workspace-shell-focus-panel-shell"
+                    data-testid="workspace-shell-focus-panel"
+                  >
+                    <ShellWorkbench
+                      sessionId={activeSession.id}
+                      disabled={false}
+                      variant="focus-docked"
+                      focusRequest={shellFocusRequest}
+                      onDismiss={() => setIsShellFocusPanelOpen(false)}
+                    />
+                  </section>
+                ) : null}
               </section>
 
               {workspaceSplitPane.isEnabled ? (
@@ -1274,10 +1311,6 @@ export function SessionWorkspaceWorkbench() {
                 id="workspace-chat-panel"
               >
                 <section className="workspace-message-panel workspace-terminal-panel">
-                  <ShellWorkbench
-                    sessionId={activeSession.id}
-                    disabled={false}
-                  />
                   <ConversationFeed
                     messages={activeConversation.messages}
                     generations={activeConversation.generations}
@@ -1307,6 +1340,7 @@ export function SessionWorkspaceWorkbench() {
                         );
                       }
                     }}
+                    onFocusShell={handleFocusShellFromConversation}
                   />
                   <WorkbenchComposer
                     sessionId={activeSession.id}

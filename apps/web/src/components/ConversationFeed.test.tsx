@@ -7,6 +7,7 @@ import type {
   SessionEventEntry,
   SessionMessage,
 } from "../types/sessions";
+import type { RuntimeExecutionRun } from "../types/runtime";
 import "../styles.css";
 import { ConversationFeed } from "./ConversationFeed";
 
@@ -310,6 +311,67 @@ describe("ConversationFeed", () => {
 
     expect(shellBlock?.open).toBe(true);
     expect(screen.getByText("runtime command completed")).toBeInTheDocument();
+  });
+
+  it("emits shell focus payload when the expanded shell card focus button is clicked", () => {
+    const onFocusShell = vi.fn();
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-focus-shell-call",
+                kind: "tool_call",
+                sequence: 1,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-focus-shell-1",
+                text: "whoami",
+                metadata: {
+                  command: "whoami",
+                },
+              }),
+              buildTranscriptSegment({
+                id: "segment-focus-shell-result",
+                kind: "tool_result",
+                sequence: 2,
+                tool_name: "execute_kali_command",
+                tool_call_id: "tool-focus-shell-1",
+                text: "命令执行完成。",
+                metadata: {
+                  result: {
+                    command: "whoami",
+                    stdout: "root",
+                    terminal_id: "term-focus-1",
+                  },
+                },
+              }),
+            ],
+            content: "focus payload ready",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={[]}
+        onFocusShell={onFocusShell}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+    const focusButton = screen.getByRole("button", { name: "聚焦终端" });
+    expect(focusButton.className).toContain("assistant-shell-focus-inline");
+    expect(focusButton.className).toContain("assistant-shell-focus-overlay");
+    expect(focusButton.className).not.toContain("assistant-shell-focus-floating");
+    expect(container.querySelector(".assistant-shell-block")?.contains(focusButton)).toBe(true);
+    expect(container.querySelector(".assistant-shell-block .assistant-shell-focus-row")).toBeNull();
+
+    fireEvent.click(focusButton);
+
+    expect(onFocusShell).toHaveBeenCalledWith({
+      terminalId: "term-focus-1",
+      command: "whoami",
+      toolCallId: "tool-focus-shell-1",
+    });
   });
 
   it("renders all selected skills in autoroute cue without prefix text", () => {
@@ -1413,6 +1475,66 @@ describe("ConversationFeed", () => {
 
     expect(screen.getByText("fallback stdout still visible")).toBeInTheDocument();
     expect(screen.getAllByText("Shell").length).toBeGreaterThan(0);
+  });
+
+  it("falls back to runtime run command and stdout when transcript shell metadata is thin", () => {
+    const runtimeRuns: RuntimeExecutionRun[] = [
+      {
+        id: "runtime-run-1",
+        session_id: "session-1",
+        command: 'curl -s -L "http://target.example/profile"',
+        requested_timeout_seconds: 120,
+        status: "success",
+        exit_code: 0,
+        stdout: "<!DOCTYPE html>\n<html><body>runtime fallback body</body></html>",
+        stderr: "",
+        container_name: "aegissec-kali",
+        created_at: "2026-04-01T10:00:04.000Z",
+        started_at: "2026-04-01T10:00:04.100Z",
+        ended_at: "2026-04-01T10:00:04.300Z",
+        artifacts: [],
+      },
+    ];
+
+    const { container } = render(
+      <ConversationFeed
+        messages={buildMessages({
+          assistant: {
+            assistant_transcript: [
+              buildTranscriptSegment({
+                id: "segment-runtime-fallback-result",
+                kind: "tool_result",
+                sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "tool-runtime-fallback-1",
+                text: "命令已完成，状态：success。",
+                metadata: {
+                  result: {
+                    status: "success",
+                    run_id: "runtime-run-1",
+                  },
+                },
+              }),
+            ],
+            content: "runtime 回填内容已展示。",
+          },
+        })}
+        generations={[buildGeneration()]}
+        events={[]}
+        runtimeRuns={runtimeRuns}
+      />,
+    );
+
+    fireEvent.click(container.querySelector(".assistant-tool-summary")!);
+
+    const terminalPrompt =
+      container.querySelector(".assistant-terminal-output-prompt")?.textContent ?? "";
+
+    expect(terminalPrompt).toContain('$ curl -s -L "http://target.example/profile"');
+    expect(terminalPrompt).not.toContain("$ Shell");
+    expect(screen.getByText(/runtime fallback body/)).toBeInTheDocument();
+    expect(screen.getByText("退出码：0")).toBeInTheDocument();
+    expect(screen.queryByText("命令已完成，状态：success。")).not.toBeInTheDocument();
   });
 
   it("falls back to reference shell metadata when the paired result is present but thin", () => {

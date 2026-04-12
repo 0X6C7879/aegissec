@@ -13,6 +13,7 @@ from app.services.terminal_runtime import (
     LiveTerminalHandle,
     LiveTerminalJobRegistry,
     LiveTerminalRegistry,
+    OrphanTerminalRecoveryResult,
     TerminalAlreadyAttachedError,
     TerminalJobAlreadyRunningError,
     TerminalNotFoundError,
@@ -242,6 +243,67 @@ async def test_terminal_runtime_service_marks_timed_out_detached_jobs_and_cleans
         assert jobs[0].status == RuntimeTerminalJobStatus.TIMEOUT
 
     assert await service.get_active_background_job_ids(session_id=session_id) == set()
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_terminal_state_cancels_running_jobs_and_closes_terminals(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id, terminal_id = _create_session_and_terminal(client, title="Orphan Recovery")
+
+    with DBSession(app.state.database_engine) as db_session:
+        session_repository = terminal_runtime.SessionRepository(db_session)
+        session = session_repository.get_session(session_id)
+        assert session is not None
+        shell_service = terminal_runtime.SessionShellService(
+            TerminalRepository(db_session),
+            terminal_runtime.RunLogRepository(db_session),
+        )
+        shell_service.start_terminal_job(
+            session=session,
+            terminal_id=terminal_id,
+            command="sleep 60",
+            metadata={"detach": True},
+        )
+
+    stop_calls = 0
+
+    class FakeRuntimeBackend:
+        def stop(self) -> object:
+            nonlocal stop_calls
+            stop_calls += 1
+            return object()
+
+    monkeypatch.setattr(
+        terminal_runtime,
+        "get_runtime_backend",
+        lambda settings: FakeRuntimeBackend(),
+    )
+
+    result = await terminal_runtime.recover_orphaned_terminal_state(
+        database_engine=app.state.database_engine,
+        settings=app.state.settings,
+    )
+
+    assert isinstance(result, OrphanTerminalRecoveryResult)
+    assert result.cancelled_jobs == 1
+    assert result.closed_terminals == 1
+    assert result.runtime_stop_attempted is True
+    assert stop_calls == 1
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        jobs = repository.list_terminal_jobs(session_id=session_id, terminal_session_id=terminal_id)
+        terminal_record = repository.get_terminal_session(
+            session_id=session_id,
+            terminal_session_id=terminal_id,
+        )
+        assert len(jobs) == 1
+        assert jobs[0].status == RuntimeTerminalJobStatus.CANCELLED
+        assert jobs[0].metadata_json["finish_reason"] == "service_restart"
+        assert terminal_record is not None
+        assert terminal_record.closed_at is not None
 
 
 @pytest.mark.anyio

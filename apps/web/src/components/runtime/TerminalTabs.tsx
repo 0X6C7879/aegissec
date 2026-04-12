@@ -7,6 +7,7 @@ type TerminalTabsProps = {
   onSelect: (terminalId: string) => void;
   onClose: (terminalId: string) => void;
   onCreate: () => void;
+  onCloseAll?: () => void;
 };
 
 export function TerminalTabs({
@@ -16,6 +17,7 @@ export function TerminalTabs({
   onSelect,
   onClose,
   onCreate,
+  onCloseAll,
 }: TerminalTabsProps) {
   return (
     <div className="shell-workbench-tabs" data-testid="shell-workbench-tabs">
@@ -40,8 +42,14 @@ export function TerminalTabs({
                 type="button"
                 className="shell-workbench-tab-close"
                 aria-label={`关闭 ${terminal.title}`}
+                title={`关闭 ${terminal.title}`}
                 disabled={disabled}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
                 onClick={(event) => {
+                  event.preventDefault();
                   event.stopPropagation();
                   onClose(terminal.id);
                 }}
@@ -52,14 +60,28 @@ export function TerminalTabs({
           );
         })}
       </div>
-      <button
-        type="button"
-        className="button button-secondary shell-workbench-create"
-        onClick={onCreate}
-        disabled={disabled}
-      >
-        新建终端
-      </button>
+      <div className="shell-workbench-tab-actions">
+        <button
+          type="button"
+          className="button button-secondary shell-workbench-create"
+          aria-label="新建终端"
+          title="新建终端"
+          onClick={onCreate}
+          disabled={disabled}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className="button button-secondary shell-workbench-close-all"
+          aria-label="关闭全部终端"
+          title="关闭全部终端"
+          onClick={onCloseAll}
+          disabled={disabled || terminals.length === 0 || typeof onCloseAll !== "function"}
+        >
+          X
+        </button>
+      </div>
     </div>
   );
 }

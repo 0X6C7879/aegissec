@@ -62,6 +62,12 @@ type PresentShellTextValue = {
   text: string;
 };
 
+export type ShellFocusPayload = {
+  terminalId: string | null;
+  command: string;
+  toolCallId: string | null;
+};
+
 type TranscriptToolPair = {
   anchorId: string;
   call: AssistantTranscriptSegment | null;
@@ -81,6 +87,7 @@ type ConversationFeedProps = {
   cancelGenerationBusy?: boolean;
   onCancelGeneration?: (generationId: string) => void;
   onEditMessage?: (message: SessionMessage, content: string) => Promise<void> | void;
+  onFocusShell?: (payload: ShellFocusPayload) => void;
 };
 
 type GenerationRun = {
@@ -690,16 +697,24 @@ function truncateCommand(value: string, maxLength = 64): string {
 
 const SHELL_CANDIDATE_RECORD_PATHS = [
   ["result"],
-  ["output"],
   ["result", "output"],
-  ["execution"],
   ["result", "execution"],
-  ["payload"],
+  ["result", "execution", "payload"],
+  ["result", "execution", "payload", "data"],
+  ["result", "execution", "data"],
   ["result", "payload"],
-  ["data"],
+  ["result", "payload", "data"],
   ["result", "data"],
-  ["arguments"],
   ["result", "arguments"],
+  ["output"],
+  ["execution"],
+  ["execution", "payload"],
+  ["execution", "payload", "data"],
+  ["execution", "data"],
+  ["payload"],
+  ["payload", "data"],
+  ["data"],
+  ["arguments"],
 ] as const;
 
 const SHELL_FALLBACK_FIELD_NAMES = ["text", "safe_summary", "summary", "message", "error"] as const;
@@ -819,6 +834,7 @@ function isUsableShellFallbackText(
   candidate: string,
   command: string,
   excludedText: string | null,
+  options?: { allowGenericSummary?: boolean },
 ): boolean {
   const normalizedCandidate = candidate.trim();
   if (normalizedCandidate.length === 0) {
@@ -831,7 +847,7 @@ function isUsableShellFallbackText(
   return !(
     normalizedCandidate === normalizedCommand ||
     (normalizedExcludedText !== null && normalizedCandidate === normalizedExcludedText) ||
-    isGenericShellSummary(normalizedCandidate)
+    (!options?.allowGenericSummary && isGenericShellSummary(normalizedCandidate))
   );
 }
 
@@ -841,7 +857,17 @@ function readSegmentCommand(segment: AssistantTranscriptSegment): string | null 
     segment.tool_name === "bash" ||
     segment.tool_name === "sh" ||
     segment.tool_name === "zsh";
-  const command = readShellDisplayField(segment, ["command"])?.text.trim() ?? null;
+  const command =
+    readShellDisplayField(segment, [
+      "command",
+      "cmd",
+      "raw_command",
+      "shell_command",
+      "original_command",
+      "requested_command",
+      "invocation",
+      "input",
+    ])?.text.trim() ?? null;
 
   return (
     (command && command.length > 0 ? command : null) ??
@@ -849,6 +875,156 @@ function readSegmentCommand(segment: AssistantTranscriptSegment): string | null 
       ? segment.text.trim()
       : null)
   );
+}
+
+function readShellCommandFromSegmentText(segment: AssistantTranscriptSegment | null): string | null {
+  if (!segment?.text) {
+    return null;
+  }
+
+  const candidate = segment.text.trim();
+  if (!candidate || isGenericShellSummary(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function readShellCommandFromSegmentTitle(segment: AssistantTranscriptSegment | null): string | null {
+  if (!segment?.title) {
+    return null;
+  }
+
+  const title = segment.title.trim();
+  if (!title || isGenericShellSummary(title) || /^shell$/i.test(title)) {
+    return null;
+  }
+
+  const prefixedCommandMatch = title.match(
+    /(?:开始调用工具|工具调用已完成|工具调用失败|执行命令|command|cmd|invocation)\s*[:：]\s*(.+)$/i,
+  );
+  if (!prefixedCommandMatch?.[1]) {
+    return null;
+  }
+
+  const candidate = prefixedCommandMatch[1].trim();
+  if (!candidate || isGenericShellSummary(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function resolveShellCommand(
+  segments: readonly (AssistantTranscriptSegment | null)[],
+): string | null {
+  for (const segment of segments) {
+    if (!segment) {
+      continue;
+    }
+
+    const command = readSegmentCommand(segment);
+    if (command) {
+      return command;
+    }
+  }
+
+  const metadataCommand = readPrioritizedShellDisplayField(segments, [
+    "command",
+    "cmd",
+    "raw_command",
+    "invocation",
+    "input",
+  ]);
+  if (metadataCommand?.text.trim()) {
+    return metadataCommand.text.trim();
+  }
+
+  for (const segment of segments) {
+    const titleCommand = readShellCommandFromSegmentTitle(segment);
+    if (titleCommand) {
+      return titleCommand;
+    }
+  }
+
+  for (const segment of segments) {
+    const textCommand = readShellCommandFromSegmentText(segment);
+    if (textCommand) {
+      return textCommand;
+    }
+  }
+
+  return null;
+}
+
+function readShellTerminalId(
+  segments: readonly (AssistantTranscriptSegment | null)[],
+): string | null {
+  const CANDIDATE_FIELDS = ["terminal_id", "terminalId", "terminal_session_id"] as const;
+
+  for (const segment of segments) {
+    for (const record of collectShellCandidateRecords(segment)) {
+      for (const field of CANDIDATE_FIELDS) {
+        const candidate = record[field];
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+          return candidate.trim();
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function readShellRunId(segments: readonly (AssistantTranscriptSegment | null)[]): string | null {
+  const CANDIDATE_FIELDS = ["run_id", "runId", "runtime_run_id", "runtimeRunId"] as const;
+
+  for (const segment of segments) {
+    for (const record of collectShellCandidateRecords(segment)) {
+      for (const field of CANDIDATE_FIELDS) {
+        const candidate = record[field];
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+          return candidate.trim();
+        }
+      }
+
+      const nestedRun = record["run"];
+      if (isRecord(nestedRun)) {
+        const nestedCandidate = readFirstString(nestedRun, ["id", "run_id", "runId"]);
+        if (nestedCandidate && nestedCandidate.trim().length > 0) {
+          return nestedCandidate.trim();
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function toPresentShellTextValue(value: string | number | null | undefined): PresentShellTextValue | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return {
+    present: true,
+    text: String(value),
+  };
+}
+
+function pickPreferredShellText(
+  primary: PresentShellTextValue | null,
+  fallback: PresentShellTextValue | null,
+): PresentShellTextValue | null {
+  if (hasVisibleShellText(primary)) {
+    return primary;
+  }
+
+  if (hasVisibleShellText(fallback)) {
+    return fallback;
+  }
+
+  return primary ?? fallback;
 }
 
 function readSkillPayload(segment: AssistantTranscriptSegment): Record<string, unknown> | null {
@@ -884,6 +1060,7 @@ function readShellFallbackOutput(
   segment: AssistantTranscriptSegment | null,
   command: string,
   excludedText: string | null = null,
+  options?: { allowGenericSummary?: boolean },
 ): PresentShellTextValue | null {
   if (!segment) {
     return null;
@@ -896,7 +1073,7 @@ function readShellFallbackOutput(
       }
 
       const text = coerceShellDisplayValue(record[fieldName]);
-      if (!isUsableShellFallbackText(text, command, excludedText)) {
+      if (!isUsableShellFallbackText(text, command, excludedText, options)) {
         continue;
       }
 
@@ -912,7 +1089,7 @@ function readShellFallbackOutput(
     return null;
   }
 
-  if (!isUsableShellFallbackText(candidate, command, excludedText)) {
+  if (!isUsableShellFallbackText(candidate, command, excludedText, options)) {
     return null;
   }
 
@@ -2013,39 +2190,84 @@ function AssistantShellBlock({
   call,
   result,
   error,
+  onFocusShell,
+  runtimeRunsById,
 }: {
   call: AssistantTranscriptSegment | null;
   result: AssistantTranscriptSegment | null;
   error: AssistantTranscriptSegment | null;
+  onFocusShell?: (payload: ShellFocusPayload) => void;
+  runtimeRunsById?: ReadonlyMap<string, RuntimeExecutionRun>;
 }) {
   const reference = result ?? error ?? call;
   if (!reference) {
     return null;
   }
 
-  const command = readSegmentCommand(call ?? result ?? reference) ?? "Shell";
-  const stdout = readPrioritizedShellDisplayField([result, call, error], ["stdout"]);
-  const stderr = readPrioritizedShellDisplayField([result, error, call], ["stderr"]);
-  const exitCode = readPrioritizedShellDisplayField([result, call, error], ["exit_code"]);
-  const status = error ? "failed" : (result?.status ?? call?.status ?? null);
+  const runId = readShellRunId([result, call, error]);
+  const runtimeRun = runId && runtimeRunsById ? (runtimeRunsById.get(runId) ?? null) : null;
+  const command =
+    resolveShellCommand([call, result, error]) ??
+    (runtimeRun?.command?.trim() ? runtimeRun.command.trim() : null) ??
+    "Shell";
+  const stdout = pickPreferredShellText(
+    readPrioritizedShellDisplayField([result, call, error], ["stdout"]),
+    runtimeRun ? toPresentShellTextValue(runtimeRun.stdout) : null,
+  );
+  const stderr = pickPreferredShellText(
+    readPrioritizedShellDisplayField([result, error, call], ["stderr"]),
+    runtimeRun ? toPresentShellTextValue(runtimeRun.stderr) : null,
+  );
+  const exitCode = pickPreferredShellText(
+    readPrioritizedShellDisplayField([result, call, error], ["exit_code"]),
+    runtimeRun ? toPresentShellTextValue(runtimeRun.exit_code) : null,
+  );
+  const status = error ? "failed" : (result?.status ?? call?.status ?? runtimeRun?.status ?? null);
   const statusForBadge = normalizeToolStatusForBadge(status);
   const sourceAttribution = mergeToolSourceAttribution(call, result, error);
+  const terminalId = readShellTerminalId([result, call, error]);
   const shellErrorText = readShellErrorText({
     error,
     result,
     call,
     status,
   });
+  const effectiveShellErrorText =
+    shellErrorText ??
+    (runtimeRun &&
+    isShellFailureStatus(runtimeRun.status) &&
+    runtimeRun.stderr.trim().length > 0
+      ? runtimeRun.stderr
+      : null);
   const outputFallback =
     !hasVisibleShellText(stdout) && !hasVisibleShellText(stderr)
-      ? (readShellFallbackOutput(result, command, shellErrorText) ??
-        readShellFallbackOutput(call, command, shellErrorText) ??
-        readShellFallbackOutput(error, command, shellErrorText))
+      ? (readShellFallbackOutput(result, command, effectiveShellErrorText) ??
+        readShellFallbackOutput(call, command, effectiveShellErrorText) ??
+        readShellFallbackOutput(error, command, effectiveShellErrorText))
       : null;
+  const outputFallbackWithSummary =
+    !hasVisibleShellText(stdout) &&
+    !hasVisibleShellText(stderr) &&
+    !hasVisibleShellText(outputFallback)
+      ? (readShellFallbackOutput(result, command, effectiveShellErrorText, {
+          allowGenericSummary: true,
+        }) ??
+        readShellFallbackOutput(call, command, effectiveShellErrorText, {
+          allowGenericSummary: true,
+        }) ??
+        readShellFallbackOutput(error, command, effectiveShellErrorText, {
+          allowGenericSummary: true,
+        }))
+      : outputFallback;
+  const runtimeArtifacts =
+    runtimeRun?.artifacts
+      .map((artifact) => artifact.relative_path.trim())
+      .filter((artifactPath) => artifactPath.length > 0) ?? [];
   const artifacts = [
     ...readShellArtifacts(result),
     ...readShellArtifacts(call),
     ...readShellArtifacts(error),
+    ...runtimeArtifacts,
   ].filter((artifact, index, allArtifacts) => allArtifacts.indexOf(artifact) === index);
 
   return (
@@ -2065,13 +2287,34 @@ function AssistantShellBlock({
           {statusForBadge ? <StatusBadge status={statusForBadge} /> : null}
         </div>
       </summary>
+      {typeof onFocusShell === "function" ? (
+        <button
+          type="button"
+          className="assistant-shell-focus-trigger assistant-shell-focus-inline assistant-shell-focus-overlay"
+          aria-label="聚焦终端"
+          title={terminalId ? `聚焦终端 ${terminalId}` : "聚焦终端"}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onFocusShell({
+              terminalId,
+              command,
+              toolCallId: reference.tool_call_id ?? null,
+            });
+          }}
+        >
+          ⌖
+        </button>
+      ) : null}
       <div className="assistant-tool-body">
         <div className="assistant-tool-detail-group">
           <pre className="assistant-terminal-output">
             <span className="assistant-terminal-output-prompt">$ {command}</span>
             {stdout !== null && stdout.text ? `\n${stdout.text}` : ""}
             {stderr !== null && stderr.text ? `\n${stderr.text}` : ""}
-            {outputFallback !== null && outputFallback.text ? `\n${outputFallback.text}` : ""}
+            {outputFallbackWithSummary !== null && outputFallbackWithSummary.text
+              ? `\n${outputFallbackWithSummary.text}`
+              : ""}
           </pre>
         </div>
         {exitCode !== null ? (
@@ -2089,7 +2332,9 @@ function AssistantShellBlock({
             </div>
           </div>
         ) : null}
-        {shellErrorText ? <p className="assistant-tool-error-copy">{shellErrorText}</p> : null}
+        {effectiveShellErrorText ? (
+          <p className="assistant-tool-error-copy">{effectiveShellErrorText}</p>
+        ) : null}
       </div>
     </details>
   );
@@ -2267,11 +2512,15 @@ function AssistantToolInvocationBlock({
   result,
   error,
   suppressExecuteSkillLabel = false,
+  onFocusShell,
+  runtimeRunsById,
 }: {
   call: AssistantTranscriptSegment | null;
   result: AssistantTranscriptSegment | null;
   error: AssistantTranscriptSegment | null;
   suppressExecuteSkillLabel?: boolean;
+  onFocusShell?: (payload: ShellFocusPayload) => void;
+  runtimeRunsById?: ReadonlyMap<string, RuntimeExecutionRun>;
 }) {
   const reference = result ?? error ?? call;
   if (!reference) {
@@ -2313,7 +2562,15 @@ function AssistantToolInvocationBlock({
   const sourceAttribution = mergeToolSourceAttribution(call, result, error);
 
   if (shellLikeTool || command) {
-    return <AssistantShellBlock call={call} result={result} error={error} />;
+    return (
+      <AssistantShellBlock
+        call={call}
+        result={result}
+        error={error}
+        onFocusShell={onFocusShell}
+        runtimeRunsById={runtimeRunsById}
+      />
+    );
   }
 
   return (
@@ -2330,12 +2587,14 @@ export function ConversationFeed(props: ConversationFeedProps) {
     messages,
     generations,
     events,
+    runtimeRuns = [],
     activeGeneration = null,
     queuedGenerations = [],
     messageActionBusyId,
     cancelGenerationBusy = false,
     onCancelGeneration,
     onEditMessage,
+    onFocusShell,
   } = props;
   const feedRef = useRef<HTMLElement | null>(null);
   const previousLastItemSignature = useRef<string | null>(null);
@@ -2348,6 +2607,12 @@ export function ConversationFeed(props: ConversationFeedProps) {
     () => mergeGenerations(generations, activeGeneration, queuedGenerations),
     [activeGeneration, generations, queuedGenerations],
   );
+  const runtimeRunsById = useMemo(() => {
+    const entries = runtimeRuns
+      .filter((run): run is RuntimeExecutionRun => typeof run.id === "string" && run.id.length > 0)
+      .map((run) => [run.id, run] as const);
+    return new Map(entries);
+  }, [runtimeRuns]);
 
   const { turns, orphanMessages, orphanGenerationRuns, orphanEventNotes } = useMemo(
     () => buildConversationRows(messages, mergedGenerations, compactionNotes),
@@ -2491,6 +2756,8 @@ export function ConversationFeed(props: ConversationFeedProps) {
                 result={block.result}
                 error={block.error}
                 suppressExecuteSkillLabel={suppressExecuteSkillLabel}
+                onFocusShell={onFocusShell}
+                runtimeRunsById={runtimeRunsById}
               />
             );
           }

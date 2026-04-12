@@ -21,12 +21,20 @@ from app.core.settings import Settings, get_settings
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
 from app.services.llm_rate_control import compute_retry_delay_seconds, get_llm_rate_controller
 
-MAX_TOOL_STEPS = 24
+MAX_TOOL_STEPS = 48
+TOOL_BUDGET_REFLECTION_PROMPT = (
+    "The automatic tool budget for the current autonomous phase has been exhausted. "
+    "Do not call any more tools in this response. Using only the evidence already gathered, "
+    "write a compact reflection that covers: verified findings, dead ends or repeated attempts "
+    "to avoid, and the next best autonomous tool plan with 1-3 concrete actions that explore a "
+    "materially different angle. If further autonomous progress looks unlikely, say so clearly."
+)
 TOOL_BUDGET_EXHAUSTED_PROMPT = (
-    "The automatic tool budget for this reply has been exhausted. Do not call any more tools. "
-    "Using only the evidence already gathered in this conversation, provide the best possible "
-    "concise answer, summarize what was verified, list the most likely next steps, and clearly "
-    "state that the automatic tool budget was reached if the task is still incomplete."
+    "The automatic tool budget across all autonomous phases has been exhausted. "
+    "Do not call any more tools. Using only the evidence already gathered in this conversation, "
+    "provide the best possible concise answer, summarize what was verified, list the most likely "
+    "next steps, and clearly state that the automatic tool budget was reached if the task is "
+    "still incomplete."
 )
 THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 INVOKE_BLOCK_PATTERN = re.compile(r"<invoke\b[^>]*>.*?</invoke>", re.IGNORECASE | re.DOTALL)
@@ -228,6 +236,25 @@ def _append_tool_budget_exhausted_prompt(
     ]
 
 
+def _append_tool_budget_reflection_prompt(
+    messages: list[dict[str, object]],
+    *,
+    cycle_index: int,
+    max_cycles: int,
+) -> list[dict[str, object]]:
+    return [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                f"{TOOL_BUDGET_REFLECTION_PROMPT} "
+                f"This is phase {cycle_index} of {max_cycles}; another autonomous phase may "
+                "follow automatically if you provide a strong plan."
+            ),
+        },
+    ]
+
+
 def _extract_openai_usage_snapshot(response_payload: Mapping[str, object]) -> UsageSnapshot:
     raw_usage = response_payload.get("usage")
     if not isinstance(raw_usage, dict):
@@ -318,7 +345,8 @@ class OpenAICompatibleChatRuntime:
             available_skills=available_skills or [],
             mcp_tools=mcp_tools,
             skill_context_prompt=skill_context_prompt,
-            max_turns=MAX_TOOL_STEPS + 1,
+            max_turns=self._settings.chat_auto_tool_turn_limit,
+            max_budget_cycles=self._settings.chat_auto_tool_budget_cycles,
             system_prompt=SYSTEM_PROMPT,
             session_state=session_state,
             compact_service=compact_service,
@@ -457,6 +485,37 @@ class OpenAICompatibleChatRuntime:
             return text_content
 
         raise ChatRuntimeError("LLM API exceeded the maximum number of automatic tool steps.")
+
+    async def _generate_tool_budget_reflection(
+        self,
+        endpoint: str,
+        headers: dict[str, str],
+        model: str,
+        messages: list[dict[str, object]],
+        *,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> str:
+        payload = self._build_payload(
+            model,
+            _append_tool_budget_reflection_prompt(
+                messages,
+                cycle_index=cycle_index,
+                max_cycles=max_cycles,
+            ),
+            mcp_tools=None,
+            allow_tools=False,
+            stream=False,
+        )
+        response_payload = await self._request_completion(endpoint, headers, payload)
+        assistant_message = self._extract_message_payload(response_payload)
+        text_content = self._extract_message_content(assistant_message.get("content"))
+        if text_content:
+            return text_content
+
+        raise ChatRuntimeError(
+            "LLM API returned an empty autonomous reflection after tool budget exhaustion."
+        )
 
     async def _stream_completion(
         self,
@@ -1221,7 +1280,8 @@ class AnthropicChatRuntime:
             available_skills=available_skills or [],
             mcp_tools=mcp_tools,
             skill_context_prompt=skill_context_prompt,
-            max_turns=MAX_TOOL_STEPS + 1,
+            max_turns=self._settings.chat_auto_tool_turn_limit,
+            max_budget_cycles=self._settings.chat_auto_tool_budget_cycles,
             system_prompt=SYSTEM_PROMPT,
             session_state=session_state,
             compact_service=compact_service,
@@ -1371,6 +1431,36 @@ class AnthropicChatRuntime:
             return text_content
 
         raise ChatRuntimeError("LLM API exceeded the maximum number of automatic tool steps.")
+
+    async def _generate_tool_budget_reflection(
+        self,
+        endpoint: str,
+        headers: dict[str, str],
+        model: str,
+        messages: list[dict[str, object]],
+        *,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> str:
+        payload = self._build_payload(
+            model,
+            _append_tool_budget_reflection_prompt(
+                messages,
+                cycle_index=cycle_index,
+                max_cycles=max_cycles,
+            ),
+            mcp_tools=None,
+            allow_tools=False,
+            stream=False,
+        )
+        response_payload = await self._request_completion(endpoint, headers, payload)
+        text_content, tool_uses = self._extract_response_content(response_payload)
+        if text_content and not tool_uses:
+            return text_content
+
+        raise ChatRuntimeError(
+            "LLM API returned an empty autonomous reflection after tool budget exhaustion."
+        )
 
     async def _stream_completion(
         self,

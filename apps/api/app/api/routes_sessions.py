@@ -53,6 +53,7 @@ from app.db.models import (
     TerminalBufferRead,
     TerminalExecuteRequest,
     TerminalExecuteResponse,
+    TerminalFocusResponse,
     TerminalInputRequest,
     TerminalJobRead,
     TerminalJobsCleanupRequest,
@@ -1508,6 +1509,133 @@ async def create_session_terminal(
 
 
 @router.get(
+    "/{session_id}/terminals/focused",
+    response_model=TerminalSessionRead,
+    summary="Get focused session terminal",
+    description="Return the currently focused terminal metadata for the session.",
+)
+async def get_focused_session_terminal(
+    request: Request,
+    session_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    terminal = service.get_focused_terminal(session_id=session_id)
+    if terminal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Focused terminal not found",
+        )
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=terminal,
+    )
+    return ok_response(enriched_terminal.model_dump(mode="json", by_alias=True))
+
+
+@router.post(
+    "/{session_id}/terminals/{terminal_id}/focus",
+    response_model=TerminalFocusResponse,
+    summary="Focus session terminal",
+    description="Mark a terminal as the focused terminal for the session.",
+)
+async def focus_session_terminal(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    try:
+        result = service.focus_terminal(session=session, terminal_id=terminal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=result.terminal,
+    )
+    return ok_response(
+        TerminalFocusResponse(terminal=enriched_terminal).model_dump(mode="json", by_alias=True)
+    )
+
+
+@router.post(
+    "/{session_id}/terminals/focused/execute",
+    response_model=TerminalExecuteResponse,
+    summary="Execute in focused session terminal",
+    description="Run a command in the session's currently focused terminal.",
+)
+async def execute_focused_session_terminal(
+    request: Request,
+    session_id: str,
+    payload: TerminalExecuteRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    focused_terminal = service.get_focused_terminal(session_id=session_id)
+    if focused_terminal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Focused terminal not found",
+        )
+    terminal_runtime_service = build_terminal_runtime_service(
+        app=request.app, event_broker=event_broker
+    )
+    try:
+        job_id, job_status = await terminal_runtime_service.execute_in_terminal(
+            session_id=session_id,
+            terminal_id=focused_terminal.id,
+            command=payload.command,
+            detach=payload.detach,
+            timeout_seconds=(
+                payload.timeout_seconds
+                or request.app.state.settings.runtime_default_timeout_seconds
+            ),
+            artifact_paths=list(payload.artifact_paths),
+            runtime_policy=runtime_service.resolve_policy_for_session(session),
+        )
+    except TerminalRuntimeError as exc:
+        detail = str(exc)
+        if isinstance(exc, TerminalNotFoundError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
+        if isinstance(exc, TerminalBackendUnavailableError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            ) from exc
+        if isinstance(exc, TerminalClosedError | TerminalNotAttachedError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        if isinstance(exc, TerminalJobAlreadyRunningError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+
+    response = TerminalExecuteResponse(
+        terminal_id=focused_terminal.id,
+        detach=payload.detach,
+        job_id=job_id,
+        status=job_status,
+    )
+    return ok_response(response.model_dump(mode="json"))
+
+
+@router.get(
     "/{session_id}/terminals/{terminal_id}",
     response_model=TerminalSessionRead,
     summary="Get session terminal",
@@ -1811,7 +1939,7 @@ async def stream_session_terminal(
     authorized, reason = is_websocket_authorized(
         websocket,
         settings,
-        allow_query_params=False,
+        allow_query_params=True,
     )
     if not authorized:
         raise HTTPException(

@@ -909,12 +909,38 @@ textarea::placeholder {
   cursor: col-resize;
 }
 
-.workspace-attack-graph-workbench,
-.workspace-graph-main-column {
+.workspace-attack-graph-workbench {
   display: flex;
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
+}
+
+.workspace-graph-main-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+}
+
+.workspace-graph-main-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.workspace-shell-focus-panel-shell {
+  display: flex;
+  min-height: 240px;
+  max-height: 42dvh;
+}
+
+.workspace-shell-focus-panel-shell .shell-workbench {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
 }
 
 .workspace-session-side-column,
@@ -1616,6 +1642,7 @@ textarea::placeholder {
 }
 
 .assistant-shell-block {
+  position: relative;
   border: 1px solid rgba(120, 154, 194, 0.14);
   background: linear-gradient(180deg, rgba(4, 8, 14, 0.98), rgba(2, 6, 12, 0.98));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
@@ -1730,6 +1757,57 @@ textarea::placeholder {
   margin: 0;
   color: var(--text-secondary);
   font: 500 0.76rem/1.5 var(--font-code);
+}
+
+.assistant-shell-focus-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: 600 0.74rem/1 var(--font-code);
+  opacity: 0;
+  transition:
+    opacity 0.18s ease,
+    color 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.assistant-shell-focus-inline {
+  position: static;
+}
+
+.assistant-shell-focus-overlay {
+  position: absolute;
+  top: 12px;
+  right: 84px;
+  z-index: 1;
+  flex: 0 0 auto;
+  opacity: 0.78;
+}
+
+.workspace-message-panel .assistant-shell-focus-overlay {
+  top: 10px;
+  right: 78px;
+}
+
+.assistant-shell-block:hover .assistant-shell-focus-trigger,
+.assistant-shell-block[open] .assistant-shell-focus-trigger,
+.assistant-shell-focus-trigger:focus-visible {
+  opacity: 0.82;
+}
+
+.assistant-shell-focus-trigger:hover,
+.assistant-shell-focus-trigger:focus-visible {
+  color: var(--accent-strong);
+  border-color: rgba(0, 217, 255, 0.2);
+  background: rgba(0, 217, 255, 0.08);
 }
 
 .assistant-tool-source-row {
@@ -2278,6 +2356,21 @@ textarea::placeholder {
   background: linear-gradient(180deg, rgba(7, 12, 21, 0.96), rgba(5, 9, 16, 0.98));
 }
 
+.shell-workbench-docked {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(5, 9, 16, 0.98), rgba(2, 5, 10, 0.99));
+  border-color: rgba(107, 126, 154, 0.22);
+}
+
+.shell-workbench-docked-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 0;
+}
+
 .shell-workbench-header,
 .shell-jobs-header,
 .shell-job-row {
@@ -2316,41 +2409,74 @@ textarea::placeholder {
   gap: 10px;
 }
 
+.shell-workbench-dismiss {
+  margin-left: auto;
+}
+
+.shell-workbench-docked .shell-command-bar {
+  padding: 10px;
+  border-radius: 10px;
+}
+
+.shell-workbench-docked .shell-workbench-tabs {
+  padding-top: 0;
+  padding-bottom: 6px;
+}
+
 .shell-workbench-tabs {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .shell-workbench-tab-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.shell-workbench-tab-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 8px;
 }
 
 .shell-workbench-tab-shell {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
+  padding: 1px 2px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .shell-workbench-tab {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   gap: 8px;
-  min-height: 38px;
-  padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
   color: var(--text-primary);
-  font: 600 0.76rem/1 var(--font-code);
+  font: 600 0.74rem/1 var(--font-code);
 }
 
 .shell-workbench-tab-active {
-  border-color: rgba(0, 217, 255, 0.28);
-  background: linear-gradient(180deg, rgba(0, 217, 255, 0.16), rgba(0, 217, 255, 0.06));
+  background: linear-gradient(180deg, rgba(0, 217, 255, 0.14), rgba(0, 217, 255, 0.04));
 }
 
 .shell-workbench-tab-title {
@@ -2360,12 +2486,59 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.shell-workbench-tab-status {
+  max-width: 78px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shell-workbench-tab-close {
-  border: none;
+  display: inline-flex;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-secondary);
-  font: 700 0.9rem/1 var(--font-code);
+  font: 700 0.82rem/1 var(--font-code);
   padding: 0;
+}
+
+.shell-workbench-tab-close:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.shell-workbench-create {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  font: 700 0.94rem/1 var(--font-code);
+}
+
+.shell-workbench-close-all {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  font: 700 0.78rem/1 var(--font-code);
+}
+
+.shell-workbench-close-all:hover {
+  border-color: rgba(255, 107, 107, 0.38);
+  color: #ffd3d3;
+  background: rgba(255, 107, 107, 0.1);
 }
 
 .shell-terminal-pane {
@@ -2374,6 +2547,32 @@ textarea::placeholder {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: #07111d;
   overflow: hidden;
+}
+
+.shell-workbench-docked .shell-terminal-pane {
+  min-height: 180px;
+  height: 100%;
+  border-radius: 10px;
+  border-color: rgba(145, 165, 190, 0.26);
+  background: #090c12;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.42);
+}
+
+.shell-workbench-docked .shell-empty-state {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  border-style: solid;
+  border-color: rgba(145, 165, 190, 0.22);
+  background: rgba(6, 10, 16, 0.86);
+}
+
+.shell-workbench-docked .xterm .xterm-viewport,
+.shell-workbench-docked .xterm-screen,
+.shell-workbench-docked .xterm-rows {
+  background-color: #090c12 !important;
 }
 
 .shell-command-bar {

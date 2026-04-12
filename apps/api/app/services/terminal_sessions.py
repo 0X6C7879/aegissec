@@ -21,6 +21,7 @@ from app.db.repositories import RunLogRepository, TerminalRepository
 TERMINAL_RUN_LOG_SOURCE = "terminal"
 TERMINAL_CREATED_EVENT_TYPE = SessionEventType.TERMINAL_SESSION_CREATED.value
 TERMINAL_CLOSED_EVENT_TYPE = SessionEventType.TERMINAL_SESSION_CLOSED.value
+TERMINAL_FOCUSED_EVENT_TYPE = "terminal.session.focused"
 TERMINAL_JOB_STARTED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_STARTED.value
 TERMINAL_JOB_COMPLETED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_COMPLETED.value
 TERMINAL_JOB_FAILED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_FAILED.value
@@ -60,6 +61,7 @@ def terminal_audit_payload(
         "session_id": terminal.session_id,
         "title": terminal.title,
         "status": terminal.status.value,
+        "focused": terminal.focused,
         "created_at": terminal.created_at.isoformat(),
         "updated_at": terminal.updated_at.isoformat(),
         "closed_at": terminal.closed_at.isoformat() if terminal.closed_at is not None else None,
@@ -162,13 +164,12 @@ def enrich_terminal_session_reads(
                     "attached": (
                         runtime_snapshot.attached if runtime_snapshot is not None else False
                     ),
+                    "focused": terminal.focused,
                     "active_job_id": active_job_id,
                     "last_job_id": latest_job.id if latest_job is not None else None,
                     "last_job_status": latest_job.status if latest_job is not None else None,
                     "reattach_deadline": (
-                        runtime_snapshot.reattach_deadline
-                        if runtime_snapshot is not None
-                        else None
+                        runtime_snapshot.reattach_deadline if runtime_snapshot is not None else None
                     ),
                 }
             )
@@ -206,12 +207,18 @@ class SessionShellService:
     ) -> TerminalSessionMutationResult:
         db_session = self._terminal_repository.db_session
         try:
+            metadata = dict(payload.metadata_payload)
+            if (
+                self._terminal_repository.get_focused_terminal_session(session_id=session.id)
+                is None
+            ):
+                metadata["focused"] = True
             terminal = self._terminal_repository.create_terminal_session(
                 session_id=session.id,
                 title=payload.title or "Terminal",
                 shell=payload.shell,
                 cwd=payload.cwd,
-                metadata=dict(payload.metadata_payload),
+                metadata=metadata,
                 commit=False,
             )
             terminal_read = to_terminal_session_read(terminal)
@@ -235,6 +242,56 @@ class SessionShellService:
         terminal_read = to_terminal_session_read(terminal)
         return TerminalSessionMutationResult(terminal=terminal_read, changed=True)
 
+    def get_focused_terminal(self, *, session_id: str) -> TerminalSessionRead | None:
+        terminal = self._terminal_repository.get_focused_terminal_session(session_id=session_id)
+        if terminal is None:
+            return None
+        return to_terminal_session_read(terminal)
+
+    def focus_terminal(
+        self,
+        *,
+        session: Session,
+        terminal_id: str,
+    ) -> TerminalSessionMutationResult | None:
+        existing = self._terminal_repository.get_terminal_session(
+            session_id=session.id,
+            terminal_session_id=terminal_id,
+        )
+        if existing is None:
+            return None
+
+        changed = existing.metadata_json.get("focused") is not True
+        db_session = self._terminal_repository.db_session
+        try:
+            terminal = self._terminal_repository.set_focused_terminal_session(
+                session_id=session.id,
+                terminal_session_id=terminal_id,
+                commit=False,
+            )
+            terminal_read = to_terminal_session_read(terminal)
+            self._run_log_repository.create_log(
+                session_id=session.id,
+                project_id=session.project_id,
+                run_id=None,
+                level="info",
+                source=TERMINAL_RUN_LOG_SOURCE,
+                event_type=TERMINAL_FOCUSED_EVENT_TYPE,
+                message=terminal_read.title,
+                payload=terminal_audit_payload(terminal_read),
+                commit=False,
+            )
+            db_session.commit()
+            db_session.refresh(terminal)
+        except Exception:
+            db_session.rollback()
+            raise
+
+        return TerminalSessionMutationResult(
+            terminal=to_terminal_session_read(terminal),
+            changed=changed,
+        )
+
     def close_terminal(
         self,
         *,
@@ -252,6 +309,7 @@ class SessionShellService:
             return None
 
         changed = existing.closed_at is None
+        was_focused = existing.metadata_json.get("focused") is True
         if not changed:
             return TerminalSessionMutationResult(
                 terminal=to_terminal_session_read(existing), changed=False
@@ -284,6 +342,20 @@ class SessionShellService:
             raise
 
         terminal_read = to_terminal_session_read(terminal)
+        if was_focused:
+            next_open_terminals = self._terminal_repository.list_terminal_sessions(
+                session_id=session.id,
+                include_closed=False,
+            )
+            fallback_terminal = next(
+                (candidate for candidate in next_open_terminals if candidate.id != terminal_id),
+                None,
+            )
+            if fallback_terminal is not None:
+                self._terminal_repository.set_focused_terminal_session(
+                    session_id=session.id,
+                    terminal_session_id=fallback_terminal.id,
+                )
         return TerminalSessionMutationResult(terminal=terminal_read, changed=changed)
 
     def list_terminal_jobs(self, *, session_id: str) -> list[TerminalJobRead]:

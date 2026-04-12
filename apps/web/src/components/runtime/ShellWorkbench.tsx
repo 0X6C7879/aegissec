@@ -24,6 +24,16 @@ import { TerminalTabs } from "./TerminalTabs";
 type ShellWorkbenchProps = {
   sessionId: string;
   disabled?: boolean;
+  variant?: "default" | "focus-docked";
+  focusRequest?: ShellWorkbenchFocusRequest | null;
+  onDismiss?: () => void;
+};
+
+export type ShellWorkbenchFocusRequest = {
+  requestId: number;
+  terminalId: string | null;
+  command: string;
+  toolCallId: string | null;
 };
 
 type ConnectionState = "connecting" | "open" | "closed" | "error";
@@ -84,7 +94,13 @@ function isTerminalEnded(terminal: TerminalSession | null): boolean {
   );
 }
 
-export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchProps) {
+export function ShellWorkbench({
+  sessionId,
+  disabled = false,
+  variant = "default",
+  focusRequest = null,
+  onDismiss,
+}: ShellWorkbenchProps) {
   const queryClient = useQueryClient();
   const sessionEventsState = useUiStore((state) => state.eventsBySession[sessionId]);
   const sessionEvents = sessionEventsState ?? EMPTY_SESSION_EVENTS;
@@ -98,8 +114,11 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
   const [terminalErrors, setTerminalErrors] = useState<Record<string, string | null>>({});
   const [terminalNotices, setTerminalNotices] = useState<Record<string, string | null>>({});
   const [reconnectKeysByTerminal, setReconnectKeysByTerminal] = useState<Record<string, number>>({});
+  const [pendingFocusRequest, setPendingFocusRequest] =
+    useState<ShellWorkbenchFocusRequest | null>(null);
   const lastHandledTerminalEventIdRef = useRef<string | null>(null);
   const previousSessionIdRef = useRef(sessionId);
+  const lastAutoCreateFocusRequestIdRef = useRef<number | null>(null);
 
   const terminalsQuery = useQuery({
     queryKey: TERMINALS_QUERY_KEY(sessionId),
@@ -143,6 +162,19 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     onSuccess: async (terminal) => {
       setTerminalErrors((current) => ({ ...current, [terminal.id]: null }));
       setTerminalNotices((current) => ({ ...current, [terminal.id]: null }));
+      await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: TERMINAL_JOBS_QUERY_KEY(sessionId) });
+    },
+  });
+
+  const closeAllTerminalsMutation = useMutation({
+    mutationFn: async (terminalIds: string[]) => {
+      for (const terminalId of terminalIds) {
+        await closeSessionTerminal(sessionId, terminalId);
+      }
+    },
+    onSuccess: async () => {
+      setFocusedTerminalId(null);
       await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
       await queryClient.invalidateQueries({ queryKey: TERMINAL_JOBS_QUERY_KEY(sessionId) });
     },
@@ -192,8 +224,43 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
 
   const terminals = terminalsQuery.data ?? EMPTY_TERMINALS;
   const jobs = jobsQuery.data ?? EMPTY_JOBS;
+  const isDockedVariant = variant === "focus-docked";
   const focusedTerminal =
     terminals.find((terminal) => terminal.id === focusedTerminalId) ?? null;
+
+  useEffect(() => {
+    if (!focusRequest) {
+      return;
+    }
+    setPendingFocusRequest(focusRequest);
+  }, [focusRequest]);
+
+  useEffect(() => {
+    if (
+      !isDockedVariant ||
+      !focusRequest ||
+      disabled ||
+      terminalsQuery.isLoading ||
+      createTerminalMutation.isPending ||
+      terminals.length > 0
+    ) {
+      return;
+    }
+
+    if (lastAutoCreateFocusRequestIdRef.current === focusRequest.requestId) {
+      return;
+    }
+
+    lastAutoCreateFocusRequestIdRef.current = focusRequest.requestId;
+    createTerminalMutation.mutate();
+  }, [
+    createTerminalMutation,
+    disabled,
+    focusRequest,
+    isDockedVariant,
+    terminals.length,
+    terminalsQuery.isLoading,
+  ]);
 
   useEffect(() => {
     if (previousSessionIdRef.current === sessionId) {
@@ -206,8 +273,46 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     setTerminalErrors({});
     setTerminalNotices({});
     setReconnectKeysByTerminal({});
+    setPendingFocusRequest(null);
+    lastAutoCreateFocusRequestIdRef.current = null;
     lastHandledTerminalEventIdRef.current = null;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!pendingFocusRequest || terminalsQuery.isLoading) {
+      return;
+    }
+
+    const requestedTerminalId = pendingFocusRequest.terminalId?.trim() || null;
+
+    if (requestedTerminalId && terminals.some((terminal) => terminal.id === requestedTerminalId)) {
+      setFocusedTerminalId(requestedTerminalId);
+      setTerminalError(requestedTerminalId, null);
+      setTerminalNotice(requestedTerminalId, null);
+      setPendingFocusRequest(null);
+      return;
+    }
+
+    if (terminals.length === 0) {
+      setPendingFocusRequest(null);
+      return;
+    }
+
+    const fallbackTerminalId = pickFocusedTerminal(
+      terminals,
+      focusedTerminalId ?? readStoredFocusedTerminalId(sessionId),
+    );
+
+    if (fallbackTerminalId && fallbackTerminalId !== focusedTerminalId) {
+      setFocusedTerminalId(fallbackTerminalId);
+    }
+
+    if (requestedTerminalId && fallbackTerminalId) {
+      setTerminalNotice(fallbackTerminalId, "未找到卡片关联终端，已切换到当前可用终端。");
+    }
+
+    setPendingFocusRequest(null);
+  }, [focusedTerminalId, pendingFocusRequest, sessionId, terminals, terminalsQuery.isLoading]);
 
   useEffect(() => {
     if (terminalsQuery.isLoading && terminals.length === 0) {
@@ -398,8 +503,39 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     try {
       await closeTerminalMutation.mutateAsync(terminalId);
     } catch (error) {
+      if (isApiError(error) && error.status === 409) {
+        try {
+          await interruptMutation.mutateAsync(terminalId);
+          await closeTerminalMutation.mutateAsync(terminalId);
+          setTerminalError(terminalId, null);
+          setTerminalNotice(terminalId, null);
+          return;
+        } catch {
+          // no-op: 兜底失败后走统一错误提示
+        }
+      }
       setTerminalError(terminalId, readErrorMessage(error));
       setTerminalNotice(terminalId, null);
+    }
+  }
+
+  async function handleCloseAll(): Promise<void> {
+    const openTerminalIds = terminals
+      .filter((terminal) => terminal.status !== "closed")
+      .map((terminal) => terminal.id);
+
+    if (openTerminalIds.length === 0) {
+      return;
+    }
+
+    try {
+      await closeAllTerminalsMutation.mutateAsync(openTerminalIds);
+    } catch (error) {
+      const primaryTerminalId = focusedTerminalId ?? openTerminalIds[0] ?? null;
+      if (primaryTerminalId) {
+        setTerminalError(primaryTerminalId, readErrorMessage(error));
+        setTerminalNotice(primaryTerminalId, null);
+      }
     }
   }
 
@@ -460,29 +596,45 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
   }
 
   return (
-    <section className="shell-workbench" data-testid="shell-workbench">
-      <header className="shell-workbench-header">
-        <div>
-          <h3 className="shell-section-title">Shell Workbench</h3>
-          <p className="shell-section-copy">
-            聚焦当前终端，持续输入多条命令，并查看后台任务状态。
-          </p>
-        </div>
-        <div className="shell-workbench-status">
-          <span>连接：{focusedConnectionState}</span>
-          <span>
-            服务端状态：{focusedTerminal?.workbench_status ?? "idle"}
-          </span>
-        </div>
-      </header>
+    <section
+      className={`shell-workbench${isDockedVariant ? " shell-workbench-docked" : ""}`}
+      data-testid="shell-workbench"
+    >
+      {isDockedVariant ? (
+        onDismiss ? (
+          <div className="shell-workbench-docked-toolbar">
+            <button
+              className="button button-secondary shell-workbench-dismiss"
+              type="button"
+              onClick={onDismiss}
+            >
+              收起
+            </button>
+          </div>
+        ) : null
+      ) : (
+        <header className="shell-workbench-header">
+          <div>
+            <h3 className="shell-section-title">Shell Workbench</h3>
+            <p className="shell-section-copy">聚焦当前终端，持续输入多条命令，并查看后台任务状态。</p>
+          </div>
+          <div className="shell-workbench-status">
+            <span>连接：{focusedConnectionState}</span>
+            <span>
+              服务端状态：{focusedTerminal?.workbench_status ?? "idle"}
+            </span>
+          </div>
+        </header>
+      )}
 
       <TerminalTabs
         terminals={terminals}
         focusedTerminalId={focusedTerminalId}
-        disabled={disabled}
+        disabled={disabled || closeAllTerminalsMutation.isPending}
         onSelect={setFocusedTerminalId}
         onClose={(terminalId) => void handleClose(terminalId)}
         onCreate={() => createTerminalMutation.mutate()}
+        onCloseAll={() => void handleCloseAll()}
       />
 
       {focusedTerminal ? (
@@ -506,7 +658,11 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
           <div className="shell-empty-state">正在恢复终端最近输出…</div>
         )
       ) : (
-        <div className="shell-empty-state">还没有终端，点击“新建终端”开始。</div>
+        <div className="shell-empty-state">
+          {isDockedVariant && createTerminalMutation.isPending
+            ? "正在为当前会话创建终端…"
+            : "还没有终端，点击“+”开始。"}
+        </div>
       )}
 
       <TerminalCommandBar
@@ -515,23 +671,25 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
         busy={
           executeTerminalMutation.isPending ||
           interruptMutation.isPending ||
-          closeTerminalMutation.isPending
+          closeTerminalMutation.isPending ||
+          closeAllTerminalsMutation.isPending
         }
         errorMessage={focusedTerminalError ?? focusedTerminalNotice}
         onExecuteForeground={(command) => handleExecute(command, false)}
         onExecuteBackground={(command) => handleExecute(command, true)}
         onInterrupt={handleInterrupt}
         onReconnect={handleReconnect}
-        onClose={() => (focusedTerminal ? handleClose(focusedTerminal.id) : Promise.resolve())}
       />
 
-      <BackgroundJobsPanel
-        jobs={jobs}
-        terminals={terminals}
-        disabled={disabled}
-        onStopJob={(jobId) => stopJobMutation.mutate(jobId)}
-        onCleanup={() => cleanupJobsMutation.mutate()}
-      />
+      {!isDockedVariant ? (
+        <BackgroundJobsPanel
+          jobs={jobs}
+          terminals={terminals}
+          disabled={disabled}
+          onStopJob={(jobId) => stopJobMutation.mutate(jobId)}
+          onCleanup={() => cleanupJobsMutation.mutate()}
+        />
+      ) : null}
     </section>
   );
 }

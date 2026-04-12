@@ -809,7 +809,15 @@ export async function cleanupSessionTerminalJobs(
 }
 
 export function getSessionTerminalStreamUrl(sessionId: string, terminalId: string): string {
-  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/terminals/${terminalId}/stream`;
+  const queryParams: Record<string, string | number | boolean | null | undefined> = {};
+
+  if (runtimeBasicAuthToken !== null) {
+    queryParams.auth_basic = runtimeBasicAuthToken;
+  } else if (apiToken && apiToken.trim().length > 0) {
+    queryParams.token = apiToken.trim();
+  }
+
+  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/terminals/${terminalId}/stream${buildQueryString(queryParams)}`;
 }
 
 export async function listSkills(signal?: AbortSignal): Promise<SkillRecord[]> {

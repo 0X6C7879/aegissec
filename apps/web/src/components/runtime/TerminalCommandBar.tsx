@@ -10,7 +10,6 @@ type TerminalCommandBarProps = {
   onExecuteBackground: (command: string) => Promise<void> | void;
   onInterrupt: () => Promise<void> | void;
   onReconnect: () => void;
-  onClose: () => Promise<void> | void;
 };
 
 export function TerminalCommandBar({
@@ -22,7 +21,6 @@ export function TerminalCommandBar({
   onExecuteBackground,
   onInterrupt,
   onReconnect,
-  onClose,
 }: TerminalCommandBarProps) {
   const [command, setCommand] = useState("");
 
@@ -100,14 +98,6 @@ export function TerminalCommandBar({
           onClick={onReconnect}
         >
           重连
-        </button>
-        <button
-          type="button"
-          className="button button-secondary"
-          disabled={disabled || terminal === null}
-          onClick={() => void onClose()}
-        >
-          关闭终端
         </button>
       </div>
 

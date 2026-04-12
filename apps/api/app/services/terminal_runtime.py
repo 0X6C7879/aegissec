@@ -26,7 +26,12 @@ from app.db.repositories import (
     SessionRepository,
     TerminalRepository,
 )
-from app.services.runtime import DockerRuntimeBackend, RuntimeOperationError, RuntimeService
+from app.services.runtime import (
+    DockerRuntimeBackend,
+    RuntimeOperationError,
+    RuntimeService,
+    get_runtime_backend,
+)
 from app.services.terminal_sessions import (
     SessionShellService,
     TerminalRuntimeSnapshot,
@@ -61,6 +66,13 @@ class TerminalNotAttachedError(TerminalRuntimeError):
 
 class TerminalJobAlreadyRunningError(TerminalRuntimeError):
     pass
+
+
+@dataclass(slots=True)
+class OrphanTerminalRecoveryResult:
+    cancelled_jobs: int = 0
+    closed_terminals: int = 0
+    runtime_stop_attempted: bool = False
 
 
 TERMINAL_CLIENT_FRAME_MAX_BYTES = 16 * 1024
@@ -1446,6 +1458,74 @@ def get_terminal_backend(app: FastAPI) -> TerminalBackend:
     backend = DockerTerminalBackend(app.state.settings)
     app.state.terminal_backend = backend
     return backend
+
+
+async def recover_orphaned_terminal_state(
+    *,
+    database_engine: Engine,
+    settings: Settings,
+) -> OrphanTerminalRecoveryResult:
+    result = OrphanTerminalRecoveryResult()
+
+    with DBSession(database_engine) as db_session:
+        terminal_repository = TerminalRepository(db_session)
+        running_jobs = terminal_repository.list_running_terminal_jobs()
+        open_terminals = terminal_repository.list_open_terminal_sessions()
+
+    if not running_jobs and not open_terminals:
+        return result
+
+    runtime_backend = get_runtime_backend(settings)
+    try:
+        runtime_backend.stop()
+    except Exception:
+        pass
+    finally:
+        result.runtime_stop_attempted = True
+
+    with DBSession(database_engine) as db_session:
+        session_repository = SessionRepository(db_session)
+        shell_service = SessionShellService(
+            TerminalRepository(db_session),
+            RunLogRepository(db_session),
+        )
+
+        cancelled_job_ids: set[str] = set()
+        for job in running_jobs:
+            session = session_repository.get_session(job.session_id, include_deleted=True)
+            if session is None:
+                continue
+            job_result = shell_service.finish_terminal_job(
+                session=session,
+                job_id=job.id,
+                status=RuntimeTerminalJobStatus.CANCELLED,
+                exit_code=None,
+                reason="service_restart",
+                metadata_updates={
+                    "finish_reason": "service_restart",
+                    "recovered_on_startup": True,
+                },
+            )
+            if job_result is not None and job_result.changed:
+                cancelled_job_ids.add(job.id)
+
+        closed_terminal_ids: set[str] = set()
+        for terminal in open_terminals:
+            session = session_repository.get_session(terminal.session_id, include_deleted=True)
+            if session is None:
+                continue
+            terminal_result = shell_service.close_terminal(
+                session=session,
+                terminal_id=terminal.id,
+                reason="service_restart",
+            )
+            if terminal_result is not None and terminal_result.changed:
+                closed_terminal_ids.add(terminal.id)
+
+        result.cancelled_jobs = len(cancelled_job_ids)
+        result.closed_terminals = len(closed_terminal_ids)
+
+    return result
 
 
 def build_terminal_runtime_service(

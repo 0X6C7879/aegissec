@@ -26,8 +26,10 @@ from app.db.session import engine, init_db
 from app.services.session_generation import recover_abandoned_generations
 
 terminal_runtime = import_module("app.services.terminal_runtime")
+LiveTerminalJobRegistry = terminal_runtime.LiveTerminalJobRegistry
 LiveTerminalRegistry = terminal_runtime.LiveTerminalRegistry
 build_terminal_runtime_service = terminal_runtime.build_terminal_runtime_service
+recover_orphaned_terminal_state = terminal_runtime.recover_orphaned_terminal_state
 
 settings = get_settings()
 LOCAL_DEV_ORIGIN_REGEX = r"^https?://(127\.0\.0\.1|localhost):\d+$"
@@ -53,8 +55,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     get_event_broker().configure_persistence(lambda: DBSession(engine))
     recover_abandoned_generations(engine)
-    if not isinstance(getattr(app.state, "live_terminal_registry", None), LiveTerminalRegistry):
-        app.state.live_terminal_registry = LiveTerminalRegistry()
+    await recover_orphaned_terminal_state(
+        database_engine=engine,
+        settings=settings,
+    )
+    app.state.live_terminal_registry = LiveTerminalRegistry()
+    app.state.live_terminal_job_registry = LiveTerminalJobRegistry()
     try:
         yield
     finally:

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalBuffer, TerminalJob, TerminalSession } from "../../types/terminals";
-import { ShellWorkbench } from "./ShellWorkbench";
+import { ShellWorkbench, type ShellWorkbenchFocusRequest } from "./ShellWorkbench";
 
 const {
   mockListSessionTerminals,
@@ -118,11 +118,18 @@ function createJob(id: string, status: string, stdoutTail = "", terminalId = "te
   };
 }
 
-function renderShellWorkbench(sessionId = "session-1") {
+function renderShellWorkbench(
+  sessionId = "session-1",
+  options: {
+    variant?: "default" | "focus-docked";
+    focusRequest?: ShellWorkbenchFocusRequest | null;
+    onDismiss?: () => void;
+  } = {},
+) {
   const queryClient = createQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShellWorkbench sessionId={sessionId} />
+      <ShellWorkbench sessionId={sessionId} {...options} />
     </QueryClientProvider>,
   );
 }
@@ -166,7 +173,7 @@ describe("ShellWorkbench", () => {
     renderShellWorkbench();
 
     await waitFor(() => {
-      expect(screen.getByText("还没有终端，点击“新建终端”开始。")).toBeInTheDocument();
+      expect(screen.getByText("还没有终端，点击“+”开始。")).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: "新建终端" }));
@@ -386,5 +393,163 @@ describe("ShellWorkbench", () => {
     await waitFor(() => {
       expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Beta|session-2:term-b");
     });
+  });
+
+  it("switches to the requested terminal when a focus request is provided", async () => {
+    const terminals = [
+      createTerminal("term-1", "Kali #1", "attached"),
+      createTerminal("term-2", "Kali #2"),
+    ];
+
+    window.localStorage.setItem("aegissec.shell.focus.session-1", "term-2");
+
+    mockListSessionTerminals.mockResolvedValue(terminals);
+    mockGetSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (_sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${terminalId}-buffer`),
+    );
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+
+    renderShellWorkbench("session-1", {
+      variant: "focus-docked",
+      focusRequest: {
+        requestId: 1,
+        terminalId: "term-1",
+        command: "id",
+        toolCallId: "tool-focus-1",
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #1|term-1-buffer");
+    });
+  });
+
+  it("closes a terminal when clicking the tab x button", async () => {
+    const user = userEvent.setup();
+    let terminals = [
+      createTerminal("term-1", "Kali #1", "attached"),
+      createTerminal("term-2", "Kali #2"),
+    ];
+
+    mockListSessionTerminals.mockImplementation(() => Promise.resolve([...terminals]));
+    mockGetSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (_sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${terminalId}-buffer`),
+    );
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+    mockCloseSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      terminals = terminals.filter((item) => item.id !== terminalId);
+      return {
+        ...terminal,
+        status: "closed",
+        closed_at: "2026-04-12T10:10:00.000Z",
+      };
+    });
+
+    renderShellWorkbench();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("shell-tab-term-1")).toBeInTheDocument();
+      expect(screen.getByTestId("shell-tab-term-2")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "关闭 Kali #1" }));
+
+    await waitFor(() => {
+      expect(mockCloseSessionTerminal).toHaveBeenCalledWith("session-1", "term-1");
+      expect(screen.queryByTestId("shell-tab-term-1")).not.toBeInTheDocument();
+      expect(screen.getByTestId("shell-tab-term-2")).toBeInTheDocument();
+    });
+  });
+
+  it("closes all terminals when clicking the close-all X button", async () => {
+    const user = userEvent.setup();
+    let terminals = [
+      createTerminal("term-1", "Kali #1", "attached"),
+      createTerminal("term-2", "Kali #2"),
+    ];
+
+    mockListSessionTerminals.mockImplementation(() => Promise.resolve([...terminals]));
+    mockGetSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (_sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${terminalId}-buffer`),
+    );
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+    mockCloseSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      terminals = terminals.filter((item) => item.id !== terminalId);
+      return {
+        ...terminal,
+        status: "closed",
+        closed_at: "2026-04-12T10:10:00.000Z",
+      };
+    });
+
+    renderShellWorkbench();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("shell-tab-term-1")).toBeInTheDocument();
+      expect(screen.getByTestId("shell-tab-term-2")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "关闭全部终端" }));
+
+    await waitFor(() => {
+      expect(mockCloseSessionTerminal).toHaveBeenCalledWith("session-1", "term-1");
+      expect(mockCloseSessionTerminal).toHaveBeenCalledWith("session-1", "term-2");
+      expect(screen.queryByTestId("shell-tab-term-1")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("shell-tab-term-2")).not.toBeInTheDocument();
+    });
+  });
+
+  it("hides docked header copy and status rows while keeping dismiss action", async () => {
+    const terminals = [createTerminal("term-1", "Kali #1", "attached")];
+    const onDismiss = vi.fn();
+
+    mockListSessionTerminals.mockResolvedValue(terminals);
+    mockGetSessionTerminal.mockResolvedValue(terminals[0]);
+    mockGetSessionTerminalBuffer.mockResolvedValue(createBuffer("term-1", "term-1-buffer"));
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+
+    renderShellWorkbench("session-1", {
+      variant: "focus-docked",
+      onDismiss,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Shell 终端")).not.toBeInTheDocument();
+    expect(screen.queryByText(/已从对话 Shell 卡片聚焦到终端/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/连接：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/服务端状态：/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
   });
 });

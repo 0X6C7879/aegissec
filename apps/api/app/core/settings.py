@@ -144,6 +144,16 @@ class Settings(BaseSettings):
         alias="AEGISSEC_LLM_MAX_OUTPUT_TOKENS",
         gt=0,
     )
+    chat_auto_tool_turn_limit: int = Field(
+        default=48,
+        alias="AEGISSEC_CHAT_AUTO_TOOL_TURN_LIMIT",
+        gt=0,
+    )
+    chat_auto_tool_budget_cycles: int = Field(
+        default=3,
+        alias="AEGISSEC_CHAT_AUTO_TOOL_BUDGET_CYCLES",
+        gt=0,
+    )
     llm_max_concurrency: int = Field(
         default=6,
         alias="AEGISSEC_LLM_MAX_CONCURRENCY",

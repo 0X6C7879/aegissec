@@ -355,6 +355,74 @@ def test_session_terminal_endpoints_persist_history_and_emit_events(client: Test
     ]
 
 
+def test_session_terminal_focus_endpoints_enforce_single_focused_terminal(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Focus Session"})
+    session_id = api_data(session_response)["id"]
+
+    first_terminal_id = api_data(
+        client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Alpha"})
+    )["id"]
+    second_terminal_id = api_data(
+        client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Beta"})
+    )["id"]
+
+    first_focus_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{first_terminal_id}/focus"
+    )
+    assert first_focus_response.status_code == 200
+    assert api_data(first_focus_response)["terminal"]["id"] == first_terminal_id
+    assert api_data(first_focus_response)["terminal"]["focused"] is True
+
+    focused_response = client.get(f"/api/sessions/{session_id}/terminals/focused")
+    assert focused_response.status_code == 200
+    assert api_data(focused_response)["id"] == first_terminal_id
+    assert api_data(focused_response)["focused"] is True
+
+    second_focus_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{second_terminal_id}/focus"
+    )
+    assert second_focus_response.status_code == 200
+    assert api_data(second_focus_response)["terminal"]["id"] == second_terminal_id
+
+    terminals_payload = api_data(client.get(f"/api/sessions/{session_id}/terminals"))
+    assert [terminal["id"] for terminal in terminals_payload] == [
+        second_terminal_id,
+        first_terminal_id,
+    ]
+    focused_flags = {terminal["id"]: terminal["focused"] for terminal in terminals_payload}
+    assert focused_flags[first_terminal_id] is False
+    assert focused_flags[second_terminal_id] is True
+
+
+def test_session_terminal_focused_execute_uses_current_focused_terminal(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Focused Execute Session"})
+    session_id = api_data(session_response)["id"]
+
+    first_terminal_id = api_data(
+        client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Alpha"})
+    )["id"]
+    second_terminal_id = api_data(
+        client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Beta"})
+    )["id"]
+
+    focus_response = client.post(f"/api/sessions/{session_id}/terminals/{second_terminal_id}/focus")
+    assert focus_response.status_code == 200
+
+    execute_response = client.post(
+        f"/api/sessions/{session_id}/terminals/focused/execute",
+        json={"command": "printf 'focused'", "detach": True, "timeout_seconds": 30},
+    )
+    assert execute_response.status_code == 200
+    execute_payload = api_data(execute_response)
+    assert execute_payload["terminal_id"] == second_terminal_id
+
+    first_jobs = api_data(client.get(f"/api/sessions/{session_id}/terminal-jobs"))
+    assert first_jobs[0]["terminal_session_id"] == second_terminal_id
+    assert all(job["terminal_session_id"] != first_terminal_id for job in first_jobs)
+
+
 def test_session_terminal_job_endpoints_return_session_scoped_metadata(client: TestClient) -> None:
     session_response = client.post("/api/sessions", json={"title": "Terminal Job Session"})
     session_id = api_data(session_response)["id"]

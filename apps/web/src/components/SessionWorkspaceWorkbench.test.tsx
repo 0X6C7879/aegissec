@@ -116,7 +116,30 @@ vi.mock("./ConversationSidebar", () => ({
 }));
 
 vi.mock("./ConversationFeed", () => ({
-  ConversationFeed: () => <div data-testid="conversation-feed" />,
+  ConversationFeed: ({
+    onFocusShell,
+  }: {
+    onFocusShell?: (payload: {
+      terminalId: string | null;
+      command: string;
+      toolCallId: string | null;
+    }) => void;
+  }) => (
+    <div data-testid="conversation-feed">
+      <button
+        type="button"
+        onClick={() =>
+          onFocusShell?.({
+            terminalId: "term-focus-1",
+            command: "whoami",
+            toolCallId: "tool-focus-1",
+          })
+        }
+      >
+        mock-focus-shell
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./WorkbenchComposer", () => ({
@@ -166,7 +189,21 @@ vi.mock("./WorkbenchComposer", () => ({
 }));
 
 vi.mock("./runtime/ShellWorkbench", () => ({
-  ShellWorkbench: () => <div data-testid="shell-workbench" />,
+  ShellWorkbench: ({
+    variant,
+    focusRequest,
+  }: {
+    variant?: string;
+    focusRequest?: {
+      terminalId: string | null;
+      command: string;
+      toolCallId: string | null;
+    } | null;
+  }) => (
+    <div data-testid="shell-workbench" data-variant={variant ?? "default"}>
+      <span data-testid="shell-workbench-focus-terminal">{focusRequest?.terminalId ?? "none"}</span>
+    </div>
+  ),
 }));
 
 vi.mock("./AttackGraphCanvas", () => ({
@@ -732,6 +769,32 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(screen.queryByText("任务树")).not.toBeInTheDocument();
     expect(screen.queryByText("任务与图谱")).not.toBeInTheDocument();
     expect(screen.queryByText("计划与推进")).not.toBeInTheDocument();
+  });
+
+  it("opens a docked shell panel under the attack graph when transcript shell focus is requested", async () => {
+    const user = userEvent.setup();
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conversation-feed")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("workspace-shell-focus-panel")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "mock-focus-shell" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workspace-shell-focus-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("shell-workbench")).toHaveAttribute(
+        "data-variant",
+        "focus-docked",
+      );
+      expect(screen.getByTestId("shell-workbench-focus-terminal").textContent).toBe(
+        "term-focus-1",
+      );
+    });
   });
 
   it("persists split pane sizing and supports keyboard resizing on desktop", async () => {

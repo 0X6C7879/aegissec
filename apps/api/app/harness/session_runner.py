@@ -731,9 +731,7 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload
-        if isinstance(skill_payload, dict)
-        else None
+        else skill_payload if isinstance(skill_payload, dict) else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(

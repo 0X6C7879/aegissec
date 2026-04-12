@@ -927,6 +927,123 @@ def test_query_loop_consumes_pending_context_injections_before_follow_up_turn() 
     ]
 
 
+def test_query_loop_reflects_and_continues_after_budget_exhaustion() -> None:
+    class ReflectiveEngine(BaseQueryEngine):
+        def __init__(self) -> None:
+            super().__init__(
+                messages=[],
+                model_name="demo-model",
+                system_prompt=None,
+                max_turns=2,
+                max_budget_cycles=2,
+            )
+            self.turns = 0
+            self.reflection_requests: list[tuple[int, int]] = []
+
+        async def request_turn(
+            self,
+            *,
+            allow_tools: bool,
+            callbacks: object | None,
+        ) -> ProviderTurnResult:
+            del allow_tools, callbacks
+            self.turns += 1
+            if self.turns <= 3:
+                return ProviderTurnResult(
+                    assistant_payload={"role": "assistant", "content": ""},
+                    text_content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            tool_call_id=f"tool-{self.turns}",
+                            tool_name="execute_kali_command",
+                            arguments={"command": f"cmd-{self.turns}"},
+                        )
+                    ],
+                )
+            return ProviderTurnResult(
+                assistant_payload={"role": "assistant", "content": "Recovered answer"},
+                text_content="Recovered answer",
+            )
+
+        def append_tool_results(
+            self,
+            *,
+            assistant_payload: dict[str, object],
+            tool_calls: Sequence[ToolCallRequest],
+            tool_results: Sequence[ToolCallResult],
+        ) -> None:
+            del assistant_payload, tool_calls, tool_results
+
+        async def generate_tool_budget_reply(
+            self,
+            *,
+            callbacks: object | None,
+        ) -> str:
+            del callbacks
+            raise AssertionError("final budget fallback should not be used in this test")
+
+        async def generate_tool_budget_reflection(
+            self,
+            *,
+            callbacks: object | None,
+            cycle_index: int,
+            max_cycles: int,
+        ) -> str | None:
+            del callbacks
+            self.reflection_requests.append((cycle_index, max_cycles))
+            return "Avoid repeating the same login path; try a materially different tool action."
+
+        def render_compact_message(self, compact_fragment: str) -> dict[str, object]:
+            return {"role": "user", "content": compact_fragment}
+
+        def append_assistant_response_to_history(
+            self, assistant_payload: dict[str, object]
+        ) -> None:
+            self.messages.append(assistant_payload)
+
+        def build_synthetic_assistant_payload(
+            self,
+            tool_calls: Sequence[object],
+        ) -> dict[str, object]:
+            del tool_calls
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [],
+            }
+
+    engine = ReflectiveEngine()
+    executed_commands: list[str] = []
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        executed_commands.append(str(tool_request.arguments["command"]))
+        return ToolCallResult(tool_name=tool_request.tool_name, payload={"status": "completed"})
+
+    result = asyncio.run(
+        QueryLoop(max_turns=2, max_budget_cycles=2).run(
+            engine,
+            execute_tool=execute_tool,
+            callbacks=None,
+        )
+    )
+
+    assert result == "Recovered answer"
+    assert executed_commands == ["cmd-1", "cmd-2", "cmd-3"]
+    assert engine.reflection_requests == [(1, 2)]
+    assert engine.usage.tool_rounds == 3
+    assert engine.usage.model_turns == 5
+    assert engine.messages == [
+        {
+            "role": "user",
+            "content": (
+                "Autonomous reflection after exhausting the current tool phase (1/2).\n"
+                "Use this to avoid repeated dead ends and choose the next best action.\n"
+                "Avoid repeating the same login path; try a materially different tool action."
+            ),
+        }
+    ]
+
+
 def test_anthropic_extract_response_content_multiple_text_blocks() -> None:
     response_payload = {
         "content": [
@@ -1235,6 +1352,8 @@ def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
         llm_api_key="test-key",
         llm_api_base_url="https://example.test",
         llm_default_model="demo-model",
+        chat_auto_tool_turn_limit=MAX_TOOL_STEPS + 1,
+        chat_auto_tool_budget_cycles=1,
     )
 
     class StubRuntime(OpenAICompatibleChatRuntime):
@@ -1291,6 +1410,8 @@ def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> No
         anthropic_api_key="test-key",
         anthropic_api_base_url="https://example.test",
         anthropic_model="claude-demo",
+        chat_auto_tool_turn_limit=MAX_TOOL_STEPS + 1,
+        chat_auto_tool_budget_cycles=1,
     )
 
     class StubRuntime(AnthropicChatRuntime):
@@ -1331,6 +1452,87 @@ def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> No
     assert result == "Budget summary"
     assert executed_commands == [f"cmd-{index + 1}" for index in range(MAX_TOOL_STEPS + 1)]
     assert "tools" not in runtime.payloads[-1]
+
+
+def test_openai_runtime_reflects_and_continues_after_tool_budget_exhaustion() -> None:
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        chat_auto_tool_turn_limit=2,
+        chat_auto_tool_budget_cycles=2,
+    )
+
+    class StubRuntime(OpenAICompatibleChatRuntime):
+        def __init__(self) -> None:
+            super().__init__(settings=settings)
+            self.payloads: list[dict[str, object]] = []
+            self.tool_request_count = 0
+
+        async def _request_completion(
+            self,
+            endpoint: str,
+            headers: dict[str, str],
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del endpoint, headers
+            self.payloads.append(payload)
+            if payload.get("tools") is None:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    "Reflection: avoid repeating the same credential path; "
+                                    "pivot to a different probe."
+                                ),
+                            }
+                        }
+                    ]
+                }
+            self.tool_request_count += 1
+            if self.tool_request_count <= 3:
+                return _build_openai_tool_response(
+                    self.tool_request_count,
+                    f"cmd-{self.tool_request_count}",
+                )
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Recovered answer",
+                        }
+                    }
+                ]
+            }
+
+    runtime = StubRuntime()
+    executed_commands: list[str] = []
+
+    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
+        executed_commands.append(str(tool_request.arguments["command"]))
+        return ToolCallResult(
+            tool_name=tool_request.tool_name,
+            payload={"status": "completed", "stdout": "ok", "stderr": "", "artifacts": []},
+        )
+
+    result = asyncio.run(
+        runtime.generate_reply("Collect initial evidence", [], execute_tool=execute_tool)
+    )
+
+    assert result == "Recovered answer"
+    assert executed_commands == ["cmd-1", "cmd-2", "cmd-3"]
+    reflection_payloads = [payload for payload in runtime.payloads if payload.get("tools") is None]
+    assert len(reflection_payloads) == 1
+    tool_payloads = [payload for payload in runtime.payloads if payload.get("tools") is not None]
+    reflection_marker = "Autonomous reflection after exhausting the current tool phase (1/2)."
+    assert any(
+        isinstance(message.get("content"), str) and reflection_marker in message["content"]
+        for message in cast(list[dict[str, object]], tool_payloads[-1]["messages"])
+        if isinstance(message, dict)
+    )
 
 
 def test_get_chat_runtime_applies_configured_timeout_for_openai(monkeypatch: MonkeyPatch) -> None:

@@ -131,6 +131,7 @@ class BaseQueryEngine(ABC):
         model_name: str,
         system_prompt: str | None,
         max_turns: int,
+        max_budget_cycles: int = 1,
         session_state: Any | None = None,
         compact_service: Any | None = None,
     ) -> None:
@@ -138,6 +139,7 @@ class BaseQueryEngine(ABC):
         self.model_name = model_name
         self.system_prompt = system_prompt
         self.max_turns = max_turns
+        self.max_budget_cycles = max_budget_cycles
         self.usage = QueryUsage()
         self.pending_continuation = False
         self.session_state = session_state
@@ -151,7 +153,10 @@ class BaseQueryEngine(ABC):
     ) -> str:
         from .query_loop import QueryLoop
 
-        return await QueryLoop(max_turns=self.max_turns).run(
+        return await QueryLoop(
+            max_turns=self.max_turns,
+            max_budget_cycles=self.max_budget_cycles,
+        ).run(
             self,
             execute_tool=execute_tool,
             callbacks=callbacks,
@@ -194,6 +199,16 @@ class BaseQueryEngine(ABC):
     ) -> str:
         raise NotImplementedError
 
+    async def generate_tool_budget_reflection(
+        self,
+        *,
+        callbacks: GenerationCallbacks | None,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> str | None:
+        del callbacks, cycle_index, max_cycles
+        return None
+
     def maybe_auto_compact(self) -> None:
         if self.compact_service is None:
             return
@@ -219,6 +234,25 @@ class BaseQueryEngine(ABC):
                     f"{normalized_injection}"
                 )
             )
+
+    def append_budget_reflection(
+        self,
+        reflection_text: str,
+        *,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> None:
+        normalized_reflection = reflection_text.strip()
+        if not normalized_reflection:
+            return
+        self.messages.append(
+            self.render_compact_message(
+                "Autonomous reflection after exhausting the current tool phase "
+                f"({cycle_index}/{max_cycles}).\n"
+                "Use this to avoid repeated dead ends and choose the next best action.\n"
+                f"{normalized_reflection}"
+            )
+        )
 
     @abstractmethod
     def append_assistant_response_to_history(self, assistant_payload: dict[str, Any]) -> None:
@@ -271,6 +305,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
         skill_context_prompt: str | None,
         max_turns: int,
         system_prompt: str,
+        max_budget_cycles: int = 1,
         session_state: Any | None = None,
         compact_service: Any | None = None,
     ) -> None:
@@ -297,6 +332,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
             model_name=model,
             system_prompt=system_prompt,
             max_turns=max_turns,
+            max_budget_cycles=max_budget_cycles,
             session_state=session_state,
             compact_service=compact_service,
         )
@@ -414,6 +450,26 @@ class OpenAIQueryEngine(BaseQueryEngine):
             ),
         )
 
+    async def generate_tool_budget_reflection(
+        self,
+        *,
+        callbacks: GenerationCallbacks | None,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> str | None:
+        del callbacks
+        return cast(
+            str,
+            await self._provider._generate_tool_budget_reflection(
+                self._endpoint,
+                self._headers,
+                self._model,
+                self.messages,
+                cycle_index=cycle_index,
+                max_cycles=max_cycles,
+            ),
+        )
+
     def render_compact_message(self, compact_fragment: str) -> dict[str, Any]:
         return {"role": "user", "content": compact_fragment}
 
@@ -431,6 +487,7 @@ class AnthropicQueryEngine(BaseQueryEngine):
         skill_context_prompt: str | None,
         max_turns: int,
         system_prompt: str,
+        max_budget_cycles: int = 1,
         session_state: Any | None = None,
         compact_service: Any | None = None,
     ) -> None:
@@ -458,6 +515,7 @@ class AnthropicQueryEngine(BaseQueryEngine):
             model_name=model,
             system_prompt=system_prompt,
             max_turns=max_turns,
+            max_budget_cycles=max_budget_cycles,
             session_state=session_state,
             compact_service=compact_service,
         )
@@ -574,6 +632,26 @@ class AnthropicQueryEngine(BaseQueryEngine):
                 self._headers,
                 self._model,
                 self.messages,
+            ),
+        )
+
+    async def generate_tool_budget_reflection(
+        self,
+        *,
+        callbacks: GenerationCallbacks | None,
+        cycle_index: int,
+        max_cycles: int,
+    ) -> str | None:
+        del callbacks
+        return cast(
+            str,
+            await self._provider._generate_tool_budget_reflection(
+                self._endpoint,
+                self._headers,
+                self._model,
+                self.messages,
+                cycle_index=cycle_index,
+                max_cycles=max_cycles,
             ),
         )
 
