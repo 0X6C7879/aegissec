@@ -190,9 +190,9 @@ def _build_context_window_updated_payload(
                 "key": key,
                 "label": label,
                 "estimated_tokens": max(tokens, 0),
-                "share_ratio": (max(tokens, 0) / context_window_tokens)
-                if context_window_tokens
-                else 0.0,
+                "share_ratio": (
+                    (max(tokens, 0) / context_window_tokens) if context_window_tokens else 0.0
+                ),
             }
             for key, label, tokens in breakdown_candidates
             if max(tokens, 0) > 0
@@ -208,9 +208,11 @@ def _build_context_window_updated_payload(
                 "key": "messages",
                 "label": "Messages",
                 "estimated_tokens": effective_used_tokens,
-                "share_ratio": (effective_used_tokens / context_window_tokens)
-                if context_window_tokens
-                else 0.0,
+                "share_ratio": (
+                    (effective_used_tokens / context_window_tokens)
+                    if context_window_tokens
+                    else 0.0
+                ),
             }
         ]
     usage_ratio = effective_used_tokens / context_window_tokens if context_window_tokens else 0.0
@@ -728,9 +730,7 @@ async def build_autorouted_skill_context(
     resolved_skill_payload = (
         prepared_primary_payload
         if isinstance(prepared_primary_payload, dict)
-        else skill_payload
-        if isinstance(skill_payload, dict)
-        else None
+        else skill_payload if isinstance(skill_payload, dict) else None
     )
     if isinstance(resolved_skill_payload, dict):
         resolved_skill_name = str(

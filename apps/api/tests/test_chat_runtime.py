@@ -1729,9 +1729,7 @@ def test_openai_runtime_second_round_payload_uses_canonical_tool_history() -> No
                 for message in messages
                 if message.get("role") == "assistant" and message.get("tool_calls")
             )
-            tool_message = next(
-                message for message in messages if message.get("role") == "tool"
-            )
+            tool_message = next(message for message in messages if message.get("role") == "tool")
 
             assert assistant_message == {
                 "role": "assistant",
