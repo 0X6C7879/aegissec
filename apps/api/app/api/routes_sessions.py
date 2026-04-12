@@ -2035,6 +2035,10 @@ async def stream_session_terminal(
         await runtime_service.mark_detached(handle)
         detached = True
         return
+    except asyncio.CancelledError:
+        await runtime_service.mark_detached(handle)
+        detached = True
+        return
     finally:
         if not detached and not handle.closed.is_set():
             await runtime_service.mark_detached(handle)

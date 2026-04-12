@@ -241,7 +241,11 @@ def _append_tool_budget_reflection_prompt(
     *,
     cycle_index: int,
     max_cycles: int,
+    recent_attempts_summary: str = "",
 ) -> list[dict[str, object]]:
+    summary_fragment = (
+        f"\n\n{recent_attempts_summary.strip()}" if recent_attempts_summary.strip() else ""
+    )
     return [
         *messages,
         {
@@ -249,7 +253,10 @@ def _append_tool_budget_reflection_prompt(
             "content": (
                 f"{TOOL_BUDGET_REFLECTION_PROMPT} "
                 f"This is phase {cycle_index} of {max_cycles}; another autonomous phase may "
-                "follow automatically if you provide a strong plan."
+                "follow automatically if you provide a strong plan. "
+                "Do not narrate the full chronology. Output only: verified findings, dead ends "
+                "to stop repeating, and 1-3 materially different next actions."
+                f"{summary_fragment}"
             ),
         },
     ]
@@ -495,6 +502,7 @@ class OpenAICompatibleChatRuntime:
         *,
         cycle_index: int,
         max_cycles: int,
+        recent_attempts_summary: str = "",
     ) -> str:
         payload = self._build_payload(
             model,
@@ -502,6 +510,7 @@ class OpenAICompatibleChatRuntime:
                 messages,
                 cycle_index=cycle_index,
                 max_cycles=max_cycles,
+                recent_attempts_summary=recent_attempts_summary,
             ),
             mcp_tools=None,
             allow_tools=False,
@@ -1441,6 +1450,7 @@ class AnthropicChatRuntime:
         *,
         cycle_index: int,
         max_cycles: int,
+        recent_attempts_summary: str = "",
     ) -> str:
         payload = self._build_payload(
             model,
@@ -1448,6 +1458,7 @@ class AnthropicChatRuntime:
                 messages,
                 cycle_index=cycle_index,
                 max_cycles=max_cycles,
+                recent_attempts_summary=recent_attempts_summary,
             ),
             mcp_tools=None,
             allow_tools=False,

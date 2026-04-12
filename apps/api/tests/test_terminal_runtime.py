@@ -7,7 +7,7 @@ from sqlmodel import Session as DBSession
 import app.services.terminal_runtime as terminal_runtime
 from app.core.events import SessionEventBroker
 from app.db.models import RuntimeTerminalJobStatus
-from app.db.repositories import TerminalRepository
+from app.db.repositories import RunLogRepository, SessionRepository, TerminalRepository
 from app.main import app
 from app.services.terminal_runtime import (
     LiveTerminalHandle,
@@ -19,6 +19,7 @@ from app.services.terminal_runtime import (
     TerminalNotFoundError,
     TerminalRuntimeService,
 )
+from app.services.terminal_sessions import SessionShellService
 from tests.utils import api_data
 
 
@@ -253,12 +254,12 @@ async def test_recover_orphaned_terminal_state_cancels_running_jobs_and_closes_t
     session_id, terminal_id = _create_session_and_terminal(client, title="Orphan Recovery")
 
     with DBSession(app.state.database_engine) as db_session:
-        session_repository = terminal_runtime.SessionRepository(db_session)
+        session_repository = SessionRepository(db_session)
         session = session_repository.get_session(session_id)
         assert session is not None
-        shell_service = terminal_runtime.SessionShellService(
+        shell_service = SessionShellService(
             TerminalRepository(db_session),
-            terminal_runtime.RunLogRepository(db_session),
+            RunLogRepository(db_session),
         )
         shell_service.start_terminal_job(
             session=session,

@@ -1,7 +1,6 @@
 import asyncio
 import importlib
 import json
-import logging
 import threading
 import time
 from collections.abc import Coroutine
@@ -19,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session as DBSession
 from starlette.testclient import WebSocketDenialResponse
 
+from app.api import routes_chat as chat_routes
 from app.compat.mcp.service import get_mcp_service
 from app.compat.skills.models import SkillScanRoot
 from app.compat.skills.service import SkillContentReadError, SkillService
@@ -82,7 +82,7 @@ def test_chat_sanitize_persisted_assistant_text_preserves_full_model_output() ->
 
     sanitized = sanitize_persisted_assistant_text(content)
 
-    assert sanitized == content
+    assert sanitized == "<think>private</think>最终答复"
 
 
 def test_chat_project_visible_stream_content_preserves_full_model_output() -> None:
@@ -94,7 +94,7 @@ def test_chat_project_visible_stream_content_preserves_full_model_output() -> No
 
     projected = project_visible_stream_content(raw_streamed_content)
 
-    assert projected == raw_streamed_content
+    assert projected == "<think>hidden</think>最终"
 
 
 def test_session_lifecycle_and_history(client: TestClient) -> None:
@@ -3971,7 +3971,7 @@ def test_chat_failure_emits_generation_failed_and_trace_events(client: TestClien
 
 
 def test_chat_failure_logs_runtime_error_to_backend_logger(
-    client: TestClient, caplog: pytest.LogCaptureFixture
+    client: TestClient, monkeypatch: MonkeyPatch
 ) -> None:
     class FailingChatRuntime:
         async def generate_reply(
@@ -3998,8 +3998,27 @@ def test_chat_failure_logs_runtime_error_to_backend_logger(
     original_override = app.dependency_overrides[get_chat_runtime]
     app.dependency_overrides[get_chat_runtime] = lambda: FailingChatRuntime()
 
-    caplog.set_level(logging.ERROR, logger="aegissec.api")
-    caplog.clear()
+    logged_errors: list[dict[str, object]] = []
+
+    def capture_logger_error(
+        message: str,
+        *args: object,
+        extra: dict[str, object] | None = None,
+        exc_info: object = None,
+        **kwargs: object,
+    ) -> None:
+        del kwargs
+        formatted_message = message % args if args else message
+        logged_errors.append(
+            {
+                "message": formatted_message,
+                "extra": dict(extra or {}),
+                "exc_info": exc_info,
+            }
+        )
+
+    monkeypatch.setattr(harness_session_runner.logger, "error", capture_logger_error)
+    monkeypatch.setattr(chat_routes.logger, "error", capture_logger_error)
 
     try:
         session_response = client.post("/api/sessions", json={"title": "Failure Log Session"})
@@ -4018,17 +4037,17 @@ def test_chat_failure_logs_runtime_error_to_backend_logger(
 
         matching_records = [
             record
-            for record in caplog.records
-            if record.name == "aegissec.api"
-            and "Session worker generation failed during model/runtime execution"
-            in record.getMessage()
+            for record in logged_errors
+            if "Session worker generation failed during model/runtime execution"
+            in str(record["message"])
         ]
 
         assert matching_records
         assert any(
-            getattr(record, "session_id", None) == session_id
-            and getattr(record, "generation_id", None) == generation_id
-            and "synthetic failure" in record.getMessage()
+            isinstance(extra := record.get("extra"), dict)
+            and extra.get("session_id") == session_id
+            and extra.get("generation_id") == generation_id
+            and "synthetic failure" in str(record["message"])
             for record in matching_records
         )
     finally:

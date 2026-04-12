@@ -244,32 +244,38 @@ class SessionRepository:
         if branches:
             self.db_session.flush()
 
-        self.db_session.exec(delete(GraphEdge).where(GraphEdge.session_id == session_id))
-        self.db_session.exec(delete(GraphNode).where(GraphNode.session_id == session_id))
+        self.db_session.exec(delete(GraphEdge).where(col(GraphEdge.session_id) == session_id))
+        self.db_session.exec(delete(GraphNode).where(col(GraphNode.session_id) == session_id))
         if workflow_run_ids:
             self.db_session.exec(
                 delete(TaskNode).where(col(TaskNode.workflow_run_id).in_(workflow_run_ids))
             )
-        self.db_session.exec(delete(WorkflowRun).where(WorkflowRun.session_id == session_id))
+        self.db_session.exec(delete(WorkflowRun).where(col(WorkflowRun.session_id) == session_id))
 
         self.db_session.exec(
-            delete(RuntimeTerminalJob).where(RuntimeTerminalJob.session_id == session_id)
+            delete(RuntimeTerminalJob).where(col(RuntimeTerminalJob.session_id) == session_id)
         )
         self.db_session.exec(
-            delete(RuntimeTerminalSession).where(RuntimeTerminalSession.session_id == session_id)
-        )
-
-        self.db_session.exec(delete(GenerationStep).where(GenerationStep.session_id == session_id))
-        self.db_session.exec(delete(ChatGeneration).where(ChatGeneration.session_id == session_id))
-        self.db_session.exec(delete(Message).where(Message.session_id == session_id))
-        self.db_session.exec(
-            delete(ConversationBranch).where(ConversationBranch.session_id == session_id)
+            delete(RuntimeTerminalSession).where(
+                col(RuntimeTerminalSession.session_id) == session_id
+            )
         )
 
         self.db_session.exec(
-            delete(SessionEventLog).where(SessionEventLog.session_id == session_id)
+            delete(GenerationStep).where(col(GenerationStep.session_id) == session_id)
         )
-        self.db_session.exec(delete(RunLog).where(RunLog.session_id == session_id))
+        self.db_session.exec(
+            delete(ChatGeneration).where(col(ChatGeneration.session_id) == session_id)
+        )
+        self.db_session.exec(delete(Message).where(col(Message.session_id) == session_id))
+        self.db_session.exec(
+            delete(ConversationBranch).where(col(ConversationBranch.session_id) == session_id)
+        )
+
+        self.db_session.exec(
+            delete(SessionEventLog).where(col(SessionEventLog.session_id) == session_id)
+        )
+        self.db_session.exec(delete(RunLog).where(col(RunLog.session_id) == session_id))
 
         if runtime_run_ids:
             self.db_session.exec(
@@ -278,9 +284,9 @@ class SessionRepository:
             self.db_session.exec(delete(RunLog).where(col(RunLog.run_id).in_(runtime_run_ids)))
 
         self.db_session.exec(
-            delete(RuntimeExecutionRun).where(RuntimeExecutionRun.session_id == session_id)
+            delete(RuntimeExecutionRun).where(col(RuntimeExecutionRun.session_id) == session_id)
         )
-        self.db_session.exec(delete(Session).where(Session.id == session_id))
+        self.db_session.exec(delete(Session).where(col(Session.id) == session_id))
         self.db_session.commit()
 
     def get_branch(self, branch_id: str) -> ConversationBranch | None:

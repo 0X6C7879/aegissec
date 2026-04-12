@@ -5,35 +5,35 @@
       "exploit-file-download": 2
     },
     "static-analysis/codeql": {
-      "static-analysis/codeql": 3
+      "wooyun-legacy": 3
     },
     "static-analysis/semgrep": {
-      "static-analysis/semgrep": 3
+      "wooyun-legacy": 3
     },
     "wooyun-legacy": {
       "wooyun-legacy": 2
     }
   },
-  "neighbor_confusion_count": 0,
+  "neighbor_confusion_count": 4,
   "original": {
     "confusion_matrix": {
       "exploit-file-download": {
         "exploit-file-download": 2
       },
       "static-analysis/codeql": {
-        "static-analysis/codeql": 3
+        "wooyun-legacy": 3
       },
       "static-analysis/semgrep": {
-        "static-analysis/semgrep": 3
+        "wooyun-legacy": 3
       },
       "wooyun-legacy": {
         "wooyun-legacy": 2
       }
     },
-    "neighbor_confusion_count": 0,
-    "pass_count": 10,
-    "precision": 1.0,
-    "recall": 1.0,
+    "neighbor_confusion_count": 4,
+    "pass_count": 4,
+    "precision": 0.4,
+    "recall": 0.4,
     "results": [
       {
         "case_id": "route-exploit-file-download",
@@ -46,17 +46,17 @@
       {
         "case_id": "route-static-analysis-semgrep",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       },
       {
         "case_id": "route-static-analysis-codeql",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       },
       {
@@ -70,17 +70,17 @@
       {
         "case_id": "route-semgrep-vs-codeql",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "shadow",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       },
       {
         "case_id": "route-codeql-vs-semgrep",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "shadow",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       },
       {
@@ -102,46 +102,46 @@
       {
         "case_id": "route-semgrep-sarif",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       },
       {
         "case_id": "route-codeql-database-workflow",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "original"
       }
     ],
-    "routing_pass_rate": 1.0,
-    "shadow_interference_count": 0,
+    "routing_pass_rate": 0.4,
+    "shadow_interference_count": 2,
     "total_cases": 10
   },
-  "pass_count": 10,
-  "precision": 1.0,
-  "recall": 1.0,
+  "pass_count": 4,
+  "precision": 0.4,
+  "recall": 0.4,
   "reduced": {
     "confusion_matrix": {
       "exploit-file-download": {
         "exploit-file-download": 2
       },
       "static-analysis/codeql": {
-        "static-analysis/codeql": 3
+        "wooyun-legacy": 3
       },
       "static-analysis/semgrep": {
-        "static-analysis/semgrep": 3
+        "wooyun-legacy": 3
       },
       "wooyun-legacy": {
         "wooyun-legacy": 2
       }
     },
-    "neighbor_confusion_count": 0,
-    "pass_count": 10,
-    "precision": 1.0,
-    "recall": 1.0,
+    "neighbor_confusion_count": 4,
+    "pass_count": 4,
+    "precision": 0.4,
+    "recall": 0.4,
     "results": [
       {
         "case_id": "route-exploit-file-download",
@@ -154,17 +154,17 @@
       {
         "case_id": "route-static-analysis-semgrep",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       },
       {
         "case_id": "route-static-analysis-codeql",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       },
       {
@@ -178,17 +178,17 @@
       {
         "case_id": "route-semgrep-vs-codeql",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "shadow",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       },
       {
         "case_id": "route-codeql-vs-semgrep",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "shadow",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       },
       {
@@ -210,22 +210,22 @@
       {
         "case_id": "route-semgrep-sarif",
         "expected_skill_id": "static-analysis/semgrep",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/semgrep",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       },
       {
         "case_id": "route-codeql-database-workflow",
         "expected_skill_id": "static-analysis/codeql",
-        "passed": true,
+        "passed": false,
         "scenario_type": "neighbor",
-        "selected_skill_id": "static-analysis/codeql",
+        "selected_skill_id": "wooyun-legacy",
         "variant": "reduced"
       }
     ],
-    "routing_pass_rate": 1.0,
-    "shadow_interference_count": 0,
+    "routing_pass_rate": 0.4,
+    "shadow_interference_count": 2,
     "total_cases": 10
   },
   "results": [
@@ -240,17 +240,17 @@
     {
       "case_id": "route-static-analysis-semgrep",
       "expected_skill_id": "static-analysis/semgrep",
-      "passed": true,
+      "passed": false,
       "scenario_type": "neighbor",
-      "selected_skill_id": "static-analysis/semgrep",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     },
     {
       "case_id": "route-static-analysis-codeql",
       "expected_skill_id": "static-analysis/codeql",
-      "passed": true,
+      "passed": false,
       "scenario_type": "neighbor",
-      "selected_skill_id": "static-analysis/codeql",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     },
     {
@@ -264,17 +264,17 @@
     {
       "case_id": "route-semgrep-vs-codeql",
       "expected_skill_id": "static-analysis/semgrep",
-      "passed": true,
+      "passed": false,
       "scenario_type": "shadow",
-      "selected_skill_id": "static-analysis/semgrep",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     },
     {
       "case_id": "route-codeql-vs-semgrep",
       "expected_skill_id": "static-analysis/codeql",
-      "passed": true,
+      "passed": false,
       "scenario_type": "shadow",
-      "selected_skill_id": "static-analysis/codeql",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     },
     {
@@ -296,21 +296,21 @@
     {
       "case_id": "route-semgrep-sarif",
       "expected_skill_id": "static-analysis/semgrep",
-      "passed": true,
+      "passed": false,
       "scenario_type": "neighbor",
-      "selected_skill_id": "static-analysis/semgrep",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     },
     {
       "case_id": "route-codeql-database-workflow",
       "expected_skill_id": "static-analysis/codeql",
-      "passed": true,
+      "passed": false,
       "scenario_type": "neighbor",
-      "selected_skill_id": "static-analysis/codeql",
+      "selected_skill_id": "wooyun-legacy",
       "variant": "reduced"
     }
   ],
-  "routing_pass_rate": 1.0,
-  "shadow_interference_count": 0,
+  "routing_pass_rate": 0.4,
+  "shadow_interference_count": 2,
   "total_cases": 10
 }

@@ -205,8 +205,9 @@ class BaseQueryEngine(ABC):
         callbacks: GenerationCallbacks | None,
         cycle_index: int,
         max_cycles: int,
+        recent_attempts_summary: str = "",
     ) -> str | None:
-        del callbacks, cycle_index, max_cycles
+        del callbacks, cycle_index, max_cycles, recent_attempts_summary
         return None
 
     def maybe_auto_compact(self) -> None:
@@ -456,6 +457,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
         callbacks: GenerationCallbacks | None,
         cycle_index: int,
         max_cycles: int,
+        recent_attempts_summary: str = "",
     ) -> str | None:
         del callbacks
         return cast(
@@ -467,6 +469,7 @@ class OpenAIQueryEngine(BaseQueryEngine):
                 self.messages,
                 cycle_index=cycle_index,
                 max_cycles=max_cycles,
+                recent_attempts_summary=recent_attempts_summary,
             ),
         )
 
@@ -641,6 +644,7 @@ class AnthropicQueryEngine(BaseQueryEngine):
         callbacks: GenerationCallbacks | None,
         cycle_index: int,
         max_cycles: int,
+        recent_attempts_summary: str = "",
     ) -> str | None:
         del callbacks
         return cast(
@@ -652,6 +656,7 @@ class AnthropicQueryEngine(BaseQueryEngine):
                 self.messages,
                 cycle_index=cycle_index,
                 max_cycles=max_cycles,
+                recent_attempts_summary=recent_attempts_summary,
             ),
         )
 

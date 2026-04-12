@@ -10,7 +10,7 @@ from app.db.models import (
     utc_now,
 )
 from app.db.repositories import SessionRepository
-from app.services.chat_runtime import sanitize_assistant_content
+from app.services.chat_runtime import sanitize_assistant_content, strip_tool_protocol_markup
 
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 THINK_TAG_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
@@ -36,7 +36,7 @@ def hidden_stream_tag_names() -> set[str]:
 
 def sanitize_persisted_assistant_text(content: str, *, fallback: str = "") -> str:
     return sanitize_assistant_content(
-        content,
+        strip_tool_protocol_markup(content),
         strip_thinking=False,
         fallback_text=fallback,
     )

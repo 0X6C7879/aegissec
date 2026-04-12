@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Awaitable, Callable
+from difflib import SequenceMatcher
 from typing import Any, cast
 
 from .messages import ChatRuntimeError, GenerationCallbacks, ToolCallResult
@@ -10,6 +13,7 @@ class QueryLoop:
     def __init__(self, *, max_turns: int, max_budget_cycles: int = 1) -> None:
         self._max_turns = max_turns
         self._max_budget_cycles = max_budget_cycles
+        self._attempt_history: list[dict[str, str | None]] = []
 
     async def run(
         self,
@@ -58,16 +62,10 @@ class QueryLoop:
                     if execute_tool is None:
                         raise ChatRuntimeError("LLM requested tools but no executor is available.")
                     engine.pending_continuation = True
-                    batch_execute = cast(
-                        Callable[[list[Any]], Awaitable[list[ToolCallResult]]] | None,
-                        getattr(execute_tool, "__batch_execute__", None),
+                    tool_results = await self._execute_tool_round(
+                        turn_result.tool_calls,
+                        execute_tool=execute_tool,
                     )
-                    if callable(batch_execute):
-                        tool_results = await batch_execute(turn_result.tool_calls)
-                    else:
-                        tool_results = []
-                        for tool_call in turn_result.tool_calls:
-                            tool_results.append(cast(ToolCallResult, await execute_tool(tool_call)))
                     engine.usage.tool_rounds += 1
                     engine.usage.tool_calls += len(tool_results)
                     engine.append_tool_results(
@@ -127,13 +125,215 @@ class QueryLoop:
         if not callable(reflection_generator):
             return None
         engine.usage.model_turns += 1
+        recent_attempts_summary = self._recent_attempts_summary()
         reflection = await reflection_generator(
             callbacks=None,
             cycle_index=cycle_index,
             max_cycles=self._max_budget_cycles,
+            recent_attempts_summary=recent_attempts_summary,
         )
         normalized = reflection.strip() if isinstance(reflection, str) else ""
         return normalized or None
+
+    async def _execute_tool_round(
+        self,
+        tool_calls: list[Any],
+        *,
+        execute_tool: Callable[[object], Awaitable[object]],
+    ) -> list[ToolCallResult]:
+        blocked_results: dict[int, ToolCallResult] = {}
+        executable_calls: list[Any] = []
+        executable_indexes: list[int] = []
+        seen_attempts = list(self._attempt_history)
+
+        for index, tool_call in enumerate(tool_calls):
+            duplicate = self._find_duplicate_attempt(tool_call, seen_attempts=seen_attempts)
+            if duplicate is not None:
+                blocked_result = self._build_repeated_attempt_result(tool_call, duplicate=duplicate)
+                blocked_results[index] = blocked_result
+                self._remember_attempt(tool_call, blocked_result)
+                seen_attempts.append(self._attempt_history[-1])
+                continue
+            executable_calls.append(tool_call)
+            executable_indexes.append(index)
+            seen_attempts.append(self._attempt_projection(tool_call))
+
+        executed_results: list[ToolCallResult] = []
+        if executable_calls:
+            batch_execute = cast(
+                Callable[[list[Any]], Awaitable[list[ToolCallResult]]] | None,
+                getattr(execute_tool, "__batch_execute__", None),
+            )
+            if callable(batch_execute):
+                executed_results = await batch_execute(executable_calls)
+            else:
+                for tool_call in executable_calls:
+                    executed_results.append(cast(ToolCallResult, await execute_tool(tool_call)))
+            for tool_call, tool_result in zip(executable_calls, executed_results, strict=True):
+                self._remember_attempt(tool_call, tool_result)
+
+        ordered_results: list[ToolCallResult] = []
+        executed_by_index = dict(zip(executable_indexes, executed_results, strict=True))
+        for index in range(len(tool_calls)):
+            if index in blocked_results:
+                ordered_results.append(blocked_results[index])
+                continue
+            ordered_results.append(executed_by_index[index])
+        return ordered_results
+
+    def _find_duplicate_attempt(
+        self,
+        tool_call: Any,
+        *,
+        seen_attempts: list[dict[str, str | None]],
+    ) -> dict[str, str | None] | None:
+        candidate = self._attempt_projection(tool_call)
+        for attempt in reversed(seen_attempts[-12:]):
+            if self._is_duplicate_attempt(candidate, attempt):
+                return attempt
+        return None
+
+    def _remember_attempt(self, tool_call: Any, tool_result: ToolCallResult) -> None:
+        record = self._attempt_projection(tool_call)
+        payload_status = tool_result.payload.get("status")
+        record["status"] = (
+            payload_status if isinstance(payload_status, str) else tool_result.safe_summary
+        )
+        self._attempt_history.append(record)
+        if len(self._attempt_history) > 24:
+            self._attempt_history = self._attempt_history[-24:]
+
+    def _attempt_projection(self, tool_call: Any) -> dict[str, str | None]:
+        tool_name = getattr(tool_call, "tool_name", "")
+        arguments = getattr(tool_call, "arguments", {}) or {}
+        command = self._normalized_command(arguments)
+        return {
+            "tool_name": str(tool_name),
+            "arg_signature": self._argument_signature(arguments),
+            "command": command,
+            "program": self._primary_program(command),
+            "target": self._primary_target(arguments, command),
+            "summary": self._attempt_summary(str(tool_name), arguments, command),
+            "status": None,
+        }
+
+    @staticmethod
+    def _argument_signature(arguments: Any) -> str:
+        try:
+            return json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            return str(arguments or {})
+
+    @staticmethod
+    def _normalized_command(arguments: Any) -> str | None:
+        if not isinstance(arguments, dict):
+            return None
+        command = arguments.get("command")
+        if not isinstance(command, str):
+            return None
+        normalized = " ".join(command.strip().split())
+        return normalized or None
+
+    @staticmethod
+    def _primary_program(command: str | None) -> str | None:
+        if not command:
+            return None
+        first_token = command.split(" ", 1)[0].strip()
+        return first_token.casefold() or None
+
+    @staticmethod
+    def _primary_target(arguments: Any, command: str | None) -> str | None:
+        if isinstance(arguments, dict):
+            for key in ("terminal_id", "job_id", "skill_name_or_id", "mcp_tool_name"):
+                value = arguments.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip().casefold()
+        if not command:
+            return None
+        matches = re.findall(r"https?://[^\s'\"`]+", command)
+        if not matches:
+            return None
+        target = matches[0]
+        target = target.split("?", 1)[0].rstrip("/")
+        return target.casefold() or None
+
+    @staticmethod
+    def _attempt_summary(tool_name: str, arguments: Any, command: str | None) -> str:
+        if command:
+            preview = command[:160]
+            return f"{tool_name}: {preview}"
+        if isinstance(arguments, dict):
+            keys = ", ".join(sorted(str(key) for key in arguments.keys())[:6])
+            return f"{tool_name}: args[{keys}]"
+        return tool_name
+
+    @staticmethod
+    def _is_duplicate_attempt(
+        candidate: dict[str, str | None],
+        previous: dict[str, str | None],
+    ) -> bool:
+        if candidate.get("tool_name") != previous.get("tool_name"):
+            return False
+        if candidate.get("arg_signature") == previous.get("arg_signature"):
+            return True
+        candidate_command = candidate.get("command")
+        previous_command = previous.get("command")
+        if not candidate_command or not previous_command:
+            return False
+        if candidate.get("program") != previous.get("program"):
+            return False
+        candidate_target = candidate.get("target")
+        previous_target = previous.get("target")
+        if candidate_target and previous_target and candidate_target != previous_target:
+            return False
+        similarity = SequenceMatcher(
+            None,
+            candidate_command.casefold(),
+            previous_command.casefold(),
+        ).ratio()
+        if candidate_target and previous_target:
+            return similarity >= 0.96
+        return similarity >= 0.985
+
+    @staticmethod
+    def _build_repeated_attempt_result(
+        tool_call: Any,
+        *,
+        duplicate: dict[str, str | None],
+    ) -> ToolCallResult:
+        duplicate_summary = duplicate.get("summary") or "recent attempt"
+        payload = {
+            "status": "blocked_repeated_attempt",
+            "blocked": True,
+            "reason": (
+                "This tool call was blocked because it is materially too similar to a recent "
+                "attempt and is unlikely to produce new evidence."
+            ),
+            "duplicate_of": duplicate_summary,
+            "guidance": (
+                "Pivot to a different endpoint, credential strategy, artifact source, or attack "
+                "surface instead of repeating the same command family."
+            ),
+        }
+        return ToolCallResult(
+            tool_name=str(getattr(tool_call, "tool_name", "tool")),
+            tool_call_id=getattr(tool_call, "tool_call_id", None),
+            payload=payload,
+            safe_summary=(
+                "Blocked repeated tool attempt; choose a materially different next action."
+            ),
+        )
+
+    def _recent_attempts_summary(self) -> str:
+        if not self._attempt_history:
+            return ""
+        lines = ["Recent autonomous attempts:"]
+        for attempt in self._attempt_history[-6:]:
+            summary = attempt.get("summary") or attempt.get("tool_name") or "tool"
+            status = attempt.get("status") or "unknown"
+            lines.append(f"- {summary} | status={status}")
+        lines.append("Avoid repeating these families unless new evidence justifies it.")
+        return "\n".join(lines)
 
     async def _drain_context_injections(
         self,

@@ -13,6 +13,8 @@ from app.core.settings import Settings
 from app.db.models import AttachmentMetadata, MessageRole, SkillAgentSummaryRead
 from app.harness.messages import GenerationCallbacks as HarnessGenerationCallbacks
 from app.harness.messages import ProviderTurnResult
+from app.harness.messages import ToolCallRequest as HarnessToolCallRequest
+from app.harness.messages import ToolCallResult as HarnessToolCallResult
 from app.harness.query_engine import BaseQueryEngine
 from app.harness.query_loop import QueryLoop
 from app.services.chat_runtime import (
@@ -953,7 +955,7 @@ def test_query_loop_reflects_and_continues_after_budget_exhaustion() -> None:
                     assistant_payload={"role": "assistant", "content": ""},
                     text_content=None,
                     tool_calls=[
-                        ToolCallRequest(
+                        HarnessToolCallRequest(
                             tool_call_id=f"tool-{self.turns}",
                             tool_name="execute_kali_command",
                             arguments={"command": f"cmd-{self.turns}"},
@@ -969,8 +971,8 @@ def test_query_loop_reflects_and_continues_after_budget_exhaustion() -> None:
             self,
             *,
             assistant_payload: dict[str, object],
-            tool_calls: Sequence[ToolCallRequest],
-            tool_results: Sequence[ToolCallResult],
+            tool_calls: Sequence[HarnessToolCallRequest],
+            tool_results: Sequence[HarnessToolCallResult],
         ) -> None:
             del assistant_payload, tool_calls, tool_results
 
@@ -988,9 +990,12 @@ def test_query_loop_reflects_and_continues_after_budget_exhaustion() -> None:
             callbacks: object | None,
             cycle_index: int,
             max_cycles: int,
+            recent_attempts_summary: str = "",
         ) -> str | None:
             del callbacks
             self.reflection_requests.append((cycle_index, max_cycles))
+            assert "Recent autonomous attempts:" in recent_attempts_summary
+            assert "execute_kali_command: cmd-1 | status=completed" in recent_attempts_summary
             return "Avoid repeating the same login path; try a materially different tool action."
 
         def render_compact_message(self, compact_fragment: str) -> dict[str, object]:
@@ -1015,9 +1020,10 @@ def test_query_loop_reflects_and_continues_after_budget_exhaustion() -> None:
     engine = ReflectiveEngine()
     executed_commands: list[str] = []
 
-    async def execute_tool(tool_request: ToolCallRequest) -> ToolCallResult:
-        executed_commands.append(str(tool_request.arguments["command"]))
-        return ToolCallResult(tool_name=tool_request.tool_name, payload={"status": "completed"})
+    async def execute_tool(tool_request: object) -> object:
+        request = cast(HarnessToolCallRequest, tool_request)
+        executed_commands.append(str(request.arguments["command"]))
+        return HarnessToolCallResult(tool_name=request.tool_name, payload={"status": "completed"})
 
     result = asyncio.run(
         QueryLoop(max_turns=2, max_budget_cycles=2).run(
@@ -1526,13 +1532,131 @@ def test_openai_runtime_reflects_and_continues_after_tool_budget_exhaustion() ->
     assert executed_commands == ["cmd-1", "cmd-2", "cmd-3"]
     reflection_payloads = [payload for payload in runtime.payloads if payload.get("tools") is None]
     assert len(reflection_payloads) == 1
+    reflection_prompt_messages = cast(list[dict[str, object]], reflection_payloads[0]["messages"])
+    assert any(
+        isinstance(content := message.get("content"), str)
+        and "Recent autonomous attempts:" in content
+        and "cmd-1 | status=completed" in content
+        for message in reflection_prompt_messages
+        if isinstance(message, dict)
+    )
     tool_payloads = [payload for payload in runtime.payloads if payload.get("tools") is not None]
     reflection_marker = "Autonomous reflection after exhausting the current tool phase (1/2)."
     assert any(
-        isinstance(message.get("content"), str) and reflection_marker in message["content"]
+        isinstance(content := message.get("content"), str) and reflection_marker in content
         for message in cast(list[dict[str, object]], tool_payloads[-1]["messages"])
         if isinstance(message, dict)
     )
+
+
+def test_query_loop_blocks_repeated_tool_attempts() -> None:
+    class DuplicateAwareEngine(BaseQueryEngine):
+        def __init__(self) -> None:
+            super().__init__(
+                messages=[],
+                model_name="demo-model",
+                system_prompt=None,
+                max_turns=3,
+            )
+            self.turns = 0
+            self.captured_results: list[list[HarnessToolCallResult]] = []
+
+        async def request_turn(
+            self,
+            *,
+            allow_tools: bool,
+            callbacks: object | None,
+        ) -> ProviderTurnResult:
+            del allow_tools, callbacks
+            self.turns += 1
+            if self.turns == 1:
+                return ProviderTurnResult(
+                    assistant_payload={"role": "assistant", "content": ""},
+                    text_content=None,
+                    tool_calls=[
+                        HarnessToolCallRequest(
+                            tool_call_id="tool-1",
+                            tool_name="execute_kali_command",
+                            arguments={"command": "curl -s http://example.test/token"},
+                        )
+                    ],
+                )
+            if self.turns == 2:
+                return ProviderTurnResult(
+                    assistant_payload={"role": "assistant", "content": ""},
+                    text_content=None,
+                    tool_calls=[
+                        HarnessToolCallRequest(
+                            tool_call_id="tool-2",
+                            tool_name="execute_kali_command",
+                            arguments={"command": "curl   -s   http://example.test/token"},
+                        )
+                    ],
+                )
+            return ProviderTurnResult(
+                assistant_payload={"role": "assistant", "content": "Pivoted"},
+                text_content="Pivoted",
+            )
+
+        def append_tool_results(
+            self,
+            *,
+            assistant_payload: dict[str, object],
+            tool_calls: Sequence[HarnessToolCallRequest],
+            tool_results: Sequence[HarnessToolCallResult],
+        ) -> None:
+            del assistant_payload, tool_calls
+            self.captured_results.append(list(tool_results))
+
+        async def generate_tool_budget_reply(
+            self,
+            *,
+            callbacks: object | None,
+        ) -> str:
+            del callbacks
+            raise AssertionError("budget fallback should not be used")
+
+        def render_compact_message(self, compact_fragment: str) -> dict[str, object]:
+            return {"role": "user", "content": compact_fragment}
+
+        def append_assistant_response_to_history(
+            self, assistant_payload: dict[str, object]
+        ) -> None:
+            self.messages.append(assistant_payload)
+
+        def build_synthetic_assistant_payload(
+            self,
+            tool_calls: Sequence[object],
+        ) -> dict[str, object]:
+            del tool_calls
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [],
+            }
+
+    engine = DuplicateAwareEngine()
+    executed_commands: list[str] = []
+
+    async def execute_tool(tool_request: object) -> object:
+        request = cast(HarnessToolCallRequest, tool_request)
+        executed_commands.append(str(request.arguments["command"]))
+        return HarnessToolCallResult(
+            tool_name=request.tool_name,
+            tool_call_id=request.tool_call_id,
+            payload={"status": "completed"},
+        )
+
+    result = asyncio.run(
+        QueryLoop(max_turns=3).run(engine, execute_tool=execute_tool, callbacks=None)
+    )
+
+    assert result == "Pivoted"
+    assert executed_commands == ["curl -s http://example.test/token"]
+    assert len(engine.captured_results) == 2
+    blocked_result = engine.captured_results[1][0]
+    assert blocked_result.payload["status"] == "blocked_repeated_attempt"
+    assert blocked_result.payload["blocked"] is True
 
 
 def test_get_chat_runtime_applies_configured_timeout_for_openai(monkeypatch: MonkeyPatch) -> None:

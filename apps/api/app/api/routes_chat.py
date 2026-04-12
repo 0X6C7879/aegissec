@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import re
 from collections.abc import Mapping
 
@@ -74,6 +75,7 @@ from app.services.session_generation import (
 )
 
 router = APIRouter(prefix="/api/sessions", tags=["chat"])
+logger = logging.getLogger("aegissec.api")
 
 _harness_generation_events = importlib.import_module("app.harness.generation_events")
 _harness_semantic = importlib.import_module("app.harness.semantic")
@@ -278,7 +280,6 @@ async def _await_generation_result(
     generation_id: str,
     future: asyncio.Future[str],
 ) -> str:
-    del session_id
     try:
         return await future
     except GenerationCancelledError as exc:
@@ -293,11 +294,29 @@ async def _await_generation_result(
             },
         ) from exc
     except ChatRuntimeConfigurationError as exc:
+        logger.error(
+            "Session worker generation failed due to runtime configuration error "
+            "[session_id=%s generation_id=%s]: %s",
+            session_id,
+            generation_id,
+            exc,
+            extra={"session_id": session_id, "generation_id": generation_id},
+            exc_info=exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     except ChatRuntimeError as exc:
+        logger.error(
+            "Session worker generation failed during model/runtime execution "
+            "[session_id=%s generation_id=%s]: %s",
+            session_id,
+            generation_id,
+            exc,
+            extra={"session_id": session_id, "generation_id": generation_id},
+            exc_info=exc,
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
