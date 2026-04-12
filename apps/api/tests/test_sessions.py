@@ -59,6 +59,8 @@ from app.services.chat_runtime import (
 from app.services.session_generation import get_generation_manager, recover_abandoned_generations
 from tests.utils import api_data
 
+terminal_runtime = importlib.import_module("app.services.terminal_runtime")
+
 TEST_POLL_INTERVAL_SECONDS = 0.01
 TEST_EVENTUAL_TIMEOUT_SECONDS = 1.0
 
@@ -419,6 +421,227 @@ def test_session_terminal_job_endpoints_return_session_scoped_metadata(client: T
 
     foreign_job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{other_job_id}")
     assert foreign_job_response.status_code == 404
+
+
+def test_session_terminal_rest_controls_require_attached_terminal_and_reuse_live_pty(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal REST Controls"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "REST Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    input_before_attach = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/input",
+        json={"data": "whoami\n"},
+    )
+    assert input_before_attach.status_code == 409
+    assert input_before_attach.json()["detail"] == "Terminal is not currently attached"
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        ready_frame = terminal_stream.receive_json()
+        assert ready_frame["type"] == "ready"
+
+        input_response = client.post(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/input",
+            json={"data": "whoami\n"},
+        )
+        resize_response = client.post(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/resize",
+            json={"cols": 120, "rows": 40},
+        )
+        interrupt_response = client.post(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/interrupt"
+        )
+
+        assert input_response.status_code == 200
+        assert api_data(input_response) == {"ok": True}
+        assert resize_response.status_code == 200
+        assert api_data(resize_response) == {"ok": True}
+        assert interrupt_response.status_code == 200
+        assert api_data(interrupt_response) == {"ok": True}
+
+        backend_process = app.state.terminal_backend.processes[terminal_id]
+        assert backend_process.inputs[-1] == b"whoami\n"
+        assert backend_process.resize_history[-1] == (120, 40)
+        assert backend_process.signals[-1] == "INT"
+
+        assert terminal_stream.receive_json() == {"type": "output", "data": "whoami\n"}
+        assert terminal_stream.receive_json() == {"type": "output", "data": "^C"}
+
+
+def test_session_terminal_execute_without_detach_reuses_current_terminal_job(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Interactive Execute"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Interactive Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        ready_frame = terminal_stream.receive_json()
+        execute_response = client.post(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+            json={"command": "pwd", "detach": False},
+        )
+
+        assert execute_response.status_code == 200
+        assert api_data(execute_response) == {
+            "terminal_id": terminal_id,
+            "accepted": True,
+            "detach": False,
+            "job_id": ready_frame["job_id"],
+            "status": "running",
+        }
+        assert app.state.terminal_backend.processes[terminal_id].inputs[-1] == b"pwd\n"
+        assert terminal_stream.receive_json() == {"type": "output", "data": "pwd\n"}
+
+
+def test_session_terminal_execute_detach_tail_and_cleanup_are_session_scoped(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Detached Execute"})
+    session_id = api_data(session_response)["id"]
+    other_session_response = client.post("/api/sessions", json={"title": "Detached Other"})
+    other_session_id = api_data(other_session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Detached Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    execute_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={
+            "command": "printf 'hello'",
+            "detach": True,
+            "timeout_seconds": 30,
+        },
+    )
+    assert execute_response.status_code == 200
+    job_id = api_data(execute_response)["job_id"]
+    assert job_id is not None
+
+    deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+    completed_job: dict[str, object] | None = None
+    while time.time() < deadline:
+        job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+        assert job_response.status_code == 200
+        completed_job = api_data(job_response)
+        assert completed_job is not None
+        if completed_job["status"] == "completed":
+            break
+        time.sleep(TEST_POLL_INTERVAL_SECONDS)
+    assert completed_job is not None
+    assert completed_job["status"] == "completed"
+
+    tail_response = client.get(
+        f"/api/sessions/{session_id}/terminal-jobs/{job_id}/tail",
+        params={"stream": "stdout", "lines": 20},
+    )
+    assert tail_response.status_code == 200
+    tail_payload = api_data(tail_response)
+    assert tail_payload["job_id"] == job_id
+    assert tail_payload["status"] == "completed"
+    assert "printf 'hello'" in tail_payload["tail"]
+
+    foreign_tail_response = client.get(
+        f"/api/sessions/{other_session_id}/terminal-jobs/{job_id}/tail",
+        params={"stream": "stdout", "lines": 20},
+    )
+    assert foreign_tail_response.status_code == 404
+
+    cleanup_response = client.post(
+        f"/api/sessions/{session_id}/terminal-jobs/cleanup",
+        json={},
+    )
+    assert cleanup_response.status_code == 200
+    assert api_data(cleanup_response)["deleted_jobs"] == 1
+
+    deleted_job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+    assert deleted_job_response.status_code == 404
+
+
+def test_session_terminal_stop_endpoint_cancels_live_detached_job(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Detached Stop"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Detached Stop Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+    backend = app.state.terminal_backend
+    original_open_terminal = backend.open_terminal
+
+    class HangingTerminalProcess:
+        def __init__(self) -> None:
+            self.events: asyncio.Queue[object] = asyncio.Queue()
+            self.inputs: list[bytes] = []
+            self.closed_reasons: list[str] = []
+
+        async def send_input(self, data: bytes) -> None:
+            self.inputs.append(data)
+            await self.events.put(terminal_runtime.TerminalBackendEvent.output(data=data))
+
+        async def resize(self, cols: int, rows: int) -> None:
+            del cols, rows
+
+        async def send_signal(self, signal_name: str) -> None:
+            del signal_name
+
+        async def send_eof(self) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=0, reason="eof")
+            )
+
+        async def close(self, *, reason: str) -> None:
+            self.closed_reasons.append(reason)
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=None, reason=reason)
+            )
+
+    async def open_terminal_for_stop(**kwargs: object) -> object:
+        terminal_key = kwargs.get("terminal_id")
+        if isinstance(terminal_key, str) and ":job:" in terminal_key:
+            return HangingTerminalProcess()
+        return await original_open_terminal(**kwargs)
+
+    monkeypatch.setattr(backend, "open_terminal", open_terminal_for_stop)
+
+    execute_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={"command": "sleep 60", "detach": True, "timeout_seconds": 60},
+    )
+    assert execute_response.status_code == 200
+    job_id = api_data(execute_response)["job_id"]
+    assert job_id is not None
+
+    stop_response = client.post(f"/api/sessions/{session_id}/terminal-jobs/{job_id}/stop")
+    assert stop_response.status_code == 200
+
+    deadline = time.time() + TEST_EVENTUAL_TIMEOUT_SECONDS
+    stopped_job: dict[str, object] | None = None
+    while time.time() < deadline:
+        job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+        assert job_response.status_code == 200
+        stopped_job = api_data(job_response)
+        assert stopped_job is not None
+        if stopped_job["status"] == "cancelled":
+            break
+        time.sleep(TEST_POLL_INTERVAL_SECONDS)
+    assert stopped_job is not None
+    assert stopped_job["status"] == "cancelled"
 
 
 def test_session_terminal_stream_rejects_second_active_attach(client: TestClient) -> None:

@@ -1,5 +1,4 @@
 import asyncio
-from importlib import import_module
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,14 +8,15 @@ from app.core.events import SessionEventBroker
 from app.db.models import RuntimeTerminalJobStatus
 from app.db.repositories import TerminalRepository
 from app.main import app
+from app.services.terminal_runtime import (
+    LiveTerminalHandle,
+    LiveTerminalJobRegistry,
+    LiveTerminalRegistry,
+    TerminalAlreadyAttachedError,
+    TerminalNotFoundError,
+    TerminalRuntimeService,
+)
 from tests.utils import api_data
-
-terminal_runtime = import_module("app.services.terminal_runtime")
-LiveTerminalHandle = terminal_runtime.LiveTerminalHandle
-LiveTerminalRegistry = terminal_runtime.LiveTerminalRegistry
-TerminalAlreadyAttachedError = terminal_runtime.TerminalAlreadyAttachedError
-TerminalNotFoundError = terminal_runtime.TerminalNotFoundError
-TerminalRuntimeService = terminal_runtime.TerminalRuntimeService
 
 
 def _create_session_and_terminal(
@@ -39,6 +39,7 @@ def _build_service() -> TerminalRuntimeService:
         event_broker=SessionEventBroker(),
         backend=app.state.terminal_backend,
         registry=LiveTerminalRegistry(),
+        job_registry=LiveTerminalJobRegistry(),
     )
 
 
@@ -70,6 +71,7 @@ async def test_terminal_runtime_service_marks_natural_exit_completed(client: Tes
     service = _build_service()
 
     handle = await service.connect(session_id=session_id, terminal_id=terminal_id, cols=80, rows=24)
+    assert handle.process is not None
     await handle.process.send_input(b"exit\n")
     await asyncio.wait_for(handle.closed.wait(), timeout=1)
 
@@ -175,7 +177,7 @@ async def test_terminal_runtime_service_rejects_concurrent_attach_without_second
     open_calls = 0
     original_open_terminal = backend.open_terminal
 
-    async def delayed_open_terminal(**kwargs: object):
+    async def delayed_open_terminal(**kwargs: object) -> object:
         nonlocal open_calls
         open_calls += 1
         started.set()

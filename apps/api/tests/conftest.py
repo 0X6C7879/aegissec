@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Generator
 from datetime import UTC, datetime
-from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -22,11 +21,12 @@ from app.services.runtime import (
     RuntimeContainerState,
     get_runtime_backend,
 )
-
-terminal_runtime = import_module("app.services.terminal_runtime")
-LiveTerminalRegistry = terminal_runtime.LiveTerminalRegistry
-TerminalBackendEvent = terminal_runtime.TerminalBackendEvent
-TerminalProcess = terminal_runtime.TerminalProcess
+from app.services.terminal_runtime import (
+    LiveTerminalJobRegistry,
+    LiveTerminalRegistry,
+    TerminalBackendEvent,
+    TerminalProcess,
+)
 
 
 class FakeChatRuntime:
@@ -310,6 +310,7 @@ def client(
     app.state.database_engine = engine
     app.state.settings = test_settings
     app.state.live_terminal_registry = LiveTerminalRegistry()
+    app.state.live_terminal_job_registry = LiveTerminalJobRegistry()
     app.state.terminal_backend = terminal_backend
 
     with TestClient(app) as test_client:

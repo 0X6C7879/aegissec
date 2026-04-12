@@ -4,7 +4,7 @@ import asyncio
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from typing import Literal, Protocol, cast
@@ -525,7 +525,9 @@ class TerminalRuntimeService:
         terminal_id: str,
     ) -> LiveTerminalHandle:
         handle = await self._registry.get(terminal_id=terminal_id)
-        if handle is None or handle.session_id != session_id:
+        if handle is None:
+            raise TerminalNotAttachedError("Terminal is not currently attached")
+        if handle.session_id != session_id:
             raise TerminalNotFoundError("Terminal not found")
         if handle.process is None or handle.finalized or handle.closed.is_set():
             raise TerminalClosedError("Terminal is already closed")
@@ -870,6 +872,200 @@ class TerminalRuntimeService:
             except Exception:
                 await self._finalize_handle(handle, exit_code=None, reason="error")
 
+    async def start_background_job(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+        command: str,
+        timeout_seconds: int,
+        artifact_paths: list[str],
+    ) -> str:
+        with DBSession(self._database_engine) as db_session:
+            session_repository = SessionRepository(db_session)
+            session = session_repository.get_session(session_id)
+            if session is None:
+                raise TerminalNotFoundError("Session not found")
+
+            terminal_repository = TerminalRepository(db_session)
+            terminal = terminal_repository.get_terminal_session(
+                session_id=session_id,
+                terminal_session_id=terminal_id,
+            )
+            if terminal is None:
+                raise TerminalNotFoundError("Terminal not found")
+            if terminal.closed_at is not None:
+                raise TerminalClosedError("Terminal is already closed")
+
+            shell_service = SessionShellService(
+                terminal_repository,
+                RunLogRepository(db_session),
+            )
+            job_result = shell_service.start_terminal_job(
+                session=session,
+                terminal_id=terminal_id,
+                command=command,
+                metadata={
+                    "detach": True,
+                    "timeout_seconds": timeout_seconds,
+                    "artifact_paths": list(artifact_paths),
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                },
+            )
+            job_id = job_result.job.id
+            shell = terminal.shell
+            cwd = terminal.cwd
+
+        started_at = utc_now()
+        handle = LiveTerminalJobHandle(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            job_id=job_id,
+            command=command,
+            timeout_seconds=timeout_seconds,
+            artifact_paths=list(artifact_paths),
+            started_at=started_at,
+        )
+        await self._job_registry.put(handle)
+        try:
+            process = await self._backend.open_terminal(
+                terminal_id=f"{terminal_id}:job:{job_id}",
+                shell=shell,
+                cwd=cwd,
+                cols=80,
+                rows=24,
+            )
+            handle.process = process
+            handle.pump_task = asyncio.create_task(
+                self._pump_background_job_events(handle),
+                name=f"pty-job:{job_id}",
+            )
+            self._schedule_background_job_timeout(handle)
+            await process.send_input(f"{command}\nexit\n".encode())
+        except Exception:
+            await self._job_registry.remove(job_id=job_id)
+            with DBSession(self._database_engine) as db_session:
+                session_repository = SessionRepository(db_session)
+                failed_session = session_repository.get_session(session_id)
+                if failed_session is not None:
+                    shell_service = SessionShellService(
+                        TerminalRepository(db_session),
+                        RunLogRepository(db_session),
+                    )
+                    shell_service.finish_terminal_job(
+                        session=failed_session,
+                        job_id=job_id,
+                        status=RuntimeTerminalJobStatus.FAILED,
+                        exit_code=None,
+                        reason="backend_open_failed",
+                    )
+            await self._event_broker.publish(
+                SessionEvent(
+                    type=SessionEventType.TERMINAL_JOB_FAILED,
+                    session_id=session_id,
+                    payload={
+                        "job_id": job_id,
+                        "terminal_id": terminal_id,
+                        "session_id": session_id,
+                        "status": RuntimeTerminalJobStatus.FAILED.value,
+                        "reason": "backend_open_failed",
+                    },
+                )
+            )
+            raise
+
+        await self._event_broker.publish(
+            SessionEvent(
+                type=SessionEventType.TERMINAL_JOB_STARTED,
+                session_id=session_id,
+                payload={
+                    "job_id": job_id,
+                    "terminal_id": terminal_id,
+                    "session_id": session_id,
+                    "status": RuntimeTerminalJobStatus.RUNNING.value,
+                    "command": command,
+                    "detach": True,
+                },
+            )
+        )
+        return job_id
+
+    async def _pump_background_job_events(self, handle: LiveTerminalJobHandle) -> None:
+        assert handle.process is not None
+        while True:
+            event = await handle.process.events.get()
+            if event.kind == "output":
+                chunk = (event.data or b"").decode("utf-8", errors="replace")
+                handle.stdout_tail = self._append_tail(handle.stdout_tail, chunk)
+                continue
+            if event.kind == "error":
+                handle.stderr_tail = self._append_tail(
+                    handle.stderr_tail,
+                    event.message or "terminal error",
+                )
+                await self._finalize_background_job(handle, exit_code=None, reason="error")
+                return
+            if event.kind == "exit":
+                await self._finalize_background_job(
+                    handle,
+                    exit_code=event.exit_code,
+                    reason=event.reason or "exit",
+                )
+                return
+
+    def _schedule_background_job_timeout(self, handle: LiveTerminalJobHandle) -> None:
+        if handle.timeout_seconds <= 0:
+            return
+
+        async def _timeout_close() -> None:
+            if handle.finalized or handle.process is None:
+                return
+            await handle.process.close(reason="timeout")
+
+        def _spawn_timeout_close() -> None:
+            handle.timeout_handle = None
+            handle.timeout_task = asyncio.create_task(
+                _timeout_close(),
+                name=f"pty-job-timeout:{handle.job_id}",
+            )
+
+        handle.timeout_handle = asyncio.get_running_loop().call_later(
+            handle.timeout_seconds,
+            _spawn_timeout_close,
+        )
+
+    async def stop_background_job(self, *, session_id: str, job_id: str) -> bool:
+        handle = await self._job_registry.get(job_id=job_id)
+        if handle is None or handle.session_id != session_id:
+            return False
+        if handle.process is not None and not handle.finalized:
+            await handle.process.close(reason="close")
+        try:
+            await asyncio.wait_for(handle.closed.wait(), timeout=TERMINAL_CLOSE_WAIT_SECONDS)
+        except TimeoutError:
+            await self._finalize_background_job(handle, exit_code=None, reason="close")
+        return True
+
+    async def get_background_job_tail(
+        self,
+        *,
+        session_id: str,
+        job_id: str,
+        stream: Literal["stdout", "stderr"],
+        lines: int,
+    ) -> str | None:
+        handle = await self._job_registry.get(job_id=job_id)
+        if handle is None:
+            return None
+        if handle.session_id != session_id:
+            raise TerminalNotFoundError("Terminal job not found")
+        content = handle.stderr_tail if stream == "stderr" else handle.stdout_tail
+        return self._slice_tail_lines(content, lines)
+
+    async def get_active_background_job_ids(self, *, session_id: str) -> set[str]:
+        return await self._job_registry.active_job_ids_for_session(session_id=session_id)
+
     async def mark_detached(
         self, handle: LiveTerminalHandle, *, timeout_seconds: float | None = None
     ) -> None:
@@ -909,6 +1105,127 @@ class TerminalRuntimeService:
         )
         handle.detach_timer = asyncio.get_running_loop().call_later(delay, _spawn_timeout_close)
 
+    def _resolve_terminal_artifacts(
+        self,
+        *,
+        artifact_paths: list[str],
+    ) -> list[tuple[str, str, str]]:
+        workspace_dir = Path(self._settings.runtime_workspace_dir).resolve()
+        workspace_container_path = PurePosixPath(self._settings.runtime_workspace_container_path)
+        normalized: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+
+        for artifact_path in artifact_paths:
+            cleaned = artifact_path.strip()
+            if not cleaned:
+                continue
+            relative_path = cleaned.replace("\\", "/").lstrip("/")
+            if relative_path in seen:
+                continue
+            seen.add(relative_path)
+            host_path = (workspace_dir / Path(relative_path)).resolve()
+            if not host_path.exists() or not host_path.is_relative_to(workspace_dir):
+                continue
+            normalized.append(
+                (
+                    relative_path,
+                    str(host_path),
+                    str(workspace_container_path / PurePosixPath(relative_path)),
+                )
+            )
+        return normalized
+
+    @staticmethod
+    def _resolve_execution_status(*, reason: str, exit_code: int | None) -> ExecutionStatus:
+        if reason == "timeout":
+            return ExecutionStatus.TIMEOUT
+        if exit_code == 0:
+            return ExecutionStatus.SUCCESS
+        return ExecutionStatus.FAILED
+
+    async def _finalize_background_job(
+        self,
+        handle: LiveTerminalJobHandle,
+        *,
+        exit_code: int | None,
+        reason: str,
+    ) -> None:
+        async with handle.finalize_lock:
+            if handle.finalized:
+                return
+            handle.finalized = True
+            if handle.timeout_task is not None:
+                handle.timeout_task.cancel()
+                handle.timeout_task = None
+            if handle.timeout_handle is not None:
+                handle.timeout_handle.cancel()
+                handle.timeout_handle = None
+
+            status = self._resolve_terminal_job_status(reason=reason, exit_code=exit_code)
+            execution_status = self._resolve_execution_status(reason=reason, exit_code=exit_code)
+            artifacts = self._resolve_terminal_artifacts(artifact_paths=handle.artifact_paths)
+            stdout_tail = handle.stdout_tail
+            stderr_tail = handle.stderr_tail
+            metadata_updates = {
+                "stdout_tail": stdout_tail,
+                "stderr_tail": stderr_tail,
+                "artifact_paths": [artifact[0] for artifact in artifacts],
+                "finish_reason": reason,
+            }
+
+            job_result = None
+            run_id: str | None = None
+            with DBSession(self._database_engine) as db_session:
+                session_repository = SessionRepository(db_session)
+                session = session_repository.get_session(handle.session_id)
+                if session is not None:
+                    runtime_repository = RuntimeRepository(db_session)
+                    run_log_repository = RunLogRepository(db_session)
+                    run, _artifact_rows = runtime_repository.create_run(
+                        session_id=handle.session_id,
+                        command=handle.command,
+                        requested_timeout_seconds=handle.timeout_seconds,
+                        status=execution_status,
+                        exit_code=exit_code,
+                        stdout=stdout_tail,
+                        stderr=stderr_tail,
+                        container_name=self._settings.runtime_container_name,
+                        started_at=handle.started_at,
+                        ended_at=utc_now(),
+                        artifacts=artifacts,
+                    )
+                    run_id = run.id
+                    shell_service = SessionShellService(
+                        TerminalRepository(db_session), run_log_repository
+                    )
+                    job_result = shell_service.finish_terminal_job(
+                        session=session,
+                        job_id=handle.job_id,
+                        status=status,
+                        exit_code=exit_code,
+                        reason=reason,
+                        metadata_updates={**metadata_updates, "run_id": run_id},
+                    )
+
+            if job_result is not None and job_result.changed:
+                event_type = {
+                    RuntimeTerminalJobStatus.COMPLETED: SessionEventType.TERMINAL_JOB_COMPLETED,
+                    RuntimeTerminalJobStatus.FAILED: SessionEventType.TERMINAL_JOB_FAILED,
+                    RuntimeTerminalJobStatus.CANCELLED: SessionEventType.TERMINAL_JOB_CANCELLED,
+                }[status]
+                payload = terminal_job_audit_payload(job_result.job, reason=reason)
+                payload["run_id"] = run_id
+                await self._event_broker.publish(
+                    SessionEvent(
+                        type=event_type,
+                        session_id=handle.session_id,
+                        payload=payload,
+                    )
+                )
+
+            handle.closed.set()
+            await self._job_registry.remove(job_id=handle.job_id)
+
     async def shutdown(self) -> None:
         handles = await self._registry.list_handles()
         close_tasks = [
@@ -916,6 +1233,12 @@ class TerminalRuntimeService:
             for handle in handles
             if handle.process is not None and not handle.finalized
         ]
+        background_job_handles = await self._job_registry.list_handles()
+        close_tasks.extend(
+            asyncio.create_task(handle.process.close(reason="shutdown"))
+            for handle in background_job_handles
+            if handle.process is not None and not handle.finalized
+        )
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
         await self._backend.shutdown()
@@ -1029,6 +1352,15 @@ def get_live_terminal_registry(app: FastAPI) -> LiveTerminalRegistry:
     return registry
 
 
+def get_live_terminal_job_registry(app: FastAPI) -> LiveTerminalJobRegistry:
+    registry = getattr(app.state, "live_terminal_job_registry", None)
+    if isinstance(registry, LiveTerminalJobRegistry):
+        return registry
+    registry = LiveTerminalJobRegistry()
+    app.state.live_terminal_job_registry = registry
+    return registry
+
+
 def get_terminal_backend(app: FastAPI) -> TerminalBackend:
     backend = getattr(app.state, "terminal_backend", None)
     if backend is not None:
@@ -1049,4 +1381,5 @@ def build_terminal_runtime_service(
         event_broker=event_broker,
         backend=get_terminal_backend(app),
         registry=get_live_terminal_registry(app),
+        job_registry=get_live_terminal_job_registry(app),
     )

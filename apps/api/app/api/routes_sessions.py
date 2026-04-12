@@ -50,7 +50,14 @@ from app.db.models import (
     SessionReplayRead,
     SessionStatus,
     SessionUpdate,
+    TerminalExecuteRequest,
+    TerminalExecuteResponse,
+    TerminalInputRequest,
     TerminalJobRead,
+    TerminalJobsCleanupRequest,
+    TerminalJobsCleanupResult,
+    TerminalJobTailRead,
+    TerminalResizeRequest,
     TerminalSessionCreateRequest,
     TerminalSessionRead,
     to_chat_generation_read,
@@ -96,6 +103,8 @@ TerminalAlreadyAttachedError = terminal_runtime.TerminalAlreadyAttachedError
 TerminalBackendUnavailableError = terminal_runtime.TerminalBackendUnavailableError
 TerminalClosedError = terminal_runtime.TerminalClosedError
 TerminalNotFoundError = terminal_runtime.TerminalNotFoundError
+TerminalNotAttachedError = terminal_runtime.TerminalNotAttachedError
+TerminalRuntimeError = terminal_runtime.TerminalRuntimeError
 build_terminal_runtime_service = terminal_runtime.build_terminal_runtime_service
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -1458,6 +1467,157 @@ async def get_session_terminal(
 
 
 @router.post(
+    "/{session_id}/terminals/{terminal_id}/input",
+    response_model=AckResponse,
+    summary="Send terminal input",
+    description="Write UTF-8 input into the currently attached terminal PTY.",
+)
+async def input_session_terminal(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    payload: TerminalInputRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    if service.get_terminal(session_id=session_id, terminal_id=terminal_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    try:
+        await runtime_service.send_terminal_input(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            data=payload.data,
+        )
+    except TerminalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (TerminalClosedError, TerminalNotAttachedError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return ok_response(AckResponse().model_dump(mode="json"))
+
+
+@router.post(
+    "/{session_id}/terminals/{terminal_id}/resize",
+    response_model=AckResponse,
+    summary="Resize terminal PTY",
+    description="Resize the currently attached terminal PTY window.",
+)
+async def resize_session_terminal(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    payload: TerminalResizeRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    if service.get_terminal(session_id=session_id, terminal_id=terminal_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    try:
+        await runtime_service.resize_terminal(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            cols=payload.cols,
+            rows=payload.rows,
+        )
+    except TerminalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (TerminalClosedError, TerminalNotAttachedError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return ok_response(AckResponse().model_dump(mode="json"))
+
+
+@router.post(
+    "/{session_id}/terminals/{terminal_id}/interrupt",
+    response_model=AckResponse,
+    summary="Interrupt terminal foreground work",
+    description="Send Ctrl+C/SIGINT to the currently attached terminal PTY.",
+)
+async def interrupt_session_terminal(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    if service.get_terminal(session_id=session_id, terminal_id=terminal_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    try:
+        await runtime_service.interrupt_terminal(session_id=session_id, terminal_id=terminal_id)
+    except TerminalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (TerminalClosedError, TerminalNotAttachedError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return ok_response(AckResponse().model_dump(mode="json"))
+
+
+@router.post(
+    "/{session_id}/terminals/{terminal_id}/execute",
+    response_model=TerminalExecuteResponse,
+    summary="Execute a command in a session terminal",
+    description="Run a command in the attached PTY or start a detached terminal job.",
+)
+async def execute_session_terminal(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    payload: TerminalExecuteRequest,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+    runtime_service: RuntimeService = Depends(get_runtime_service),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    if service.get_terminal(session_id=session_id, terminal_id=terminal_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+    terminal_runtime_service = build_terminal_runtime_service(
+        app=request.app, event_broker=event_broker
+    )
+    try:
+        job_id, job_status = await terminal_runtime_service.execute_in_terminal(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            command=payload.command,
+            detach=payload.detach,
+            timeout_seconds=(
+                payload.timeout_seconds
+                or request.app.state.settings.runtime_default_timeout_seconds
+            ),
+            artifact_paths=list(payload.artifact_paths),
+            runtime_policy=runtime_service.resolve_policy_for_session(session),
+        )
+    except TerminalRuntimeError as exc:
+        detail = str(exc)
+        if isinstance(exc, TerminalNotFoundError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
+        if isinstance(exc, TerminalBackendUnavailableError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
+            ) from exc
+        if isinstance(exc, TerminalClosedError | TerminalNotAttachedError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+    response = TerminalExecuteResponse(
+        terminal_id=terminal_id,
+        detach=payload.detach,
+        job_id=job_id,
+        status=job_status,
+    )
+    return ok_response(response.model_dump(mode="json"))
+
+
+@router.post(
     "/{session_id}/terminals/{terminal_id}/close",
     response_model=TerminalSessionRead,
     summary="Close session terminal",
@@ -1651,6 +1811,110 @@ async def get_session_terminal_job(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")
     return ok_response(job.model_dump(mode="json", by_alias=True))
+
+
+@router.get(
+    "/{session_id}/terminal-jobs/{job_id}/tail",
+    response_model=TerminalJobTailRead,
+    summary="Tail session terminal job output",
+    description="Return the latest persisted or live output tail for a session terminal job.",
+)
+async def tail_session_terminal_job(
+    request: Request,
+    session_id: str,
+    job_id: str,
+    stream: Literal["stdout", "stderr"] = Query(default="stdout"),
+    lines: int = Query(default=200, ge=1, le=2_000),
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    job = service.get_terminal_job(session_id=session_id, job_id=job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")
+
+    terminal_runtime_service = build_terminal_runtime_service(
+        app=request.app, event_broker=event_broker
+    )
+    live_tail = await terminal_runtime_service.get_background_job_tail(
+        session_id=session_id,
+        job_id=job_id,
+        stream=stream,
+        lines=lines,
+    )
+    if live_tail is None:
+        metadata = dict(job.metadata_payload)
+        persisted_tail = metadata.get(f"{stream}_tail")
+        if isinstance(persisted_tail, str) and persisted_tail:
+            persisted_lines = persisted_tail.splitlines()
+            live_tail = "\n".join(persisted_lines[-lines:])
+        else:
+            live_tail = ""
+    tail = service.build_terminal_job_tail(job=job, stream=stream, lines=lines, content=live_tail)
+    return ok_response(tail.model_dump(mode="json", by_alias=True))
+
+
+@router.post(
+    "/{session_id}/terminal-jobs/{job_id}/stop",
+    response_model=TerminalJobRead,
+    summary="Stop session terminal job",
+    description="Stop a live detached terminal job within the current session scope.",
+)
+async def stop_session_terminal_job(
+    request: Request,
+    session_id: str,
+    job_id: str,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    existing_job = service.get_terminal_job(session_id=session_id, job_id=job_id)
+    if existing_job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")
+    terminal_runtime_service = build_terminal_runtime_service(
+        app=request.app, event_broker=event_broker
+    )
+    await terminal_runtime_service.stop_background_job(session_id=session_id, job_id=job_id)
+    refreshed_job = service.get_terminal_job(session_id=session_id, job_id=job_id)
+    if refreshed_job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal job not found")
+    return ok_response(refreshed_job.model_dump(mode="json", by_alias=True))
+
+
+@router.post(
+    "/{session_id}/terminal-jobs/cleanup",
+    response_model=TerminalJobsCleanupResult,
+    summary="Clean up finished session terminal jobs",
+    description=(
+        "Delete completed or failed terminal-job rows that no longer have active live processes."
+    ),
+)
+async def cleanup_session_terminal_jobs(
+    request: Request,
+    session_id: str,
+    payload: TerminalJobsCleanupRequest | None = None,
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    session = _get_existing_session(session_repository, session_id)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    terminal_runtime_service = build_terminal_runtime_service(
+        app=request.app, event_broker=event_broker
+    )
+    active_job_ids = await terminal_runtime_service.get_active_background_job_ids(
+        session_id=session_id
+    )
+    result = service.cleanup_finished_jobs(
+        session=session,
+        active_job_ids=active_job_ids,
+        limit=(payload.limit if payload is not None else None),
+    )
+    return ok_response(result.model_dump(mode="json"))
 
 
 @router.websocket("/{session_id}/events")

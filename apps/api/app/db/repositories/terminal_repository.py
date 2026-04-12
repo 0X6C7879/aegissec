@@ -294,9 +294,9 @@ class TerminalRepository:
         if not job_ids:
             return 0
         statement = delete(RuntimeTerminalJob).where(
-            RuntimeTerminalJob.session_id == session_id,
-            col(RuntimeTerminalJob.id).in_(job_ids),
+            col(RuntimeTerminalJob.session_id) == session_id
         )
+        statement = statement.where(col(RuntimeTerminalJob.id).in_(job_ids))
         result = self.db_session.exec(statement)
         self.db_session.commit()
         return int(result.rowcount or 0)
