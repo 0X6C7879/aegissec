@@ -35,6 +35,7 @@ import type { ModelApiSettings, ModelApiSettingsUpdate } from "../types/settings
 import type { SlashAction, SlashCatalogItem } from "../types/slash";
 import type { SkillContent, SkillContext, SkillRecord } from "../types/skills";
 import type {
+  TerminalBuffer,
   TerminalExecuteResponse,
   TerminalJob,
   TerminalJobsCleanupResult,
@@ -682,6 +683,18 @@ export async function getSessionTerminal(
   return apiRequest<TerminalSession>(`/api/sessions/${sessionId}/terminals/${terminalId}`, {
     signal,
   });
+}
+
+export async function getSessionTerminalBuffer(
+  sessionId: string,
+  terminalId: string,
+  params: { lines?: number } = {},
+  signal?: AbortSignal,
+): Promise<TerminalBuffer> {
+  return apiRequest<TerminalBuffer>(
+    `/api/sessions/${sessionId}/terminals/${terminalId}/buffer${buildQueryString(params)}`,
+    { signal },
+  );
 }
 
 export async function closeSessionTerminal(

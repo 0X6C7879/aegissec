@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.core.events import SessionEventType
 from app.db.models import (
     RuntimeTerminalJobStatus,
+    RuntimeTerminalWorkbenchStatus,
     Session,
     TerminalJobRead,
     TerminalJobsCleanupResult,
@@ -36,6 +38,14 @@ class TerminalSessionMutationResult:
 class TerminalJobMutationResult:
     job: TerminalJobRead
     changed: bool
+
+
+@dataclass(slots=True)
+class TerminalRuntimeSnapshot:
+    terminal_id: str
+    attached: bool
+    active_job_id: str | None
+    reattach_deadline: datetime | None
 
 
 def terminal_audit_payload(
@@ -87,6 +97,83 @@ def terminal_job_audit_payload(
     if reason is not None:
         payload["reason"] = reason
     return payload
+
+
+def _resolve_terminal_workbench_status(
+    *,
+    terminal: TerminalSessionRead,
+    runtime_snapshot: TerminalRuntimeSnapshot | None,
+    running_detached_job: TerminalJobRead | None,
+    last_job: TerminalJobRead | None,
+) -> RuntimeTerminalWorkbenchStatus:
+    if running_detached_job is not None:
+        return RuntimeTerminalWorkbenchStatus.RUNNING
+    if runtime_snapshot is not None and runtime_snapshot.attached:
+        return RuntimeTerminalWorkbenchStatus.ATTACHED
+    if terminal.closed_at is not None:
+        if last_job is None:
+            return RuntimeTerminalWorkbenchStatus.CANCELLED
+        if last_job.status == RuntimeTerminalJobStatus.COMPLETED:
+            return RuntimeTerminalWorkbenchStatus.COMPLETED
+        if last_job.status == RuntimeTerminalJobStatus.CANCELLED:
+            return RuntimeTerminalWorkbenchStatus.CANCELLED
+        return RuntimeTerminalWorkbenchStatus.FAILED
+    return RuntimeTerminalWorkbenchStatus.IDLE
+
+
+def enrich_terminal_session_reads(
+    *,
+    terminals: list[TerminalSessionRead],
+    jobs: list[TerminalJobRead],
+    runtime_snapshots: dict[str, TerminalRuntimeSnapshot],
+) -> list[TerminalSessionRead]:
+    jobs_by_terminal: dict[str, list[TerminalJobRead]] = {}
+    for job in jobs:
+        jobs_by_terminal.setdefault(job.terminal_session_id, []).append(job)
+
+    enriched: list[TerminalSessionRead] = []
+    for terminal in terminals:
+        terminal_jobs = jobs_by_terminal.get(terminal.id, [])
+        latest_job = terminal_jobs[0] if terminal_jobs else None
+        running_detached_job = next(
+            (
+                job
+                for job in terminal_jobs
+                if job.status == RuntimeTerminalJobStatus.RUNNING
+                and job.metadata_payload.get("detach") is True
+            ),
+            None,
+        )
+        runtime_snapshot = runtime_snapshots.get(terminal.id)
+        active_job_id = (
+            running_detached_job.id
+            if running_detached_job is not None
+            else runtime_snapshot.active_job_id if runtime_snapshot is not None else None
+        )
+        enriched.append(
+            terminal.model_copy(
+                update={
+                    "workbench_status": _resolve_terminal_workbench_status(
+                        terminal=terminal,
+                        runtime_snapshot=runtime_snapshot,
+                        running_detached_job=running_detached_job,
+                        last_job=latest_job,
+                    ),
+                    "attached": (
+                        runtime_snapshot.attached if runtime_snapshot is not None else False
+                    ),
+                    "active_job_id": active_job_id,
+                    "last_job_id": latest_job.id if latest_job is not None else None,
+                    "last_job_status": latest_job.status if latest_job is not None else None,
+                    "reattach_deadline": (
+                        runtime_snapshot.reattach_deadline
+                        if runtime_snapshot is not None
+                        else None
+                    ),
+                }
+            )
+        )
+    return enriched
 
 
 class SessionShellService:
@@ -333,6 +420,7 @@ class SessionShellService:
                 RuntimeTerminalJobStatus.COMPLETED: TERMINAL_JOB_COMPLETED_EVENT_TYPE,
                 RuntimeTerminalJobStatus.FAILED: TERMINAL_JOB_FAILED_EVENT_TYPE,
                 RuntimeTerminalJobStatus.CANCELLED: TERMINAL_JOB_CANCELLED_EVENT_TYPE,
+                RuntimeTerminalJobStatus.TIMEOUT: TERMINAL_JOB_FAILED_EVENT_TYPE,
             }[status]
             self._run_log_repository.create_log(
                 session_id=session.id,

@@ -5,7 +5,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from typing import Literal, Protocol, cast
@@ -29,6 +29,7 @@ from app.db.repositories import (
 from app.services.runtime import DockerRuntimeBackend, RuntimeOperationError, RuntimeService
 from app.services.terminal_sessions import (
     SessionShellService,
+    TerminalRuntimeSnapshot,
     terminal_audit_payload,
     terminal_job_audit_payload,
 )
@@ -68,6 +69,7 @@ TERMINAL_BACKEND_EVENT_QUEUE_MAXSIZE = 256
 TERMINAL_ALLOWED_SIGNALS = frozenset({"HUP", "INT", "KILL", "QUIT", "TERM"})
 TERMINAL_CLOSE_WAIT_SECONDS = 1.0
 TERMINAL_JOB_OUTPUT_MAX_CHARS = 8_192
+TERMINAL_BUFFER_MAX_CHARS = 50_000
 
 
 def normalize_terminal_signal_name(signal_name: str) -> str:
@@ -145,6 +147,8 @@ class LiveTerminalHandle:
     detach_timer: asyncio.TimerHandle | None = None
     pump_task: asyncio.Task[None] | None = None
     detach_generation: int = 0
+    output_buffer: str = ""
+    reattach_deadline: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -179,6 +183,7 @@ class LiveTerminalRegistry:
                 raise TerminalAlreadyAttachedError("terminal already attached")
             handle.attached = True
             handle.detach_generation += 1
+            handle.reattach_deadline = None
             self._handles[terminal_id] = handle
             return handle
 
@@ -202,6 +207,7 @@ class LiveTerminalRegistry:
                     raise TerminalAlreadyAttachedError("terminal already attached")
                 existing.attached = True
                 existing.detach_generation += 1
+                existing.reattach_deadline = None
                 if existing.detach_task is not None:
                     existing.detach_task.cancel()
                     existing.detach_task = None
@@ -220,6 +226,7 @@ class LiveTerminalRegistry:
                     raise TerminalAlreadyAttachedError("terminal already attached")
                 existing.attached = True
                 existing.detach_generation += 1
+                existing.reattach_deadline = None
                 if existing.detach_task is not None:
                     existing.detach_task.cancel()
                     existing.detach_task = None
@@ -230,6 +237,7 @@ class LiveTerminalRegistry:
 
             handle.attached = True
             handle.detach_generation += 1
+            handle.reattach_deadline = None
             self._handles[terminal_id] = handle
             return handle, True
 
@@ -523,6 +531,13 @@ class TerminalRuntimeService:
         return merged[-TERMINAL_JOB_OUTPUT_MAX_CHARS:]
 
     @staticmethod
+    def _append_output_buffer(existing: str, chunk: str) -> str:
+        merged = existing + chunk
+        if len(merged) <= TERMINAL_BUFFER_MAX_CHARS:
+            return merged
+        return merged[-TERMINAL_BUFFER_MAX_CHARS:]
+
+    @staticmethod
     def _slice_tail_lines(content: str, lines: int) -> str:
         if not content:
             return ""
@@ -776,11 +791,13 @@ class TerminalRuntimeService:
         while True:
             event = await handle.process.events.get()
             if event.kind == "output":
+                decoded = (event.data or b"").decode("utf-8", errors="replace")
+                handle.output_buffer = self._append_output_buffer(handle.output_buffer, decoded)
                 await self._queue_frame(
                     handle,
                     {
                         "type": "output",
-                        "data": (event.data or b"").decode("utf-8", errors="replace"),
+                        "data": decoded,
                     },
                     overflow_reason="output_backpressure",
                 )
@@ -1085,6 +1102,42 @@ class TerminalRuntimeService:
     async def get_active_background_job_ids(self, *, session_id: str) -> set[str]:
         return await self._job_registry.active_job_ids_for_session(session_id=session_id)
 
+    async def get_terminal_runtime_snapshots(
+        self, *, session_id: str
+    ) -> dict[str, TerminalRuntimeSnapshot]:
+        handles = await self._registry.list_handles()
+        return {
+            handle.terminal_id: TerminalRuntimeSnapshot(
+                terminal_id=handle.terminal_id,
+                attached=handle.attached and not handle.closed.is_set() and not handle.finalized,
+                active_job_id=handle.job_id,
+                reattach_deadline=handle.reattach_deadline,
+            )
+            for handle in handles
+            if handle.session_id == session_id and not handle.finalized
+        }
+
+    async def get_terminal_buffer(
+        self,
+        *,
+        session_id: str,
+        terminal_id: str,
+        lines: int,
+    ) -> tuple[str, bool, str | None, datetime | None] | None:
+        handle = await self._registry.get(terminal_id=terminal_id)
+        if handle is None:
+            return None
+        if handle.session_id != session_id:
+            raise TerminalNotFoundError("Terminal not found")
+        if handle.finalized or handle.closed.is_set():
+            return None
+        return (
+            self._slice_tail_lines(handle.output_buffer, lines),
+            handle.attached,
+            handle.job_id,
+            handle.reattach_deadline,
+        )
+
     async def mark_detached(
         self, handle: LiveTerminalHandle, *, timeout_seconds: float | None = None
     ) -> None:
@@ -1122,6 +1175,7 @@ class TerminalRuntimeService:
             if timeout_seconds is None
             else timeout_seconds
         )
+        handle.reattach_deadline = utc_now() + timedelta(seconds=max(delay, 0))
         handle.detach_timer = asyncio.get_running_loop().call_later(delay, _spawn_timeout_close)
 
     def _resolve_terminal_artifacts(
@@ -1231,6 +1285,7 @@ class TerminalRuntimeService:
                     RuntimeTerminalJobStatus.COMPLETED: SessionEventType.TERMINAL_JOB_COMPLETED,
                     RuntimeTerminalJobStatus.FAILED: SessionEventType.TERMINAL_JOB_FAILED,
                     RuntimeTerminalJobStatus.CANCELLED: SessionEventType.TERMINAL_JOB_CANCELLED,
+                    RuntimeTerminalJobStatus.TIMEOUT: SessionEventType.TERMINAL_JOB_FAILED,
                 }[status]
                 payload = terminal_job_audit_payload(job_result.job, reason=reason)
                 payload["run_id"] = run_id
@@ -1273,6 +1328,7 @@ class TerminalRuntimeService:
             if handle.finalized:
                 return
             handle.finalized = True
+            handle.reattach_deadline = None
             if handle.detach_task is not None:
                 handle.detach_task.cancel()
                 handle.detach_task = None
@@ -1314,6 +1370,7 @@ class TerminalRuntimeService:
                     RuntimeTerminalJobStatus.COMPLETED: SessionEventType.TERMINAL_JOB_COMPLETED,
                     RuntimeTerminalJobStatus.FAILED: SessionEventType.TERMINAL_JOB_FAILED,
                     RuntimeTerminalJobStatus.CANCELLED: SessionEventType.TERMINAL_JOB_CANCELLED,
+                    RuntimeTerminalJobStatus.TIMEOUT: SessionEventType.TERMINAL_JOB_FAILED,
                 }[status]
                 await self._event_broker.publish(
                     SessionEvent(
@@ -1353,6 +1410,8 @@ class TerminalRuntimeService:
     def _resolve_terminal_job_status(
         *, reason: str, exit_code: int | None
     ) -> RuntimeTerminalJobStatus:
+        if reason == "timeout":
+            return RuntimeTerminalJobStatus.TIMEOUT
         if reason in {"close", "disconnect_timeout", "shutdown", "eof"}:
             return RuntimeTerminalJobStatus.CANCELLED
         if reason == "error":

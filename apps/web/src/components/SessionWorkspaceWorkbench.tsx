@@ -75,13 +75,6 @@ function buildInvalidSessionState(sessionId: string, message?: string): InvalidS
   };
 }
 
-function visibleSessionsForSidebar(
-  sessions: SessionSummary[],
-  activeSessionId: string | null,
-): SessionSummary[] {
-  return sessions.filter((session) => !session.deleted_at || session.id === activeSessionId);
-}
-
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -233,7 +226,7 @@ export function SessionWorkspaceWorkbench() {
 
   const sessionsQuery = useQuery({
     queryKey: ["sessions", "workspace"],
-    queryFn: ({ signal }) => listSessions(true, signal),
+    queryFn: ({ signal }) => listSessions(false, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
@@ -278,9 +271,7 @@ export function SessionWorkspaceWorkbench() {
       return lastVisitedSessionId;
     }
 
-    return (
-      sortedSessions.find((session) => !session.deleted_at)?.id ?? sortedSessions[0]?.id ?? null
-    );
+    return sortedSessions[0]?.id ?? null;
   }, [
     invalidSessionState,
     lastVisitedSessionId,
@@ -316,10 +307,7 @@ export function SessionWorkspaceWorkbench() {
     });
   }, [slashCatalogQuery.data]);
 
-  const sidebarSessions = useMemo(
-    () => visibleSessionsForSidebar(sortedSessions, activeSessionId),
-    [activeSessionId, sortedSessions],
-  );
+  const sidebarSessions = useMemo(() => sortedSessions, [sortedSessions]);
 
   useEffect(() => {
     if (
@@ -461,39 +449,54 @@ export function SessionWorkspaceWorkbench() {
   const deleteSessionMutation = useMutation({
     mutationFn: (id: string) => deleteSession(id),
     onSuccess: async (_value, deletedId) => {
+      const queryKeysToClear: Array<readonly unknown[]> = [
+        ["conversation", deletedId],
+        ["session-queue", deletedId],
+        ["session-context-window", deletedId],
+        ["session", deletedId],
+        ["session", deletedId, "graph", "attack"],
+        ["session", deletedId, "slash-catalog"],
+      ];
+      const clearDeletedSessionQueries = (): void => {
+        for (const queryKey of queryKeysToClear) {
+          queryClient.setQueryData(queryKey, undefined);
+          queryClient.removeQueries({ queryKey, exact: true });
+        }
+      };
+
+      await Promise.all(
+        queryKeysToClear.map((queryKey) =>
+          queryClient.cancelQueries({ queryKey, exact: true }),
+        ),
+      );
+      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
+        currentValue?.filter((session) => session.id !== deletedId),
+      );
+      clearDeletedSessionQueries();
+      useUiStore.setState((state) => {
+        const nextDraftsBySession = { ...state.draftsBySession };
+        const nextEventsBySession = { ...state.eventsBySession };
+        const nextLastCursorBySession = { ...state.lastServerCursorBySession };
+        delete nextDraftsBySession[deletedId];
+        delete nextEventsBySession[deletedId];
+        delete nextLastCursorBySession[deletedId];
+        return {
+          draftsBySession: nextDraftsBySession,
+          eventsBySession: nextEventsBySession,
+          lastServerCursorBySession: nextLastCursorBySession,
+          lastVisitedSessionId:
+            state.lastVisitedSessionId === deletedId ? null : state.lastVisitedSessionId,
+        };
+      });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       if (routeSessionId === deletedId) {
+        setSelectedAttackNodeId(null);
+        setInvalidSessionState(null);
+        setLastVisitedSessionId(null);
+        suppressRouteAutonavigateRef.current = true;
         navigate("/sessions");
       }
-    },
-  });
-
-  const restoreSessionMutation = useMutation({
-    mutationFn: (id: string) => updateSession(id, {}),
-    onSuccess: async (_value, restoredId) => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      suppressRouteAutonavigateRef.current = false;
-      setInvalidSessionState(null);
-      navigate(`/sessions/${restoredId}/chat`);
-    },
-    onError: async (_error, restoredId) => {
-      await restoreSessionMutation.reset();
-      await queryClient.invalidateQueries({ queryKey: ["conversation", restoredId] });
-    },
-  });
-
-  const restoreArchivedSessionMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { restoreSession } = await import("../lib/api");
-      return restoreSession(id);
-    },
-    onSuccess: (restoredSession) => {
-      queryClient.setQueriesData<SessionSummary[]>({ queryKey: ["sessions"] }, (currentValue) =>
-        upsertSession(currentValue, restoredSession),
-      );
-      suppressRouteAutonavigateRef.current = false;
-      setInvalidSessionState(null);
-      navigate(`/sessions/${restoredSession.id}/chat`);
+      clearDeletedSessionQueries();
     },
   });
 
@@ -1186,11 +1189,8 @@ export function SessionWorkspaceWorkbench() {
         onToggleCollapsed={handleToggleSidebarCollapsed}
         onSelect={handleSelectSession}
         onRename={handleRenameSession}
-        onArchive={async (id) => {
+        onDelete={async (id) => {
           await deleteSessionMutation.mutateAsync(id);
-        }}
-        onRestore={async (id) => {
-          await restoreArchivedSessionMutation.mutateAsync(id);
         }}
       />
 
@@ -1243,12 +1243,6 @@ export function SessionWorkspaceWorkbench() {
           </section>
         ) : activeSession && activeConversation ? (
           <>
-            {activeSession.deleted_at ? (
-              <section className="conversation-inline-notice">
-                对话已归档，仍可查看当前消息与执行摘要。
-              </section>
-            ) : null}
-
             <section
               ref={workspaceSplitPane.containerRef}
               className={`workspace-session-grid workspace-session-grid-attack-main${workspaceSplitPane.isEnabled ? " workspace-session-grid-resizable" : ""}${workspaceSplitPane.isDragging ? " workspace-session-grid-resizing" : ""}`}
@@ -1282,7 +1276,7 @@ export function SessionWorkspaceWorkbench() {
                 <section className="workspace-message-panel workspace-terminal-panel">
                   <ShellWorkbench
                     sessionId={activeSession.id}
-                    disabled={activeSession.deleted_at !== null}
+                    disabled={false}
                   />
                   <ConversationFeed
                     messages={activeConversation.messages}
@@ -1317,7 +1311,7 @@ export function SessionWorkspaceWorkbench() {
                   <WorkbenchComposer
                     sessionId={activeSession.id}
                     slashCatalog={slashCatalog}
-                    disabled={activeSession.deleted_at !== null}
+                    disabled={false}
                     isActiveGeneration={isInjectableGenerationActive || isPausedGeneration}
                     isPausedGeneration={isPausedGeneration}
                     isInterrupting={

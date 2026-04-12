@@ -34,7 +34,7 @@ export function TerminalTabs({
                 onClick={() => onSelect(terminal.id)}
               >
                 <span className="shell-workbench-tab-title">{terminal.title}</span>
-                <span className="shell-workbench-tab-status">{terminal.status}</span>
+                <span className="shell-workbench-tab-status">{terminal.workbench_status}</span>
               </button>
               <button
                 type="button"

@@ -12,8 +12,7 @@ type ConversationSidebarProps = {
   onToggleCollapsed: () => void;
   onSelect: (sessionId: string) => void;
   onRename: (sessionId: string) => Promise<void>;
-  onArchive: (sessionId: string) => Promise<void>;
-  onRestore: (sessionId: string) => Promise<void>;
+  onDelete: (sessionId: string) => Promise<void>;
 };
 
 function getSessionTitle(title: string): string {
@@ -21,10 +20,6 @@ function getSessionTitle(title: string): string {
 }
 
 function getSessionMeta(session: SessionSummary): string {
-  if (session.deleted_at) {
-    return "已归档";
-  }
-
   return formatStatusLabel(session.status);
 }
 
@@ -38,8 +33,7 @@ export function ConversationSidebar({
   onToggleCollapsed,
   onSelect,
   onRename,
-  onArchive,
-  onRestore,
+  onDelete,
 }: ConversationSidebarProps) {
   const [searchValue, setSearchValue] = useState("");
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
@@ -60,14 +54,9 @@ export function ConversationSidebar({
     await onRename(sessionId);
   }
 
-  async function handleArchive(sessionId: string): Promise<void> {
+  async function handleDelete(sessionId: string): Promise<void> {
     setMenuSessionId(null);
-    await onArchive(sessionId);
-  }
-
-  async function handleRestore(sessionId: string): Promise<void> {
-    setMenuSessionId(null);
-    await onRestore(sessionId);
+    await onDelete(sessionId);
   }
 
   return (
@@ -160,7 +149,7 @@ export function ConversationSidebar({
                         >
                           <div className="conversation-link-row">
                             <span
-                              className={`conversation-link-dot status-${session.deleted_at ? "paused" : session.status}`}
+                              className={`conversation-link-dot status-${session.status}`}
                               aria-hidden="true"
                             />
                             <span className="conversation-link-title">
@@ -201,21 +190,9 @@ export function ConversationSidebar({
                               <button type="button" onClick={() => void handleRename(session.id)}>
                                 重命名
                               </button>
-                              {session.deleted_at ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRestore(session.id)}
-                                >
-                                  恢复对话
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleArchive(session.id)}
-                                >
-                                  归档对话
-                                </button>
-                              )}
+                              <button type="button" onClick={() => void handleDelete(session.id)}>
+                                删除对话
+                              </button>
                             </div>
                           ) : null}
                         </div>

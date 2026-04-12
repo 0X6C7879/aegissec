@@ -98,6 +98,16 @@ class RuntimeTerminalJobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+
+
+class RuntimeTerminalWorkbenchStatus(str, Enum):
+    IDLE = "idle"
+    ATTACHED = "attached"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RuntimePolicy(SQLModel):
@@ -1017,7 +1027,7 @@ TERMINAL_METADATA_MAX_ITEMS = 32
 TERMINAL_ALLOWED_SHELLS = frozenset({"/bin/zsh", "/bin/bash", "/bin/sh"})
 TERMINAL_ALLOWED_CWD_PREFIX = "/workspace"
 TERMINAL_JOB_PRIVATE_METADATA_KEYS = frozenset(
-    {"stdout_tail", "stderr_tail", "artifact_paths", "run_id"}
+    {"stdout_tail", "stderr_tail", "artifact_paths", "run_id", "finish_reason"}
 )
 
 
@@ -1147,8 +1157,14 @@ class TerminalSessionRead(SQLModel):
     session_id: str
     title: str
     status: RuntimeTerminalSessionStatus
+    workbench_status: RuntimeTerminalWorkbenchStatus = RuntimeTerminalWorkbenchStatus.IDLE
     shell: str
     cwd: str
+    attached: bool = False
+    active_job_id: str | None = None
+    last_job_id: str | None = None
+    last_job_status: RuntimeTerminalJobStatus | None = None
+    reattach_deadline: datetime | None = None
     metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
     created_at: datetime
     updated_at: datetime
@@ -1164,6 +1180,10 @@ class TerminalJobRead(SQLModel):
     exit_code: int | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    finish_reason: str | None = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    run_id: str | None = None
     metadata_payload: dict[str, object] = Field(default_factory=dict, alias="metadata")
     created_at: datetime
     updated_at: datetime
@@ -1230,6 +1250,16 @@ class TerminalJobTailRead(SQLModel):
     tail: str = ""
     ended_at: datetime | None = None
     updated_at: datetime
+
+
+class TerminalBufferRead(SQLModel):
+    session_id: str
+    terminal_id: str
+    attached: bool = False
+    job_id: str | None = None
+    reattach_deadline: datetime | None = None
+    lines: int = Field(ge=1)
+    buffer: str = ""
 
 
 class TerminalJobsCleanupRequest(SQLModel):
@@ -1895,8 +1925,14 @@ def to_terminal_session_read(terminal_session: RuntimeTerminalSession) -> Termin
             "session_id": terminal_session.session_id,
             "title": terminal_session.title,
             "status": terminal_session.status,
+            "workbench_status": RuntimeTerminalWorkbenchStatus.IDLE,
             "shell": terminal_session.shell,
             "cwd": terminal_session.cwd,
+            "attached": False,
+            "active_job_id": None,
+            "last_job_id": None,
+            "last_job_status": None,
+            "reattach_deadline": None,
             "metadata": dict(terminal_session.metadata_json),
             "created_at": terminal_session.created_at,
             "updated_at": terminal_session.updated_at,
@@ -1906,6 +1942,7 @@ def to_terminal_session_read(terminal_session: RuntimeTerminalSession) -> Termin
 
 
 def to_terminal_job_read(terminal_job: RuntimeTerminalJob) -> TerminalJobRead:
+    metadata = dict(terminal_job.metadata_json)
     return TerminalJobRead.model_validate(
         {
             "id": terminal_job.id,
@@ -1916,7 +1953,11 @@ def to_terminal_job_read(terminal_job: RuntimeTerminalJob) -> TerminalJobRead:
             "exit_code": terminal_job.exit_code,
             "started_at": terminal_job.started_at,
             "ended_at": terminal_job.ended_at,
-            "metadata": sanitize_terminal_job_metadata(dict(terminal_job.metadata_json)),
+            "finish_reason": metadata.get("finish_reason"),
+            "stdout_tail": metadata.get("stdout_tail", ""),
+            "stderr_tail": metadata.get("stderr_tail", ""),
+            "run_id": metadata.get("run_id"),
+            "metadata": sanitize_terminal_job_metadata(metadata),
             "created_at": terminal_job.created_at,
             "updated_at": terminal_job.updated_at,
         }

@@ -15,6 +15,18 @@ function findTerminalTitle(terminals: TerminalSession[], terminalId: string | nu
   return terminals.find((terminal) => terminal.id === terminalId)?.title ?? terminalId;
 }
 
+function summarizeJobOutput(job: TerminalJob): string {
+  const stderr = job.stderr_tail.trim();
+  if (stderr) {
+    return stderr;
+  }
+  const stdout = job.stdout_tail.trim();
+  if (stdout) {
+    return stdout;
+  }
+  return "暂无最近输出";
+}
+
 export function BackgroundJobsPanel({
   jobs,
   terminals,
@@ -53,8 +65,9 @@ export function BackgroundJobsPanel({
                 </div>
                 <div className="shell-job-row shell-job-row-secondary">
                   <span>{findTerminalTitle(terminals, job.terminal_session_id ?? null)}</span>
-                  <span>{job.id}</span>
+                  <span>{job.run_id ?? job.id}</span>
                 </div>
+                <pre className="shell-job-output">{summarizeJobOutput(job)}</pre>
                 <div className="shell-job-row shell-job-row-actions">
                   <button
                     type="button"

@@ -2311,6 +2311,9 @@ textarea::placeholder {
 .shell-job-row-secondary {
   color: var(--text-secondary);
   font: 600 0.72rem/1.4 var(--font-code);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .shell-workbench-tabs {
@@ -2373,6 +2376,49 @@ textarea::placeholder {
   overflow: hidden;
 }
 
+.shell-command-bar {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shell-command-main,
+.shell-command-secondary,
+.shell-command-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shell-command-main,
+.shell-command-hint {
+  justify-content: space-between;
+}
+
+.shell-command-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.shell-command-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.shell-command-secondary {
+  flex-wrap: wrap;
+}
+
+.shell-command-hint {
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
 .shell-jobs-panel {
   display: grid;
   gap: 10px;
@@ -2398,6 +2444,16 @@ textarea::placeholder {
 
 .shell-job-row-secondary {
   font-size: 0.7rem;
+}
+
+.shell-job-output {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  font: 0.72rem/1.55 var(--font-code);
 }
 
 .shell-job-row-actions {
@@ -2440,6 +2496,23 @@ textarea::placeholder {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.02);
   color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .shell-workbench-tabs,
+  .shell-command-main,
+  .shell-command-hint {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .shell-command-actions {
+    width: 100%;
+  }
+
+  .shell-command-actions .button {
+    flex: 1;
+  }
 }
 
 .settings-inline-toggle input {

@@ -8,12 +8,14 @@ import type { TerminalClientFrame, TerminalSession, TerminalStreamFrame } from "
 type TerminalPaneProps = {
   sessionId: string;
   terminal: TerminalSession;
-  initialBuffer: string;
+  bootstrapBuffer: string;
+  reconnectKey?: number;
   onBufferAppend: (terminalId: string, content: string) => void;
   onConnectionStateChange: (
     terminalId: string,
     state: "connecting" | "open" | "closed" | "error",
   ) => void;
+  onRuntimeEvent?: (terminalId: string, eventType: string) => void;
 };
 
 function sendFrame(socket: WebSocket | null, frame: TerminalClientFrame): void {
@@ -26,12 +28,33 @@ function sendFrame(socket: WebSocket | null, frame: TerminalClientFrame): void {
 export function TerminalPane({
   sessionId,
   terminal,
-  initialBuffer,
+  bootstrapBuffer,
+  reconnectKey = 0,
   onBufferAppend,
   onConnectionStateChange,
+  onRuntimeEvent,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
+  const bootstrapBufferRef = useRef(bootstrapBuffer);
+  const onBufferAppendRef = useRef(onBufferAppend);
+  const onConnectionStateChangeRef = useRef(onConnectionStateChange);
+  const onRuntimeEventRef = useRef(onRuntimeEvent);
+
+  useEffect(() => {
+    bootstrapBufferRef.current = bootstrapBuffer;
+  }, [bootstrapBuffer]);
+
+  useEffect(() => {
+    onBufferAppendRef.current = onBufferAppend;
+  }, [onBufferAppend]);
+
+  useEffect(() => {
+    onConnectionStateChangeRef.current = onConnectionStateChange;
+  }, [onConnectionStateChange]);
+
+  useEffect(() => {
+    onRuntimeEventRef.current = onRuntimeEvent;
+  }, [onRuntimeEvent]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -44,7 +67,7 @@ export function TerminalPane({
       cursorBlink: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 13,
-      scrollback: 2000,
+      scrollback: 4000,
       theme: {
         background: "#07111d",
         foreground: "#d8edf7",
@@ -55,15 +78,14 @@ export function TerminalPane({
     term.loadAddon(fitAddon);
     term.open(container);
     fitAddon.fit();
-    if (initialBuffer) {
-      term.write(initialBuffer);
+    if (bootstrapBufferRef.current) {
+      term.write(bootstrapBufferRef.current);
     }
 
-    onConnectionStateChange(terminal.id, "connecting");
+    onConnectionStateChangeRef.current(terminal.id, "connecting");
     const socket = new WebSocket(
       `${getSessionTerminalStreamUrl(sessionId, terminal.id)}?cols=${term.cols}&rows=${term.rows}`,
     );
-    socketRef.current = socket;
 
     const disposeData = term.onData((data) => {
       sendFrame(socket, { type: "input", data });
@@ -79,39 +101,48 @@ export function TerminalPane({
     resizeObserver.observe(container);
 
     socket.addEventListener("open", () => {
-      onConnectionStateChange(terminal.id, "open");
+      onConnectionStateChangeRef.current(terminal.id, "open");
+      onRuntimeEventRef.current?.(terminal.id, "socket.open");
       term.focus();
     });
     socket.addEventListener("close", () => {
-      onConnectionStateChange(terminal.id, "closed");
+      onConnectionStateChangeRef.current(terminal.id, "closed");
+      onRuntimeEventRef.current?.(terminal.id, "socket.close");
     });
     socket.addEventListener("error", () => {
-      onConnectionStateChange(terminal.id, "error");
+      onConnectionStateChangeRef.current(terminal.id, "error");
+      onRuntimeEventRef.current?.(terminal.id, "socket.error");
     });
     socket.addEventListener("message", (event) => {
       const frame = JSON.parse(event.data as string) as TerminalStreamFrame;
       switch (frame.type) {
+        case "ready":
+          onRuntimeEventRef.current?.(terminal.id, "ready");
+          break;
         case "output": {
           term.write(frame.data);
-          onBufferAppend(terminal.id, frame.data);
+          onBufferAppendRef.current(terminal.id, frame.data);
           break;
         }
         case "error": {
           const line = `\r\n[error] ${frame.message}\r\n`;
           term.write(line);
-          onBufferAppend(terminal.id, line);
+          onBufferAppendRef.current(terminal.id, line);
+          onRuntimeEventRef.current?.(terminal.id, "error");
           break;
         }
         case "exit": {
           const line = `\r\n[exit:${frame.reason}]\r\n`;
           term.write(line);
-          onBufferAppend(terminal.id, line);
+          onBufferAppendRef.current(terminal.id, line);
+          onRuntimeEventRef.current?.(terminal.id, "exit");
           break;
         }
         case "closed": {
           const line = `\r\n[closed:${frame.reason}]\r\n`;
           term.write(line);
-          onBufferAppend(terminal.id, line);
+          onBufferAppendRef.current(terminal.id, line);
+          onRuntimeEventRef.current?.(terminal.id, "closed");
           break;
         }
         default:
@@ -124,10 +155,9 @@ export function TerminalPane({
       disposeResize.dispose();
       disposeData.dispose();
       socket.close();
-      socketRef.current = null;
       term.dispose();
     };
-  }, [initialBuffer, onBufferAppend, onConnectionStateChange, sessionId, terminal.id]);
+  }, [reconnectKey, sessionId, terminal.id]);
 
   return <div ref={containerRef} className="shell-terminal-pane" data-testid="shell-terminal-pane" />;
 }

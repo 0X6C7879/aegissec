@@ -144,6 +144,107 @@ async def test_terminal_runtime_service_reattach_within_grace_reuses_same_job(
 
 
 @pytest.mark.anyio
+async def test_terminal_runtime_service_exposes_live_buffer_snapshot_and_detach_deadline(
+    client: TestClient,
+) -> None:
+    session_id, terminal_id = _create_session_and_terminal(client, title="Buffer Snapshot")
+    service = _build_service()
+
+    handle = await service.connect(session_id=session_id, terminal_id=terminal_id, cols=80, rows=24)
+    await asyncio.wait_for(handle.queue.get(), timeout=1)
+
+    await service.send_terminal_input(session_id=session_id, terminal_id=terminal_id, data="pwd\n")
+    assert await asyncio.wait_for(handle.queue.get(), timeout=1) == {
+        "type": "output",
+        "data": "pwd\n",
+    }
+
+    live_buffer = await service.get_terminal_buffer(
+        session_id=session_id,
+        terminal_id=terminal_id,
+        lines=20,
+    )
+    assert live_buffer == ("pwd", True, handle.job_id, None)
+
+    await service.mark_detached(handle, timeout_seconds=0.05)
+    detached_buffer = await service.get_terminal_buffer(
+        session_id=session_id,
+        terminal_id=terminal_id,
+        lines=20,
+    )
+    assert detached_buffer is not None
+    assert detached_buffer[0] == "pwd"
+    assert detached_buffer[1] is False
+    assert detached_buffer[2] == handle.job_id
+    assert detached_buffer[3] is not None
+
+    await service.shutdown()
+    await asyncio.wait_for(handle.closed.wait(), timeout=1)
+
+
+@pytest.mark.anyio
+async def test_terminal_runtime_service_marks_timed_out_detached_jobs_and_cleans_registry(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id, terminal_id = _create_session_and_terminal(client, title="Detached Timeout")
+    service = _build_service()
+    backend = app.state.terminal_backend
+    original_open_terminal = backend.open_terminal
+
+    class HangingTerminalProcess:
+        def __init__(self) -> None:
+            self.events: asyncio.Queue[object] = asyncio.Queue()
+
+        async def send_input(self, data: bytes) -> None:
+            del data
+
+        async def resize(self, cols: int, rows: int) -> None:
+            del cols, rows
+
+        async def send_signal(self, signal_name: str) -> None:
+            del signal_name
+
+        async def send_eof(self) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=0, reason="eof")
+            )
+
+        async def close(self, *, reason: str) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=None, reason=reason)
+            )
+
+    async def open_terminal_for_timeout(**kwargs: object) -> object:
+        terminal_key = kwargs.get("terminal_id")
+        if isinstance(terminal_key, str) and ":job:" in terminal_key:
+            return HangingTerminalProcess()
+        return await original_open_terminal(**kwargs)
+
+    monkeypatch.setattr(backend, "open_terminal", open_terminal_for_timeout)
+
+    job_id = await service.start_background_job(
+        session_id=session_id,
+        terminal_id=terminal_id,
+        command="sleep 60",
+        timeout_seconds=1,
+        artifact_paths=[],
+    )
+    live_handle = await service._job_registry.get(job_id=job_id)
+    assert live_handle is not None
+
+    await asyncio.wait_for(live_handle.closed.wait(), timeout=2)
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        jobs = repository.list_terminal_jobs(session_id=session_id, terminal_session_id=terminal_id)
+        assert len(jobs) == 1
+        assert jobs[0].status == RuntimeTerminalJobStatus.TIMEOUT
+
+    assert await service.get_active_background_job_ids(session_id=session_id) == set()
+
+
+@pytest.mark.anyio
 async def test_terminal_runtime_service_shutdown_closes_live_handles(client: TestClient) -> None:
     session_id, terminal_id = _create_session_and_terminal(client, title="Shutdown Cleanup")
     service = _build_service()

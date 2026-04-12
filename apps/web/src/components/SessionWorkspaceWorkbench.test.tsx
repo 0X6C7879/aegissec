@@ -92,7 +92,27 @@ vi.mock("../hooks/useSessionEvents", () => ({
 }));
 
 vi.mock("./ConversationSidebar", () => ({
-  ConversationSidebar: () => <div data-testid="conversation-sidebar" />,
+  ConversationSidebar: ({
+    sessions,
+    onDelete,
+  }: {
+    sessions: SessionSummary[];
+    onDelete: (sessionId: string) => Promise<void>;
+  }) => (
+    <div data-testid="conversation-sidebar">
+      {sessions.map((session) => (
+        <button
+          key={session.id}
+          type="button"
+          onClick={() => {
+            void onDelete(session.id);
+          }}
+        >
+          delete-{session.id}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("./ConversationFeed", () => ({
@@ -456,6 +476,66 @@ describe("SessionWorkspaceWorkbench", () => {
     await waitFor(() => {
       expect(mockCompactSessionContext).toHaveBeenCalledWith("session-1");
     });
+  });
+
+  it("deletes sessions permanently from local cache and UI state", async () => {
+    const user = userEvent.setup();
+
+    mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+    mockDeleteSession.mockResolvedValue(undefined);
+    useUiStore.setState({
+      lastVisitedSessionId: "session-1",
+      draftsBySession: {
+        "session-1": {
+          content: "draft-content",
+          queuedContent: "",
+          queuedReady: false,
+          attachmentForm: {
+            name: "",
+            contentType: "application/octet-stream",
+            sizeBytes: "0",
+          },
+          attachments: [],
+        },
+      },
+      eventsBySession: {
+        "session-1": [
+          {
+            id: "event-1",
+            sessionId: "session-1",
+            type: "assistant.trace",
+            createdAt: "2026-04-01T10:00:00.000Z",
+            summary: "trace",
+            payload: {},
+          },
+        ],
+      },
+      lastServerCursorBySession: {
+        "session-1": 7,
+      },
+    });
+
+    renderWorkbench("/sessions/session-1/chat");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-composer")).toBeInTheDocument();
+    });
+
+    expect(mockListSessions).toHaveBeenCalledWith(false, expect.anything());
+
+    await user.click(screen.getByRole("button", { name: "delete-session-1" }));
+
+    await waitFor(() => {
+      expect(mockDeleteSession).toHaveBeenCalledWith("session-1");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-display").textContent).toBe("/sessions");
+    });
+
+    expect(useUiStore.getState().draftsBySession["session-1"]).toBeUndefined();
+    expect(useUiStore.getState().eventsBySession["session-1"]).toBeUndefined();
+    expect(useUiStore.getState().lastServerCursorBySession["session-1"]).toBeUndefined();
   });
 
   it("recovers when the route session is missing from the current session list", async () => {

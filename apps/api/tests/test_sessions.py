@@ -162,20 +162,10 @@ def test_session_lifecycle_and_history(client: TestClient) -> None:
     assert delete_response.status_code == 200
     assert client.get(f"/api/sessions/{session_id}").status_code == 404
     assert api_data(client.get("/api/sessions")) == []
+    assert api_data(client.get("/api/sessions", params={"include_deleted": "true"})) == []
 
     restore_response = client.post(f"/api/sessions/{session_id}/restore")
-
-    assert restore_response.status_code == 200
-    restored_payload = api_data(restore_response)
-    assert restored_payload["id"] == session_id
-    assert restored_payload["deleted_at"] is None
-
-    restored_detail_response = client.get(f"/api/sessions/{session_id}")
-
-    assert restored_detail_response.status_code == 200
-    restored_detail_payload = api_data(restored_detail_response)
-    assert restored_detail_payload["title"] == "Renamed Session"
-    assert restored_detail_payload["status"] == "cancelled"
+    assert restore_response.status_code == 404
 
 
 def test_session_create_and_update_reject_unknown_project(client: TestClient) -> None:
@@ -1119,6 +1109,118 @@ def test_session_terminal_stream_rejects_foreign_session_reattach_during_grace(
     time.sleep(0.25)
 
 
+def test_session_terminal_buffer_endpoint_restores_recent_output_within_grace(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings, "terminal_disconnect_grace_seconds", 0.2)
+
+    session_response = client.post("/api/sessions", json={"title": "Terminal Buffer Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Buffer Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        ready_frame = terminal_stream.receive_json()
+        terminal_stream.send_json({"type": "input", "data": "pwd\n"})
+        assert terminal_stream.receive_json() == {"type": "output", "data": "pwd\n"}
+
+    time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+    buffer_response = client.get(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/buffer",
+        params={"lines": 20},
+    )
+    assert buffer_response.status_code == 200
+    buffer_payload = api_data(buffer_response)
+    assert buffer_payload["terminal_id"] == terminal_id
+    assert buffer_payload["attached"] is False
+    assert buffer_payload["job_id"] == ready_frame["job_id"]
+    assert buffer_payload["buffer"] == "pwd"
+    assert buffer_payload["reattach_deadline"] is not None
+
+    with client.websocket_connect(stream_path) as reattached_stream:
+        reattached_ready = reattached_stream.receive_json()
+        assert reattached_ready["terminal_id"] == terminal_id
+        assert reattached_ready["job_id"] == ready_frame["job_id"]
+        assert reattached_ready["reattached"] is True
+        reattached_stream.send_json({"type": "close"})
+        assert reattached_stream.receive_json()["type"] == "exit"
+        assert reattached_stream.receive_json() == {"type": "closed", "reason": "close"}
+
+
+def test_session_terminal_execute_detach_timeout_sets_timeout_status(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Detached Timeout Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Detached Timeout Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+    backend = app.state.terminal_backend
+    original_open_terminal = backend.open_terminal
+
+    class HangingTerminalProcess:
+        def __init__(self) -> None:
+            self.events: asyncio.Queue[object] = asyncio.Queue()
+
+        async def send_input(self, data: bytes) -> None:
+            del data
+
+        async def resize(self, cols: int, rows: int) -> None:
+            del cols, rows
+
+        async def send_signal(self, signal_name: str) -> None:
+            del signal_name
+
+        async def send_eof(self) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=0, reason="eof")
+            )
+
+        async def close(self, *, reason: str) -> None:
+            await self.events.put(
+                terminal_runtime.TerminalBackendEvent.exit(exit_code=None, reason=reason)
+            )
+
+    async def open_terminal_for_timeout(**kwargs: object) -> object:
+        terminal_key = kwargs.get("terminal_id")
+        if isinstance(terminal_key, str) and ":job:" in terminal_key:
+            return HangingTerminalProcess()
+        return await original_open_terminal(**kwargs)
+
+    monkeypatch.setattr(backend, "open_terminal", open_terminal_for_timeout)
+
+    execute_response = client.post(
+        f"/api/sessions/{session_id}/terminals/{terminal_id}/execute",
+        json={"command": "sleep 60", "detach": True, "timeout_seconds": 1},
+    )
+    assert execute_response.status_code == 200
+    job_id = api_data(execute_response)["job_id"]
+    assert job_id is not None
+
+    deadline = time.time() + 2.0
+    timed_out_job: dict[str, object] | None = None
+    while time.time() < deadline:
+        job_response = client.get(f"/api/sessions/{session_id}/terminal-jobs/{job_id}")
+        assert job_response.status_code == 200
+        timed_out_job = api_data(job_response)
+        if timed_out_job["status"] == "timeout":
+            break
+        time.sleep(TEST_POLL_INTERVAL_SECONDS)
+
+    assert timed_out_job is not None
+    assert timed_out_job["status"] == "timeout"
+    assert timed_out_job["finish_reason"] == "timeout"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("shell", "   "), ("cwd", "\n\t  ")],
@@ -1255,6 +1357,7 @@ def test_terminal_repository_accepts_only_valid_initial_job_states(
         RuntimeTerminalJobStatus.COMPLETED,
         RuntimeTerminalJobStatus.FAILED,
         RuntimeTerminalJobStatus.CANCELLED,
+        RuntimeTerminalJobStatus.TIMEOUT,
     ],
 )
 def test_terminal_repository_rejects_invalid_initial_job_states(

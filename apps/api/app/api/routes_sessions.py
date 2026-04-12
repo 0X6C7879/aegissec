@@ -50,6 +50,7 @@ from app.db.models import (
     SessionReplayRead,
     SessionStatus,
     SessionUpdate,
+    TerminalBufferRead,
     TerminalExecuteRequest,
     TerminalExecuteResponse,
     TerminalInputRequest,
@@ -96,7 +97,11 @@ from app.services.session_generation import (
     SessionGenerationManager,
     get_generation_manager,
 )
-from app.services.terminal_sessions import SessionShellService, terminal_audit_payload
+from app.services.terminal_sessions import (
+    SessionShellService,
+    enrich_terminal_session_reads,
+    terminal_audit_payload,
+)
 
 terminal_runtime = import_module("app.services.terminal_runtime")
 TerminalAlreadyAttachedError = terminal_runtime.TerminalAlreadyAttachedError
@@ -143,6 +148,45 @@ def _get_existing_session(
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return session
+
+
+async def _build_enriched_terminal_reads(
+    *,
+    request: Request,
+    event_broker: SessionEventBroker,
+    session_id: str,
+    shell_service: SessionShellService,
+    terminals: list[TerminalSessionRead] | None = None,
+) -> list[TerminalSessionRead]:
+    current_terminals = (
+        shell_service.list_terminals(session_id=session_id) if terminals is None else terminals
+    )
+    terminal_jobs = shell_service.list_terminal_jobs(session_id=session_id)
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    runtime_snapshots = await runtime_service.get_terminal_runtime_snapshots(session_id=session_id)
+    return enrich_terminal_session_reads(
+        terminals=current_terminals,
+        jobs=terminal_jobs,
+        runtime_snapshots=runtime_snapshots,
+    )
+
+
+async def _build_enriched_terminal_read(
+    *,
+    request: Request,
+    event_broker: SessionEventBroker,
+    session_id: str,
+    shell_service: SessionShellService,
+    terminal: TerminalSessionRead,
+) -> TerminalSessionRead:
+    enriched = await _build_enriched_terminal_reads(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=shell_service,
+        terminals=[terminal],
+    )
+    return enriched[0]
 
 
 def _ensure_project_exists(repository: ProjectRepository, project_id: str) -> None:
@@ -1132,14 +1176,15 @@ async def delete_session(
 ) -> object:
     repository = SessionRepository(db_session)
     session = _get_existing_session(repository, session_id)
-    deleted_session = repository.soft_delete_session(session)
+    session_status = session.status.value
     await event_broker.publish(
         SessionEvent(
             type=SessionEventType.SESSION_DELETED,
-            session_id=deleted_session.id,
-            payload={"status": deleted_session.status.value},
+            session_id=session.id,
+            payload={"status": session_status},
         )
     )
+    repository.hard_delete_session(session)
     return ok_response(AckResponse().model_dump(mode="json"))
 
 
@@ -1410,13 +1455,20 @@ async def get_session_artifacts(
     description="Return persisted terminal-session metadata for the session.",
 )
 async def list_session_terminals(
+    request: Request,
     session_id: str,
     db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
 ) -> object:
     session_repository = SessionRepository(db_session)
     _get_existing_session(session_repository, session_id, include_deleted=True)
     service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
-    terminals = service.list_terminals(session_id=session_id)
+    terminals = await _build_enriched_terminal_reads(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+    )
     return ok_response([terminal.model_dump(mode="json", by_alias=True) for terminal in terminals])
 
 
@@ -1428,6 +1480,7 @@ async def list_session_terminals(
     description="Persist terminal-session metadata for later shell workbench phases.",
 )
 async def create_session_terminal(
+    request: Request,
     session_id: str,
     payload: TerminalSessionCreateRequest,
     db_session: DBSession = Depends(get_db_session),
@@ -1444,7 +1497,14 @@ async def create_session_terminal(
             payload=terminal_audit_payload(result.terminal),
         )
     )
-    return ok_response(result.terminal.model_dump(mode="json", by_alias=True), status_code=201)
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=result.terminal,
+    )
+    return ok_response(enriched_terminal.model_dump(mode="json", by_alias=True), status_code=201)
 
 
 @router.get(
@@ -1454,9 +1514,11 @@ async def create_session_terminal(
     description="Return terminal-session metadata by id.",
 )
 async def get_session_terminal(
+    request: Request,
     session_id: str,
     terminal_id: str,
     db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
 ) -> object:
     session_repository = SessionRepository(db_session)
     _get_existing_session(session_repository, session_id, include_deleted=True)
@@ -1464,7 +1526,61 @@ async def get_session_terminal(
     terminal = service.get_terminal(session_id=session_id, terminal_id=terminal_id)
     if terminal is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
-    return ok_response(terminal.model_dump(mode="json", by_alias=True))
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=terminal,
+    )
+    return ok_response(enriched_terminal.model_dump(mode="json", by_alias=True))
+
+
+@router.get(
+    "/{session_id}/terminals/{terminal_id}/buffer",
+    response_model=TerminalBufferRead,
+    summary="Read recent live terminal buffer",
+    description="Return the recent live PTY buffer snapshot for a terminal when available.",
+)
+async def get_session_terminal_buffer(
+    request: Request,
+    session_id: str,
+    terminal_id: str,
+    lines: int = Query(default=200, ge=1, le=2_000),
+    db_session: DBSession = Depends(get_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+) -> object:
+    session_repository = SessionRepository(db_session)
+    _get_existing_session(session_repository, session_id, include_deleted=True)
+    service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
+    terminal = service.get_terminal(session_id=session_id, terminal_id=terminal_id)
+    if terminal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=terminal,
+    )
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    buffer_snapshot = await runtime_service.get_terminal_buffer(
+        session_id=session_id,
+        terminal_id=terminal_id,
+        lines=lines,
+    )
+
+    payload = TerminalBufferRead(
+        session_id=session_id,
+        terminal_id=terminal_id,
+        attached=enriched_terminal.attached,
+        job_id=enriched_terminal.active_job_id,
+        reattach_deadline=enriched_terminal.reattach_deadline,
+        lines=lines,
+        buffer=(buffer_snapshot[0] if buffer_snapshot is not None else ""),
+    )
+    return ok_response(payload.model_dump(mode="json", by_alias=True))
 
 
 @router.post(
@@ -1647,7 +1763,17 @@ async def close_session_terminal(
         ).get_terminal(session_id=session_id, terminal_id=terminal_id)
         if refreshed_terminal is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
-        return ok_response(refreshed_terminal.model_dump(mode="json", by_alias=True))
+        enriched_terminal = await _build_enriched_terminal_read(
+            request=request,
+            event_broker=event_broker,
+            session_id=session_id,
+            shell_service=SessionShellService(
+                TerminalRepository(db_session),
+                RunLogRepository(db_session),
+            ),
+            terminal=refreshed_terminal,
+        )
+        return ok_response(enriched_terminal.model_dump(mode="json", by_alias=True))
 
     service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
     result = service.close_terminal(session=session, terminal_id=terminal_id)
@@ -1661,7 +1787,14 @@ async def close_session_terminal(
                 payload=terminal_audit_payload(result.terminal),
             )
         )
-    return ok_response(result.terminal.model_dump(mode="json", by_alias=True))
+    enriched_terminal = await _build_enriched_terminal_read(
+        request=request,
+        event_broker=event_broker,
+        session_id=session_id,
+        shell_service=service,
+        terminal=result.terminal,
+    )
+    return ok_response(enriched_terminal.model_dump(mode="json", by_alias=True))
 
 
 @router.websocket("/{session_id}/terminals/{terminal_id}/stream")

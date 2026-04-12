@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta
 
 from sqlmodel import Session as DBSession
-from sqlmodel import col, or_, select
+from sqlmodel import col, delete, or_, select
 
 from app.db.models import (
     AssistantTranscriptSegment,
@@ -13,13 +13,22 @@ from app.db.models import (
     GenerationAction,
     GenerationStatus,
     GenerationStep,
+    GraphEdge,
+    GraphNode,
     Message,
     MessageKind,
     MessageRole,
     MessageStatus,
+    RunLog,
+    RuntimeArtifact,
+    RuntimeExecutionRun,
+    RuntimeTerminalJob,
+    RuntimeTerminalSession,
     Session,
     SessionEventLog,
     SessionStatus,
+    TaskNode,
+    WorkflowRun,
     assistant_transcript_from_storage,
     assistant_transcript_to_storage,
     utc_now,
@@ -213,6 +222,66 @@ class SessionRepository:
         self.db_session.commit()
         self.db_session.refresh(session)
         return session
+
+    def hard_delete_session(self, session: Session) -> None:
+        session_id = session.id
+        workflow_run_ids = list(
+            self.db_session.exec(
+                select(WorkflowRun.id).where(WorkflowRun.session_id == session_id)
+            ).all()
+        )
+        runtime_run_ids = list(
+            self.db_session.exec(
+                select(RuntimeExecutionRun.id).where(RuntimeExecutionRun.session_id == session_id)
+            ).all()
+        )
+
+        branches = self.list_branches(session_id)
+        for branch in branches:
+            if branch.forked_from_message_id is not None:
+                branch.forked_from_message_id = None
+                self.db_session.add(branch)
+        if branches:
+            self.db_session.flush()
+
+        self.db_session.exec(delete(GraphEdge).where(GraphEdge.session_id == session_id))
+        self.db_session.exec(delete(GraphNode).where(GraphNode.session_id == session_id))
+        if workflow_run_ids:
+            self.db_session.exec(
+                delete(TaskNode).where(col(TaskNode.workflow_run_id).in_(workflow_run_ids))
+            )
+        self.db_session.exec(delete(WorkflowRun).where(WorkflowRun.session_id == session_id))
+
+        self.db_session.exec(
+            delete(RuntimeTerminalJob).where(RuntimeTerminalJob.session_id == session_id)
+        )
+        self.db_session.exec(
+            delete(RuntimeTerminalSession).where(RuntimeTerminalSession.session_id == session_id)
+        )
+
+        self.db_session.exec(delete(GenerationStep).where(GenerationStep.session_id == session_id))
+        self.db_session.exec(delete(ChatGeneration).where(ChatGeneration.session_id == session_id))
+        self.db_session.exec(delete(Message).where(Message.session_id == session_id))
+        self.db_session.exec(
+            delete(ConversationBranch).where(ConversationBranch.session_id == session_id)
+        )
+
+        self.db_session.exec(
+            delete(SessionEventLog).where(SessionEventLog.session_id == session_id)
+        )
+        self.db_session.exec(delete(RunLog).where(RunLog.session_id == session_id))
+
+        if runtime_run_ids:
+            self.db_session.exec(
+                delete(RuntimeArtifact).where(col(RuntimeArtifact.run_id).in_(runtime_run_ids))
+            )
+            self.db_session.exec(delete(RunLog).where(col(RunLog.run_id).in_(runtime_run_ids)))
+
+        self.db_session.exec(
+            delete(RuntimeExecutionRun).where(RuntimeExecutionRun.session_id == session_id)
+        )
+        self.db_session.exec(delete(Session).where(Session.id == session_id))
+        self.db_session.commit()
 
     def get_branch(self, branch_id: str) -> ConversationBranch | None:
         statement = select(ConversationBranch).where(ConversationBranch.id == branch_id)
