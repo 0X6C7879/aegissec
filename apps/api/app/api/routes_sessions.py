@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
+from importlib import import_module
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +12,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    Request,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -22,6 +25,7 @@ from app.agent.token_budget import estimate_token_count
 from app.compat.mcp.service import MCPService, get_mcp_service
 from app.compat.skills.service import SkillService, get_skill_service
 from app.core.api import AckResponse, PaginationMeta, SortMeta, ok_response
+from app.core.auth import is_websocket_authorized
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType, get_event_broker
 from app.core.settings import Settings, get_settings
 from app.db.models import (
@@ -86,6 +90,13 @@ from app.services.session_generation import (
     get_generation_manager,
 )
 from app.services.terminal_sessions import SessionShellService, terminal_audit_payload
+
+terminal_runtime = import_module("app.services.terminal_runtime")
+TerminalAlreadyAttachedError = terminal_runtime.TerminalAlreadyAttachedError
+TerminalBackendUnavailableError = terminal_runtime.TerminalBackendUnavailableError
+TerminalClosedError = terminal_runtime.TerminalClosedError
+TerminalNotFoundError = terminal_runtime.TerminalNotFoundError
+build_terminal_runtime_service = terminal_runtime.build_terminal_runtime_service
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -1453,6 +1464,7 @@ async def get_session_terminal(
     description="Mark terminal-session metadata as closed without simulating PTY persistence.",
 )
 async def close_session_terminal(
+    request: Request,
     session_id: str,
     terminal_id: str,
     db_session: DBSession = Depends(get_db_session),
@@ -1460,6 +1472,20 @@ async def close_session_terminal(
 ) -> object:
     session_repository = SessionRepository(db_session)
     session = _get_existing_session(session_repository, session_id)
+    runtime_service = build_terminal_runtime_service(app=request.app, event_broker=event_broker)
+    live_closed = await runtime_service.close_live_terminal(
+        session_id=session_id,
+        terminal_id=terminal_id,
+    )
+    if live_closed:
+        refreshed_terminal = SessionShellService(
+            TerminalRepository(db_session),
+            RunLogRepository(db_session),
+        ).get_terminal(session_id=session_id, terminal_id=terminal_id)
+        if refreshed_terminal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Terminal not found")
+        return ok_response(refreshed_terminal.model_dump(mode="json", by_alias=True))
+
     service = SessionShellService(TerminalRepository(db_session), RunLogRepository(db_session))
     result = service.close_terminal(session=session, terminal_id=terminal_id)
     if result is None:
@@ -1473,6 +1499,121 @@ async def close_session_terminal(
             )
         )
     return ok_response(result.terminal.model_dump(mode="json", by_alias=True))
+
+
+@router.websocket("/{session_id}/terminals/{terminal_id}/stream")
+async def stream_session_terminal(
+    websocket: WebSocket,
+    session_id: str,
+    terminal_id: str,
+    cols: int = Query(default=80, ge=1),
+    rows: int = Query(default=24, ge=1),
+    db_session: DBSession = Depends(get_websocket_db_session),
+    event_broker: SessionEventBroker = Depends(get_event_broker),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    authorized, reason = is_websocket_authorized(
+        websocket,
+        settings,
+        allow_query_params=False,
+    )
+    if not authorized:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=reason or "Unauthorized",
+        )
+
+    try:
+        session_repository = SessionRepository(db_session)
+        session = session_repository.get_session(session_id, include_deleted=True)
+    finally:
+        db_session.close()
+
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    runtime_service = build_terminal_runtime_service(app=websocket.app, event_broker=event_broker)
+    try:
+        handle = await runtime_service.connect(
+            session_id=session_id,
+            terminal_id=terminal_id,
+            cols=cols,
+            rows=rows,
+        )
+    except TerminalAlreadyAttachedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (TerminalNotFoundError, TerminalClosedError) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TerminalBackendUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
+
+    await websocket.accept()
+
+    detached = False
+
+    async def _receive_client_frame() -> tuple[str, object | None]:
+        try:
+            return "frame", await websocket.receive_json()
+        except WebSocketDisconnect:
+            return "disconnect", None
+        except json.JSONDecodeError:
+            return "invalid_json", None
+
+    try:
+        while True:
+            receive_task = asyncio.create_task(_receive_client_frame())
+            send_task = asyncio.create_task(handle.queue.get())
+            done, pending = await asyncio.wait(
+                {receive_task, send_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+            should_close = False
+            if send_task in done:
+                frame = send_task.result()
+                await websocket.send_json(frame)
+                if frame.get("type") == "closed":
+                    should_close = True
+            if receive_task in done:
+                receive_kind, receive_payload = receive_task.result()
+                if receive_kind == "disconnect":
+                    if should_close or handle.closed.is_set():
+                        return
+                    await runtime_service.mark_detached(handle)
+                    detached = True
+                    return
+                if receive_kind == "invalid_json":
+                    if should_close:
+                        return
+                    await runtime_service.emit_protocol_error(
+                        handle,
+                        "terminal frames must be valid JSON",
+                    )
+                    continue
+                frame = receive_payload
+                if not isinstance(frame, dict):
+                    if should_close:
+                        return
+                    await runtime_service.emit_protocol_error(
+                        handle,
+                        "terminal frames must be JSON objects",
+                    )
+                    continue
+                await runtime_service.handle_client_frame(handle, frame)
+            if should_close:
+                return
+    except WebSocketDisconnect:
+        await runtime_service.mark_detached(handle)
+        detached = True
+        return
+    finally:
+        if not detached and not handle.closed.is_set():
+            await runtime_service.mark_detached(handle)
 
 
 @router.get(
@@ -1519,7 +1660,15 @@ async def stream_session_events(
     cursor: int | None = Query(default=None, ge=0),
     db_session: DBSession = Depends(get_websocket_db_session),
     event_broker: SessionEventBroker = Depends(get_event_broker),
+    settings: Settings = Depends(get_settings),
 ) -> None:
+    authorized, reason = is_websocket_authorized(websocket, settings)
+    if not authorized:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=reason or "Unauthorized",
+        )
+
     try:
         repository = SessionRepository(db_session)
         session = repository.get_session(session_id, include_deleted=True)

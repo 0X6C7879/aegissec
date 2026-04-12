@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import signal
 import subprocess
@@ -56,12 +57,42 @@ def stop_process(process: subprocess.Popen[str]) -> None:
             process.kill()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Start aegissec API and web dev servers.",
+    )
+    parser.add_argument(
+        "--user",
+        dest="auth_user",
+        default=None,
+        help="Enable username/password login with the provided username.",
+    )
+    parser.add_argument(
+        "--passwd",
+        dest="auth_passwd",
+        default=None,
+        help="Enable username/password login with the provided password.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_args()
     env = os.environ.copy()
     api_host = env.get("AEGISSEC_API_HOST", "0.0.0.0")
     api_port = env.get("AEGISSEC_API_PORT", "8000")
     web_host = env.get("AEGISSEC_WEB_HOST", "0.0.0.0")
     web_port = env.get("AEGISSEC_WEB_PORT", "5173")
+
+    if bool(args.auth_user) != bool(args.auth_passwd):
+        print("Both --user and --passwd must be provided together.", file=sys.stderr)
+        return 2
+
+    if args.auth_user and args.auth_passwd:
+        env["AEGISSEC_API_AUTH_MODE"] = "basic"
+        env["AEGISSEC_API_AUTH_USERNAME"] = args.auth_user
+        env["AEGISSEC_API_AUTH_PASSWORD"] = args.auth_passwd
+        print(f"==> Username/password auth enabled for user: {args.auth_user}")
 
     print("==> Syncing API dependencies")
     run(["uv", "sync", "--all-extras", "--dev"], API_DIR)

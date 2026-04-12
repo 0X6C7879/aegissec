@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from pytest import MonkeyPatch
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session as DBSession
 from starlette.testclient import WebSocketDenialResponse
 
@@ -36,6 +37,7 @@ from app.db.models import (
     RuntimeTerminalJobStatus,
 )
 from app.db.repositories import RunLogRepository, SessionRepository, TerminalRepository
+from app.db.repositories.terminal_repository import _commit_and_refresh, _flush_pending
 from app.db.session import get_websocket_db_session
 from app.harness import session_runner as harness_session_runner
 from app.harness.session_runner import _publish_auto_compaction_events_if_needed
@@ -419,6 +421,282 @@ def test_session_terminal_job_endpoints_return_session_scoped_metadata(client: T
     assert foreign_job_response.status_code == 404
 
 
+def test_session_terminal_stream_rejects_second_active_attach(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Stream Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Primary Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=120&rows=40"
+    with client.websocket_connect(stream_path) as websocket:
+        ready_frame = websocket.receive_json()
+        assert ready_frame["type"] == "ready"
+        assert ready_frame["session_id"] == session_id
+        assert ready_frame["terminal_id"] == terminal_id
+        assert ready_frame["job_id"]
+
+        with pytest.raises(WebSocketDenialResponse) as exc_info:
+            with client.websocket_connect(stream_path):
+                pass
+
+        response = exc_info.value
+        assert response.status_code == 409
+        assert "already attached" in response.text
+
+
+def test_session_terminal_stream_supports_concurrent_different_terminals(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Concurrent Terminal Session"})
+    session_id = api_data(session_response)["id"]
+
+    first_terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Alpha Shell"},
+    )
+    second_terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Beta Shell"},
+    )
+    first_terminal_id = api_data(first_terminal_response)["id"]
+    second_terminal_id = api_data(second_terminal_response)["id"]
+
+    with ExitStack() as stack:
+        alpha = stack.enter_context(
+            client.websocket_connect(
+                f"/api/sessions/{session_id}/terminals/{first_terminal_id}/stream?cols=100&rows=30"
+            )
+        )
+        beta = stack.enter_context(
+            client.websocket_connect(
+                f"/api/sessions/{session_id}/terminals/{second_terminal_id}/stream?cols=80&rows=24"
+            )
+        )
+
+        alpha_ready = alpha.receive_json()
+        beta_ready = beta.receive_json()
+        assert alpha_ready["terminal_id"] == first_terminal_id
+        assert beta_ready["terminal_id"] == second_terminal_id
+        assert alpha_ready["job_id"] != beta_ready["job_id"]
+
+        alpha.send_json({"type": "input", "data": "alpha\n"})
+        beta.send_json({"type": "input", "data": "beta\n"})
+
+        alpha_output = alpha.receive_json()
+        beta_output = beta.receive_json()
+        assert alpha_output == {"type": "output", "data": "alpha\n"}
+        assert beta_output == {"type": "output", "data": "beta\n"}
+
+
+def test_session_terminal_stream_persists_job_lifecycle_and_emits_events(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Lifecycle Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Lifecycle Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/events") as event_stream:
+        with client.websocket_connect(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+        ) as terminal_stream:
+            ready_frame = terminal_stream.receive_json()
+            assert ready_frame["type"] == "ready"
+            job_id = ready_frame["job_id"]
+
+            started_event = event_stream.receive_json()
+            assert started_event["type"] == "terminal.job.started"
+            assert started_event["payload"]["job_id"] == job_id
+            assert started_event["payload"]["terminal_id"] == terminal_id
+
+            terminal_stream.send_json({"type": "input", "data": "exit\n"})
+            assert terminal_stream.receive_json() == {"type": "output", "data": "exit\n"}
+
+            exit_frame = terminal_stream.receive_json()
+            assert exit_frame == {"type": "exit", "exit_code": 0, "reason": "exit"}
+
+            closed_frame = terminal_stream.receive_json()
+            assert closed_frame == {"type": "closed", "reason": "exit"}
+
+            completed_event = event_stream.receive_json()
+            assert completed_event["type"] == "terminal.job.completed"
+            assert completed_event["payload"]["job_id"] == job_id
+            assert completed_event["payload"]["exit_code"] == 0
+
+            closed_event = event_stream.receive_json()
+            assert closed_event["type"] == "terminal.session.closed"
+            assert closed_event["payload"]["id"] == terminal_id
+
+    jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    assert jobs_response.status_code == 200
+    jobs_payload = api_data(jobs_response)
+    assert jobs_payload[0]["id"] == job_id
+    assert jobs_payload[0]["status"] == "completed"
+    assert jobs_payload[0]["exit_code"] == 0
+
+
+def test_session_terminal_stream_close_frame_cancels_job_and_emits_events(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Terminal Close Frame Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Close Frame Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/events") as event_stream:
+        with client.websocket_connect(
+            f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+        ) as terminal_stream:
+            ready_frame = terminal_stream.receive_json()
+            job_id = ready_frame["job_id"]
+
+            started_event = event_stream.receive_json()
+            assert started_event["type"] == "terminal.job.started"
+            assert started_event["payload"]["job_id"] == job_id
+
+            terminal_stream.send_json({"type": "close"})
+
+            exit_frame = terminal_stream.receive_json()
+            assert exit_frame == {"type": "exit", "exit_code": None, "reason": "close"}
+            closed_frame = terminal_stream.receive_json()
+            assert closed_frame == {"type": "closed", "reason": "close"}
+
+            cancelled_event = event_stream.receive_json()
+            assert cancelled_event["type"] == "terminal.job.cancelled"
+            assert cancelled_event["payload"]["job_id"] == job_id
+
+            closed_event = event_stream.receive_json()
+            assert closed_event["type"] == "terminal.session.closed"
+            assert closed_event["payload"]["id"] == terminal_id
+
+    jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    jobs_payload = api_data(jobs_response)
+    assert jobs_payload[0]["id"] == job_id
+    assert jobs_payload[0]["status"] == "cancelled"
+
+
+def test_http_terminal_close_closes_active_stream_and_cancels_job(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "HTTP Close Active Stream"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "HTTP Close Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        ready_frame = terminal_stream.receive_json()
+        job_id = ready_frame["job_id"]
+
+        close_response = client.post(f"/api/sessions/{session_id}/terminals/{terminal_id}/close")
+        assert close_response.status_code == 200
+        assert api_data(close_response)["status"] == "closed"
+
+        exit_frame = terminal_stream.receive_json()
+        assert exit_frame == {"type": "exit", "exit_code": None, "reason": "close"}
+        closed_frame = terminal_stream.receive_json()
+        assert closed_frame == {"type": "closed", "reason": "close"}
+
+    jobs_response = client.get(f"/api/sessions/{session_id}/terminal-jobs")
+    jobs_payload = api_data(jobs_response)
+    assert jobs_payload[0]["id"] == job_id
+    assert jobs_payload[0]["status"] == "cancelled"
+
+
+def test_session_terminal_stream_rejects_invalid_signal_name(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Invalid Signal Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Signal Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        terminal_stream.receive_json()
+        terminal_stream.send_json({"type": "signal", "signal": "TERM;whoami"})
+
+        error_frame = terminal_stream.receive_json()
+        assert error_frame == {"type": "error", "message": "unsupported terminal signal"}
+
+
+def test_session_terminal_stream_rejects_malformed_json_frame(client: TestClient) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Malformed Frame Session"})
+    session_id = api_data(session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{session_id}/terminals",
+        json={"title": "Malformed Frame Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    stream_path = f"/api/sessions/{session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    with client.websocket_connect(stream_path) as terminal_stream:
+        terminal_stream.receive_json()
+        terminal_stream.send_text("not-json")
+
+        error_frame = terminal_stream.receive_json()
+        assert error_frame == {"type": "error", "message": "terminal frames must be valid JSON"}
+
+        terminal_stream.send_json({"type": "close"})
+        assert terminal_stream.receive_json() == {
+            "type": "exit",
+            "exit_code": None,
+            "reason": "close",
+        }
+        assert terminal_stream.receive_json() == {"type": "closed", "reason": "close"}
+
+
+def test_session_terminal_stream_rejects_foreign_session_reattach_during_grace(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings, "terminal_disconnect_grace_seconds", 0.2)
+
+    owner_session_response = client.post("/api/sessions", json={"title": "Owner Session"})
+    owner_session_id = api_data(owner_session_response)["id"]
+    foreign_session_response = client.post("/api/sessions", json={"title": "Foreign Session"})
+    foreign_session_id = api_data(foreign_session_response)["id"]
+    terminal_response = client.post(
+        f"/api/sessions/{owner_session_id}/terminals",
+        json={"title": "Detached Grace Shell"},
+    )
+    terminal_id = api_data(terminal_response)["id"]
+
+    owner_stream_path = (
+        f"/api/sessions/{owner_session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    )
+    with client.websocket_connect(owner_stream_path) as owner_stream:
+        owner_stream.receive_json()
+
+    foreign_stream_path = (
+        f"/api/sessions/{foreign_session_id}/terminals/{terminal_id}/stream?cols=80&rows=24"
+    )
+    with pytest.raises(WebSocketDenialResponse) as exc_info:
+        with client.websocket_connect(foreign_stream_path):
+            pass
+
+    response = exc_info.value
+    assert response.status_code == 404
+    assert "Terminal not found" in response.text
+
+    jobs_response = client.get(f"/api/sessions/{owner_session_id}/terminal-jobs")
+    jobs_payload = api_data(jobs_response)
+    assert len(jobs_payload) == 1
+
+    time.sleep(0.25)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("shell", "   "), ("cwd", "\n\t  ")],
@@ -512,6 +790,249 @@ def test_terminal_repository_rejects_job_for_closed_terminal(client: TestClient)
                 command="echo closed",
                 status=RuntimeTerminalJobStatus.QUEUED,
             )
+
+
+@pytest.mark.parametrize(
+    ("status", "expects_started_at"),
+    [
+        (RuntimeTerminalJobStatus.QUEUED, False),
+        (RuntimeTerminalJobStatus.RUNNING, True),
+    ],
+)
+def test_terminal_repository_accepts_only_valid_initial_job_states(
+    client: TestClient,
+    status: RuntimeTerminalJobStatus,
+    expects_started_at: bool,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Job State Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        job = repository.create_terminal_job(
+            terminal_session_id=terminal_id,
+            session_id=session_id,
+            command="sleep 1",
+            status=status,
+            metadata={"nested": {"phase": "phase-1.1"}},
+        )
+
+        assert job.status == status
+        assert (job.started_at is not None) is expects_started_at
+        assert job.ended_at is None
+        assert job.exit_code is None
+        assert job.metadata_json == {"nested": {"phase": "phase-1.1"}}
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        RuntimeTerminalJobStatus.COMPLETED,
+        RuntimeTerminalJobStatus.FAILED,
+        RuntimeTerminalJobStatus.CANCELLED,
+    ],
+)
+def test_terminal_repository_rejects_invalid_initial_job_states(
+    client: TestClient,
+    status: RuntimeTerminalJobStatus,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Invalid Job State Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        with pytest.raises(ValueError, match="can only be created in queued or running state"):
+            repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=session_id,
+                command="echo invalid",
+                status=status,
+            )
+
+        assert repository.list_terminal_jobs(session_id=session_id) == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"score": float("nan")},
+        {"payload": "x" * 5000},
+        [],
+        "",
+        0,
+        False,
+    ],
+)
+def test_terminal_repository_rejects_invalid_job_metadata(
+    client: TestClient,
+    metadata: object,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Invalid Job Metadata Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        with pytest.raises(ValueError, match="Terminal job metadata"):
+            repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=session_id,
+                command="echo invalid metadata",
+                status=RuntimeTerminalJobStatus.QUEUED,
+                metadata=metadata,
+            )
+
+        assert repository.list_terminal_jobs(session_id=session_id) == []
+
+
+def test_terminal_repository_rolls_back_when_job_commit_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Job Commit Rollback Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    rollback_calls = 0
+
+    def fail_commit(self: DBSession) -> None:
+        del self
+        raise SQLAlchemyError("forced job commit failure")
+
+    original_rollback = DBSession.rollback
+
+    def tracking_rollback(self: DBSession) -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+        original_rollback(self)
+
+    monkeypatch.setattr(DBSession, "commit", fail_commit)
+    monkeypatch.setattr(DBSession, "rollback", tracking_rollback)
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        with pytest.raises(SQLAlchemyError, match="forced job commit failure"):
+            repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=session_id,
+                command="sleep 5",
+                status=RuntimeTerminalJobStatus.QUEUED,
+                metadata={"phase": "rollback"},
+            )
+
+    assert rollback_calls == 1
+
+    with DBSession(app.state.database_engine) as verification_session:
+        verification_repository = TerminalRepository(verification_session)
+        assert verification_repository.list_terminal_jobs(session_id=session_id) == []
+
+
+def test_flush_pending_rolls_back_on_flush_failure() -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+
+        def flush(self) -> None:
+            raise SQLAlchemyError("forced job flush failure")
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    fake_session = FakeSession()
+
+    with pytest.raises(SQLAlchemyError, match="forced job flush failure"):
+        _flush_pending(cast(DBSession, fake_session))
+
+    assert fake_session.rollback_calls == 1
+
+
+def test_commit_and_refresh_rolls_back_on_refresh_failure() -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+            self.commit_calls = 0
+            self.refresh_calls = 0
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+
+        def refresh(self, instance: object) -> None:
+            del instance
+            self.refresh_calls += 1
+            raise SQLAlchemyError("forced job refresh failure")
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    fake_session = FakeSession()
+
+    _commit_and_refresh(cast(DBSession, fake_session), object())
+
+    assert fake_session.commit_calls == 1
+    assert fake_session.refresh_calls == 1
+    assert fake_session.rollback_calls == 1
+
+
+def test_terminal_repository_preserves_job_when_refresh_fails_after_commit(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Job Refresh Semantics Session"})
+    session_id = api_data(session_response)["id"]
+
+    terminal_response = client.post(f"/api/sessions/{session_id}/terminals", json={"title": "Main"})
+    terminal_id = api_data(terminal_response)["id"]
+
+    refresh_calls = 0
+    rollback_calls = 0
+
+    def fail_refresh(self: DBSession, instance: object) -> None:
+        del self, instance
+        nonlocal refresh_calls
+        refresh_calls += 1
+        raise SQLAlchemyError("forced job refresh failure")
+
+    original_rollback = DBSession.rollback
+
+    def tracking_rollback(self: DBSession) -> None:
+        nonlocal rollback_calls
+        rollback_calls += 1
+        original_rollback(self)
+
+    monkeypatch.setattr(DBSession, "refresh", fail_refresh)
+    monkeypatch.setattr(DBSession, "rollback", tracking_rollback)
+
+    with DBSession(app.state.database_engine) as db_session:
+        repository = TerminalRepository(db_session)
+        terminal_job = repository.create_terminal_job(
+            terminal_session_id=terminal_id,
+            session_id=session_id,
+            command="sleep 5",
+            status=RuntimeTerminalJobStatus.QUEUED,
+            metadata={"phase": "refresh-semantics"},
+        )
+        persisted_job_id = terminal_job.id
+
+    assert persisted_job_id is not None
+    assert refresh_calls == 1
+    assert rollback_calls == 1
+
+    with DBSession(app.state.database_engine) as verification_session:
+        verification_repository = TerminalRepository(verification_session)
+        persisted_jobs = verification_repository.list_terminal_jobs(session_id=session_id)
+        assert len(persisted_jobs) == 1
+        assert persisted_jobs[0].id == persisted_job_id
+        assert persisted_jobs[0].command == "sleep 5"
 
 
 @pytest.mark.parametrize(

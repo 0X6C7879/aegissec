@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib import import_module
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,10 @@ from app.core.settings import get_settings
 from app.db.session import engine, init_db
 from app.services.session_generation import recover_abandoned_generations
 
+terminal_runtime = import_module("app.services.terminal_runtime")
+LiveTerminalRegistry = terminal_runtime.LiveTerminalRegistry
+build_terminal_runtime_service = terminal_runtime.build_terminal_runtime_service
+
 settings = get_settings()
 LOCAL_DEV_ORIGIN_REGEX = r"^https?://(127\.0\.0\.1|localhost):\d+$"
 OPENAPI_TAGS = [
@@ -44,11 +49,19 @@ OPENAPI_TAGS = [
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     get_event_broker().configure_persistence(lambda: DBSession(engine))
     recover_abandoned_generations(engine)
-    yield
+    if not isinstance(getattr(app.state, "live_terminal_registry", None), LiveTerminalRegistry):
+        app.state.live_terminal_registry = LiveTerminalRegistry()
+    try:
+        yield
+    finally:
+        await build_terminal_runtime_service(
+            app=app,
+            event_broker=get_event_broker(),
+        ).shutdown()
 
 
 app = FastAPI(

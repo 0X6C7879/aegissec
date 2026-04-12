@@ -40,6 +40,99 @@ const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000"
   "",
 );
 const apiToken = import.meta.env.VITE_API_TOKEN as string | undefined;
+const API_BASIC_AUTH_STORAGE_KEY = "aegissec.api.basic_auth";
+export const API_AUTH_EXPIRED_EVENT = "aegissec.api.auth-expired";
+
+function readStoredBasicAuthToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(API_BASIC_AUTH_STORAGE_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsedValue = JSON.parse(rawValue) as { token?: unknown };
+    if (typeof parsedValue.token !== "string") {
+      return null;
+    }
+
+    const normalizedToken = parsedValue.token.trim();
+    return normalizedToken.length > 0 ? normalizedToken : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistBasicAuthToken(token: string | null): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (token === null) {
+    window.localStorage.removeItem(API_BASIC_AUTH_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(
+    API_BASIC_AUTH_STORAGE_KEY,
+    JSON.stringify({ token }),
+  );
+}
+
+function emitAuthExpiredEvent(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(API_AUTH_EXPIRED_EVENT));
+}
+
+function encodeBase64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary);
+}
+
+let runtimeBasicAuthToken: string | null = readStoredBasicAuthToken();
+
+function getAuthorizationHeader(): string | null {
+  if (runtimeBasicAuthToken) {
+    return `Basic ${runtimeBasicAuthToken}`;
+  }
+
+  const normalizedApiToken = (apiToken ?? "").trim();
+  if (normalizedApiToken.length > 0) {
+    return `Bearer ${normalizedApiToken}`;
+  }
+
+  return null;
+}
+
+export function hasApiBasicCredentials(): boolean {
+  return runtimeBasicAuthToken !== null;
+}
+
+export function setApiBasicCredentials(username: string, password: string): void {
+  runtimeBasicAuthToken = encodeBase64(`${username}:${password}`);
+  persistBasicAuthToken(runtimeBasicAuthToken);
+}
+
+export function clearApiBasicCredentials(emitAuthExpired = false): void {
+  runtimeBasicAuthToken = null;
+  persistBasicAuthToken(null);
+
+  if (emitAuthExpired) {
+    emitAuthExpiredEvent();
+  }
+}
 
 type ApiEnvelope<T> = {
   data: T;
@@ -84,6 +177,21 @@ export class ApiError extends Error {
 export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
+
+export type AuthStatusRead = {
+  mode: string;
+  token_required: boolean;
+};
+
+type AuthLoginPayload = {
+  username: string;
+  password: string;
+};
+
+export type AuthLoginRead = {
+  mode: string;
+  authenticated: boolean;
+};
 
 type ChatRequestPayload = {
   content: string;
@@ -173,18 +281,27 @@ async function readErrorResponse(response: Response): Promise<{ message: string;
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormDataBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  const authorizationHeader = getAuthorizationHeader();
 
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
       Accept: "application/json",
       ...(init?.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
-      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+      ...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
       ...init?.headers,
     },
   });
 
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      runtimeBasicAuthToken !== null &&
+      !path.startsWith("/api/auth/login")
+    ) {
+      clearApiBasicCredentials(true);
+    }
+
     const { message, body } = await readErrorResponse(response);
     throw new ApiError({
       message,
@@ -225,6 +342,17 @@ function buildQueryString(
 
 export function getApiBaseUrl(): string {
   return apiBaseUrl;
+}
+
+export async function getAuthStatus(signal?: AbortSignal): Promise<AuthStatusRead> {
+  return apiRequest<AuthStatusRead>("/api/auth/status", { signal });
+}
+
+export async function loginWithCredentials(payload: AuthLoginPayload): Promise<AuthLoginRead> {
+  return apiRequest<AuthLoginRead>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function listSessions(
@@ -488,7 +616,17 @@ export async function cancelGeneration(
 }
 
 export function getSessionEventsUrl(sessionId: string, cursor?: number | null): string {
-  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/events${buildQueryString({ cursor })}`;
+  const queryParams: Record<string, string | number | boolean | null | undefined> = {
+    cursor,
+  };
+
+  if (runtimeBasicAuthToken !== null) {
+    queryParams.auth_basic = runtimeBasicAuthToken;
+  } else if (apiToken && apiToken.trim().length > 0) {
+    queryParams.token = apiToken.trim();
+  }
+
+  return `${apiBaseUrl.replace(/^http/, "ws")}/api/sessions/${sessionId}/events${buildQueryString(queryParams)}`;
 }
 
 export async function listSkills(signal?: AbortSignal): Promise<SkillRecord[]> {
@@ -629,14 +767,19 @@ export async function uploadRuntimeArtifact(payload: {
 }
 
 export async function downloadRuntimeArtifact(path: string): Promise<Blob> {
+  const authorizationHeader = getAuthorizationHeader();
   const response = await fetch(`${apiBaseUrl}/api/runtime/download${buildQueryString({ path })}`, {
     headers: {
       Accept: "application/octet-stream",
-      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+      ...(authorizationHeader ? { Authorization: authorizationHeader } : {}),
     },
   });
 
   if (!response.ok) {
+    if (response.status === 401 && runtimeBasicAuthToken !== null) {
+      clearApiBasicCredentials(true);
+    }
+
     const { message, body } = await readErrorResponse(response);
     throw new ApiError({
       message,

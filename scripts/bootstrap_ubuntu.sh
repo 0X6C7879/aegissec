@@ -22,6 +22,10 @@ KALI_INSTALL_SKILL_TOOLS="${AEGISSEC_KALI_INSTALL_SKILL_TOOLS:-1}"
 KALI_SKILL_TOOL_PROFILE="${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-lean}"
 KALI_INSTALL_GCP_TOOLS="${AEGISSEC_KALI_INSTALL_GCP_TOOLS:-0}"
 KALI_INSTALL_BROWSER_TOOLS="${AEGISSEC_KALI_INSTALL_BROWSER_TOOLS:-0}"
+KALI_INSTALL_AZURE_TOOLS="${AEGISSEC_KALI_INSTALL_AZURE_TOOLS:-0}"
+KALI_APT_MIRROR="${AEGISSEC_KALI_APT_MIRROR:-https://mirrors.ustc.edu.cn/kali}"
+KALI_APT_MIRROR="${KALI_APT_MIRROR%/}"
+KALI_MAX_IMAGE_SIZE_GB="${AEGISSEC_KALI_MAX_IMAGE_SIZE_GB:-20}"
 KALI_FORCE_REBUILD="${AEGISSEC_KALI_FORCE_REBUILD:-0}"
 KALI_DOCKERFILE_PATH="$REPO_ROOT/docker/kali/Dockerfile"
 KALI_INSTALL_SCRIPT_PATH="$REPO_ROOT/scripts/install_ctf_tools.sh"
@@ -42,6 +46,15 @@ log() {
 die() {
   printf '[aegissec-bootstrap] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+ensure_positive_integer() {
+  local name="$1"
+  local value="$2"
+
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ "$value" -le 0 ]]; then
+    die "$name must be a positive integer, got '$value'"
+  fi
 }
 
 usage() {
@@ -72,6 +85,9 @@ Environment overrides:
   AEGISSEC_KALI_SKILL_TOOL_PROFILE    Skill tool profile: lean|core|full (default: lean)
   AEGISSEC_KALI_INSTALL_GCP_TOOLS     Install Google Cloud CLI in image build (default: 0)
   AEGISSEC_KALI_INSTALL_BROWSER_TOOLS Install browser tooling (Google Chrome) in image build (default: 0)
+  AEGISSEC_KALI_INSTALL_AZURE_TOOLS   Install Azure CLI in image build (default: 0)
+  AEGISSEC_KALI_APT_MIRROR            Kali apt mirror (default: https://mirrors.ustc.edu.cn/kali)
+  AEGISSEC_KALI_MAX_IMAGE_SIZE_GB     Maximum allowed Kali image size in GiB (default: 20)
   AEGISSEC_KALI_FORCE_REBUILD         Always rebuild Kali image (default: 0)
 EOF
 }
@@ -92,9 +108,19 @@ ensure_supported_ubuntu() {
   [[ "${VERSION_ID:-}" == 24* ]] || die "This bootstrap script targets Ubuntu 24.x; detected ${VERSION_ID:-unknown}"
 }
 
-ensure_non_root() {
+ensure_execution_user() {
   if [[ "${EUID}" -eq 0 ]]; then
-    die "Please run this script as a normal user with sudo privileges, not as root"
+    log "Running as root; privileged commands will execute directly"
+    if ! command -v sudo >/dev/null 2>&1; then
+      sudo() {
+        "$@"
+      }
+    fi
+    return
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    die "sudo is required when running as non-root user; please install sudo or run as root"
   fi
 }
 
@@ -119,6 +145,11 @@ ensure_user_local_bin_on_path() {
 }
 
 require_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    log "Running as root; skipping sudo credential refresh"
+    return
+  fi
+
   log "Refreshing sudo credentials"
   sudo -v
 }
@@ -239,8 +270,13 @@ ensure_docker() {
     die "Docker appears installed, but docker.service is unavailable and the daemon is not reachable"
   fi
 
-  sudo usermod -aG docker "$USER" >/dev/null 2>&1 || true
-  log "Docker group membership has been refreshed for $USER; open a new shell or run 'newgrp docker' if you want docker commands without sudo"
+  local target_user="${SUDO_USER:-${USER:-}}"
+  if [[ -n "$target_user" && "$target_user" != "root" ]]; then
+    sudo usermod -aG docker "$target_user" >/dev/null 2>&1 || true
+    log "Docker group membership has been refreshed for $target_user; open a new shell or run 'newgrp docker' if you want docker commands without sudo"
+  else
+    log "Skipping docker group membership update for root user"
+  fi
 }
 
 sha256_file() {
@@ -260,6 +296,34 @@ docker_label_or_empty() {
   printf '%s\n' "$value"
 }
 
+kali_image_size_bytes_or_empty() {
+  local image="$1"
+  local value
+
+  value="$(sudo docker image inspect --format '{{ .Size }}' "$image" 2>/dev/null || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value=""
+  fi
+  printf '%s\n' "$value"
+}
+
+ensure_kali_image_size_within_limit() {
+  ensure_positive_integer "AEGISSEC_KALI_MAX_IMAGE_SIZE_GB" "$KALI_MAX_IMAGE_SIZE_GB"
+
+  local image_size_bytes
+  local max_size_bytes
+
+  image_size_bytes="$(kali_image_size_bytes_or_empty "$KALI_IMAGE_TAG")"
+  [[ -n "$image_size_bytes" ]] || die "Unable to determine size for image $KALI_IMAGE_TAG"
+
+  max_size_bytes=$((KALI_MAX_IMAGE_SIZE_GB * 1024 * 1024 * 1024))
+  if [[ "$image_size_bytes" -gt "$max_size_bytes" ]]; then
+    die "Kali image size ${image_size_bytes} bytes exceeds limit ${KALI_MAX_IMAGE_SIZE_GB} GiB; tune install flags to slim the image"
+  fi
+
+  log "Kali image size check passed: ${image_size_bytes} bytes (limit: ${KALI_MAX_IMAGE_SIZE_GB} GiB)"
+}
+
 kali_image_matches_requested_profile() {
   local desired_installer_sha="$1"
 
@@ -273,6 +337,8 @@ kali_image_matches_requested_profile() {
   local image_skill_profile
   local image_install_gcp_tools
   local image_install_browser_tools
+  local image_install_azure_tools
+  local image_kali_apt_mirror
   local image_installer_sha
 
   image_ctf_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_ctf_tools")"
@@ -281,6 +347,8 @@ kali_image_matches_requested_profile() {
   image_skill_profile="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.skill_tool_profile")"
   image_install_gcp_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_gcp_tools")"
   image_install_browser_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_browser_tools")"
+  image_install_azure_tools="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.install_azure_tools")"
+  image_kali_apt_mirror="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.kali_apt_mirror")"
   image_installer_sha="$(docker_label_or_empty "$KALI_IMAGE_TAG" "aegissec.ctf_installer_sha")"
 
   [[ "$image_ctf_tools" == "$KALI_INSTALL_CTF_TOOLS" ]] || return 1
@@ -289,6 +357,8 @@ kali_image_matches_requested_profile() {
   [[ "$image_skill_profile" == "$KALI_SKILL_TOOL_PROFILE" ]] || return 1
   [[ "$image_install_gcp_tools" == "$KALI_INSTALL_GCP_TOOLS" ]] || return 1
   [[ "$image_install_browser_tools" == "$KALI_INSTALL_BROWSER_TOOLS" ]] || return 1
+  [[ "$image_install_azure_tools" == "$KALI_INSTALL_AZURE_TOOLS" ]] || return 1
+  [[ "$image_kali_apt_mirror" == "$KALI_APT_MIRROR" ]] || return 1
 
   if [[ "$KALI_INSTALL_CTF_TOOLS" == "1" ]]; then
     [[ "$image_installer_sha" == "$desired_installer_sha" ]] || return 1
@@ -329,6 +399,7 @@ ensure_kali_image() {
   fi
 
   if [[ "$KALI_FORCE_REBUILD" != "1" ]] && kali_image_matches_requested_profile "$installer_sha"; then
+    ensure_kali_image_size_within_limit
     log "Kali image $KALI_IMAGE_TAG already exists and matches requested tool profile"
     return
   fi
@@ -340,7 +411,7 @@ ensure_kali_image() {
   fi
 
   log "Building Kali image $KALI_IMAGE_TAG"
-  log "Kali preinstall config: ctf_tools=$KALI_INSTALL_CTF_TOOLS, ctf_mode=$KALI_CTF_INSTALL_MODE, skill_tools=$KALI_INSTALL_SKILL_TOOLS, skill_profile=$KALI_SKILL_TOOL_PROFILE, gcp_tools=$KALI_INSTALL_GCP_TOOLS, browser_tools=$KALI_INSTALL_BROWSER_TOOLS"
+  log "Kali preinstall config: ctf_tools=$KALI_INSTALL_CTF_TOOLS, ctf_mode=$KALI_CTF_INSTALL_MODE, skill_tools=$KALI_INSTALL_SKILL_TOOLS, skill_profile=$KALI_SKILL_TOOL_PROFILE, gcp_tools=$KALI_INSTALL_GCP_TOOLS, azure_tools=$KALI_INSTALL_AZURE_TOOLS, browser_tools=$KALI_INSTALL_BROWSER_TOOLS, apt_mirror=$KALI_APT_MIRROR, max_size_gib=$KALI_MAX_IMAGE_SIZE_GB"
   (
     cd "$REPO_ROOT"
     sudo docker build \
@@ -349,12 +420,16 @@ ensure_kali_image() {
       --build-arg INSTALL_SKILL_TOOLS="$KALI_INSTALL_SKILL_TOOLS" \
       --build-arg SKILL_TOOL_PROFILE="$KALI_SKILL_TOOL_PROFILE" \
       --build-arg INSTALL_GCP_TOOLS="$KALI_INSTALL_GCP_TOOLS" \
+      --build-arg INSTALL_AZURE_TOOLS="$KALI_INSTALL_AZURE_TOOLS" \
       --build-arg INSTALL_BROWSER_TOOLS="$KALI_INSTALL_BROWSER_TOOLS" \
+      --build-arg KALI_APT_MIRROR="$KALI_APT_MIRROR" \
       --build-arg CTF_INSTALLER_SHA="$installer_sha" \
       -t "$KALI_IMAGE_TAG" \
       -f "$KALI_DOCKERFILE_PATH" \
       .
   )
+
+  ensure_kali_image_size_within_limit
 }
 
 run_verification() {
@@ -539,7 +614,7 @@ main() {
 
   ensure_repo_root
   ensure_supported_ubuntu
-  ensure_non_root
+  ensure_execution_user
   ensure_state_dirs
 
   case "$command" in

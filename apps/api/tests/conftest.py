@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator
 from datetime import UTC, datetime
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,11 @@ from app.services.runtime import (
     RuntimeContainerState,
     get_runtime_backend,
 )
+
+terminal_runtime = import_module("app.services.terminal_runtime")
+LiveTerminalRegistry = terminal_runtime.LiveTerminalRegistry
+TerminalBackendEvent = terminal_runtime.TerminalBackendEvent
+TerminalProcess = terminal_runtime.TerminalProcess
 
 
 class FakeChatRuntime:
@@ -149,6 +156,65 @@ class FakeRuntimeBackend:
         )
 
 
+class FakeTerminalProcess(TerminalProcess):
+    def __init__(self, *, terminal_id: str, cols: int, rows: int) -> None:
+        self.terminal_id = terminal_id
+        self.cols = cols
+        self.rows = rows
+        self.events: asyncio.Queue[TerminalBackendEvent] = asyncio.Queue()
+        self.inputs: list[bytes] = []
+        self.resize_history: list[tuple[int, int]] = [(cols, rows)]
+        self.signals: list[str] = []
+        self.closed_reasons: list[str] = []
+        self.closed = False
+
+    async def send_input(self, data: bytes) -> None:
+        self.inputs.append(data)
+        await self.events.put(TerminalBackendEvent.output(data=data))
+        if data.endswith(b"exit\n"):
+            await self.events.put(TerminalBackendEvent.exit(exit_code=0, reason="exit"))
+
+    async def resize(self, cols: int, rows: int) -> None:
+        self.cols = cols
+        self.rows = rows
+        self.resize_history.append((cols, rows))
+
+    async def send_signal(self, signal_name: str) -> None:
+        self.signals.append(signal_name)
+        if signal_name.lower() in {"interrupt", "int"}:
+            await self.events.put(TerminalBackendEvent.output(data=b"^C"))
+
+    async def send_eof(self) -> None:
+        await self.events.put(TerminalBackendEvent.exit(exit_code=0, reason="eof"))
+
+    async def close(self, *, reason: str) -> None:
+        self.closed = True
+        self.closed_reasons.append(reason)
+        await self.events.put(TerminalBackendEvent.exit(exit_code=None, reason=reason))
+
+
+class FakeTerminalBackend:
+    def __init__(self) -> None:
+        self.processes: dict[str, FakeTerminalProcess] = {}
+
+    async def open_terminal(
+        self,
+        *,
+        terminal_id: str,
+        shell: str,
+        cwd: str,
+        cols: int,
+        rows: int,
+    ) -> TerminalProcess:
+        del shell, cwd
+        process = FakeTerminalProcess(terminal_id=terminal_id, cols=cols, rows=rows)
+        self.processes[terminal_id] = process
+        return process
+
+    async def shutdown(self) -> None:
+        self.processes.clear()
+
+
 @pytest.fixture
 def test_settings(tmp_path: Path) -> Settings:
     database_url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
@@ -166,6 +232,7 @@ def test_settings(tmp_path: Path) -> Settings:
             "runtime_default_timeout_seconds": 300,
             "runtime_recent_runs_limit": 10,
             "runtime_recent_artifacts_limit": 20,
+            "terminal_disconnect_grace_seconds": 0.01,
             "mcp_import_paths": [],
             "database_url": database_url,
             "llm_api_key": None,
@@ -186,10 +253,16 @@ def runtime_backend(test_settings: Settings) -> FakeRuntimeBackend:
 
 
 @pytest.fixture
+def terminal_backend() -> FakeTerminalBackend:
+    return FakeTerminalBackend()
+
+
+@pytest.fixture
 def client(
     tmp_path: Path,
     test_settings: Settings,
     runtime_backend: FakeRuntimeBackend,
+    terminal_backend: FakeTerminalBackend,
 ) -> Generator[TestClient, None, None]:
     database_url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
@@ -236,6 +309,8 @@ def client(
     app.dependency_overrides[get_runtime_backend] = override_runtime_backend
     app.state.database_engine = engine
     app.state.settings = test_settings
+    app.state.live_terminal_registry = LiveTerminalRegistry()
+    app.state.terminal_backend = terminal_backend
 
     with TestClient(app) as test_client:
         yield test_client

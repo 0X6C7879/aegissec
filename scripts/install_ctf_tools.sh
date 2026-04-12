@@ -104,12 +104,9 @@ gem_installed() {
 # ---------------------------------------------------------------------------
 
 PIP_PACKAGES=(
-  "requests==2.32.5:requests"
   "flask-unsign==1.2.1:flask_unsign"
   "sqlmap==1.10.3:sqlmap"
   "scapy==2.7.0:scapy"
-  "dnspython==2.8.0:dns"
-  "dnslib==0.9.26:dnslib"
 )
 
 # ---------------------------------------------------------------------------
@@ -120,6 +117,7 @@ install_python() {
   require_cmd python3 || return 1
 
   local pip_flags=()
+  local pip_index_url="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 
   # PEP 668: prefer creating a dedicated venv over --user
   if python3 -c "import sysconfig; marker = sysconfig.get_path('stdlib') + '/EXTERNALLY-MANAGED'; open(marker)" 2>/dev/null; then
@@ -138,18 +136,6 @@ install_python() {
           log_info "Activated virtualenv: $CTF_VENV"
           log_info "To reuse: source $CTF_VENV/bin/activate"
         fi
-      fi
-    fi
-  fi
-
-  # Install libgmp-dev first if on apt-based systems — required by gmpy2
-  if command -v apt-get >/dev/null 2>&1; then
-    if ! dpkg -s libgmp-dev >/dev/null 2>&1; then
-      if [ "$DRY_RUN" = true ]; then
-        log_info "Would install libgmp-dev (required by gmpy2)"
-      else
-        log_info "Installing libgmp-dev (required by gmpy2)"
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q libgmp-dev >>"${LOG_FILE:-/dev/null}" 2>&1 || log_warn "Could not install libgmp-dev"
       fi
     fi
   fi
@@ -184,7 +170,7 @@ install_python() {
 
   # Try batch install first (pip handles parallelism internally)
   log_info "Attempting batch install of ${#to_install[@]} packages"
-  if python3 -m pip install "${pip_flags[@]}" "${to_install[@]}" >>"$LOG_FILE" 2>&1; then
+  if python3 -m pip install -i "$pip_index_url" "${pip_flags[@]}" "${to_install[@]}" >>"$LOG_FILE" 2>&1; then
     for entry in "${to_install_display[@]}"; do
       SUCCEEDED+=("pip:$entry")
     done
@@ -203,7 +189,7 @@ install_python() {
       continue
     fi
 
-    if python3 -m pip install "${pip_flags[@]}" "$spec" >>"$LOG_FILE" 2>&1; then
+    if python3 -m pip install -i "$pip_index_url" "${pip_flags[@]}" "$spec" >>"$LOG_FILE" 2>&1; then
       SUCCEEDED+=("pip:$name")
     else
       log_warn "pip install failed: $name"
@@ -217,7 +203,7 @@ install_apt() {
   require_cmd apt-get || return 1
 
   local packages=(
-    nmap whois dnsutils tshark john hashcat curl jq
+    nmap whois dnsutils tshark john hashcat
   )
   local optional_packages=()
 
@@ -292,7 +278,7 @@ install_brew() {
   require_cmd brew || return 1
 
   local packages=(
-    nmap whois bind wireshark john-jumbo hashcat curl jq
+    nmap whois bind wireshark john-jumbo hashcat
   )
 
   # Collect packages that need installing
@@ -357,8 +343,10 @@ install_gems() {
     return 0
   fi
 
+  local gem_source="${GEM_SOURCE:-https://gems.ruby-china.com}"
+
   for pkg in "${to_install[@]}"; do
-    if gem install "$pkg" >>"$LOG_FILE" 2>&1; then
+    if gem install --source "$gem_source" "$pkg" >>"$LOG_FILE" 2>&1; then
       SUCCEEDED+=("gem:$pkg")
     else
       log_warn "gem install failed: $pkg"
@@ -385,8 +373,10 @@ install_go() {
     return 0
   fi
 
+  local go_proxy="${GOPROXY:-https://goproxy.cn,direct}"
+
   log_info "Installing Go tools"
-  if go install github.com/ffuf/ffuf/v2@latest >>"$LOG_FILE" 2>&1; then
+  if GOPROXY="$go_proxy" go install github.com/ffuf/ffuf/v2@latest >>"$LOG_FILE" 2>&1; then
     SUCCEEDED+=(go:ffuf)
   else
     log_warn "go install failed: ffuf"
@@ -395,10 +385,17 @@ install_go() {
 }
 
 print_manual() {
-  cat <<'EOF'
+  local github_proxy_prefix="${GITHUB_PROXY_PREFIX-https://gh-proxy.org}"
+  local ligolo_url="https://github.com/nicocha30/ligolo-ng"
+
+  if [ -n "$github_proxy_prefix" ]; then
+    ligolo_url="${github_proxy_prefix%/}/${ligolo_url}"
+  fi
+
+  cat <<EOF
 Manual installs (cannot be automated reliably):
   Burp Suite Community — https://portswigger.net/burp/communitydownload
-  Ligolo-ng            — https://github.com/nicocha30/ligolo-ng
+  Ligolo-ng            — ${ligolo_url}
   Neo4j Desktop        — https://neo4j.com/download/ (for local BloodHound analysis)
 EOF
 }

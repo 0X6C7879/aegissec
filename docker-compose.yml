@@ -51,7 +51,9 @@ services:
         INSTALL_SKILL_TOOLS: ${AEGISSEC_KALI_INSTALL_SKILL_TOOLS:-1}
         SKILL_TOOL_PROFILE: ${AEGISSEC_KALI_SKILL_TOOL_PROFILE:-lean}
         INSTALL_GCP_TOOLS: ${AEGISSEC_KALI_INSTALL_GCP_TOOLS:-0}
+        INSTALL_AZURE_TOOLS: ${AEGISSEC_KALI_INSTALL_AZURE_TOOLS:-0}
         INSTALL_BROWSER_TOOLS: ${AEGISSEC_KALI_INSTALL_BROWSER_TOOLS:-0}
+        KALI_APT_MIRROR: ${AEGISSEC_KALI_APT_MIRROR:-https://mirrors.ustc.edu.cn/kali}
     image: ${AEGISSEC_KALI_IMAGE:-aegissec-kali:latest}
     container_name: aegissec-kali-runtime
     working_dir: /workspace

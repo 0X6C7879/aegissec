@@ -16,9 +16,9 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 from sqlmodel import col, select
 
+from app.agent.token_budget import estimate_token_count
 from app.compat.mcp.service import MCPDisabledServerError, MCPInvalidToolError, MCPService
 from app.compat.skills.service import SkillContentReadError, SkillLookupError, SkillService
-from app.agent.token_budget import estimate_token_count
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType
 from app.core.settings import Settings, get_settings
 from app.db.models import (

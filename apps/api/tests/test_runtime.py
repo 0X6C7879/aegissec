@@ -178,6 +178,39 @@ def test_runtime_execute_rejects_unknown_session_and_invalid_artifact_path(
     )
 
 
+def test_runtime_execute_remains_on_one_shot_backend_seam(
+    client: TestClient,
+    runtime_backend: Any,
+) -> None:
+    terminal_backend = app.state.terminal_backend
+
+    def fail_if_called(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError(
+            "interactive terminal backend must not be used by /api/runtime/execute"
+        )
+
+    terminal_backend.open_terminal = fail_if_called  # type: ignore[method-assign]
+
+    runtime_backend.queue_result(
+        status=ExecutionStatus.SUCCESS,
+        exit_code=0,
+        stdout="one-shot ok",
+        stderr="",
+    )
+    response = client.post(
+        "/api/runtime/execute",
+        json={
+            "command": "printf 'one-shot ok'",
+            "timeout_seconds": 10,
+            "artifact_paths": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert api_data(response)["stdout"] == "one-shot ok"
+
+
 def test_runtime_status_degrades_when_docker_is_unavailable(
     client: TestClient,
     monkeypatch: Any,

@@ -31,7 +31,11 @@ class APIRequestMiddleware(BaseHTTPMiddleware):
         started_at = perf_counter()
         settings = getattr(request.app.state, "settings", get_settings())
 
-        if is_api_request(request.url.path) and not is_auth_exempt_path(request.url.path):
+        if (
+            is_api_request(request.url.path)
+            and request.method.upper() != "OPTIONS"
+            and not is_auth_exempt_path(request.url.path)
+        ):
             authorized, reason = is_request_authorized(request, settings)
             if not authorized:
                 payload = ApiErrorResponse(

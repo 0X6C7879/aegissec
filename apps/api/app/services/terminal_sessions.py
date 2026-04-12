@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.core.events import SessionEventType
 from app.db.models import (
+    RuntimeTerminalJobStatus,
     Session,
     TerminalJobRead,
     TerminalSessionCreateRequest,
@@ -16,6 +17,10 @@ from app.db.repositories import RunLogRepository, TerminalRepository
 TERMINAL_RUN_LOG_SOURCE = "terminal"
 TERMINAL_CREATED_EVENT_TYPE = SessionEventType.TERMINAL_SESSION_CREATED.value
 TERMINAL_CLOSED_EVENT_TYPE = SessionEventType.TERMINAL_SESSION_CLOSED.value
+TERMINAL_JOB_STARTED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_STARTED.value
+TERMINAL_JOB_COMPLETED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_COMPLETED.value
+TERMINAL_JOB_FAILED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_FAILED.value
+TERMINAL_JOB_CANCELLED_EVENT_TYPE = SessionEventType.TERMINAL_JOB_CANCELLED.value
 
 
 @dataclass(slots=True)
@@ -24,8 +29,20 @@ class TerminalSessionMutationResult:
     changed: bool
 
 
-def terminal_audit_payload(terminal: TerminalSessionRead) -> dict[str, object]:
-    return {
+@dataclass(slots=True)
+class TerminalJobMutationResult:
+    job: TerminalJobRead
+    changed: bool
+
+
+def terminal_audit_payload(
+    terminal: TerminalSessionRead,
+    *,
+    reason: str | None = None,
+    exit_code: int | None = None,
+    job_id: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         "id": terminal.id,
         "session_id": terminal.session_id,
         "title": terminal.title,
@@ -34,6 +51,39 @@ def terminal_audit_payload(terminal: TerminalSessionRead) -> dict[str, object]:
         "updated_at": terminal.updated_at.isoformat(),
         "closed_at": terminal.closed_at.isoformat() if terminal.closed_at is not None else None,
     }
+    if reason is not None:
+        payload["reason"] = reason
+    if exit_code is not None:
+        payload["exit_code"] = exit_code
+    if job_id is not None:
+        payload["job_id"] = job_id
+    return payload
+
+
+def terminal_job_audit_payload(
+    job: TerminalJobRead,
+    *,
+    terminal: TerminalSessionRead | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "job_id": job.id,
+        "terminal_id": job.terminal_session_id,
+        "session_id": job.session_id,
+        "status": job.status.value,
+        "command": job.command,
+        "exit_code": job.exit_code,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at is not None else None,
+        "ended_at": job.ended_at.isoformat() if job.ended_at is not None else None,
+        "metadata": dict(job.metadata_payload),
+    }
+    if terminal is not None:
+        payload["terminal_title"] = terminal.title
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
 
 
 class SessionShellService:
@@ -100,6 +150,9 @@ class SessionShellService:
         *,
         session: Session,
         terminal_id: str,
+        reason: str | None = None,
+        exit_code: int | None = None,
+        job_id: str | None = None,
     ) -> TerminalSessionMutationResult | None:
         existing = self._terminal_repository.get_terminal_session(
             session_id=session.id,
@@ -126,7 +179,12 @@ class SessionShellService:
                 source=TERMINAL_RUN_LOG_SOURCE,
                 event_type=TERMINAL_CLOSED_EVENT_TYPE,
                 message=terminal_read.title,
-                payload=terminal_audit_payload(terminal_read),
+                payload=terminal_audit_payload(
+                    terminal_read,
+                    reason=reason,
+                    exit_code=exit_code,
+                    job_id=job_id,
+                ),
                 commit=False,
             )
             db_session.commit()
@@ -150,6 +208,123 @@ class SessionShellService:
         if terminal_job is None:
             return None
         return to_terminal_job_read(terminal_job)
+
+    def start_terminal_job(
+        self,
+        *,
+        session: Session,
+        terminal_id: str,
+        command: str,
+        metadata: object | None = None,
+    ) -> TerminalJobMutationResult:
+        existing_terminal = self._terminal_repository.get_terminal_session(
+            session_id=session.id,
+            terminal_session_id=terminal_id,
+        )
+        if existing_terminal is None:
+            raise ValueError("Terminal session not found.")
+
+        running_job = self._terminal_repository.get_running_terminal_job(
+            session_id=session.id,
+            terminal_session_id=terminal_id,
+        )
+        if running_job is not None:
+            return TerminalJobMutationResult(job=to_terminal_job_read(running_job), changed=False)
+
+        db_session = self._terminal_repository.db_session
+        try:
+            terminal_job = self._terminal_repository.create_terminal_job(
+                terminal_session_id=terminal_id,
+                session_id=session.id,
+                command=command,
+                status=RuntimeTerminalJobStatus.RUNNING,
+                metadata=metadata,
+                commit=False,
+            )
+            terminal_job_read = to_terminal_job_read(terminal_job)
+            self._run_log_repository.create_log(
+                session_id=session.id,
+                project_id=session.project_id,
+                run_id=None,
+                level="info",
+                source=TERMINAL_RUN_LOG_SOURCE,
+                event_type=TERMINAL_JOB_STARTED_EVENT_TYPE,
+                message=command,
+                payload=terminal_job_audit_payload(
+                    terminal_job_read,
+                    terminal=to_terminal_session_read(existing_terminal),
+                ),
+                commit=False,
+            )
+            db_session.commit()
+            db_session.refresh(terminal_job)
+        except Exception:
+            db_session.rollback()
+            raise
+
+        return TerminalJobMutationResult(job=to_terminal_job_read(terminal_job), changed=True)
+
+    def finish_terminal_job(
+        self,
+        *,
+        session: Session,
+        job_id: str,
+        status: RuntimeTerminalJobStatus,
+        exit_code: int | None,
+        reason: str | None = None,
+        metadata_updates: object | None = None,
+    ) -> TerminalJobMutationResult | None:
+        terminal_job = self._terminal_repository.get_terminal_job(
+            terminal_job_id=job_id,
+            session_id=session.id,
+        )
+        if terminal_job is None:
+            return None
+
+        if terminal_job.ended_at is not None:
+            return TerminalJobMutationResult(job=to_terminal_job_read(terminal_job), changed=False)
+
+        terminal = self._terminal_repository.get_terminal_session(
+            session_id=session.id,
+            terminal_session_id=terminal_job.terminal_session_id,
+        )
+        db_session = self._terminal_repository.db_session
+        try:
+            updated_job = self._terminal_repository.finalize_terminal_job(
+                terminal_job,
+                status=status,
+                exit_code=exit_code,
+                metadata_updates=metadata_updates,
+                commit=False,
+            )
+            updated_job_read = to_terminal_job_read(updated_job)
+            event_type = {
+                RuntimeTerminalJobStatus.COMPLETED: TERMINAL_JOB_COMPLETED_EVENT_TYPE,
+                RuntimeTerminalJobStatus.FAILED: TERMINAL_JOB_FAILED_EVENT_TYPE,
+                RuntimeTerminalJobStatus.CANCELLED: TERMINAL_JOB_CANCELLED_EVENT_TYPE,
+            }[status]
+            self._run_log_repository.create_log(
+                session_id=session.id,
+                project_id=session.project_id,
+                run_id=None,
+                level="info",
+                source=TERMINAL_RUN_LOG_SOURCE,
+                event_type=event_type,
+                message=updated_job.command,
+                payload=terminal_job_audit_payload(
+                    updated_job_read,
+                    terminal=(to_terminal_session_read(terminal) if terminal is not None else None),
+                    reason=reason,
+                ),
+                commit=False,
+            )
+            db_session.commit()
+            db_session.refresh(updated_job)
+        except Exception:
+            db_session.rollback()
+            raise
+
+        return TerminalJobMutationResult(job=to_terminal_job_read(updated_job), changed=True)
 
 
 TerminalSessionService = SessionShellService

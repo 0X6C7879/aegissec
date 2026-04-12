@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     )
     api_auth_mode: str = Field(default="disabled", alias="AEGISSEC_API_AUTH_MODE")
     api_auth_token: str | None = Field(default=None, alias="AEGISSEC_API_AUTH_TOKEN")
+    api_auth_username: str | None = Field(default=None, alias="AEGISSEC_API_AUTH_USERNAME")
+    api_auth_password: str | None = Field(default=None, alias="AEGISSEC_API_AUTH_PASSWORD")
     queue_backend: str = Field(default="in_process", alias="AEGISSEC_QUEUE_BACKEND")
     redis_url: str | None = Field(default=None, alias="AEGISSEC_REDIS_URL")
     kali_image: str = Field(default="aegissec-kali:latest", alias="AEGISSEC_KALI_IMAGE")
@@ -81,6 +83,11 @@ class Settings(BaseSettings):
     runtime_recent_artifacts_limit: int = Field(
         default=20,
         alias="AEGISSEC_RUNTIME_RECENT_ARTIFACTS_LIMIT",
+    )
+    terminal_disconnect_grace_seconds: float = Field(
+        default=1.0,
+        alias="AEGISSEC_TERMINAL_DISCONNECT_GRACE_SECONDS",
+        ge=0,
     )
     runtime_artifact_retention_seconds: int = Field(
         default=7 * 24 * 3600,

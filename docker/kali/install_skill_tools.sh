@@ -6,6 +6,10 @@ PROFILE="${1:-lean}"
 SKILL_VENV="${SKILL_VENV:-/root/.aegissec-skill-tools/venv}"
 LOCAL_BIN_DIR="${LOCAL_BIN_DIR:-/usr/local/bin}"
 KUBEAUDIT_VERSION="${KUBEAUDIT_VERSION:-0.22.2}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+GITHUB_PROXY_PREFIX="${GITHUB_PROXY_PREFIX-https://gh-proxy.org}"
+PREWARM_NUCLEI_TEMPLATES="${PREWARM_NUCLEI_TEMPLATES:-0}"
 
 log() {
   printf '[aegissec-skill-tools] %s\n' "$*"
@@ -15,13 +19,32 @@ warn() {
   printf '[aegissec-skill-tools] WARNING: %s\n' "$*" >&2
 }
 
+proxy_github_url() {
+  local url="$1"
+  local proxy_prefix="${GITHUB_PROXY_PREFIX%/}"
+
+  if [[ -z "${proxy_prefix}" ]]; then
+    printf '%s\n' "${url}"
+    return
+  fi
+
+  case "${url}" in
+    https://github.com/*|https://raw.githubusercontent.com/*)
+      printf '%s/%s\n' "${proxy_prefix}" "${url}"
+      ;;
+    *)
+      printf '%s\n' "${url}"
+      ;;
+  esac
+}
+
 ensure_skill_venv() {
   if [[ ! -x "${SKILL_VENV}/bin/python3" ]]; then
     log "Creating skill venv at ${SKILL_VENV}"
     python3 -m venv "${SKILL_VENV}"
   fi
 
-  "${SKILL_VENV}/bin/python3" -m pip install --no-cache-dir --upgrade pip >/dev/null 2>&1 || true
+  "${SKILL_VENV}/bin/python3" -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --upgrade pip >/dev/null 2>&1 || true
 }
 
 install_apt_packages() {
@@ -72,7 +95,7 @@ install_pip_packages() {
 
   log "Installing pip extras in ${SKILL_VENV}: ${packages[*]}"
   for pkg in "${packages[@]}"; do
-    if "${SKILL_VENV}/bin/python3" -m pip install --no-cache-dir "${pkg}" >/dev/null 2>&1; then
+    if "${SKILL_VENV}/bin/python3" -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" "${pkg}" >/dev/null 2>&1; then
       log "Installed pip:${pkg}"
     else
       warn "Failed to install pip:${pkg}"
@@ -94,7 +117,7 @@ install_go_tools() {
 
   log "Installing go tools"
   for tool in "${tools[@]}"; do
-    if go install "${tool}" >/dev/null 2>&1; then
+    if GOPROXY="${GOPROXY}" go install "${tool}" >/dev/null 2>&1; then
       log "Installed go:${tool}"
     else
       warn "Failed to install go:${tool}"
@@ -132,6 +155,7 @@ install_release_tarball_binary() {
   local archive_member="$3"
   local tmpdir
   local archive
+  local resolved_url
   local source_path
 
   if command -v "${name}" >/dev/null 2>&1; then
@@ -141,9 +165,10 @@ install_release_tarball_binary() {
 
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/${name}.tar.gz"
+  resolved_url="$(proxy_github_url "${url}")"
 
-  if ! wget -qO "${archive}" "${url}"; then
-    warn "Failed to download ${name} from ${url}"
+  if ! wget -qO "${archive}" "${resolved_url}"; then
+    warn "Failed to download ${name} from ${resolved_url}"
     rm -rf "${tmpdir}"
     return
   fi
@@ -200,7 +225,7 @@ install_additional_release_tools() {
   if ! command -v kubeaudit >/dev/null 2>&1; then
     if command -v go >/dev/null 2>&1; then
       log "Falling back to go install for kubeaudit@v${KUBEAUDIT_VERSION}"
-      if GOBIN="${LOCAL_BIN_DIR}" go install "github.com/Shopify/kubeaudit/cmd@v${KUBEAUDIT_VERSION}" >/dev/null 2>&1; then
+      if GOBIN="${LOCAL_BIN_DIR}" GOPROXY="${GOPROXY}" go install "github.com/Shopify/kubeaudit/cmd@v${KUBEAUDIT_VERSION}" >/dev/null 2>&1; then
         log "Installed go:kubeaudit@v${KUBEAUDIT_VERSION}"
       else
         warn "Failed fallback go install for kubeaudit@v${KUBEAUDIT_VERSION}"
@@ -240,6 +265,11 @@ create_compatibility_aliases() {
 }
 
 prewarm_tool_state() {
+  if [[ "${PREWARM_NUCLEI_TEMPLATES}" != "1" ]]; then
+    log "Skip nuclei template prewarm (set PREWARM_NUCLEI_TEMPLATES=1 to enable)"
+    return
+  fi
+
   if command -v nuclei >/dev/null 2>&1; then
     log "Prewarming nuclei templates"
     if nuclei -update-templates >/dev/null 2>&1; then
@@ -251,22 +281,24 @@ prewarm_tool_state() {
 }
 
 lean_apt=(
-  feroxbuster
-  gobuster
 )
 
 lean_pip=(
-  dirsearch
   kube-hunter
   roadrecon
   semgrep
+)
+
+core_apt=(
+  gobuster
+)
+
+core_pip=(
+  "${lean_pip[@]}"
+  dirsearch
   wafw00f
   xsstrike
 )
-
-core_apt=("${lean_apt[@]}")
-
-core_pip=("${lean_pip[@]}")
 
 core_go=(
   github.com/aquasecurity/kubectl-who-can/cmd/kubectl-who-can@latest
