@@ -10,7 +10,9 @@ const {
   mockCreateSessionTerminal,
   mockCloseSessionTerminal,
   mockExecuteTerminalCommand,
+  mockGetSessionTerminal,
   mockGetSessionTerminalBuffer,
+  mockGetRuntimeStatus,
   mockInterruptTerminal,
   mockListSessionTerminalJobs,
   mockStopSessionTerminalJob,
@@ -20,7 +22,9 @@ const {
   mockCreateSessionTerminal: vi.fn(),
   mockCloseSessionTerminal: vi.fn(),
   mockExecuteTerminalCommand: vi.fn(),
+  mockGetSessionTerminal: vi.fn(),
   mockGetSessionTerminalBuffer: vi.fn(),
+  mockGetRuntimeStatus: vi.fn(),
   mockInterruptTerminal: vi.fn(),
   mockListSessionTerminalJobs: vi.fn(),
   mockStopSessionTerminalJob: vi.fn(),
@@ -35,7 +39,9 @@ vi.mock("../../lib/api", async () => {
     createSessionTerminal: mockCreateSessionTerminal,
     closeSessionTerminal: mockCloseSessionTerminal,
     executeTerminalCommand: mockExecuteTerminalCommand,
+    getSessionTerminal: mockGetSessionTerminal,
     getSessionTerminalBuffer: mockGetSessionTerminalBuffer,
+    getRuntimeStatus: mockGetRuntimeStatus,
     interruptTerminal: mockInterruptTerminal,
     listSessionTerminalJobs: mockListSessionTerminalJobs,
     stopSessionTerminalJob: mockStopSessionTerminalJob,
@@ -73,8 +79,8 @@ function createTerminal(id: string, title: string, workbenchStatus = "idle"): Te
     cwd: "/workspace/sessions/session-1",
     attached: workbenchStatus === "attached",
     active_job_id: workbenchStatus === "attached" ? `job-${id}` : null,
-    last_job_id: null,
-    last_job_status: null,
+    last_job_id: workbenchStatus === "attached" ? `job-${id}` : null,
+    last_job_status: workbenchStatus === "attached" ? "running" : null,
     reattach_deadline: null,
     metadata: {},
     created_at: "2026-04-12T10:00:00.000Z",
@@ -95,10 +101,10 @@ function createBuffer(terminalId: string, buffer: string): TerminalBuffer {
   };
 }
 
-function createJob(id: string, status: string, stdoutTail = ""): TerminalJob {
+function createJob(id: string, status: string, stdoutTail = "", terminalId = "term-1"): TerminalJob {
   return {
     id,
-    terminal_session_id: "term-1",
+    terminal_session_id: terminalId,
     session_id: "session-1",
     status,
     command: "sleep 60",
@@ -112,11 +118,11 @@ function createJob(id: string, status: string, stdoutTail = ""): TerminalJob {
   };
 }
 
-function renderShellWorkbench() {
+function renderShellWorkbench(sessionId = "session-1") {
   const queryClient = createQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShellWorkbench sessionId="session-1" />
+      <ShellWorkbench sessionId={sessionId} />
     </QueryClientProvider>,
   );
 }
@@ -125,56 +131,85 @@ describe("ShellWorkbench", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
-    mockListSessionTerminals.mockResolvedValue([
-      createTerminal("term-1", "Kali #1", "attached"),
-      createTerminal("term-2", "Kali #2"),
-    ]);
-    mockCreateSessionTerminal.mockResolvedValue(createTerminal("term-3", "Kali #3"));
-    mockCloseSessionTerminal.mockResolvedValue({
-      ...createTerminal("term-1", "Kali #1", "cancelled"),
-      status: "closed",
-      closed_at: "2026-04-12T10:05:00.000Z",
-    });
-    mockExecuteTerminalCommand.mockResolvedValue({
-      terminal_id: "term-1",
-      accepted: true,
-      detach: false,
-      job_id: "job-term-1",
-      status: "running",
-    });
-    mockGetSessionTerminalBuffer.mockImplementation((sessionId: string, terminalId: string) => {
-      expect(sessionId).toBe("session-1");
-      return Promise.resolve(createBuffer(terminalId, `${terminalId}-buffer`));
+    mockGetRuntimeStatus.mockResolvedValue({
+      runtime: { status: "running" },
+      recent_runs: [],
+      recent_artifacts: [],
     });
     mockInterruptTerminal.mockResolvedValue(undefined);
-    mockListSessionTerminalJobs.mockResolvedValue([createJob("job-1", "running", "tick")]);
     mockStopSessionTerminalJob.mockResolvedValue(createJob("job-1", "cancelled"));
     mockCleanupSessionTerminalJobs.mockResolvedValue({ deleted_jobs: 1, kept_jobs: 0 });
   });
 
-  it("renders terminal tabs and switches the focused terminal", async () => {
+  it("creates two terminal tabs and switches between them", async () => {
     const user = userEvent.setup();
+    const terminals: TerminalSession[] = [];
+
+    mockListSessionTerminals.mockImplementation(() => Promise.resolve([...terminals]));
+    mockCreateSessionTerminal.mockImplementation(async (_sessionId: string, payload: { title?: string }) => {
+      const terminal = createTerminal(`term-${terminals.length + 1}`, payload.title ?? `Kali #${terminals.length + 1}`);
+      terminals.push(terminal);
+      return terminal;
+    });
+    mockGetSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (_sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${terminalId}-buffer`),
+    );
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+
     renderShellWorkbench();
+
+    await waitFor(() => {
+      expect(screen.getByText("还没有终端，点击“新建终端”开始。")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "新建终端" }));
+    await user.click(screen.getByRole("button", { name: "新建终端" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("shell-tab-term-1")).toBeInTheDocument();
+      expect(screen.getByTestId("shell-tab-term-2")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #2|term-2-buffer");
+
+    await user.click(screen.getByTestId("shell-tab-term-1"));
 
     await waitFor(() => {
       expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #1|term-1-buffer");
     });
-
-    await user.click(screen.getByTestId("shell-tab-term-2"));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #2|term-2-buffer");
-    });
-    expect(mockGetSessionTerminalBuffer).toHaveBeenCalledWith(
-      "session-1",
-      "term-2",
-      { lines: 400 },
-      expect.anything(),
-    );
   });
 
   it("executes multiple foreground commands on the same terminal", async () => {
     const user = userEvent.setup();
+    const terminals = [createTerminal("term-1", "Kali #1", "attached")];
+
+    mockListSessionTerminals.mockResolvedValue(terminals);
+    mockGetSessionTerminal.mockResolvedValue(terminals[0]);
+    mockGetSessionTerminalBuffer.mockResolvedValue(createBuffer("term-1", "term-1-buffer"));
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+    mockExecuteTerminalCommand
+      .mockResolvedValueOnce({
+        terminal_id: "term-1",
+        accepted: true,
+        detach: false,
+        job_id: "job-term-1",
+        status: "running",
+      })
+      .mockResolvedValueOnce({
+        terminal_id: "term-1",
+        accepted: true,
+        detach: false,
+        job_id: "job-term-1",
+        status: "running",
+      });
+
     renderShellWorkbench();
 
     await waitFor(() => {
@@ -204,17 +239,24 @@ describe("ShellWorkbench", () => {
     );
   });
 
-  it("starts a background job and refreshes the completed status", async () => {
+  it("shows a detached job after completion", async () => {
     const user = userEvent.setup();
-    mockListSessionTerminalJobs
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([createJob("job-9", "completed", "done")]);
-    mockExecuteTerminalCommand.mockResolvedValue({
-      terminal_id: "term-1",
-      accepted: true,
-      detach: true,
-      job_id: "job-9",
-      status: "running",
+    const terminals = [createTerminal("term-1", "Kali #1", "attached")];
+    let jobs: TerminalJob[] = [];
+
+    mockListSessionTerminals.mockResolvedValue(terminals);
+    mockGetSessionTerminal.mockResolvedValue(terminals[0]);
+    mockGetSessionTerminalBuffer.mockResolvedValue(createBuffer("term-1", "term-1-buffer"));
+    mockListSessionTerminalJobs.mockImplementation(() => Promise.resolve([...jobs]));
+    mockExecuteTerminalCommand.mockImplementation(async () => {
+      jobs = [createJob("job-9", "completed", "done", "term-1")];
+      return {
+        terminal_id: "term-1",
+        accepted: true,
+        detach: true,
+        job_id: "job-9",
+        status: "running",
+      };
     });
 
     renderShellWorkbench();
@@ -234,31 +276,115 @@ describe("ShellWorkbench", () => {
         expect.objectContaining({ command: "sleep 1", detach: true }),
       );
     });
+
     await waitFor(() => {
       expect(screen.getByTestId("shell-job-job-9")).toHaveTextContent("completed");
       expect(screen.getByTestId("shell-job-job-9")).toHaveTextContent("done");
     });
   });
 
-  it("restores focused terminal from localStorage after remount", async () => {
+  it("restores terminal list, job list, and focused terminal after remount", async () => {
+    const terminals = [
+      createTerminal("term-1", "Kali #1", "attached"),
+      createTerminal("term-2", "Kali #2"),
+    ];
+    const jobs = [createJob("job-2", "completed", "restored", "term-2")];
+
     window.localStorage.setItem("aegissec.shell.focus.session-1", "term-2");
 
+    mockListSessionTerminals.mockResolvedValue(terminals);
+    mockGetSessionTerminal.mockImplementation(async (_sessionId: string, terminalId: string) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (_sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${terminalId}-buffer`),
+    );
+    mockListSessionTerminalJobs.mockResolvedValue(jobs);
+
     const firstRender = renderShellWorkbench();
+
     await waitFor(() => {
       expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #2|term-2-buffer");
+      expect(screen.getByTestId("shell-job-job-2")).toHaveTextContent("restored");
     });
-    firstRender.unmount();
 
+    firstRender.unmount();
     renderShellWorkbench();
 
     await waitFor(() => {
       expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #2|term-2-buffer");
+      expect(screen.getByTestId("shell-job-job-2")).toHaveTextContent("restored");
     });
-    expect(mockGetSessionTerminalBuffer).toHaveBeenCalledWith(
-      "session-1",
-      "term-2",
-      { lines: 400 },
-      expect.anything(),
+
+    expect(mockListSessionTerminals).toHaveBeenCalledTimes(2);
+    expect(mockListSessionTerminalJobs).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores focused terminal with sessionId scope", async () => {
+    window.localStorage.setItem("aegissec.shell.focus.session-1", "term-2");
+    window.localStorage.setItem("aegissec.shell.focus.session-2", "term-b");
+
+    mockListSessionTerminals.mockImplementation(async (sessionId: string) => {
+      if (sessionId === "session-2") {
+        return [
+          {
+            ...createTerminal("term-a", "Alpha"),
+            session_id: "session-2",
+          },
+          {
+            ...createTerminal("term-b", "Beta"),
+            session_id: "session-2",
+          },
+        ];
+      }
+      return [
+        createTerminal("term-1", "Kali #1", "attached"),
+        createTerminal("term-2", "Kali #2"),
+      ];
+    });
+    mockGetSessionTerminal.mockImplementation(async (sessionId: string, terminalId: string) => {
+      const terminals =
+        sessionId === "session-2"
+          ? [
+              {
+                ...createTerminal("term-a", "Alpha"),
+                session_id: "session-2",
+              },
+              {
+                ...createTerminal("term-b", "Beta"),
+                session_id: "session-2",
+              },
+            ]
+          : [
+              createTerminal("term-1", "Kali #1", "attached"),
+              createTerminal("term-2", "Kali #2"),
+            ];
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (!terminal) {
+        throw new Error("not found");
+      }
+      return terminal;
+    });
+    mockGetSessionTerminalBuffer.mockImplementation(async (sessionId: string, terminalId: string) =>
+      createBuffer(terminalId, `${sessionId}:${terminalId}`),
     );
+    mockListSessionTerminalJobs.mockResolvedValue([]);
+
+    const firstView = renderShellWorkbench("session-1");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Kali #2|session-1:term-2");
+    });
+
+    firstView.unmount();
+    renderShellWorkbench("session-2");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-pane")).toHaveTextContent("Beta|session-2:term-b");
+    });
   });
 });

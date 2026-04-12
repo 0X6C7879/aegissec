@@ -5,6 +5,15 @@ import "@xterm/xterm/css/xterm.css";
 import { getSessionTerminalStreamUrl } from "../../lib/api";
 import type { TerminalClientFrame, TerminalSession, TerminalStreamFrame } from "../../types/terminals";
 
+export type TerminalPaneRuntimeEvent =
+  | { type: "socket.open" }
+  | { type: "socket.error"; hadReady: boolean; ended: boolean }
+  | { type: "socket.close"; hadReady: boolean; ended: boolean }
+  | { type: "ready"; reattached: boolean }
+  | { type: "error"; message: string }
+  | { type: "exit"; reason: string; exitCode: number | null }
+  | { type: "closed"; reason: string };
+
 type TerminalPaneProps = {
   sessionId: string;
   terminal: TerminalSession;
@@ -15,7 +24,7 @@ type TerminalPaneProps = {
     terminalId: string,
     state: "connecting" | "open" | "closed" | "error",
   ) => void;
-  onRuntimeEvent?: (terminalId: string, eventType: string) => void;
+  onRuntimeEvent?: (terminalId: string, event: TerminalPaneRuntimeEvent) => void;
 };
 
 function sendFrame(socket: WebSocket | null, frame: TerminalClientFrame): void {
@@ -39,6 +48,8 @@ export function TerminalPane({
   const onBufferAppendRef = useRef(onBufferAppend);
   const onConnectionStateChangeRef = useRef(onConnectionStateChange);
   const onRuntimeEventRef = useRef(onRuntimeEvent);
+  const readyStateRef = useRef(false);
+  const endedStateRef = useRef(false);
 
   useEffect(() => {
     bootstrapBufferRef.current = bootstrapBuffer;
@@ -81,6 +92,8 @@ export function TerminalPane({
     if (bootstrapBufferRef.current) {
       term.write(bootstrapBufferRef.current);
     }
+    readyStateRef.current = false;
+    endedStateRef.current = false;
 
     onConnectionStateChangeRef.current(terminal.id, "connecting");
     const socket = new WebSocket(
@@ -102,22 +115,35 @@ export function TerminalPane({
 
     socket.addEventListener("open", () => {
       onConnectionStateChangeRef.current(terminal.id, "open");
-      onRuntimeEventRef.current?.(terminal.id, "socket.open");
+      onRuntimeEventRef.current?.(terminal.id, { type: "socket.open" });
       term.focus();
     });
     socket.addEventListener("close", () => {
       onConnectionStateChangeRef.current(terminal.id, "closed");
-      onRuntimeEventRef.current?.(terminal.id, "socket.close");
+      onRuntimeEventRef.current?.(terminal.id, {
+        type: "socket.close",
+        hadReady: readyStateRef.current,
+        ended: endedStateRef.current,
+      });
     });
     socket.addEventListener("error", () => {
       onConnectionStateChangeRef.current(terminal.id, "error");
-      onRuntimeEventRef.current?.(terminal.id, "socket.error");
+      onRuntimeEventRef.current?.(terminal.id, {
+        type: "socket.error",
+        hadReady: readyStateRef.current,
+        ended: endedStateRef.current,
+      });
     });
     socket.addEventListener("message", (event) => {
       const frame = JSON.parse(event.data as string) as TerminalStreamFrame;
       switch (frame.type) {
         case "ready":
-          onRuntimeEventRef.current?.(terminal.id, "ready");
+          readyStateRef.current = true;
+          endedStateRef.current = false;
+          onRuntimeEventRef.current?.(terminal.id, {
+            type: "ready",
+            reattached: frame.reattached,
+          });
           break;
         case "output": {
           term.write(frame.data);
@@ -128,21 +154,27 @@ export function TerminalPane({
           const line = `\r\n[error] ${frame.message}\r\n`;
           term.write(line);
           onBufferAppendRef.current(terminal.id, line);
-          onRuntimeEventRef.current?.(terminal.id, "error");
+          onRuntimeEventRef.current?.(terminal.id, { type: "error", message: frame.message });
           break;
         }
         case "exit": {
           const line = `\r\n[exit:${frame.reason}]\r\n`;
           term.write(line);
           onBufferAppendRef.current(terminal.id, line);
-          onRuntimeEventRef.current?.(terminal.id, "exit");
+          endedStateRef.current = true;
+          onRuntimeEventRef.current?.(terminal.id, {
+            type: "exit",
+            reason: frame.reason,
+            exitCode: frame.exit_code,
+          });
           break;
         }
         case "closed": {
           const line = `\r\n[closed:${frame.reason}]\r\n`;
           term.write(line);
           onBufferAppendRef.current(terminal.id, line);
-          onRuntimeEventRef.current?.(terminal.id, "closed");
+          endedStateRef.current = true;
+          onRuntimeEventRef.current?.(terminal.id, { type: "closed", reason: frame.reason });
           break;
         }
         default:

@@ -6,6 +6,8 @@ import {
   createSessionTerminal,
   executeTerminalCommand,
   getSessionTerminalBuffer,
+  getSessionTerminal,
+  getRuntimeStatus,
   interruptTerminal,
   isApiError,
   listSessionTerminalJobs,
@@ -16,7 +18,7 @@ import { useUiStore } from "../../store/uiStore";
 import type { TerminalJob, TerminalSession } from "../../types/terminals";
 import { BackgroundJobsPanel } from "./BackgroundJobsPanel";
 import { TerminalCommandBar } from "./TerminalCommandBar";
-import { TerminalPane } from "./TerminalPane";
+import { TerminalPane, type TerminalPaneRuntimeEvent } from "./TerminalPane";
 import { TerminalTabs } from "./TerminalTabs";
 
 type ShellWorkbenchProps = {
@@ -70,6 +72,18 @@ function readErrorMessage(error: unknown): string {
   return "Shell 工作台操作失败。";
 }
 
+function isTerminalEnded(terminal: TerminalSession | null): boolean {
+  if (!terminal) {
+    return false;
+  }
+  return (
+    terminal.status === "closed" ||
+    terminal.workbench_status === "completed" ||
+    terminal.workbench_status === "failed" ||
+    terminal.workbench_status === "cancelled"
+  );
+}
+
 export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchProps) {
   const queryClient = useQueryClient();
   const sessionEventsState = useUiStore((state) => state.eventsBySession[sessionId]);
@@ -82,8 +96,10 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     Record<string, ConnectionState>
   >({});
   const [terminalErrors, setTerminalErrors] = useState<Record<string, string | null>>({});
+  const [terminalNotices, setTerminalNotices] = useState<Record<string, string | null>>({});
   const [reconnectKeysByTerminal, setReconnectKeysByTerminal] = useState<Record<string, number>>({});
   const lastHandledTerminalEventIdRef = useRef<string | null>(null);
+  const previousSessionIdRef = useRef(sessionId);
 
   const terminalsQuery = useQuery({
     queryKey: TERMINALS_QUERY_KEY(sessionId),
@@ -117,6 +133,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     onSuccess: async (terminal) => {
       setFocusedTerminalId(terminal.id);
       setTerminalErrors((current) => ({ ...current, [terminal.id]: null }));
+      setTerminalNotices((current) => ({ ...current, [terminal.id]: null }));
       await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
     },
   });
@@ -125,6 +142,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     mutationFn: (terminalId: string) => closeSessionTerminal(sessionId, terminalId),
     onSuccess: async (terminal) => {
       setTerminalErrors((current) => ({ ...current, [terminal.id]: null }));
+      setTerminalNotices((current) => ({ ...current, [terminal.id]: null }));
       await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
       await queryClient.invalidateQueries({ queryKey: TERMINAL_JOBS_QUERY_KEY(sessionId) });
     },
@@ -142,6 +160,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     }) => executeTerminalCommand(sessionId, terminalId, { command, detach }),
     onSuccess: async (_, variables) => {
       setTerminalErrors((current) => ({ ...current, [variables.terminalId]: null }));
+      setTerminalNotices((current) => ({ ...current, [variables.terminalId]: null }));
       await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
       await queryClient.invalidateQueries({ queryKey: TERMINAL_JOBS_QUERY_KEY(sessionId) });
     },
@@ -151,6 +170,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     mutationFn: (terminalId: string) => interruptTerminal(sessionId, terminalId),
     onSuccess: async (_, terminalId) => {
       setTerminalErrors((current) => ({ ...current, [terminalId]: null }));
+      setTerminalNotices((current) => ({ ...current, [terminalId]: null }));
       await queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
     },
   });
@@ -176,6 +196,20 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     terminals.find((terminal) => terminal.id === focusedTerminalId) ?? null;
 
   useEffect(() => {
+    if (previousSessionIdRef.current === sessionId) {
+      return;
+    }
+    previousSessionIdRef.current = sessionId;
+    setFocusedTerminalId(readStoredFocusedTerminalId(sessionId));
+    setBuffersByTerminal({});
+    setConnectionStateByTerminal({});
+    setTerminalErrors({});
+    setTerminalNotices({});
+    setReconnectKeysByTerminal({});
+    lastHandledTerminalEventIdRef.current = null;
+  }, [sessionId]);
+
+  useEffect(() => {
     if (terminalsQuery.isLoading && terminals.length === 0) {
       return;
     }
@@ -185,9 +219,14 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       }
       return;
     }
+    const storedFocusedTerminalId = readStoredFocusedTerminalId(sessionId);
+    const focusCandidate =
+      focusedTerminalId && terminals.some((terminal) => terminal.id === focusedTerminalId)
+        ? focusedTerminalId
+        : storedFocusedTerminalId;
     const nextFocusedTerminalId = pickFocusedTerminal(
       terminals,
-      focusedTerminalId ?? readStoredFocusedTerminalId(sessionId),
+      focusCandidate,
     );
     if (nextFocusedTerminalId !== focusedTerminalId) {
       setFocusedTerminalId(nextFocusedTerminalId);
@@ -195,8 +234,15 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
   }, [focusedTerminalId, sessionId, terminals, terminalsQuery.isLoading]);
 
   useEffect(() => {
+    if (
+      focusedTerminalId !== null &&
+      terminals.length > 0 &&
+      !terminals.some((terminal) => terminal.id === focusedTerminalId)
+    ) {
+      return;
+    }
     writeStoredFocusedTerminalId(sessionId, focusedTerminalId);
-  }, [focusedTerminalId, sessionId]);
+  }, [focusedTerminalId, sessionId, terminals]);
 
   useEffect(() => {
     if (!focusedTerminalId || !focusedBufferQuery.data) {
@@ -207,6 +253,20 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       [focusedTerminalId]: focusedBufferQuery.data.buffer,
     }));
   }, [focusedBufferQuery.data, focusedTerminalId]);
+
+  useEffect(() => {
+    setConnectionStateByTerminal((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const terminal of terminals) {
+        if (isTerminalEnded(terminal) && next[terminal.id] !== "closed") {
+          next[terminal.id] = "closed";
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [terminals]);
 
   useEffect(() => {
     const latestEvent = sessionEvents[sessionEvents.length - 1];
@@ -230,6 +290,8 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     (focusedTerminalId && connectionStateByTerminal[focusedTerminalId]) ?? "closed";
   const focusedTerminalError =
     (focusedTerminalId && terminalErrors[focusedTerminalId]) ?? null;
+  const focusedTerminalNotice =
+    (focusedTerminalId && terminalNotices[focusedTerminalId]) ?? null;
   const focusedCachedBuffer =
     (focusedTerminalId && buffersByTerminal[focusedTerminalId]) ?? "";
   const focusedBootstrapBuffer = focusedBufferQuery.data?.buffer ?? focusedCachedBuffer;
@@ -256,6 +318,53 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
     }));
   }
 
+  function setTerminalNotice(terminalId: string, message: string | null): void {
+    setTerminalNotices((current) => ({
+      ...current,
+      [terminalId]: message,
+    }));
+  }
+
+  async function resolveTerminalConnectionIssue(
+    terminalId: string,
+    options: { hadReady: boolean; ended: boolean },
+  ): Promise<void> {
+    try {
+      const [terminal, runtimeStatus] = await Promise.all([
+        getSessionTerminal(sessionId, terminalId),
+        getRuntimeStatus(),
+      ]);
+
+      if (options.ended || isTerminalEnded(terminal)) {
+        setConnectionStateByTerminal((current) => ({
+          ...current,
+          [terminalId]: "closed",
+        }));
+        setTerminalError(terminalId, null);
+        setTerminalNotice(terminalId, "终端已结束，请切换其他终端或新建终端。");
+        return;
+      }
+
+      if (runtimeStatus.runtime.status !== "running") {
+        setTerminalError(terminalId, "Runtime 未启动，无法附着终端。");
+        setTerminalNotice(terminalId, null);
+        return;
+      }
+
+      if (!options.hadReady && terminal.attached) {
+        setTerminalError(terminalId, "该 terminal 已被其他连接占用，当前无法附着。");
+        setTerminalNotice(terminalId, null);
+        return;
+      }
+
+      setTerminalError(terminalId, "终端连接已断开，可点击“重连”尝试恢复。");
+      setTerminalNotice(terminalId, null);
+    } catch (error) {
+      setTerminalError(terminalId, readErrorMessage(error));
+      setTerminalNotice(terminalId, null);
+    }
+  }
+
   async function handleExecute(command: string, detach: boolean): Promise<void> {
     if (!focusedTerminalId) {
       return;
@@ -268,6 +377,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       });
     } catch (error) {
       setTerminalError(focusedTerminalId, readErrorMessage(error));
+      setTerminalNotice(focusedTerminalId, null);
       throw error;
     }
   }
@@ -280,6 +390,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       await interruptMutation.mutateAsync(focusedTerminalId);
     } catch (error) {
       setTerminalError(focusedTerminalId, readErrorMessage(error));
+      setTerminalNotice(focusedTerminalId, null);
     }
   }
 
@@ -288,6 +399,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       await closeTerminalMutation.mutateAsync(terminalId);
     } catch (error) {
       setTerminalError(terminalId, readErrorMessage(error));
+      setTerminalNotice(terminalId, null);
     }
   }
 
@@ -296,28 +408,51 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
       return;
     }
     setTerminalError(focusedTerminalId, null);
+    setTerminalNotice(focusedTerminalId, "正在重连终端…");
+    setConnectionStateByTerminal((current) => ({
+      ...current,
+      [focusedTerminalId]: "connecting",
+    }));
     setReconnectKeysByTerminal((current) => ({
       ...current,
       [focusedTerminalId]: (current[focusedTerminalId] ?? 0) + 1,
     }));
   }
 
-  function handlePaneRuntimeEvent(terminalId: string, eventType: string): void {
-    if (eventType === "ready") {
+  function handlePaneRuntimeEvent(terminalId: string, event: TerminalPaneRuntimeEvent): void {
+    if (event.type === "ready") {
       setTerminalError(terminalId, null);
+      setTerminalNotice(terminalId, event.reattached ? "已重新附着到原终端。" : null);
     }
-    if (eventType === "socket.error") {
-      setTerminalError(
+    if (event.type === "closed" || event.type === "exit") {
+      setConnectionStateByTerminal((current) => ({
+        ...current,
+        [terminalId]: "closed",
+      }));
+      setTerminalError(terminalId, null);
+      setTerminalNotice(
         terminalId,
-        "终端连接失败，请检查是否被占用、runtime 未启动或终端已关闭。",
+        event.type === "exit"
+          ? `终端执行已结束（${event.reason}）。`
+          : `终端连接已关闭（${event.reason}）。`,
       );
     }
+    if (event.type === "error") {
+      setTerminalError(terminalId, event.message);
+      setTerminalNotice(terminalId, null);
+    }
+    if (event.type === "socket.close" || event.type === "socket.error") {
+      void resolveTerminalConnectionIssue(terminalId, {
+        hadReady: event.hadReady,
+        ended: event.ended,
+      });
+    }
     if (
-      eventType === "ready" ||
-      eventType === "closed" ||
-      eventType === "exit" ||
-      eventType === "socket.close" ||
-      eventType === "socket.error"
+      event.type === "ready" ||
+      event.type === "closed" ||
+      event.type === "exit" ||
+      event.type === "socket.close" ||
+      event.type === "socket.error"
     ) {
       void queryClient.invalidateQueries({ queryKey: TERMINALS_QUERY_KEY(sessionId) });
       void queryClient.invalidateQueries({ queryKey: TERMINAL_JOBS_QUERY_KEY(sessionId) });
@@ -382,7 +517,7 @@ export function ShellWorkbench({ sessionId, disabled = false }: ShellWorkbenchPr
           interruptMutation.isPending ||
           closeTerminalMutation.isPending
         }
-        errorMessage={focusedTerminalError}
+        errorMessage={focusedTerminalError ?? focusedTerminalNotice}
         onExecuteForeground={(command) => handleExecute(command, false)}
         onExecuteBackground={(command) => handleExecute(command, true)}
         onInterrupt={handleInterrupt}

@@ -173,12 +173,30 @@ describe("TerminalPane", () => {
     socket.emit("close");
 
     await waitFor(() => {
-      expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", "ready");
+      expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", {
+        type: "ready",
+        reattached: false,
+      });
     });
-    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", "exit");
-    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", "closed");
-    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", "socket.error");
-    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", "socket.close");
+    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", {
+      type: "exit",
+      reason: "exit",
+      exitCode: 0,
+    });
+    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", {
+      type: "closed",
+      reason: "exit",
+    });
+    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", {
+      type: "socket.error",
+      hadReady: true,
+      ended: true,
+    });
+    expect(onRuntimeEvent).toHaveBeenCalledWith("term-2", {
+      type: "socket.close",
+      hadReady: true,
+      ended: true,
+    });
     expect(onConnectionStateChange).toHaveBeenCalledWith("term-2", "error");
     expect(onConnectionStateChange).toHaveBeenCalledWith("term-2", "closed");
   });
