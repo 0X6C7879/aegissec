@@ -15,7 +15,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: adscan
@@ -33,7 +33,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: agent-browser
@@ -51,7 +51,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: api-security-testing
@@ -69,7 +69,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: backend-engineering
@@ -87,7 +87,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: bypass
@@ -105,7 +105,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: c2
@@ -123,7 +123,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: cloud-security
@@ -141,7 +141,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: container-security
@@ -159,7 +159,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: ctf-ai-ml
@@ -177,7 +177,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-crypto
@@ -200,7 +200,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -223,7 +223,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -246,7 +246,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -269,7 +269,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -292,7 +292,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -315,7 +315,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -338,7 +338,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -361,7 +361,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -384,7 +384,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - ctf-ai-ml
@@ -407,7 +407,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - dirsearch-recon
@@ -426,7 +426,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - dirsearch-command-generator
@@ -445,7 +445,7 @@ skills:
   routing_pass_rate: 1.0
   obsolescence_score: 0.0
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - wooyun-legacy
@@ -464,7 +464,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -485,7 +485,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -506,7 +506,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - exploit-file-download
@@ -527,7 +527,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: initial-access-recon
@@ -545,9 +545,590 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
+- skill_id: linux-privilege-escalation
+  path: linux-privilege-escalation/SKILL.md
+  family: linux
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 55
+  body_tokens: 3405
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: linuxgun
+  path: linuxgun/SKILL.md
+  family: linuxgun
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 66
+  body_tokens: 617
+  reference_tokens: 10624
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: movement
+  path: movement/SKILL.md
+  family: movement
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 44
+  body_tokens: 594
+  reference_tokens: 4166
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: network-service-enumeration
+  path: network-service-enumeration/SKILL.md
+  family: network
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 57
+  body_tokens: 2519
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: nmap-recon
+  path: nmap-recon/SKILL.md
+  family: nmap
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 57
+  body_tokens: 500
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: nu1l-zone-competition
+  path: nu1l-zone-competition/SKILL.md
+  family: nu1l
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 25
+  body_tokens: 930
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: password-attacks
+  path: password-attacks/SKILL.md
+  family: password
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 50
+  body_tokens: 2492
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: pattt-readme-loader
+  path: pattt-readme-loader/SKILL.md
+  family: pattt
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 51
+  body_tokens: 387
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: pentest-report
+  path: pentest-report/SKILL.md
+  family: pentest
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 33
+  body_tokens: 882
+  reference_tokens: 4718
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: persistence-techniques
+  path: persistence-techniques/SKILL.md
+  family: persistence
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 56
+  body_tokens: 2994
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - persistence
+- skill_id: persistence
+  path: persistence/SKILL.md
+  family: persistence
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 54
+  body_tokens: 611
+  reference_tokens: 5362
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - persistence-techniques
+- skill_id: phishing-social-engineering
+  path: phishing-social-engineering/SKILL.md
+  family: phishing
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 56
+  body_tokens: 2551
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: privesc
+  path: privesc/SKILL.md
+  family: privesc
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 49
+  body_tokens: 598
+  reference_tokens: 4039
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: protocol-reverse-engineering
+  path: protocol-reverse-engineering/SKILL.md
+  family: protocol
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 59
+  body_tokens: 3157
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: recon-dir-scan
+  path: recon-dir-scan/SKILL.md
+  family: recon
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 58
+  body_tokens: 2578
+  reference_tokens: 2873
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - recon-fingerprint
+  - recon-port-scan
+  - recon-subdomain
+  - recon-web
+- skill_id: recon-fingerprint
+  path: recon-fingerprint/SKILL.md
+  family: recon
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 57
+  body_tokens: 2405
+  reference_tokens: 2530
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - recon-dir-scan
+  - recon-port-scan
+  - recon-subdomain
+  - recon-web
+- skill_id: recon-port-scan
+  path: recon-port-scan/SKILL.md
+  family: recon
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 58
+  body_tokens: 2268
+  reference_tokens: 6427
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - recon-dir-scan
+  - recon-fingerprint
+  - recon-subdomain
+  - recon-web
+- skill_id: recon-subdomain
+  path: recon-subdomain/SKILL.md
+  family: recon
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 60
+  body_tokens: 2539
+  reference_tokens: 2597
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - recon-dir-scan
+  - recon-fingerprint
+  - recon-port-scan
+  - recon-web
+- skill_id: recon-web
+  path: recon-web/SKILL.md
+  family: recon
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 69
+  body_tokens: 1071
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - recon-dir-scan
+  - recon-fingerprint
+  - recon-port-scan
+  - recon-subdomain
+- skill_id: results-storage
+  path: results-storage/SKILL.md
+  family: results
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 55
+  body_tokens: 4338
+  reference_tokens: 11112
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: reverse-engineering
+  path: reverse-engineering/SKILL.md
+  family: reverse
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 37
+  body_tokens: 3268
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: secknowledge
+  path: secknowledge/SKILL.md
+  family: secknowledge
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 34
+  body_tokens: 4255
+  reference_tokens: 62805
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: security-testing-patterns
+  path: security-testing-patterns/SKILL.md
+  family: security
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 58
+  body_tokens: 1544
+  reference_tokens: 7607
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: shell-scripting
+  path: shell-scripting/SKILL.md
+  family: shell
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 40
+  body_tokens: 1152
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: solve-challenge
+  path: solve-challenge/SKILL.md
+  family: solve
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 129
+  body_tokens: 2033
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: sqlmap-sqli
+  path: sqlmap-sqli/SKILL.md
+  family: sqlmap
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 82
+  body_tokens: 801
+  reference_tokens: 815
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: test-engineering
+  path: test-engineering/SKILL.md
+  family: test
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 26
+  body_tokens: 1819
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: threat-modeling
+  path: threat-modeling/SKILL.md
+  family: threat
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 189
+  body_tokens: 4976
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: tunnel
+  path: tunnel/SKILL.md
+  family: tunnel
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 52
+  body_tokens: 549
+  reference_tokens: 3057
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: windows-privilege-escalation
+  path: windows-privilege-escalation/SKILL.md
+  family: windows
+  owner: sec-platform
+  version: 0.1.0
+  status: incubating
+  description_tokens: 59
+  body_tokens: 3338
+  reference_tokens: 0
+  invocation_30d: 0
+  route_collision_score: 0.0
+  task_pass_rate: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.75
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors: []
+- skill_id: wooyun-legacy
+  path: wooyun-legacy/SKILL.md
+  family: business-logic
+  owner: sec-platform
+  version: 1.0.0
+  status: active
+  description_tokens: 59
+  body_tokens: 1713
+  reference_tokens: 5605
+  invocation_30d: 15
+  route_collision_score: 0.0
+  task_pass_rate: 1.0
+  routing_pass_rate: 1.0
+  obsolescence_score: 0.0
+  last_verified_model: gpt-5.4
+  last_verified_at: '2026-04-12T16:42:20Z'
+  depends_on: []
+  neighbors:
+  - exploit-file-download
 - skill_id: java-audit-pipeline
   path: java-audit-pipeline/SKILL.md
   family: java
@@ -563,7 +1144,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit
@@ -586,7 +1167,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -609,7 +1190,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -632,7 +1213,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -655,7 +1236,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -678,7 +1259,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -701,7 +1282,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -724,7 +1305,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -747,7 +1328,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -770,7 +1351,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - java-audit-pipeline
@@ -778,42 +1359,6 @@ skills:
   - java-auth-audit
   - java-file-read-audit
   - java-file-upload-audit
-- skill_id: linux-privilege-escalation
-  path: linux-privilege-escalation/SKILL.md
-  family: linux
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 55
-  body_tokens: 3405
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: linuxgun
-  path: linuxgun/SKILL.md
-  family: linuxgun
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 66
-  body_tokens: 617
-  reference_tokens: 10624
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
 - skill_id: mobile-pentesting
   path: mobile-pentesting/SKILL.md
   family: mobile
@@ -829,7 +1374,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - mobile-security
@@ -848,192 +1393,10 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - mobile-pentesting
-- skill_id: movement
-  path: movement/SKILL.md
-  family: movement
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 44
-  body_tokens: 594
-  reference_tokens: 4166
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: network-service-enumeration
-  path: network-service-enumeration/SKILL.md
-  family: network
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 57
-  body_tokens: 2519
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: nmap-recon
-  path: nmap-recon/SKILL.md
-  family: nmap
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 57
-  body_tokens: 500
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: nu1l-zone-competition
-  path: nu1l-zone-competition/SKILL.md
-  family: nu1l
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 25
-  body_tokens: 930
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: password-attacks
-  path: password-attacks/SKILL.md
-  family: password
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 50
-  body_tokens: 2492
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: pattt-readme-loader
-  path: pattt-readme-loader/SKILL.md
-  family: pattt
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 51
-  body_tokens: 387
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: pentest-report
-  path: pentest-report/SKILL.md
-  family: pentest
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 33
-  body_tokens: 882
-  reference_tokens: 4718
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: persistence-techniques
-  path: persistence-techniques/SKILL.md
-  family: persistence
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 56
-  body_tokens: 2994
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - persistence
-- skill_id: persistence
-  path: persistence/SKILL.md
-  family: persistence
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 54
-  body_tokens: 611
-  reference_tokens: 5362
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - persistence-techniques
-- skill_id: phishing-social-engineering
-  path: phishing-social-engineering/SKILL.md
-  family: phishing
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 56
-  body_tokens: 2551
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
 - skill_id: php-archive-extract-audit
   path: php-archive-extract-audit/SKILL.md
   family: php
@@ -1049,7 +1412,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-audit-pipeline
@@ -1072,7 +1435,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1095,7 +1458,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1118,7 +1481,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1141,7 +1504,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1164,7 +1527,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1187,7 +1550,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1210,7 +1573,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1233,7 +1596,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1256,7 +1619,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1279,7 +1642,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1302,7 +1665,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1325,7 +1688,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1348,7 +1711,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1371,7 +1734,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1394,7 +1757,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1417,7 +1780,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1440,7 +1803,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1463,7 +1826,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1486,7 +1849,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1509,7 +1872,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1532,7 +1895,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1555,7 +1918,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1578,7 +1941,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1601,7 +1964,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1624,7 +1987,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1647,7 +2010,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1670,7 +2033,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1693,7 +2056,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1716,7 +2079,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1739,7 +2102,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1762,7 +2125,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1785,7 +2148,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1808,7 +2171,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1831,7 +2194,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1854,7 +2217,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - php-archive-extract-audit
@@ -1862,278 +2225,6 @@ skills:
   - php-auth-audit
   - php-cmd-audit
   - php-codeigniter-audit
-- skill_id: privesc
-  path: privesc/SKILL.md
-  family: privesc
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 49
-  body_tokens: 598
-  reference_tokens: 4039
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: protocol-reverse-engineering
-  path: protocol-reverse-engineering/SKILL.md
-  family: protocol
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 59
-  body_tokens: 3157
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: recon-dir-scan
-  path: recon-dir-scan/SKILL.md
-  family: recon
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 58
-  body_tokens: 2578
-  reference_tokens: 2873
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - recon-fingerprint
-  - recon-port-scan
-  - recon-subdomain
-  - recon-web
-- skill_id: recon-fingerprint
-  path: recon-fingerprint/SKILL.md
-  family: recon
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 57
-  body_tokens: 2405
-  reference_tokens: 2530
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - recon-dir-scan
-  - recon-port-scan
-  - recon-subdomain
-  - recon-web
-- skill_id: recon-port-scan
-  path: recon-port-scan/SKILL.md
-  family: recon
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 58
-  body_tokens: 2268
-  reference_tokens: 6427
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - recon-dir-scan
-  - recon-fingerprint
-  - recon-subdomain
-  - recon-web
-- skill_id: recon-subdomain
-  path: recon-subdomain/SKILL.md
-  family: recon
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 60
-  body_tokens: 2539
-  reference_tokens: 2597
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - recon-dir-scan
-  - recon-fingerprint
-  - recon-port-scan
-  - recon-web
-- skill_id: recon-web
-  path: recon-web/SKILL.md
-  family: recon
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 69
-  body_tokens: 1071
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - recon-dir-scan
-  - recon-fingerprint
-  - recon-port-scan
-  - recon-subdomain
-- skill_id: results-storage
-  path: results-storage/SKILL.md
-  family: results
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 55
-  body_tokens: 4338
-  reference_tokens: 11112
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: reverse-engineering
-  path: reverse-engineering/SKILL.md
-  family: reverse
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 37
-  body_tokens: 3268
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: secknowledge
-  path: secknowledge/SKILL.md
-  family: secknowledge
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 34
-  body_tokens: 4255
-  reference_tokens: 62805
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: security-testing-patterns
-  path: security-testing-patterns/SKILL.md
-  family: security
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 58
-  body_tokens: 1544
-  reference_tokens: 7607
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: shell-scripting
-  path: shell-scripting/SKILL.md
-  family: shell
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 40
-  body_tokens: 1152
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: solve-challenge
-  path: solve-challenge/SKILL.md
-  family: solve
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 129
-  body_tokens: 2033
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: sqlmap-sqli
-  path: sqlmap-sqli/SKILL.md
-  family: sqlmap
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 82
-  body_tokens: 801
-  reference_tokens: 815
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
 - skill_id: static-analysis/codeql
   path: static-analysis/skills/codeql/SKILL.md
   family: static-analysis
@@ -2144,12 +2235,12 @@ skills:
   body_tokens: 2184
   reference_tokens: 152
   invocation_30d: 17
-  route_collision_score: 0.0
+  route_collision_score: 1.0
   task_pass_rate: 1.0
-  routing_pass_rate: 1.0
-  obsolescence_score: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.45
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - static-analysis/semgrep
@@ -2168,7 +2259,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - static-analysis/codeql
@@ -2183,69 +2274,15 @@ skills:
   body_tokens: 2163
   reference_tokens: 183
   invocation_30d: 21
-  route_collision_score: 0.0
+  route_collision_score: 1.0
   task_pass_rate: 1.0
-  routing_pass_rate: 1.0
-  obsolescence_score: 0.0
+  routing_pass_rate: 0.0
+  obsolescence_score: 0.45
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors:
   - static-analysis/codeql
-- skill_id: test-engineering
-  path: test-engineering/SKILL.md
-  family: test
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 26
-  body_tokens: 1819
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: threat-modeling
-  path: threat-modeling/SKILL.md
-  family: threat
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 189
-  body_tokens: 4976
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: tunnel
-  path: tunnel/SKILL.md
-  family: tunnel
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 52
-  body_tokens: 549
-  reference_tokens: 3057
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
 - skill_id: web-app-security
   path: web-app-security/SKILL.md
   family: web
@@ -2261,7 +2298,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: web3-blockchain
@@ -2279,7 +2316,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: webapp-testing
@@ -2297,25 +2334,7 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors: []
-- skill_id: windows-privilege-escalation
-  path: windows-privilege-escalation/SKILL.md
-  family: windows
-  owner: sec-platform
-  version: 0.1.0
-  status: incubating
-  description_tokens: 59
-  body_tokens: 3338
-  reference_tokens: 0
-  invocation_30d: 0
-  route_collision_score: 0.0
-  task_pass_rate: 0.0
-  routing_pass_rate: 0.0
-  obsolescence_score: 0.75
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
 - skill_id: wireless-attacks
@@ -2333,25 +2352,6 @@ skills:
   routing_pass_rate: 0.0
   obsolescence_score: 0.75
   last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
+  last_verified_at: '2026-04-12T16:42:20Z'
   depends_on: []
   neighbors: []
-- skill_id: wooyun-legacy
-  path: wooyun-legacy/SKILL.md
-  family: business-logic
-  owner: sec-platform
-  version: 1.0.0
-  status: active
-  description_tokens: 59
-  body_tokens: 1713
-  reference_tokens: 5605
-  invocation_30d: 15
-  route_collision_score: 0.0
-  task_pass_rate: 1.0
-  routing_pass_rate: 1.0
-  obsolescence_score: 0.0
-  last_verified_model: gpt-5.4
-  last_verified_at: '2026-04-11T08:16:07Z'
-  depends_on: []
-  neighbors:
-  - exploit-file-download

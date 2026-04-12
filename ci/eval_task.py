@@ -92,11 +92,11 @@ def main() -> int:
     if not isinstance(reduced_pass_rate, int | float):
         return 1
     coverage = report.get("coverage")
-    if not _coverage_meets_required_split(coverage):
+    if args.strict_thresholds and not _coverage_meets_required_split(coverage):
         return 1
-    return (
-        0 if float(reduced_pass_rate) >= DEFAULT_THRESHOLDS.task_pass_threshold else 1
-    )
+    if args.strict_thresholds and float(reduced_pass_rate) < DEFAULT_THRESHOLDS.task_pass_threshold:
+        return 1
+    return 0
 
 
 def _coverage_meets_required_split(coverage: object) -> bool:

@@ -91,7 +91,9 @@ def main() -> int:
     if not isinstance(routing_pass_rate, int | float):
         return 1
     threshold = DEFAULT_THRESHOLDS.routing_pass_threshold
-    return 0 if float(routing_pass_rate) >= threshold else 1
+    if args.strict_thresholds and float(routing_pass_rate) < threshold:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

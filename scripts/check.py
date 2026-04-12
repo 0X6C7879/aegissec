@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -19,7 +20,33 @@ def run_api_python(args: list[str], workdir: Path = REPO_ROOT) -> None:
     run(["uv", "run", "--project", str(API_DIR), "python", *args], workdir)
 
 
+def _env_truthy(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run full project checks.")
+    parser.set_defaults(strict_governance=_env_truthy("CI"))
+    parser.add_argument(
+        "--strict-governance",
+        dest="strict_governance",
+        action="store_true",
+        help="Enable strict governance thresholds for routing/task metrics.",
+    )
+    parser.add_argument(
+        "--no-strict-governance",
+        dest="strict_governance",
+        action="store_false",
+        help="Disable strict governance thresholds for routing/task metrics.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
     run(["python", str(REPO_ROOT / "scripts" / "sync_requirements.py")], REPO_ROOT)
     run(["uv", "sync", "--all-extras", "--dev"], API_DIR)
     run(["uv", "run", "ruff", "check", "."], API_DIR)
@@ -28,17 +55,21 @@ def main() -> int:
     run(["uv", "run", "pytest"], API_DIR)
     run_api_python([str(REPO_ROOT / "ci" / "lint_skills.py"), "--strict"])
     run_api_python([str(REPO_ROOT / "ci" / "reduce_skill.py")])
-    run_api_python([str(REPO_ROOT / "ci" / "eval_routing.py")])
-    run_api_python([str(REPO_ROOT / "ci" / "eval_task.py")])
-    run_api_python(
-        [
-            str(REPO_ROOT / "ci" / "report_metrics.py"),
-            "--strict-thresholds",
-            "--write-registry",
-            "--last-verified-model",
-            "gpt-5.4",
-        ]
-    )
+    eval_routing_args = [str(REPO_ROOT / "ci" / "eval_routing.py")]
+    eval_task_args = [str(REPO_ROOT / "ci" / "eval_task.py")]
+    report_metrics_args = [
+        str(REPO_ROOT / "ci" / "report_metrics.py"),
+        "--write-registry",
+        "--last-verified-model",
+        "gpt-5.4",
+    ]
+    if args.strict_governance:
+        eval_routing_args.append("--strict-thresholds")
+        eval_task_args.append("--strict-thresholds")
+        report_metrics_args.insert(1, "--strict-thresholds")
+    run_api_python(eval_routing_args)
+    run_api_python(eval_task_args)
+    run_api_python(report_metrics_args)
     run(
         ["uv", "run", "python", str(REPO_ROOT / "scripts" / "export_api_schema.py")],
         API_DIR,

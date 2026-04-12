@@ -1,18 +1,18 @@
 {
   "cost_metrics": {
-    "average_injected_tokens": 2235.238938053097,
-    "average_reference_load_count": 0.375,
-    "body_token_p50": 1805.0,
-    "body_token_p95": 5272.0,
-    "description_token_p50": 52.0,
-    "description_token_p95": 129.0,
+    "average_injected_tokens": 2576.344827586207,
+    "average_reference_load_count": 0.4166666666666667,
+    "body_token_p50": 2248.5,
+    "body_token_p95": 6116.0,
+    "description_token_p50": 57.0,
+    "description_token_p95": 140.0,
     "reference_token_p50": 0.0,
-    "reference_token_p95": 11112.0
+    "reference_token_p95": 10624.0
   },
   "family_total": 48,
   "governance_metrics": {
     "deprecated_candidates": [],
-    "duplicate_content_ratio": 0.04530301226336469,
+    "duplicate_content_ratio": 0.04977079240340537,
     "obsolescence_top": [
       {
         "obsolescence_score": 0.75,
@@ -57,6 +57,14 @@
     ],
     "route_collision_top": [
       {
+        "route_collision_score": 1.0,
+        "skill_id": "static-analysis/semgrep"
+      },
+      {
+        "route_collision_score": 1.0,
+        "skill_id": "static-analysis/codeql"
+      },
+      {
         "route_collision_score": 0.0,
         "skill_id": "wooyun-legacy"
       },
@@ -87,27 +95,34 @@
       {
         "route_collision_score": 0.0,
         "skill_id": "threat-modeling"
-      },
-      {
-        "route_collision_score": 0.0,
-        "skill_id": "test-engineering"
-      },
-      {
-        "route_collision_score": 0.0,
-        "skill_id": "static-analysis/semgrep"
       }
     ],
     "uninvoked_30d_count": 109,
-    "watch_candidates": []
+    "watch_candidates": [
+      {
+        "reasons": [
+          "high_route_collision",
+          "low_routing_pass_rate"
+        ],
+        "skill_id": "static-analysis/codeql"
+      },
+      {
+        "reasons": [
+          "high_route_collision",
+          "low_routing_pass_rate"
+        ],
+        "skill_id": "static-analysis/semgrep"
+      }
+    ]
   },
   "quality_metrics": {
     "regression_count": 0,
-    "routing_precision": 1.0,
-    "routing_recall": 1.0,
-    "selective_restore_trigger_rate": 0.375,
+    "routing_precision": 0.4,
+    "routing_recall": 0.4,
+    "selective_restore_trigger_rate": 0.4166666666666667,
     "task_pass_rate": 1.0
   },
-  "skill_total": 113,
+  "skill_total": 58,
   "status_counts": {
     "active": 4,
     "deprecated": 0,

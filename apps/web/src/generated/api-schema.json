@@ -73,6 +73,47 @@
         }
       }
     },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login With Username Password",
+        "operationId": "login_with_username_password_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthLoginRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects": {
       "get": {
         "tags": [
@@ -1195,6 +1236,100 @@
         }
       }
     },
+    "/api/sessions/{session_id}/context-window": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get session context window usage",
+        "operationId": "get_session_context_window_api_sessions__session_id__context_window_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionContextWindowRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/compact": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Compact session context",
+        "operationId": "compact_session_context_api_sessions__session_id__compact_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCompactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCompactResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sessions/{session_id}/replay": {
       "get": {
         "tags": [
@@ -1475,6 +1610,947 @@
               "application/json": {
                 "schema": {
                   "title": "Response Get Session Artifacts Api Sessions  Session Id  Artifacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List session terminals",
+        "description": "Return persisted terminal-session metadata for the session.",
+        "operationId": "list_session_terminals_api_sessions__session_id__terminals_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TerminalSessionRead"
+                  },
+                  "title": "Response List Session Terminals Api Sessions  Session Id  Terminals Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Create session terminal",
+        "description": "Persist terminal-session metadata for later shell workbench phases.",
+        "operationId": "create_session_terminal_api_sessions__session_id__terminals_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/focused": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get focused session terminal",
+        "description": "Return the currently focused terminal metadata for the session.",
+        "operationId": "get_focused_session_terminal_api_sessions__session_id__terminals_focused_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/focus": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Focus session terminal",
+        "description": "Mark a terminal as the focused terminal for the session.",
+        "operationId": "focus_session_terminal_api_sessions__session_id__terminals__terminal_id__focus_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalFocusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/focused/execute": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Execute in focused session terminal",
+        "description": "Run a command in the session's currently focused terminal.",
+        "operationId": "execute_focused_session_terminal_api_sessions__session_id__terminals_focused_execute_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalExecuteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get session terminal",
+        "description": "Return terminal-session metadata by id.",
+        "operationId": "get_session_terminal_api_sessions__session_id__terminals__terminal_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/buffer": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Read recent live terminal buffer",
+        "description": "Return the recent live PTY buffer snapshot for a terminal when available.",
+        "operationId": "get_session_terminal_buffer_api_sessions__session_id__terminals__terminal_id__buffer_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          },
+          {
+            "name": "lines",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Lines"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalBufferRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/input": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Send terminal input",
+        "description": "Write UTF-8 input into the currently attached terminal PTY.",
+        "operationId": "input_session_terminal_api_sessions__session_id__terminals__terminal_id__input_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/resize": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Resize terminal PTY",
+        "description": "Resize the currently attached terminal PTY window.",
+        "operationId": "resize_session_terminal_api_sessions__session_id__terminals__terminal_id__resize_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalResizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/interrupt": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Interrupt terminal foreground work",
+        "description": "Send Ctrl+C/SIGINT to the currently attached terminal PTY.",
+        "operationId": "interrupt_session_terminal_api_sessions__session_id__terminals__terminal_id__interrupt_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/execute": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Execute a command in a session terminal",
+        "description": "Run a command in the attached PTY or start a detached terminal job.",
+        "operationId": "execute_session_terminal_api_sessions__session_id__terminals__terminal_id__execute_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalExecuteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminals/{terminal_id}/close": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Close session terminal",
+        "description": "Mark terminal-session metadata as closed without simulating PTY persistence.",
+        "operationId": "close_session_terminal_api_sessions__session_id__terminals__terminal_id__close_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "terminal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Terminal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminal-jobs": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List session terminal jobs",
+        "description": "Return persisted terminal-job metadata for the session.",
+        "operationId": "list_session_terminal_jobs_api_sessions__session_id__terminal_jobs_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TerminalJobRead"
+                  },
+                  "title": "Response List Session Terminal Jobs Api Sessions  Session Id  Terminal Jobs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminal-jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get session terminal job",
+        "description": "Return terminal-job metadata by id.",
+        "operationId": "get_session_terminal_job_api_sessions__session_id__terminal_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalJobRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminal-jobs/{job_id}/tail": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Tail session terminal job output",
+        "description": "Return the latest persisted or live output tail for a session terminal job.",
+        "operationId": "tail_session_terminal_job_api_sessions__session_id__terminal_jobs__job_id__tail_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "stream",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "stdout",
+                "stderr"
+              ],
+              "type": "string",
+              "default": "stdout",
+              "title": "Stream"
+            }
+          },
+          {
+            "name": "lines",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Lines"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalJobTailRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminal-jobs/{job_id}/stop": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Stop session terminal job",
+        "description": "Stop a live detached terminal job within the current session scope.",
+        "operationId": "stop_session_terminal_job_api_sessions__session_id__terminal_jobs__job_id__stop_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalJobRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/terminal-jobs/cleanup": {
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Clean up finished session terminal jobs",
+        "description": "Delete completed or failed terminal-job rows that no longer have active live processes.",
+        "operationId": "cleanup_session_terminal_jobs_api_sessions__session_id__terminal_jobs_cleanup_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TerminalJobsCleanupRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalJobsCleanupResult"
                 }
               }
             }
@@ -3639,6 +4715,17 @@
   },
   "components": {
     "schemas": {
+      "AckResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "AckResponse"
+      },
       "ActiveGenerationInjectRequest": {
         "properties": {
           "content": {
@@ -3842,6 +4929,42 @@
         },
         "type": "object",
         "title": "AttachmentMetadata"
+      },
+      "AuthLoginRead": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "authenticated": {
+            "type": "boolean",
+            "title": "Authenticated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "authenticated"
+        ],
+        "title": "AuthLoginRead"
+      },
+      "AuthLoginRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "AuthLoginRequest"
       },
       "Body_upload_runtime_artifact_api_runtime_upload_post": {
         "properties": {
@@ -5987,6 +7110,227 @@
         ],
         "title": "RuntimeStatusRead"
       },
+      "RuntimeTerminalJobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled",
+          "timeout"
+        ],
+        "title": "RuntimeTerminalJobStatus"
+      },
+      "RuntimeTerminalSessionStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed"
+        ],
+        "title": "RuntimeTerminalSessionStatus"
+      },
+      "RuntimeTerminalWorkbenchStatus": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "attached",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "RuntimeTerminalWorkbenchStatus"
+      },
+      "SessionCompactRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "manual",
+            "title": "Mode",
+            "default": "manual"
+          }
+        },
+        "type": "object",
+        "title": "SessionCompactRequest"
+      },
+      "SessionCompactResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "compacted": {
+            "type": "boolean",
+            "title": "Compacted"
+          },
+          "compact_boundary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compact Boundary"
+          },
+          "before_tokens": {
+            "type": "integer",
+            "title": "Before Tokens"
+          },
+          "after_tokens": {
+            "type": "integer",
+            "title": "After Tokens"
+          },
+          "reclaimed_tokens": {
+            "type": "integer",
+            "title": "Reclaimed Tokens"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "mode",
+          "compacted",
+          "before_tokens",
+          "after_tokens",
+          "reclaimed_tokens",
+          "summary",
+          "created_at"
+        ],
+        "title": "SessionCompactResponse"
+      },
+      "SessionContextWindowBreakdownRead": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "estimated_tokens": {
+            "type": "integer",
+            "title": "Estimated Tokens"
+          },
+          "share_ratio": {
+            "type": "number",
+            "title": "Share Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "estimated_tokens",
+          "share_ratio"
+        ],
+        "title": "SessionContextWindowBreakdownRead"
+      },
+      "SessionContextWindowRead": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "context_window_tokens": {
+            "type": "integer",
+            "title": "Context Window Tokens"
+          },
+          "used_tokens": {
+            "type": "integer",
+            "title": "Used Tokens"
+          },
+          "reserved_response_tokens": {
+            "type": "integer",
+            "title": "Reserved Response Tokens"
+          },
+          "usage_ratio": {
+            "type": "number",
+            "title": "Usage Ratio"
+          },
+          "auto_compact_threshold_ratio": {
+            "type": "number",
+            "title": "Auto Compact Threshold Ratio"
+          },
+          "last_compacted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Compacted At"
+          },
+          "last_compact_boundary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Compact Boundary"
+          },
+          "can_manual_compact": {
+            "type": "boolean",
+            "title": "Can Manual Compact"
+          },
+          "blocking_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Reason"
+          },
+          "breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/SessionContextWindowBreakdownRead"
+            },
+            "type": "array",
+            "title": "Breakdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "model",
+          "context_window_tokens",
+          "used_tokens",
+          "reserved_response_tokens",
+          "usage_ratio",
+          "auto_compact_threshold_ratio",
+          "can_manual_compact"
+        ],
+        "title": "SessionContextWindowRead"
+      },
       "SessionConversationRead": {
         "properties": {
           "session": {
@@ -7758,6 +9102,573 @@
           "action"
         ],
         "title": "SlashCatalogItem"
+      },
+      "TerminalBufferRead": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "terminal_id": {
+            "type": "string",
+            "title": "Terminal Id"
+          },
+          "attached": {
+            "type": "boolean",
+            "title": "Attached",
+            "default": false
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "reattach_deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reattach Deadline"
+          },
+          "lines": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Lines"
+          },
+          "buffer": {
+            "type": "string",
+            "title": "Buffer",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "terminal_id",
+          "lines"
+        ],
+        "title": "TerminalBufferRead"
+      },
+      "TerminalExecuteRequest": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Command"
+          },
+          "detach": {
+            "type": "boolean",
+            "title": "Detach",
+            "default": false
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 86400.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          },
+          "artifact_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Artifact Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "title": "TerminalExecuteRequest"
+      },
+      "TerminalExecuteResponse": {
+        "properties": {
+          "terminal_id": {
+            "type": "string",
+            "title": "Terminal Id"
+          },
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted",
+            "default": true
+          },
+          "detach": {
+            "type": "boolean",
+            "title": "Detach"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "terminal_id",
+          "detach",
+          "status"
+        ],
+        "title": "TerminalExecuteResponse"
+      },
+      "TerminalFocusResponse": {
+        "properties": {
+          "terminal": {
+            "$ref": "#/components/schemas/TerminalSessionRead"
+          }
+        },
+        "type": "object",
+        "required": [
+          "terminal"
+        ],
+        "title": "TerminalFocusResponse"
+      },
+      "TerminalInputRequest": {
+        "properties": {
+          "data": {
+            "type": "string",
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "TerminalInputRequest"
+      },
+      "TerminalJobRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "terminal_session_id": {
+            "type": "string",
+            "title": "Terminal Session Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeTerminalJobStatus"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finish Reason"
+          },
+          "stdout_tail": {
+            "type": "string",
+            "title": "Stdout Tail",
+            "default": ""
+          },
+          "stderr_tail": {
+            "type": "string",
+            "title": "Stderr Tail",
+            "default": ""
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "terminal_session_id",
+          "session_id",
+          "status",
+          "command",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TerminalJobRead"
+      },
+      "TerminalJobTailRead": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "terminal_session_id": {
+            "type": "string",
+            "title": "Terminal Session Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeTerminalJobStatus"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "stdout",
+              "stderr"
+            ],
+            "title": "Stream"
+          },
+          "lines": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Lines"
+          },
+          "tail": {
+            "type": "string",
+            "title": "Tail",
+            "default": ""
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "session_id",
+          "terminal_session_id",
+          "status",
+          "stream",
+          "lines",
+          "updated_at"
+        ],
+        "title": "TerminalJobTailRead"
+      },
+      "TerminalJobsCleanupRequest": {
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "title": "TerminalJobsCleanupRequest"
+      },
+      "TerminalJobsCleanupResult": {
+        "properties": {
+          "deleted_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Deleted Jobs"
+          },
+          "kept_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Kept Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted_jobs",
+          "kept_jobs"
+        ],
+        "title": "TerminalJobsCleanupResult"
+      },
+      "TerminalResizeRequest": {
+        "properties": {
+          "cols": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Cols"
+          },
+          "rows": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "title": "TerminalResizeRequest"
+      },
+      "TerminalSessionCreateRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "shell": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Shell",
+            "default": "/bin/zsh"
+          },
+          "cwd": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Cwd",
+            "default": "/workspace"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "title": "TerminalSessionCreateRequest"
+      },
+      "TerminalSessionRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeTerminalSessionStatus"
+          },
+          "workbench_status": {
+            "$ref": "#/components/schemas/RuntimeTerminalWorkbenchStatus",
+            "default": "idle"
+          },
+          "shell": {
+            "type": "string",
+            "title": "Shell"
+          },
+          "cwd": {
+            "type": "string",
+            "title": "Cwd"
+          },
+          "focused": {
+            "type": "boolean",
+            "title": "Focused",
+            "default": false
+          },
+          "attached": {
+            "type": "boolean",
+            "title": "Attached",
+            "default": false
+          },
+          "active_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Job Id"
+          },
+          "last_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Job Id"
+          },
+          "last_job_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeTerminalJobStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reattach_deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reattach Deadline"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "title",
+          "status",
+          "shell",
+          "cwd",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TerminalSessionRead"
       },
       "ToggleMCPServerRequest": {
         "properties": {
