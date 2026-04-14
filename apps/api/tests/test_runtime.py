@@ -94,6 +94,22 @@ def test_runtime_start_execute_status_and_stop(
     assert api_data(stop_response)["status"] == "stopped"
 
 
+def test_runtime_execute_uses_1200s_default_timeout_when_not_specified(
+    client: TestClient,
+) -> None:
+    execute_response = client.post(
+        "/api/runtime/execute",
+        json={
+            "command": "printf 'default timeout'",
+            "artifact_paths": [],
+        },
+    )
+
+    assert execute_response.status_code == 200
+    execute_payload = api_data(execute_response)
+    assert execute_payload["requested_timeout_seconds"] == 1200
+
+
 def test_runtime_execute_tracks_failed_and_timeout_runs(
     client: TestClient,
     runtime_backend: Any,

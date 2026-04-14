@@ -115,7 +115,7 @@ class RuntimePolicy(SQLModel):
 
     allow_network: bool = True
     allow_write: bool = True
-    max_execution_seconds: int = Field(default=300, gt=0)
+    max_execution_seconds: int = Field(default=1200, gt=0)
     max_command_length: int = Field(default=4000, gt=0)
 
 

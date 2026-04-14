@@ -229,7 +229,7 @@ def test_settings(tmp_path: Path) -> Settings:
             "runtime_container_name": "aegissec-kali-runtime",
             "runtime_workspace_dir": str((tmp_path / "runtime-workspace").resolve()),
             "runtime_workspace_container_path": "/workspace",
-            "runtime_default_timeout_seconds": 300,
+            "runtime_default_timeout_seconds": 1200,
             "runtime_recent_runs_limit": 10,
             "runtime_recent_artifacts_limit": 20,
             "terminal_disconnect_grace_seconds": 0.05,

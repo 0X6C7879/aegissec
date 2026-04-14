@@ -33,7 +33,7 @@ class RuntimeProfileDefaults:
     DEFAULT_PROFILE: dict[str, object] = {
         "allow_network": True,
         "allow_write": True,
-        "max_execution_seconds": 300,
+        "max_execution_seconds": 1200,
         "max_command_length": 4000,
     }
 
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
         alias="AEGISSEC_RUNTIME_WORKSPACE_CONTAINER_PATH",
     )
     runtime_default_timeout_seconds: int = Field(
-        default=300,
+        default=1200,
         alias="AEGISSEC_RUNTIME_DEFAULT_TIMEOUT_SECONDS",
     )
     runtime_recent_runs_limit: int = Field(
