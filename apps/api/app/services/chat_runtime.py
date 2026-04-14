@@ -47,6 +47,7 @@ INVOKE_TAG_PATTERN = re.compile(r"</?invoke\b[^>]*>", re.IGNORECASE)
 DEFAULT_ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 HTTP_ERROR_BODY_PREVIEW_LIMIT = 1500
 _FIXED_NO_ARGUMENT_TOOL_NAMES = {"list_available_skills", "list_terminal_sessions"}
+_RETRYABLE_UPSTREAM_STATUS_CODES = {502, 503, 504}
 
 
 def strip_tool_protocol_markup(content: str) -> str:
@@ -412,9 +413,14 @@ class OpenAICompatibleChatRuntime:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
-                is_rate_limit = exc.response.status_code == 429
+                status_code = exc.response.status_code
+                is_rate_limit = status_code == 429
+                is_retryable_gateway_error = status_code in _RETRYABLE_UPSTREAM_STATUS_CODES
                 await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
-                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                should_retry = (
+                    is_rate_limit or is_retryable_gateway_error
+                ) and attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
                     delay_seconds = compute_retry_delay_seconds(
                         headers=exc.response.headers,
                         attempt=attempt + 1,
@@ -428,7 +434,11 @@ class OpenAICompatibleChatRuntime:
                 if is_rate_limit:
                     raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
-                    await OpenAICompatibleChatRuntime._format_status_error_message(exc)
+                    await OpenAICompatibleChatRuntime._format_status_error_message(
+                        exc,
+                        attempt=attempt + 1,
+                        max_attempts=self._settings.llm_rate_limit_max_retries + 1,
+                    )
                 ) from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
@@ -631,9 +641,14 @@ class OpenAICompatibleChatRuntime:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
-                is_rate_limit = exc.response.status_code == 429
+                status_code = exc.response.status_code
+                is_rate_limit = status_code == 429
+                is_retryable_gateway_error = status_code in _RETRYABLE_UPSTREAM_STATUS_CODES
                 await self._rate_controller.finalize(lease, rate_limited=is_rate_limit)
-                if is_rate_limit and attempt < self._settings.llm_rate_limit_max_retries:
+                should_retry = (
+                    is_rate_limit or is_retryable_gateway_error
+                ) and attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
                     delay_seconds = compute_retry_delay_seconds(
                         headers=exc.response.headers,
                         attempt=attempt + 1,
@@ -647,7 +662,11 @@ class OpenAICompatibleChatRuntime:
                 if is_rate_limit:
                     raise ChatRuntimeError("LLM API rate limit exceeded after retries.") from exc
                 raise ChatRuntimeError(
-                    await OpenAICompatibleChatRuntime._format_status_error_message(exc)
+                    await OpenAICompatibleChatRuntime._format_status_error_message(
+                        exc,
+                        attempt=attempt + 1,
+                        max_attempts=self._settings.llm_rate_limit_max_retries + 1,
+                    )
                 ) from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
@@ -827,12 +846,47 @@ class OpenAICompatibleChatRuntime:
         )
 
     @staticmethod
-    async def _format_status_error_message(exc: httpx.HTTPStatusError) -> str:
+    async def _format_status_error_message(
+        exc: httpx.HTTPStatusError,
+        *,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> str:
         message = f"LLM API request failed with status {exc.response.status_code}."
+        endpoint = OpenAICompatibleChatRuntime._safe_request_endpoint(exc.request)
+        if endpoint is not None:
+            message = f"{message} Endpoint: {endpoint}."
+        if (
+            attempt is not None
+            and max_attempts is not None
+            and attempt > 0
+            and max_attempts > 0
+        ):
+            message = f"{message} Attempt: {attempt}/{max_attempts}."
         response_text = await OpenAICompatibleChatRuntime._response_body_excerpt(exc.response)
         if response_text is None:
             return message
         return f"{message} Response body: {response_text}"
+
+    @staticmethod
+    def _safe_request_endpoint(request: httpx.Request | None) -> str | None:
+        if request is None:
+            return None
+
+        url = request.url
+        host = url.host
+        if host is None or not host:
+            raw_url = str(url)
+            return raw_url.split("?", 1)[0] if raw_url else None
+
+        scheme = url.scheme
+        if not scheme:
+            return None
+
+        port = url.port
+        authority = f"{host}:{port}" if port is not None else host
+        path = url.path or "/"
+        return f"{scheme}://{authority}{path}"
 
     @staticmethod
     async def _response_body_excerpt(response: httpx.Response) -> str | None:

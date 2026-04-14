@@ -1875,6 +1875,63 @@ def test_openai_request_completion_retries_on_429(monkeypatch: MonkeyPatch) -> N
     assert sleeps[0] >= 0.05
 
 
+def test_openai_request_completion_retries_on_502(monkeypatch: MonkeyPatch) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=1,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    responses = [
+        _httpx_response(
+            502,
+            json_payload={"error": {"message": "bad gateway"}},
+        ),
+        _httpx_response(
+            200,
+            json_payload={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+            },
+        ),
+    ]
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses),
+    )
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._request_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": False},
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "ok"
+    assert sleeps
+    assert sleeps[0] >= 0.01
+
+
 def test_openai_request_completion_includes_response_body_on_400(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1927,6 +1984,48 @@ def test_openai_response_body_excerpt_returns_none_when_stream_is_closed() -> No
     )
 
     assert excerpt is None
+
+
+def test_openai_safe_request_endpoint_drops_query_string() -> None:
+    request = httpx.Request(
+        "POST",
+        "http://10.0.0.24:8080/390_1nfbrqi3/chat/completions?trace_id=abc123",
+    )
+
+    endpoint = OpenAICompatibleChatRuntime._safe_request_endpoint(request)
+
+    assert endpoint == "http://10.0.0.24:8080/390_1nfbrqi3/chat/completions"
+
+
+def test_openai_format_status_error_message_includes_endpoint_and_attempt() -> None:
+    request = httpx.Request(
+        "POST",
+        "https://example.test/v1/chat/completions?trace_id=abc123",
+    )
+    response = httpx.Response(
+        502,
+        request=request,
+        text='{"error":{"message":"bad gateway"}}',
+    )
+    status_error = httpx.HTTPStatusError(
+        "bad gateway",
+        request=request,
+        response=response,
+    )
+
+    message = asyncio.run(
+        OpenAICompatibleChatRuntime._format_status_error_message(
+            status_error,
+            attempt=2,
+            max_attempts=7,
+        )
+    )
+
+    assert "status 502" in message
+    assert "Endpoint: https://example.test/v1/chat/completions." in message
+    assert "Attempt: 2/7." in message
+    assert "trace_id=abc123" not in message
+    assert "bad gateway" in message
 
 
 def test_anthropic_stream_completion_retries_on_429(monkeypatch: MonkeyPatch) -> None:
@@ -2071,6 +2170,59 @@ def test_openai_stream_completion_preserves_tool_call_type(monkeypatch: MonkeyPa
     assert tool_calls[0]["type"] == "function"
     assert function_payload["name"] == "execute_kali_command"
     assert json.loads(cast(str, function_payload["arguments"])) == {"command": "pwd"}
+
+
+def test_openai_stream_completion_retries_on_502(monkeypatch: MonkeyPatch) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=1,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    responses = [_httpx_response(502), _httpx_response(200)]
+    stream_lines = [
+        [],
+        [
+            'data: {"choices":[{"delta":{"content":"stream ok"}}]}',
+            "data: [DONE]",
+        ],
+    ]
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "app.services.chat_runtime.httpx.AsyncClient",
+        lambda timeout: _FakeAsyncClient(responses, stream_lines=stream_lines),
+    )
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._stream_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": True},
+            GenerationCallbacks(),
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "stream ok"
+    assert sleeps
+    assert sleeps[0] >= 0.01
 
 
 def test_openai_stream_completion_includes_response_body_on_400(
