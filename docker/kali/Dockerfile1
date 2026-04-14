@@ -7,10 +7,15 @@ ARG SKILL_TOOL_PROFILE=lean
 ARG INSTALL_GCP_TOOLS=0
 ARG INSTALL_BROWSER_TOOLS=0
 ARG INSTALL_AZURE_TOOLS=0
+ARG INSTALL_AD_HEAVY_TOOLS=0
+ARG INSTALL_RECON_EXTRA_TOOLS=0
+ARG INSTALL_TRAFFIC_TOOLS=0
+ARG INSTALL_EXPLOITDB_TOOLS=0
 ARG KALI_APT_MIRROR=http://mirrors.aliyun.com/kali
 ARG CTF_INSTALLER_SHA=unknown
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
 ENV PATH="/root/.local/bin:/root/go/bin:/root/.ctf-tools/venv/bin:/root/.aegissec-skill-tools/venv/bin:${PATH}"
 
 LABEL aegissec.install_ctf_tools="${INSTALL_CTF_TOOLS}"
@@ -20,6 +25,10 @@ LABEL aegissec.skill_tool_profile="${SKILL_TOOL_PROFILE}"
 LABEL aegissec.install_gcp_tools="${INSTALL_GCP_TOOLS}"
 LABEL aegissec.install_browser_tools="${INSTALL_BROWSER_TOOLS}"
 LABEL aegissec.install_azure_tools="${INSTALL_AZURE_TOOLS}"
+LABEL aegissec.install_ad_heavy_tools="${INSTALL_AD_HEAVY_TOOLS}"
+LABEL aegissec.install_recon_extra_tools="${INSTALL_RECON_EXTRA_TOOLS}"
+LABEL aegissec.install_traffic_tools="${INSTALL_TRAFFIC_TOOLS}"
+LABEL aegissec.install_exploitdb_tools="${INSTALL_EXPLOITDB_TOOLS}"
 LABEL aegissec.kali_apt_mirror="${KALI_APT_MIRROR}"
 LABEL aegissec.ctf_installer_sha="${CTF_INSTALLER_SHA}"
 
@@ -37,7 +46,7 @@ RUN set -eux; \
         sed -i "s|https://kali.download/kali|${KALI_APT_MIRROR}|g" /etc/apt/sources.list; \
     fi
 
-# Install only competition-required tooling (without kali-linux-default)
+# Install competition baseline tooling only (without kali-linux-default)
 RUN set -eux; \
     apt-get update -o Acquire::Retries=5; \
     apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
@@ -59,42 +68,61 @@ RUN set -eux; \
         dnsutils \
         nmap \
         whois \
-        amass \
         arp-scan \
         arjun \
         awscli \
-        bloodhound \
         chisel \
         dnsenum \
         dnsrecon \
         enum4linux \
         evil-winrm \
-        exploitdb \
         feroxbuster \
         gobuster \
         hydra \
         kubectl \
         ldap-utils \
-        mitmproxy \
-        mimikatz \
         netdiscover \
         netexec \
         nfs-common \
         nikto \
         onesixtyone \
-        powershell \
         python3-impacket \
-        recon-ng \
-        rubeus \
-        sharphound \
         smbclient \
         smbmap \
         snmp \
         snmpcheck \
         theharvester \
-        tshark \
         whatweb \
         wfuzz; \
+    if [ "${INSTALL_AD_HEAVY_TOOLS}" = "1" ]; then \
+        apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
+            bloodhound \
+            mimikatz \
+            powershell \
+            rubeus \
+            sharphound; \
+    else \
+        echo "[aegissec-kali] Skip AD heavy tooling installation"; \
+    fi; \
+    if [ "${INSTALL_RECON_EXTRA_TOOLS}" = "1" ]; then \
+        apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
+            amass \
+            recon-ng; \
+    else \
+        echo "[aegissec-kali] Skip recon extra tooling installation"; \
+    fi; \
+    if [ "${INSTALL_TRAFFIC_TOOLS}" = "1" ]; then \
+        apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends \
+            mitmproxy \
+            tshark; \
+    else \
+        echo "[aegissec-kali] Skip traffic/proxy tooling installation"; \
+    fi; \
+    if [ "${INSTALL_EXPLOITDB_TOOLS}" = "1" ]; then \
+        apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends exploitdb; \
+    else \
+        echo "[aegissec-kali] Skip exploitdb installation"; \
+    fi; \
     if [ "${SKILL_TOOL_PROFILE}" = "core" ] || [ "${SKILL_TOOL_PROFILE}" = "full" ] || [ "${CTF_INSTALL_MODE}" = "go" ] || [ "${CTF_INSTALL_MODE}" = "all" ]; then \
         apt-get install -y -o Acquire::Retries=5 --fix-missing --no-install-recommends golang-go cargo; \
     else \
@@ -134,7 +162,7 @@ RUN set -eux; \
     else \
         echo "[aegissec-kali] Skip browser tooling installation"; \
     fi; \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
 
 WORKDIR /opt/aegissec
 

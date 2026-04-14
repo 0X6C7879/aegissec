@@ -61,6 +61,157 @@ class SessionEvent(SQLModel):
     payload: dict[str, Any]
 
 
+_MESSAGE_PERSIST_BASE_KEYS = (
+    "session_id",
+    "parent_message_id",
+    "branch_id",
+    "generation_id",
+    "status",
+    "message_kind",
+    "sequence",
+    "turn_index",
+    "edited_from_message_id",
+    "version_group_id",
+    "created_at",
+    "completed_at",
+    "error_message",
+)
+
+_GRAPH_PERSIST_KEYS = (
+    "run_id",
+    "graph_type",
+    "current_stage",
+    "message_id",
+    "assistant_message_id",
+    "generation_id",
+    "evidence_ids",
+    "hypothesis_ids",
+    "artifacts",
+    "reason",
+)
+
+
+def _read_non_empty_string(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _build_thin_message_payload(
+    payload: dict[str, Any],
+    *,
+    keep_assistant_content: bool,
+) -> dict[str, Any]:
+    thin_payload: dict[str, Any] = {"__thin_replay": True}
+
+    message_id = _read_non_empty_string(payload, "message_id") or _read_non_empty_string(
+        payload, "id"
+    )
+    if message_id is not None:
+        thin_payload["message_id"] = message_id
+        thin_payload["id"] = message_id
+
+    role = _read_non_empty_string(payload, "role")
+    if role is not None:
+        thin_payload["role"] = role
+
+    for key in _MESSAGE_PERSIST_BASE_KEYS:
+        if key in payload:
+            thin_payload[key] = payload[key]
+
+    content = payload.get("content")
+    if isinstance(content, str):
+        if role == "assistant" and not keep_assistant_content:
+            thin_payload["content"] = ""
+            thin_payload["content_length"] = len(content)
+        else:
+            thin_payload["content"] = content
+    else:
+        thin_payload["content"] = ""
+
+    delta = payload.get("delta")
+    if isinstance(delta, str):
+        if role == "assistant" and not keep_assistant_content:
+            thin_payload["delta_length"] = len(delta)
+        else:
+            thin_payload["delta"] = delta
+
+    assistant_transcript = payload.get("assistant_transcript")
+    if isinstance(assistant_transcript, list):
+        thin_payload["assistant_transcript_count"] = len(assistant_transcript)
+
+    attachments = payload.get("attachments")
+    if isinstance(attachments, list):
+        thin_payload["attachments_count"] = len(attachments)
+
+    return thin_payload
+
+
+def _build_thin_tool_finished_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    thin_payload = dict(payload)
+    stdout = thin_payload.pop("stdout", None)
+    stderr = thin_payload.pop("stderr", None)
+    removed_result = thin_payload.pop("result", None)
+
+    for key in ("output", "payload", "data", "graph_updates", "swarm_notifications"):
+        thin_payload.pop(key, None)
+
+    if "semantic_state" in thin_payload:
+        thin_payload.pop("semantic_state", None)
+        thin_payload["semantic_state_omitted"] = True
+
+    if isinstance(stdout, str):
+        thin_payload["stdout_length"] = len(stdout)
+    if isinstance(stderr, str):
+        thin_payload["stderr_length"] = len(stderr)
+    if removed_result is not None:
+        thin_payload["result_omitted"] = True
+
+    thin_payload["__thin_replay"] = True
+    return thin_payload
+
+
+def _build_thin_assistant_trace_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    thin_payload = dict(payload)
+    if "semantic_state" in thin_payload:
+        thin_payload.pop("semantic_state", None)
+        thin_payload["semantic_state_omitted"] = True
+    thin_payload["__thin_replay"] = True
+    return thin_payload
+
+
+def _build_thin_graph_updated_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    thin_payload = {key: payload[key] for key in _GRAPH_PERSIST_KEYS if key in payload}
+    graph_updates = payload.get("graph_updates")
+    if isinstance(graph_updates, list):
+        thin_payload["graph_updates_count"] = len(graph_updates)
+    thin_payload["__thin_replay"] = True
+    return thin_payload
+
+
+def _build_persisted_payload(
+    event_type: SessionEventType,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if event_type in {SessionEventType.MESSAGE_UPDATED, SessionEventType.MESSAGE_DELTA}:
+        return _build_thin_message_payload(payload, keep_assistant_content=False)
+
+    if event_type == SessionEventType.MESSAGE_COMPLETED:
+        return _build_thin_message_payload(payload, keep_assistant_content=True)
+
+    if event_type == SessionEventType.TOOL_CALL_FINISHED:
+        return _build_thin_tool_finished_payload(payload)
+
+    if event_type == SessionEventType.ASSISTANT_TRACE:
+        return _build_thin_assistant_trace_payload(payload)
+
+    if event_type == SessionEventType.GRAPH_UPDATED:
+        return _build_thin_graph_updated_payload(payload)
+
+    return dict(payload)
+
+
 class SessionEventBroker:
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[SessionEvent]]] = {}
@@ -138,13 +289,15 @@ class SessionEventBroker:
 
         from app.db.repositories import SessionRepository
 
+        persisted_payload = _build_persisted_payload(event.type, event.payload)
+
         try:
             with self._session_factory() as db_session:
                 repository = SessionRepository(db_session)
                 persisted = repository.create_session_event(
                     session_id=event.session_id,
                     event_type=event.type.value,
-                    payload=dict(event.payload),
+                    payload=persisted_payload,
                     timestamp=event.timestamp,
                 )
         except SQLAlchemyPoolTimeoutError:
