@@ -411,6 +411,18 @@ class OpenAICompatibleChatRuntime:
                     raise ChatRuntimeError("LLM API returned an unexpected response shape.")
             except httpx.TimeoutException as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
@@ -440,6 +452,21 @@ class OpenAICompatibleChatRuntime:
                         max_attempts=self._settings.llm_rate_limit_max_retries + 1,
                     )
                 ) from exc
+            except httpx.ConnectError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                raise ChatRuntimeError("LLM API request failed.") from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
@@ -639,6 +666,18 @@ class OpenAICompatibleChatRuntime:
                 raise
             except httpx.TimeoutException as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
@@ -668,6 +707,21 @@ class OpenAICompatibleChatRuntime:
                         max_attempts=self._settings.llm_rate_limit_max_retries + 1,
                     )
                 ) from exc
+            except httpx.ConnectError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                raise ChatRuntimeError("LLM API request failed.") from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
@@ -1412,6 +1466,18 @@ class AnthropicChatRuntime:
                     raise ChatRuntimeError("LLM API returned an unexpected response shape.")
             except httpx.TimeoutException as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
                 is_rate_limit = exc.response.status_code == 429
@@ -1432,6 +1498,21 @@ class AnthropicChatRuntime:
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
+            except httpx.ConnectError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                raise ChatRuntimeError("LLM API request failed.") from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc
@@ -1633,6 +1714,18 @@ class AnthropicChatRuntime:
                 raise
             except httpx.TimeoutException as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
                 raise ChatRuntimeError("LLM request timed out.") from exc
             except httpx.HTTPStatusError as exc:
                 is_rate_limit = exc.response.status_code == 429
@@ -1653,6 +1746,21 @@ class AnthropicChatRuntime:
                 raise ChatRuntimeError(
                     f"LLM API request failed with status {exc.response.status_code}."
                 ) from exc
+            except httpx.ConnectError as exc:
+                await self._rate_controller.finalize(lease, rate_limited=False)
+                should_retry = attempt < self._settings.llm_rate_limit_max_retries
+                if should_retry:
+                    delay_seconds = compute_retry_delay_seconds(
+                        headers={},
+                        attempt=attempt + 1,
+                        previous_delay=previous_delay,
+                        config=self._rate_controller.config,
+                    )
+                    previous_delay = delay_seconds
+                    await self._rate_controller.note_backoff(delay_seconds)
+                    await asyncio.sleep(delay_seconds)
+                    continue
+                raise ChatRuntimeError("LLM API request failed.") from exc
             except httpx.HTTPError as exc:
                 await self._rate_controller.finalize(lease, rate_limited=False)
                 raise ChatRuntimeError("LLM API request failed.") from exc

@@ -1932,6 +1932,81 @@ def test_openai_request_completion_retries_on_502(monkeypatch: MonkeyPatch) -> N
     assert sleeps[0] >= 0.01
 
 
+def test_openai_request_completion_retries_on_connect_timeout(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=1,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    attempts = 0
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: object) -> None:
+            del timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            del exc_type, exc, tb
+
+        async def post(
+            self,
+            endpoint: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> httpx.Response:
+            del endpoint, headers, json
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise httpx.ConnectTimeout("connect timed out")
+            return _httpx_response(
+                200,
+                json_payload={
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+                },
+            )
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("app.services.chat_runtime.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._request_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": False},
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "ok"
+    assert attempts == 2
+    assert sleeps
+    assert sleeps[0] >= 0.01
+
+
 def test_openai_request_completion_includes_response_body_on_400(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -2221,6 +2296,83 @@ def test_openai_stream_completion_retries_on_502(monkeypatch: MonkeyPatch) -> No
     choices = cast(list[dict[str, object]], result["choices"])
     message = cast(dict[str, object], choices[0]["message"])
     assert message["content"] == "stream ok"
+    assert sleeps
+    assert sleeps[0] >= 0.01
+
+
+def test_openai_stream_completion_retries_on_connect_timeout(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    reset_llm_rate_limiter_cache()
+    settings = Settings.model_construct(
+        llm_api_key="test-key",
+        llm_api_base_url="https://example.test",
+        llm_default_model="demo-model",
+        llm_max_output_tokens=128,
+        llm_max_concurrency=1,
+        llm_rate_limit_rpm=10_000,
+        llm_rate_limit_tpm_total=10_000,
+        llm_rate_limit_tpm_input=10_000,
+        llm_rate_limit_tpm_output=10_000,
+        llm_rate_limit_safety_ratio=1.0,
+        llm_rate_limit_max_retries=1,
+        llm_rate_limit_base_delay_ms=10,
+        llm_rate_limit_max_delay_seconds=1,
+    )
+    runtime = OpenAICompatibleChatRuntime(settings=settings)
+    sleeps: list[float] = []
+    attempts = 0
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: object) -> None:
+            del timeout
+
+        async def __aenter__(self) -> FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            del exc_type, exc, tb
+
+        def stream(
+            self,
+            method: str,
+            endpoint: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> _FakeStreamContext:
+            del method, endpoint, headers, json
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise httpx.ConnectTimeout("connect timed out")
+            return _FakeStreamContext(
+                response=_httpx_response(200),
+                lines=[
+                    'data: {"choices":[{"delta":{"content":"stream ok"}}]}',
+                    "data: [DONE]",
+                ],
+            )
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("app.services.chat_runtime.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.services.chat_runtime.asyncio.sleep", fake_sleep)
+
+    result = asyncio.run(
+        runtime._stream_completion(
+            "https://example.test/v1/chat/completions",
+            {"authorization": "Bearer test-key"},
+            {"model": "demo-model", "messages": [], "max_tokens": 128, "stream": True},
+            GenerationCallbacks(),
+        )
+    )
+
+    choices = cast(list[dict[str, object]], result["choices"])
+    message = cast(dict[str, object], choices[0]["message"])
+    assert message["content"] == "stream ok"
+    assert attempts == 2
     assert sleeps
     assert sleeps[0] >= 0.01
 
