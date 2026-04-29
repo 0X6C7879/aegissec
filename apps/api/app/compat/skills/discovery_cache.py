@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -13,6 +15,49 @@ if TYPE_CHECKING:
     from .models import DiscoveredSkillFile, SkillInvocationRequest, SkillScanRoot
 
 _CompiledSkillT = TypeVar("_CompiledSkillT")
+
+_lock = threading.Lock()
+_cache: dict[tuple[object, ...], Any] = {}
+_last_refresh_ts: float = 0.0
+
+
+def _is_expired() -> bool:
+    from app.core.settings import get_settings
+
+    return time.monotonic() - _last_refresh_ts > get_settings().skill_cache_ttl_seconds
+
+
+def get_cached(key: tuple[object, ...]) -> Any | None:
+    global _last_refresh_ts
+    with _lock:
+        if _last_refresh_ts > 0.0 and _is_expired():
+            _cache.clear()
+            _last_refresh_ts = 0.0
+            return None
+        return _cache.get(key)
+
+
+def set_cached(key: tuple[object, ...], value: Any) -> None:
+    global _last_refresh_ts
+    with _lock:
+        _cache[key] = value
+        _last_refresh_ts = time.monotonic()
+
+
+def invalidate_cache() -> None:
+    global _last_refresh_ts
+    with _lock:
+        _cache.clear()
+        _last_refresh_ts = 0.0
+
+
+def _invalidate_cache_namespace(namespace: str) -> None:
+    global _last_refresh_ts
+    with _lock:
+        for key in [key for key in _cache if key and key[0] == namespace]:
+            _cache.pop(key, None)
+        if not _cache:
+            _last_refresh_ts = 0.0
 
 
 def _cache_component(value: object | None) -> str:
@@ -133,11 +178,13 @@ def build_compiled_skill_cache_key(
     source_kind: str,
     relative_path: str,
     invocation_request: SkillInvocationRequest | None,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, ...]:
     return (
         source_kind,
         canonicalize_skill_path_key(record.root_dir),
         relative_path.casefold(),
+        record.id,
+        canonicalize_skill_path_key(record.entry_file),
         record.content_hash,
         invocation_request_signature(invocation_request),
     )
@@ -145,37 +192,32 @@ def build_compiled_skill_cache_key(
 
 @dataclass(slots=True)
 class SkillDiscoveryCache:
-    _entry_content_cache: dict[str, str] = field(default_factory=dict)
-    _compiled_skill_cache: dict[tuple[str, str, str, str, str], Any] = field(default_factory=dict)
-    _scan_roots_cache: dict[tuple[bool, tuple[str, ...], tuple[str, ...]], list[SkillScanRoot]] = (
-        field(default_factory=dict)
-    )
-
     def read_entry_content(self, entry_file: str, reader: Callable[[str], str]) -> str:
         canonical_entry = canonicalize_skill_path(entry_file)
-        cached = self._entry_content_cache.get(canonical_entry)
+        cached = get_cached(("entry_content", canonical_entry))
         if cached is not None:
-            return cached
+            return cast(str, cached)
         content = reader(entry_file)
-        self._entry_content_cache[canonical_entry] = content
+        set_cached(("entry_content", canonical_entry), content)
         return content
 
     def clear_entry_content_cache(self) -> None:
-        self._entry_content_cache.clear()
+        _invalidate_cache_namespace("entry_content")
 
     def clear_scan_roots_cache(self) -> None:
-        self._scan_roots_cache.clear()
+        _invalidate_cache_namespace("scan_roots")
 
     def get_or_compile_skill(
         self,
-        cache_key: tuple[str, str, str, str, str],
+        cache_key: tuple[str, ...],
         compiler: Callable[[], _CompiledSkillT],
     ) -> _CompiledSkillT:
-        cached = self._compiled_skill_cache.get(cache_key)
+        namespaced_key = ("compiled_skill", *cache_key)
+        cached = get_cached(namespaced_key)
         if cached is not None:
             return cast(_CompiledSkillT, cached)
         compiled_skill = compiler()
-        self._compiled_skill_cache[cache_key] = compiled_skill
+        set_cached(namespaced_key, compiled_skill)
         return compiled_skill
 
     def get_or_resolve_scan_roots(
@@ -199,9 +241,16 @@ class SkillDiscoveryCache:
                 sorted(canonicalize_skill_path(path) for path in discovery_paths if path.strip())
             ),
         )
-        cached = self._scan_roots_cache.get(cache_key)
+        cached = get_cached(("scan_roots", *cache_key))
         if cached is not None:
-            return list(cached)
+            return list(cast(list[Any], cached))
         roots = resolver()
-        self._scan_roots_cache[cache_key] = list(roots)
+        set_cached(("scan_roots", *cache_key), list(roots))
         return list(roots)
+
+
+_shared_discovery_cache = SkillDiscoveryCache()
+
+
+def get_skill_discovery_cache() -> SkillDiscoveryCache:
+    return _shared_discovery_cache

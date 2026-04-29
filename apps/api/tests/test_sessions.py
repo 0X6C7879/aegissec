@@ -5132,6 +5132,10 @@ def test_chat_autoroutes_docx_skill_context_on_exact_skill_mention(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(app.state.settings, "skill_autoroute_enabled", True)
+    monkeypatch.setattr(app.state.settings, "skill_autoroute_preload_enabled", True)
+    import app.harness.session_runner as _sr_module
+    monkeypatch.setattr(_sr_module, "get_settings", lambda: app.state.settings)
     _seed_skills(
         client,
         monkeypatch,
@@ -6121,6 +6125,9 @@ def test_chat_skips_autoroute_when_skill_match_is_ambiguous(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(app.state.settings, "skill_autoroute_enabled", True)
+    import app.harness.session_runner as _sr_module
+    monkeypatch.setattr(_sr_module, "get_settings", lambda: app.state.settings)
     _seed_skills(
         client,
         monkeypatch,
@@ -6214,6 +6221,10 @@ def test_chat_reports_autoroute_preload_failure_and_continues_generation(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(app.state.settings, "skill_autoroute_enabled", True)
+    monkeypatch.setattr(app.state.settings, "skill_autoroute_preload_enabled", True)
+    import app.harness.session_runner as _sr_module
+    monkeypatch.setattr(_sr_module, "get_settings", lambda: app.state.settings)
     _seed_skills(
         client,
         monkeypatch,

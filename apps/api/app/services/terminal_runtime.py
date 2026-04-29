@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from threading import Thread
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import docker
 from docker.errors import DockerException, NotFound
@@ -18,7 +18,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 
 from app.core.events import SessionEvent, SessionEventBroker, SessionEventType
-from app.core.settings import Settings
+from app.core.settings import Settings, get_settings
 from app.db.models import ExecutionStatus, RuntimePolicy, RuntimeTerminalJobStatus, utc_now
 from app.db.repositories import (
     RunLogRepository,
@@ -433,10 +433,17 @@ class DockerExecTerminalProcess:
 class DockerTerminalBackend:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._client: Any | None = None
+        self._api_client: Any | None = None
+        self._client_initialized = False
         try:
-            client = docker.from_env()
-            self._client = client
-            self._api_client = client.api
+            if not settings.docker_lazy_init:
+                import docker
+
+                client = docker.from_env()
+                self._client = client
+                self._api_client = client.api
+                self._client_initialized = True
             self._runtime_backend = DockerRuntimeBackend(settings)
         except DockerException as exc:
             raise TerminalBackendUnavailableError(
@@ -456,9 +463,11 @@ class DockerTerminalBackend:
     ) -> TerminalProcess:
         del terminal_id
         try:
+            client = self._get_client()
+            api_client = self._get_api_client()
             self._runtime_backend.ensure_started()
-            container = self._client.containers.get(self._settings.runtime_container_name)
-            exec_payload = self._api_client.exec_create(
+            container = client.containers.get(self._settings.runtime_container_name)
+            exec_payload = api_client.exec_create(
                 container.id,
                 cmd=[shell],
                 stdout=True,
@@ -470,10 +479,10 @@ class DockerTerminalBackend:
             exec_id = exec_payload.get("Id")
             if not isinstance(exec_id, str) or not exec_id:
                 raise TerminalBackendUnavailableError("Docker did not return a PTY exec id.")
-            raw_socket = self._api_client.exec_start(exec_id, tty=True, socket=True)
+            raw_socket = api_client.exec_start(exec_id, tty=True, socket=True)
             sock = cast(socket.socket, getattr(raw_socket, "_sock", raw_socket))
             process = DockerExecTerminalProcess(
-                api_client=self._api_client,
+                api_client=api_client,
                 container=container,
                 exec_id=exec_id,
                 sock=sock,
@@ -485,9 +494,34 @@ class DockerTerminalBackend:
             raise TerminalBackendUnavailableError("Runtime container is not available.") from exc
         except DockerException as exc:
             raise TerminalBackendUnavailableError("Failed to open Docker PTY session.") from exc
+        except RuntimeOperationError as exc:
+            raise TerminalBackendUnavailableError(str(exc)) from exc
 
     async def shutdown(self) -> None:
         return None
+
+    def _get_client(self) -> Any:
+        if not self._client_initialized:
+            try:
+                import docker
+
+                client = docker.from_env()
+                self._client = client
+                self._api_client = client.api
+                self._client_initialized = True
+            except DockerException as exc:
+                raise TerminalBackendUnavailableError(
+                    "Docker is not available. Start Docker Desktop or the daemon."
+                ) from exc
+
+        if self._client is None:
+            raise TerminalBackendUnavailableError("Docker client is not initialized.")
+        return self._client
+
+    def _get_api_client(self) -> Any:
+        if self._api_client is None:
+            self._api_client = self._get_client().api
+        return self._api_client
 
 
 class TerminalRuntimeService:
@@ -1455,7 +1489,10 @@ def get_terminal_backend(app: FastAPI) -> TerminalBackend:
     backend = getattr(app.state, "terminal_backend", None)
     if backend is not None:
         return cast(TerminalBackend, backend)
-    backend = DockerTerminalBackend(app.state.settings)
+    settings = getattr(app.state, "settings", None)
+    if not isinstance(settings, Settings):
+        settings = get_settings()
+    backend = DockerTerminalBackend(settings)
     app.state.terminal_backend = backend
     return backend
 

@@ -658,6 +658,17 @@ async def build_autorouted_skill_context(
     recent_context_text: str,
     execute_tool: Any,
 ) -> tuple[str | None, list[dict[str, object]], dict[str, object]]:
+    settings = get_settings()
+    if not settings.skill_autoroute_enabled:
+        disabled_entry = {
+            "state": "skill.autoroute.skipped",
+            "reason": "技能自动路由已禁用",
+            "confidence": 0,
+            "top_candidate": None,
+            "candidates": [],
+        }
+        return None, [disabled_entry], disabled_entry
+
     selected_skill, route_report = _resolve_autorouted_skill_candidate(
         available_skills=available_skills,
         latest_message_text=latest_message_text,
@@ -691,6 +702,9 @@ async def build_autorouted_skill_context(
         "top_candidate": route_report.get("top_candidate"),
         "candidates": candidate_list,
     }
+    if not settings.skill_autoroute_preload_enabled:
+        return None, [selected_entry], selected_entry
+
     executing_entry = {
         "state": "skill.autoroute.executing",
         "skill": skill_display_name,

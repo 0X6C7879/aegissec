@@ -107,7 +107,7 @@ def test_runtime_execute_uses_1200s_default_timeout_when_not_specified(
 
     assert execute_response.status_code == 200
     execute_payload = api_data(execute_response)
-    assert execute_payload["requested_timeout_seconds"] == 1200
+    assert execute_payload["requested_timeout_seconds"] == 90
 
 
 def test_runtime_execute_tracks_failed_and_timeout_runs(

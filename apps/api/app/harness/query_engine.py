@@ -23,6 +23,54 @@ _TOOL_RESULT_TEXT_PREVIEW_CHARS = 500
 _TOOL_RESULT_LIST_PREVIEW_ITEMS = 10
 
 
+class ToolResultSummarizer:
+    """Compresses tool results to fit within context budget."""
+
+    MAX_CHARS = _TOOL_RESULT_HISTORY_MAX_CHARS
+    PREVIEW_CHARS = 500
+    SCAN_TOOL_NAMES = {"nmap", "masscan", "nuclei", "nikto", "gobuster", "ffuf", "dirsearch"}
+
+    @staticmethod
+    def summarize(result_text: str, tool_name: str = "") -> str:
+        """Summarize a tool result, preserving key findings."""
+        if len(result_text) <= ToolResultSummarizer.MAX_CHARS:
+            return result_text
+
+        lines = result_text.splitlines()
+        if ToolResultSummarizer._is_scan_tool(tool_name):
+            scan_summary = ToolResultSummarizer._summarize_scan_output(result_text, lines)
+            if len(scan_summary) <= ToolResultSummarizer.MAX_CHARS:
+                return scan_summary
+
+        head = result_text[: ToolResultSummarizer.PREVIEW_CHARS]
+        tail = result_text[-ToolResultSummarizer.PREVIEW_CHARS :]
+        omitted = len(result_text) - (ToolResultSummarizer.PREVIEW_CHARS * 2)
+        return f"{head}\n\n[... {omitted} chars omitted ...]\n\n{tail}"
+
+    @staticmethod
+    def _summarize_scan_output(text: str, lines: list[str]) -> str:
+        """Summarize scan tool output preserving findings."""
+        if len(lines) <= 100:
+            return text
+
+        head_lines = lines[:50]
+        tail_lines = lines[-50:]
+        omitted = len(lines) - 100
+
+        head = "\n".join(head_lines)
+        tail = "\n".join(tail_lines)
+
+        return f"{head}\n\n[... {omitted} lines omitted ...]\n\n{tail}"
+
+    @staticmethod
+    def _is_scan_tool(tool_name: str) -> bool:
+        normalized_tool_name = tool_name.lower()
+        return any(
+            scan_tool in normalized_tool_name
+            for scan_tool in ToolResultSummarizer.SCAN_TOOL_NAMES
+        )
+
+
 def _assistant_tool_call_ids(assistant_payload: Mapping[str, Any]) -> list[str]:
     raw_tool_calls = assistant_payload.get("tool_calls")
     if raw_tool_calls is None:
@@ -55,6 +103,21 @@ def _anthropic_tool_use_ids(assistant_payload: Mapping[str, Any]) -> list[str]:
             raise ChatRuntimeError("Anthropic assistant tool_use block is missing a valid id.")
         tool_use_ids.append(tool_use_id)
     return tool_use_ids
+
+
+def _summarize_tool_payload_strings(
+    payload: Mapping[str, Any], *, tool_name: str
+) -> dict[str, Any]:
+    summarized_payload: dict[str, Any] = {}
+    for field_name, field_value in payload.items():
+        if isinstance(field_value, str):
+            summarized_payload[str(field_name)] = ToolResultSummarizer.summarize(
+                field_value,
+                tool_name=tool_name,
+            )
+        else:
+            summarized_payload[str(field_name)] = field_value
+    return summarized_payload
 
 
 def _preview_text(value: Any) -> tuple[str | None, int | None, bool]:
@@ -105,22 +168,28 @@ def _render_tool_result_history_content(tool_result: ToolCallResult) -> str:
     if len(serialized_payload) <= _TOOL_RESULT_HISTORY_MAX_CHARS:
         return serialized_payload
 
-    payload_summary: dict[str, Any] = {
-        "tool": tool_result.tool_name,
-        "payload_summary": {
-            "original_char_length": len(serialized_payload),
-            **(
-                _summarize_tool_payload(tool_result.payload, safe_summary=tool_result.safe_summary)
-                if isinstance(tool_result.payload, Mapping)
-                else {
-                    "truncated": True,
-                    "summary": tool_result.safe_summary,
-                    "preview": str(tool_result.payload)[:_TOOL_RESULT_TEXT_PREVIEW_CHARS],
-                }
+    if isinstance(tool_result.payload, Mapping):
+        summarized_history_payload: dict[str, Any] = {
+            "tool": tool_result.tool_name,
+            "payload": _summarize_tool_payload_strings(
+                tool_result.payload,
+                tool_name=tool_result.tool_name,
             ),
-        },
-    }
-    return json.dumps(payload_summary, ensure_ascii=False)
+            "payload_summary": {
+                "original_char_length": len(serialized_payload),
+                **_summarize_tool_payload(
+                    tool_result.payload,
+                    safe_summary=tool_result.safe_summary,
+                ),
+            },
+        }
+        if tool_result.safe_summary:
+            summarized_history_payload["safe_summary"] = tool_result.safe_summary
+        summarized_serialized_payload = json.dumps(summarized_history_payload, ensure_ascii=False)
+        if len(summarized_serialized_payload) <= _TOOL_RESULT_HISTORY_MAX_CHARS:
+            return summarized_serialized_payload
+
+    return ToolResultSummarizer.summarize(serialized_payload, tool_name=tool_result.tool_name)
 
 
 class BaseQueryEngine(ABC):

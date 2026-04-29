@@ -73,7 +73,7 @@ class Settings(BaseSettings):
         alias="AEGISSEC_RUNTIME_WORKSPACE_CONTAINER_PATH",
     )
     runtime_default_timeout_seconds: int = Field(
-        default=1200,
+        default=90,
         alias="AEGISSEC_RUNTIME_DEFAULT_TIMEOUT_SECONDS",
     )
     runtime_recent_runs_limit: int = Field(
@@ -135,7 +135,7 @@ class Settings(BaseSettings):
     llm_api_base_url: str | None = Field(default=None, alias="LLM_API_BASE_URL")
     llm_default_model: str | None = Field(default=None, alias="LLM_DEFAULT_MODEL")
     llm_request_timeout_seconds: int = Field(
-        default=600,
+        default=120,
         alias="AEGISSEC_LLM_REQUEST_TIMEOUT_SECONDS",
         gt=0,
     )
@@ -145,12 +145,12 @@ class Settings(BaseSettings):
         gt=0,
     )
     chat_auto_tool_turn_limit: int = Field(
-        default=48,
+        default=12,
         alias="AEGISSEC_CHAT_AUTO_TOOL_TURN_LIMIT",
         gt=0,
     )
     chat_auto_tool_budget_cycles: int = Field(
-        default=3,
+        default=1,
         alias="AEGISSEC_CHAT_AUTO_TOOL_BUDGET_CYCLES",
         gt=0,
     )
@@ -186,7 +186,7 @@ class Settings(BaseSettings):
         le=1,
     )
     llm_rate_limit_max_retries: int = Field(
-        default=6,
+        default=2,
         alias="AEGISSEC_LLM_RATE_LIMIT_MAX_RETRIES",
         ge=0,
     )
@@ -208,6 +208,73 @@ class Settings(BaseSettings):
         default=True,
         alias="AEGISSEC_CHAT_EXPOSE_THINKING",
         description="Legacy compatibility flag for non-chat surfaces.",
+    )
+    # --- Agent loop hard stops ---
+    agent_max_elapsed_seconds: int = Field(
+        default=180,
+        alias="AEGISSEC_AGENT_MAX_ELAPSED_SECONDS",
+        gt=0,
+    )
+    agent_max_total_tool_calls: int = Field(
+        default=20,
+        alias="AEGISSEC_AGENT_MAX_TOTAL_TOOL_CALLS",
+        gt=0,
+    )
+    agent_max_no_progress_turns: int = Field(
+        default=3,
+        alias="AEGISSEC_AGENT_MAX_NO_PROGRESS_TURNS",
+        gt=0,
+    )
+    # --- Skill routing ---
+    skill_autoroute_enabled: bool = Field(
+        default=False,
+        alias="AEGISSEC_SKILL_AUTOROUTE_ENABLED",
+    )
+    skill_autoroute_preload_enabled: bool = Field(
+        default=False,
+        alias="AEGISSEC_SKILL_AUTOROUTE_PRELOAD_ENABLED",
+    )
+    skill_cache_ttl_seconds: int = Field(
+        default=300,
+        alias="AEGISSEC_SKILL_CACHE_TTL_SECONDS",
+        gt=0,
+    )
+    # --- Session pagination ---
+    session_initial_message_limit: int = Field(
+        default=50,
+        alias="AEGISSEC_SESSION_INITIAL_MESSAGE_LIMIT",
+        gt=0,
+    )
+    session_initial_step_limit: int = Field(
+        default=100,
+        alias="AEGISSEC_SESSION_INITIAL_STEP_LIMIT",
+        gt=0,
+    )
+    prompt_history_message_limit: int = Field(
+        default=30,
+        alias="AEGISSEC_PROMPT_HISTORY_MESSAGE_LIMIT",
+        gt=0,
+    )
+    # --- Docker lazy init ---
+    docker_lazy_init: bool = Field(
+        default=True,
+        alias="AEGISSEC_DOCKER_LAZY_INIT",
+    )
+    # --- Startup recovery ---
+    recover_on_startup: bool = Field(
+        default=False,
+        alias="AEGISSEC_RECOVER_ON_STARTUP",
+    )
+    # --- Event debouncing ---
+    event_debounce_ms: int = Field(
+        default=250,
+        alias="AEGISSEC_EVENT_DEBOUNCE_MS",
+        ge=0,
+    )
+    attack_graph_update_debounce_ms: int = Field(
+        default=1000,
+        alias="AEGISSEC_ATTACK_GRAPH_UPDATE_DEBOUNCE_MS",
+        ge=0,
     )
 
 

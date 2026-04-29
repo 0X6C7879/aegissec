@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable
 from difflib import SequenceMatcher
 from typing import Any, cast
 
-from .messages import ChatRuntimeError, GenerationCallbacks, ToolCallResult
+from app.core.settings import get_settings
+
+from .messages import ChatRuntimeError, GenerationCallbacks, ToolCallRequest, ToolCallResult
 
 
 class QueryLoop:
-    def __init__(self, *, max_turns: int, max_budget_cycles: int = 1) -> None:
-        self._max_turns = max_turns
-        self._max_budget_cycles = max_budget_cycles
+    def __init__(
+        self,
+        *,
+        max_turns: int | None = None,
+        max_budget_cycles: int | None = None,
+    ) -> None:
+        settings = get_settings()
+        self._max_turns = max_turns or settings.chat_auto_tool_turn_limit
+        self._max_budget_cycles = max_budget_cycles or settings.chat_auto_tool_budget_cycles
         self._attempt_history: list[dict[str, str | None]] = []
+        self._loop_start_time = time.monotonic()
+        self._total_tool_calls = 0
+        self._no_progress_turns = 0
+        self._last_tool_result_hash: str | None = None
 
     async def run(
         self,
@@ -22,18 +36,34 @@ class QueryLoop:
         execute_tool: Callable[[object], Awaitable[object]] | None,
         callbacks: GenerationCallbacks | None,
     ) -> str:
+        self._reset_limit_state()
         for cycle_index in range(1, self._max_budget_cycles + 1):
             for _ in range(self._max_turns):
+                stop_reason = self._check_limits()
+                if stop_reason is not None:
+                    engine.pending_continuation = False
+                    return self._build_limit_stop_reply(stop_reason)
+
                 synthetic_tool_call = engine.dequeue_synthetic_tool_call()
                 if synthetic_tool_call is not None:
                     if execute_tool is None:
                         raise ChatRuntimeError(
                             "Slash action requested a tool but no executor is available."
                         )
+                    stop_reason = self._check_limits()
+                    if stop_reason is not None:
+                        engine.pending_continuation = False
+                        return self._build_limit_stop_reply(stop_reason)
+                    projected_stop_reason = self._projected_tool_call_limit_reason(1)
+                    if projected_stop_reason is not None:
+                        engine.pending_continuation = False
+                        return self._build_limit_stop_reply(projected_stop_reason)
                     engine.pending_continuation = True
                     synthetic_tool_result = cast(
                         ToolCallResult, await execute_tool(synthetic_tool_call)
                     )
+                    self._total_tool_calls += 1
+                    self._record_tool_progress([synthetic_tool_call], [synthetic_tool_result])
                     engine.usage.tool_rounds += 1
                     engine.usage.tool_calls += 1
                     engine.append_tool_results(
@@ -61,11 +91,23 @@ class QueryLoop:
                 if turn_result.tool_calls:
                     if execute_tool is None:
                         raise ChatRuntimeError("LLM requested tools but no executor is available.")
+                    stop_reason = self._check_limits()
+                    if stop_reason is not None:
+                        engine.pending_continuation = False
+                        return self._build_limit_stop_reply(stop_reason)
+                    projected_stop_reason = self._projected_tool_call_limit_reason(
+                        len(turn_result.tool_calls)
+                    )
+                    if projected_stop_reason is not None:
+                        engine.pending_continuation = False
+                        return self._build_limit_stop_reply(projected_stop_reason)
                     engine.pending_continuation = True
                     tool_results = await self._execute_tool_round(
                         turn_result.tool_calls,
                         execute_tool=execute_tool,
                     )
+                    self._total_tool_calls += len(tool_results)
+                    self._record_tool_progress(turn_result.tool_calls, tool_results)
                     engine.usage.tool_rounds += 1
                     engine.usage.tool_calls += len(tool_results)
                     engine.append_tool_results(
@@ -94,6 +136,11 @@ class QueryLoop:
             if cycle_index >= self._max_budget_cycles:
                 break
 
+            stop_reason = self._check_limits()
+            if stop_reason is not None:
+                engine.pending_continuation = False
+                return self._build_limit_stop_reply(stop_reason)
+
             reflection = await self._generate_budget_reflection(
                 engine,
                 callbacks=callbacks,
@@ -113,6 +160,67 @@ class QueryLoop:
         engine.pending_continuation = False
         return await engine.generate_tool_budget_reply(callbacks=callbacks)
 
+    def _reset_limit_state(self) -> None:
+        self._loop_start_time = time.monotonic()
+        self._total_tool_calls = 0
+        self._no_progress_turns = 0
+        self._last_tool_result_hash = None
+
+    def _check_limits(self) -> str | None:
+        settings = get_settings()
+        elapsed = time.monotonic() - self._loop_start_time
+
+        if elapsed > settings.agent_max_elapsed_seconds:
+            return f"elapsed time limit ({settings.agent_max_elapsed_seconds}s) exceeded"
+
+        if self._total_tool_calls > settings.agent_max_total_tool_calls:
+            return f"total tool call limit ({settings.agent_max_total_tool_calls}) exceeded"
+
+        if self._no_progress_turns >= settings.agent_max_no_progress_turns:
+            return f"no progress for {settings.agent_max_no_progress_turns} consecutive turns"
+
+        return None
+
+    def _projected_tool_call_limit_reason(self, tool_call_count: int) -> str | None:
+        settings = get_settings()
+        if self._total_tool_calls + tool_call_count > settings.agent_max_total_tool_calls:
+            return f"total tool call limit ({settings.agent_max_total_tool_calls}) exceeded"
+        return None
+
+    @staticmethod
+    def _build_limit_stop_reply(reason: str) -> str:
+        return f"Autonomous loop stopped because {reason}."
+
+    def _record_tool_progress(self, tool_calls: list[ToolCallRequest], tool_results: list[ToolCallResult]) -> None:
+        result_hash = self._tool_results_hash(tool_calls, tool_results)
+        if result_hash == self._last_tool_result_hash:
+            self._no_progress_turns += 1
+        else:
+            self._no_progress_turns = 0
+        self._last_tool_result_hash = result_hash
+
+    @staticmethod
+    def _tool_results_hash(tool_calls: list[ToolCallRequest], tool_results: list[ToolCallResult]) -> str:
+        try:
+            call_data = [
+                {"name": tc.tool_name, "args": tc.arguments} for tc in tool_calls
+            ]
+            result_data = [
+                tool_result.model_dump(mode="json") for tool_result in tool_results
+            ]
+            serialized = json.dumps(
+                {"calls": call_data, "results": result_data},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        except (TypeError, AttributeError):
+            call_part = "\n".join(
+                f"{getattr(tc, 'tool_name', '?')}:{getattr(tc, 'arguments', {})}" for tc in tool_calls
+            )
+            result_part = "\n".join(str(tool_result) for tool_result in tool_results)
+            serialized = f"calls:\n{call_part}\nresults:\n{result_part}"
+        return hashlib.sha256(serialized.encode()).hexdigest()
+
     async def _generate_budget_reflection(
         self,
         engine: BaseQueryEngine,
@@ -124,9 +232,12 @@ class QueryLoop:
         reflection_generator = getattr(engine, "generate_tool_budget_reflection", None)
         if not callable(reflection_generator):
             return None
+        typed_reflection_generator = cast(
+            Callable[..., Awaitable[str | None]], reflection_generator
+        )
         engine.usage.model_turns += 1
         recent_attempts_summary = self._recent_attempts_summary()
-        reflection = await reflection_generator(
+        reflection = await typed_reflection_generator(
             callbacks=None,
             cycle_index=cycle_index,
             max_cycles=self._max_budget_cycles,

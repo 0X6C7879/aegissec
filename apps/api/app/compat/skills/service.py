@@ -11,9 +11,9 @@ from sqlmodel import Session as DBSession
 
 from app.compat.skills import models as skill_models
 from app.compat.skills.discovery_cache import (
-    SkillDiscoveryCache,
     build_compiled_skill_cache_key,
     build_root_cache_key,
+    get_skill_discovery_cache,
 )
 from app.compat.skills.executor import (
     execute_skill_orchestration_plan as execute_skill_orchestration_runtime,
@@ -204,7 +204,6 @@ class SkillService:
         self._repository = SkillRepository(db_session)
         self._mcp_repository = MCPRepository(db_session)
         self._settings = settings
-        self._cache = SkillDiscoveryCache()
 
     def list_skills(self) -> list[SkillRecordRead]:
         return [
@@ -2168,8 +2167,9 @@ class SkillService:
         return primary_skill if isinstance(primary_skill, dict) else None
 
     def rescan_skills(self) -> list[SkillRecordRead]:
-        self._cache.clear_entry_content_cache()
-        self._cache.clear_scan_roots_cache()
+        cache = get_skill_discovery_cache()
+        cache.clear_entry_content_cache()
+        cache.clear_scan_roots_cache()
         records = [self._to_skill_record(parsed) for parsed in self._scan_and_parse()]
         self._repository.replace_all(records)
         return self.list_skills()
@@ -2195,9 +2195,15 @@ class SkillService:
         normalized_discovery_paths = [
             path for path in discovery_paths or [] if path and path.strip()
         ]
-        return self._cache.get_or_resolve_scan_roots(
+        db_bind = self._db_session.get_bind()
+        return get_skill_discovery_cache().get_or_resolve_scan_roots(
             include_compatibility_roots=self._settings.skill_compatibility_scan_enabled,
-            extra_dirs=list(self._settings.skill_extra_dirs),
+            extra_dirs=[
+                *self._settings.skill_extra_dirs,
+                f"settings://{id(self._settings)}",
+                f"resolver://{id(resolve_skill_scan_roots)}",
+                f"database://{getattr(db_bind, 'url', '')}",
+            ],
             discovery_paths=normalized_discovery_paths,
             resolver=lambda: self._resolve_skill_scan_roots_with_compatibility(
                 normalized_discovery_paths,
@@ -2473,7 +2479,7 @@ class SkillService:
             record = None
             entry_file = record_or_entry_file
         try:
-            return self._cache.read_entry_content(entry_file, read_skill_markdown)
+            return get_skill_discovery_cache().read_entry_content(entry_file, read_skill_markdown)
         except OSError as exc:
             entry_path = Path(entry_file)
             raise SkillContentReadError(
@@ -2495,7 +2501,7 @@ class SkillService:
         )
         compiler_module = import_module("app.compat.skills.compiler")
         registry_module = import_module("app.compat.skills.registry")
-        compiled_skill = self._cache.get_or_compile_skill(
+        compiled_skill = get_skill_discovery_cache().get_or_compile_skill(
             cache_key,
             lambda: cast(
                 skill_models.CompiledSkill,

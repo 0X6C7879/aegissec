@@ -1353,14 +1353,20 @@ def test_anthropic_runtime_supports_more_than_three_tool_rounds() -> None:
     ]
 
 
-def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
+def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = Settings.model_construct(
         llm_api_key="test-key",
         llm_api_base_url="https://example.test",
         llm_default_model="demo-model",
         chat_auto_tool_turn_limit=MAX_TOOL_STEPS + 1,
         chat_auto_tool_budget_cycles=1,
+        agent_max_total_tool_calls=MAX_TOOL_STEPS + 100,
+        agent_max_elapsed_seconds=99999,
+        agent_max_no_progress_turns=999,
     )
+    monkeypatch.setattr("app.harness.query_loop.get_settings", lambda: settings)
 
     class StubRuntime(OpenAICompatibleChatRuntime):
         def __init__(self) -> None:
@@ -1411,14 +1417,20 @@ def test_openai_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
     assert "tools" not in runtime.payloads[-1]
 
 
-def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted() -> None:
+def test_anthropic_runtime_returns_summary_when_tool_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = Settings.model_construct(
         anthropic_api_key="test-key",
         anthropic_api_base_url="https://example.test",
         anthropic_model="claude-demo",
         chat_auto_tool_turn_limit=MAX_TOOL_STEPS + 1,
         chat_auto_tool_budget_cycles=1,
+        agent_max_total_tool_calls=MAX_TOOL_STEPS + 100,
+        agent_max_elapsed_seconds=99999,
+        agent_max_no_progress_turns=999,
     )
+    monkeypatch.setattr("app.harness.query_loop.get_settings", lambda: settings)
 
     class StubRuntime(AnthropicChatRuntime):
         def __init__(self) -> None:

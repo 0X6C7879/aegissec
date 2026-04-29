@@ -6,8 +6,11 @@ import logging
 import re
 from collections.abc import Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import or_
 from sqlmodel import Session as DBSession
+from sqlmodel import col, select
 
 from app.compat.mcp.service import (
     MCPService,
@@ -19,12 +22,14 @@ from app.compat.skills.service import (
     get_skill_service,
 )
 from app.core.events import SessionEventBroker, SessionEventType, get_event_broker
+from app.core.settings import get_settings
 from app.db.models import (
     BranchForkRequest,
     ChatGeneration,
     ChatGenerationRead,
     ChatRequest,
     ChatResponse,
+    GenerationStep,
     GenerationAction,
     GenerationStatus,
     GenerationStepRead,
@@ -148,11 +153,22 @@ def _clear_generation_continuation_state(
 def _build_conversation_read(
     repository: SessionRepository,
     session: Session,
+    message_limit: int | None = None,
+    step_limit: int | None = None,
+    before_message_id: str | None = None,
 ) -> SessionConversationRead:
+    settings = get_settings()
+    msg_limit = message_limit or settings.session_initial_message_limit
+    stp_limit = step_limit or settings.session_initial_step_limit
     active_branch = repository.ensure_active_branch(session)
     branches = repository.list_branches(session.id)
-    messages = repository.list_messages(
-        session.id, branch_id=active_branch.id, include_superseded=False
+    messages, message_has_more = _list_recent_messages(
+        repository,
+        session.id,
+        msg_limit,
+        branch_id=active_branch.id,
+        include_superseded=False,
+        before_message_id=before_message_id,
     )
     generations = [
         generation
@@ -160,25 +176,111 @@ def _build_conversation_read(
         if generation.branch_id == active_branch.id
     ]
     active_generation = repository.get_active_generation(session.id)
-    return SessionConversationRead(
+    read = SessionConversationRead(
         session=to_session_read(session),
         active_branch=to_conversation_branch_read(active_branch),
         branches=[to_conversation_branch_read(branch) for branch in branches],
         messages=[to_message_read(message) for message in messages],
-        generations=_build_generation_reads(repository, session.id, generations),
+        generations=_build_generation_reads(
+            repository, session.id, generations, step_limit=stp_limit
+        ),
         active_generation_id=active_generation.id if active_generation is not None else None,
         queued_generation_count=repository.queue_size(session.id),
     )
+    object.__setattr__(
+        read, "has_more", message_has_more or _generation_reads_have_more_steps(read.generations)
+    )
+    object.__setattr__(read, "has_more_messages", message_has_more)
+    object.__setattr__(read, "has_more_steps", _generation_reads_have_more_steps(read.generations))
+    return read
+
+
+def _conversation_read_payload(read: SessionConversationRead) -> dict[str, object]:
+    payload = read.model_dump(mode="json")
+    has_more_messages = bool(getattr(read, "has_more_messages", False))
+    has_more_steps = bool(getattr(read, "has_more_steps", False))
+    payload["has_more"] = bool(getattr(read, "has_more", has_more_messages or has_more_steps))
+    payload["has_more_messages"] = has_more_messages
+    payload["has_more_steps"] = has_more_steps
+    return payload
+
+
+def _conversation_read_response(read: SessionConversationRead) -> JSONResponse:
+    return JSONResponse(content=_conversation_read_payload(read))
+
+
+def _generation_reads_have_more_steps(generations: list[ChatGenerationRead]) -> bool:
+    return any(bool(getattr(generation, "has_more_steps", False)) for generation in generations)
+
+
+def _list_recent_messages(
+    repository: SessionRepository,
+    session_id: str,
+    limit: int,
+    *,
+    branch_id: str | None = None,
+    include_superseded: bool = False,
+    before_message_id: str | None = None,
+) -> tuple[list[Message], bool]:
+    statement = select(Message).where(Message.session_id == session_id)
+    if branch_id is not None:
+        statement = statement.where(Message.branch_id == branch_id)
+    if not include_superseded:
+        statement = statement.where(Message.status != MessageStatus.SUPERSEDED)
+    if before_message_id is not None:
+        cursor_message = repository.get_message(before_message_id)
+        if cursor_message is None or cursor_message.session_id != session_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        if branch_id is not None and cursor_message.branch_id != branch_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        statement = statement.where(
+            or_(
+                col(Message.created_at) < cursor_message.created_at,
+                (col(Message.created_at) == cursor_message.created_at)
+                & (col(Message.id) < cursor_message.id),
+            )
+        )
+    rows = list(
+        repository.db_session.exec(
+            statement.order_by(col(Message.created_at).desc(), col(Message.id).desc()).limit(
+                limit + 1
+            )
+        ).all()
+    )
+    return list(reversed(rows[:limit])), len(rows) > limit
 
 
 def _build_generation_reads(
     repository: SessionRepository,
     session_id: str,
     generations: list[ChatGeneration],
+    step_limit: int | None = None,
 ) -> list[ChatGenerationRead]:
+    settings = get_settings()
+    stp_limit = step_limit or settings.session_initial_step_limit
     generation_ids = [generation.id for generation in generations]
     steps_by_generation_id: dict[str, list[GenerationStepRead]] = {}
-    for step in repository.list_generation_steps(generation_ids=generation_ids):
+    step_has_more = False
+    if generation_ids:
+        statement = select(GenerationStep).where(
+            col(GenerationStep.generation_id).in_(generation_ids)
+        )
+        rows = list(
+            repository.db_session.exec(
+                statement.order_by(
+                    col(GenerationStep.started_at).desc(),
+                    col(GenerationStep.id).desc(),
+                ).limit(stp_limit + 1)
+            ).all()
+        )
+        step_has_more = len(rows) > stp_limit
+        steps = sorted(
+            rows[:stp_limit],
+            key=lambda item: (item.generation_id, item.sequence, item.started_at, item.id),
+        )
+    else:
+        steps = []
+    for step in steps:
         steps_by_generation_id.setdefault(step.generation_id, []).append(
             to_generation_step_read(step)
         )
@@ -196,6 +298,7 @@ def _build_generation_reads(
         generation_read = to_chat_generation_read(generation)
         generation_read.steps = list(steps_by_generation_id.get(generation.id, []))
         generation_read.queue_position = queue_positions.get(generation.id)
+        object.__setattr__(generation_read, "has_more_steps", step_has_more)
         reads.append(generation_read)
     return reads
 
@@ -1098,8 +1201,11 @@ async def fork_from_message(
     session_id: str,
     message_id: str,
     payload: BranchForkRequest | None = None,
+    message_limit: int | None = Query(default=None, ge=1),
+    step_limit: int | None = Query(default=None, ge=1),
+    before_message_id: str | None = Query(default=None),
     db_session: DBSession = Depends(get_db_session),
-) -> SessionConversationRead:
+) -> object:
     repository = SessionRepository(db_session)
     session = _get_session_or_404(repository, session_id)
     target_message = _get_message_or_404(repository, session_id=session_id, message_id=message_id)
@@ -1123,7 +1229,15 @@ async def fork_from_message(
     session = repository.activate_branch(session, new_branch)
     db_session.expire_all()
     refreshed_session = _get_session_or_404(repository, session_id)
-    return _build_conversation_read(repository, refreshed_session)
+    return _conversation_read_response(
+        _build_conversation_read(
+            repository,
+            refreshed_session,
+            message_limit=message_limit,
+            step_limit=step_limit,
+            before_message_id=before_message_id,
+        )
+    )
 
 
 @router.post("/{session_id}/messages/{message_id}/rollback", response_model=SessionConversationRead)
@@ -1131,8 +1245,11 @@ async def rollback_to_message(
     session_id: str,
     message_id: str,
     payload: MessageRollbackRequest | None = None,
+    message_limit: int | None = Query(default=None, ge=1),
+    step_limit: int | None = Query(default=None, ge=1),
+    before_message_id: str | None = Query(default=None),
     db_session: DBSession = Depends(get_db_session),
-) -> SessionConversationRead:
+) -> object:
     repository = SessionRepository(db_session)
     session = _get_session_or_404(repository, session_id)
     target_message = _get_message_or_404(repository, session_id=session_id, message_id=message_id)
@@ -1154,7 +1271,15 @@ async def rollback_to_message(
     session = repository.activate_branch(session, branch)
     db_session.expire_all()
     refreshed_session = _get_session_or_404(repository, session_id)
-    return _build_conversation_read(repository, refreshed_session)
+    return _conversation_read_response(
+        _build_conversation_read(
+            repository,
+            refreshed_session,
+            message_limit=message_limit,
+            step_limit=step_limit,
+            before_message_id=before_message_id,
+        )
+    )
 
 
 @router.post(

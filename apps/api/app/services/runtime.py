@@ -201,17 +201,27 @@ class DockerRuntimeBackend:
         self._settings = settings
         self._workspace_dir = Path(settings.runtime_workspace_dir).resolve()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
+        self._client: DockerClientProtocol | None = None
+        self._api_client: DockerExecApi | None = None
+        self._client_initialized = False
+        if settings.docker_lazy_init:
+            return
+
         try:
             client = docker.from_env()
-            self._client = client
-            self._api_client = client.api
+            self._client = cast(DockerClientProtocol, client)
+            self._api_client = cast(DockerExecApi, client.api)
+            self._client_initialized = True
         except DockerException as exc:
             raise RuntimeOperationError(
                 "Docker is not available. Start Docker Desktop or the daemon."
             ) from exc
 
     def inspect(self) -> RuntimeContainerState:
-        container = self._get_container()
+        try:
+            container = self._get_container()
+        except RuntimeOperationError:
+            return self._missing_state()
         if container is None:
             return self._missing_state()
 
@@ -261,7 +271,8 @@ class DockerRuntimeBackend:
         started_at = utc_now()
 
         try:
-            exec_payload = self._api_client.exec_create(
+            api_client = self._get_api_client()
+            exec_payload = api_client.exec_create(
                 container.id,
                 cmd=[SHELL_PATH, "-lc", command],
                 stdout=True,
@@ -279,7 +290,7 @@ class DockerRuntimeBackend:
         if not isinstance(exec_id, str) or not exec_id:
             raise RuntimeOperationError("Docker did not return a valid exec identifier.")
 
-        collector = _ExecCollector(self._api_client, exec_id)
+        collector = _ExecCollector(api_client, exec_id)
         thread = Thread(target=collector.collect, daemon=True)
         thread.start()
         thread.join(timeout=float(timeout_seconds))
@@ -321,10 +332,7 @@ class DockerRuntimeBackend:
 
     def _get_container(self) -> DockerContainer | None:
         try:
-            return cast(
-                DockerContainer,
-                self._client.containers.get(self._settings.runtime_container_name),
-            )
+            return self._get_client().containers.get(self._settings.runtime_container_name)
         except NotFound:
             return None
         except DockerException as exc:
@@ -339,34 +347,31 @@ class DockerRuntimeBackend:
     def _create_container(self) -> DockerContainer:
         self._ensure_image_exists()
         try:
-            return cast(
-                DockerContainer,
-                self._client.containers.create(
-                    image=self._settings.kali_image,
-                    name=self._settings.runtime_container_name,
-                    command=[SHELL_PATH, "-lc", "while true; do sleep 3600; done"],
-                    detach=True,
-                    tty=False,
-                    stdin_open=False,
-                    working_dir=self._settings.runtime_workspace_container_path,
-                    volumes={
-                        str(self._workspace_dir): {
-                            "bind": self._settings.runtime_workspace_container_path,
-                            "mode": "rw",
-                        }
-                    },
-                    labels={
-                        "app": "aegissec",
-                        "component": "runtime",
-                    },
-                ),
+            return self._get_client().containers.create(
+                image=self._settings.kali_image,
+                name=self._settings.runtime_container_name,
+                command=[SHELL_PATH, "-lc", "while true; do sleep 3600; done"],
+                detach=True,
+                tty=False,
+                stdin_open=False,
+                working_dir=self._settings.runtime_workspace_container_path,
+                volumes={
+                    str(self._workspace_dir): {
+                        "bind": self._settings.runtime_workspace_container_path,
+                        "mode": "rw",
+                    }
+                },
+                labels={
+                    "app": "aegissec",
+                    "component": "runtime",
+                },
             )
         except DockerException as exc:
             raise RuntimeOperationError("Failed to create the Kali runtime container.") from exc
 
     def _ensure_image_exists(self) -> None:
         try:
-            self._client.images.get(self._settings.kali_image)
+            self._get_client().images.get(self._settings.kali_image)
         except ImageNotFound as exc:
             raise RuntimeOperationError(
                 "Docker image "
@@ -380,7 +385,7 @@ class DockerRuntimeBackend:
 
     def _inspect_exec(self, exec_id: str) -> dict[str, object]:
         try:
-            exec_details = self._api_client.exec_inspect(exec_id)
+            exec_details = self._get_api_client().exec_inspect(exec_id)
         except DockerException as exc:
             raise RuntimeOperationError("Failed to inspect the Docker exec state.") from exc
 
@@ -388,6 +393,29 @@ class DockerRuntimeBackend:
             raise RuntimeOperationError("Docker returned an invalid exec inspection payload.")
 
         return exec_details
+
+    def _get_client(self) -> DockerClientProtocol:
+        if not self._client_initialized:
+            try:
+                import docker
+
+                client = docker.from_env()
+                self._client = cast(DockerClientProtocol, client)
+                self._api_client = cast(DockerExecApi, client.api)
+                self._client_initialized = True
+            except DockerException as exc:
+                raise RuntimeOperationError(
+                    "Docker is not available. Start Docker Desktop or the daemon."
+                ) from exc
+
+        if self._client is None:
+            raise RuntimeOperationError("Docker client is not initialized.")
+        return self._client
+
+    def _get_api_client(self) -> DockerExecApi:
+        if self._api_client is None:
+            self._api_client = self._get_client().api
+        return self._api_client
 
     def _terminate_exec(self, container: DockerContainer, exec_id: str) -> None:
         exec_details = self._inspect_exec(exec_id)
