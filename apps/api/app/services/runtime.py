@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -7,7 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from time import sleep
-from typing import Any, Protocol, cast
+from typing import Any, BinaryIO, Protocol, cast
+from uuid import uuid4
 
 import docker
 from docker.errors import DockerException, ImageNotFound, NotFound
@@ -49,6 +51,10 @@ class RuntimeOperationError(RuntimeServiceError):
 
 
 class RuntimePolicyViolationError(RuntimeServiceError):
+    pass
+
+
+class RuntimeUploadTooLargeError(RuntimeServiceError):
     pass
 
 
@@ -510,8 +516,11 @@ class RuntimeService:
         recent_runs = self._repository.list_recent_runs(
             limit=self._settings.runtime_recent_runs_limit
         )
+        artifacts_by_run_id = self._repository.list_artifacts_for_runs(
+            run.id for run in recent_runs
+        )
         recent_run_reads = [
-            to_runtime_execution_run_read(run, self._repository.list_artifacts_for_run(run.id))
+            to_runtime_execution_run_read(run, artifacts_by_run_id.get(run.id, []))
             for run in recent_runs
         ]
         recent_artifacts = [
@@ -565,6 +574,88 @@ class RuntimeService:
         session_id: str | None = None,
         overwrite: bool = False,
     ) -> RuntimeExecutionRunRead:
+        if len(content) > self._settings.runtime_upload_max_bytes:
+            raise RuntimeUploadTooLargeError(
+                "Upload exceeds configured maximum size "
+                f"{self._settings.runtime_upload_max_bytes} bytes."
+            )
+        relative_path, host_path, container_path = self._resolve_upload_target(
+            destination_path=destination_path,
+            overwrite=overwrite,
+        )
+        host_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = host_path.parent / f".upload-{uuid4().hex}.tmp"
+        try:
+            temp_path.write_bytes(content)
+            if host_path.exists() and not overwrite:
+                raise RuntimeArtifactPathError(
+                    "Destination already exists; set overwrite=true to replace."
+                )
+            temp_path.replace(host_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return self._record_uploaded_artifact(
+            session_id=session_id,
+            relative_path=relative_path,
+            host_path=host_path,
+            container_path=container_path,
+            byte_count=len(content),
+            overwrite=overwrite,
+        )
+
+    def upload_artifact_stream(
+        self,
+        *,
+        destination_path: str,
+        source: BinaryIO,
+        session_id: str | None = None,
+        overwrite: bool = False,
+    ) -> RuntimeExecutionRunRead:
+        relative_path, host_path, container_path = self._resolve_upload_target(
+            destination_path=destination_path,
+            overwrite=overwrite,
+        )
+        host_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = host_path.parent / f".upload-{uuid4().hex}.tmp"
+        chunk_size = 1024 * 1024
+        total_written = 0
+        try:
+            with temp_path.open("wb") as handle:
+                while True:
+                    chunk = source.read(chunk_size)
+                    if not chunk:
+                        break
+                    total_written += len(chunk)
+                    if total_written > self._settings.runtime_upload_max_bytes:
+                        raise RuntimeUploadTooLargeError(
+                            "Upload exceeds configured maximum size "
+                            f"{self._settings.runtime_upload_max_bytes} bytes."
+                        )
+                    handle.write(chunk)
+            if host_path.exists() and not overwrite:
+                raise RuntimeArtifactPathError(
+                    "Destination already exists; set overwrite=true to replace."
+                )
+            temp_path.replace(host_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return self._record_uploaded_artifact(
+            session_id=session_id,
+            relative_path=relative_path,
+            host_path=host_path,
+            container_path=container_path,
+            byte_count=total_written,
+            overwrite=overwrite,
+        )
+
+    def _resolve_upload_target(
+        self,
+        *,
+        destination_path: str,
+        overwrite: bool,
+    ) -> tuple[str, Path, str]:
         relative_path = self._normalize_relative_artifact_path(destination_path)
         host_path = (self._workspace_dir / Path(relative_path)).resolve()
         if not host_path.is_relative_to(self._workspace_dir):
@@ -573,9 +664,21 @@ class RuntimeService:
             raise RuntimeArtifactPathError(
                 "Destination already exists; set overwrite=true to replace."
             )
+        container_path = str(
+            PurePosixPath(self._settings.runtime_workspace_container_path) / relative_path
+        )
+        return relative_path, host_path, container_path
 
-        host_path.parent.mkdir(parents=True, exist_ok=True)
-        host_path.write_bytes(content)
+    def _record_uploaded_artifact(
+        self,
+        *,
+        session_id: str | None,
+        relative_path: str,
+        host_path: Path,
+        container_path: str,
+        byte_count: int,
+        overwrite: bool,
+    ) -> RuntimeExecutionRunRead:
         created_at = utc_now()
         run, artifact_rows = self._repository.create_run(
             session_id=session_id,
@@ -583,21 +686,12 @@ class RuntimeService:
             requested_timeout_seconds=1,
             status=ExecutionStatus.SUCCESS,
             exit_code=0,
-            stdout=f"Uploaded {len(content)} bytes to {relative_path}.",
+            stdout=f"Uploaded {byte_count} bytes to {relative_path}.",
             stderr="",
             container_name=self._settings.runtime_container_name,
             started_at=created_at,
             ended_at=created_at,
-            artifacts=[
-                (
-                    relative_path,
-                    str(host_path),
-                    str(
-                        PurePosixPath(self._settings.runtime_workspace_container_path)
-                        / relative_path
-                    ),
-                )
-            ],
+            artifacts=[(relative_path, str(host_path), container_path)],
         )
         self._run_log_repository.create_log(
             session_id=session_id,
@@ -607,17 +701,21 @@ class RuntimeService:
             source="runtime",
             event_type="runtime.upload",
             message=relative_path,
-            payload={"bytes": len(content), "overwrite": overwrite},
+            payload={"bytes": byte_count, "overwrite": overwrite},
         )
         return to_runtime_execution_run_read(run, artifact_rows)
 
-    def download_artifact_bytes(self, *, artifact_path: str) -> tuple[Path, bytes]:
+    def resolve_artifact_path(self, *, artifact_path: str) -> Path:
         relative_path = self._normalize_relative_artifact_path(artifact_path)
         host_path = (self._workspace_dir / Path(relative_path)).resolve()
         if not host_path.is_relative_to(self._workspace_dir):
             raise RuntimeArtifactPathError("Download path must stay in runtime workspace.")
         if not host_path.exists() or not host_path.is_file():
             raise RuntimeArtifactPathError(f"Artifact path '{artifact_path}' was not found.")
+        return host_path
+
+    def download_artifact_bytes(self, *, artifact_path: str) -> tuple[Path, bytes]:
+        host_path = self.resolve_artifact_path(artifact_path=artifact_path)
         return host_path, host_path.read_bytes()
 
     def cleanup_artifacts(self) -> dict[str, int]:
@@ -720,26 +818,98 @@ class RuntimeService:
         *,
         runtime_policy: RuntimePolicy | None = None,
     ) -> RuntimeExecutionRunRead:
+        policy, timeout_seconds, command = self._prepare_execution(
+            payload=payload,
+            runtime_policy=runtime_policy,
+        )
+        result, artifacts = self._execute_backend(
+            command=command,
+            timeout_seconds=timeout_seconds,
+            artifact_paths=list(payload.artifact_paths),
+        )
+        return self._persist_execution(
+            payload=payload,
+            command=command,
+            timeout_seconds=timeout_seconds,
+            policy=policy,
+            result=result,
+            artifacts=artifacts,
+        )
+
+    async def execute_async(
+        self,
+        payload: RuntimeExecuteRequest,
+        *,
+        runtime_policy: RuntimePolicy | None = None,
+    ) -> RuntimeExecutionRunRead:
+        policy, timeout_seconds, command = self._prepare_execution(
+            payload=payload,
+            runtime_policy=runtime_policy,
+        )
+        result, artifacts = await asyncio.to_thread(
+            self._execute_backend,
+            command,
+            timeout_seconds,
+            list(payload.artifact_paths),
+        )
+        return self._persist_execution(
+            payload=payload,
+            command=command,
+            timeout_seconds=timeout_seconds,
+            policy=policy,
+            result=result,
+            artifacts=artifacts,
+        )
+
+    def _prepare_execution(
+        self,
+        *,
+        payload: RuntimeExecuteRequest,
+        runtime_policy: RuntimePolicy | None,
+    ) -> tuple[RuntimePolicy, int, str]:
         policy = runtime_policy or RuntimePolicy()
         timeout_seconds = payload.timeout_seconds or self._settings.runtime_default_timeout_seconds
         command = payload.command.strip()
         if not command:
             raise RuntimeArtifactPathError("Command must not be empty.")
-
         self._enforce_runtime_policy(
-            command=command, timeout_seconds=timeout_seconds, policy=policy
+            command=command,
+            timeout_seconds=timeout_seconds,
+            policy=policy,
         )
+        return policy, timeout_seconds, command
 
-        result = self._backend.execute(command, timeout_seconds, payload.artifact_paths)
-        artifacts = self._resolve_artifacts(payload.artifact_paths)
+    def _execute_backend(
+        self,
+        command: str,
+        timeout_seconds: int,
+        artifact_paths: list[str],
+    ) -> tuple[RuntimeCommandResult, list[tuple[str, str, str]]]:
+        result = self._backend.execute(command, timeout_seconds, artifact_paths)
+        artifacts = self._resolve_artifacts(artifact_paths)
+        return result, artifacts
+
+    def _persist_execution(
+        self,
+        *,
+        payload: RuntimeExecuteRequest,
+        command: str,
+        timeout_seconds: int,
+        policy: RuntimePolicy,
+        result: RuntimeCommandResult,
+        artifacts: list[tuple[str, str, str]],
+    ) -> RuntimeExecutionRunRead:
+        persisted_stdout, persisted_stderr, stdout_truncated, stderr_truncated = (
+            self._truncate_persisted_output(stdout=result.stdout, stderr=result.stderr)
+        )
         run, artifact_rows = self._repository.create_run(
             session_id=payload.session_id,
             command=command,
             requested_timeout_seconds=timeout_seconds,
             status=result.status,
             exit_code=result.exit_code,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout=persisted_stdout,
+            stderr=persisted_stderr,
             container_name=result.container_state.container_name,
             started_at=result.started_at,
             ended_at=result.ended_at,
@@ -758,10 +928,48 @@ class RuntimeService:
                 "exit_code": result.exit_code,
                 "artifact_count": len(artifact_rows),
                 "requested_timeout_seconds": timeout_seconds,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
                 "runtime_policy": policy.model_dump(mode="json"),
             },
         )
         return to_runtime_execution_run_read(run, artifact_rows)
+
+    def _truncate_persisted_output(
+        self,
+        *,
+        stdout: str,
+        stderr: str,
+    ) -> tuple[str, str, bool, bool]:
+        max_chars = max(1, self._settings.runtime_output_max_chars)
+        stdout_truncated = len(stdout) > max_chars
+        stderr_truncated = len(stderr) > max_chars
+        truncated_stdout = stdout[:max_chars]
+        truncated_stderr = stderr[:max_chars]
+        notices: list[str] = []
+        if stdout_truncated:
+            notices.append(f"stdout truncated to {max_chars} chars")
+        if stderr_truncated:
+            notices.append(f"stderr truncated to {max_chars} chars")
+        if notices:
+            truncated_stderr = self._append_truncation_notice(
+                stderr=truncated_stderr,
+                notice=f"[aegissec] {'; '.join(notices)}.",
+                max_chars=max_chars,
+            )
+        return truncated_stdout, truncated_stderr, stdout_truncated, stderr_truncated
+
+    @staticmethod
+    def _append_truncation_notice(*, stderr: str, notice: str, max_chars: int) -> str:
+        if max_chars <= len(notice):
+            return notice[-max_chars:]
+        if not stderr:
+            return notice
+        reserved = len(notice) + 1
+        if reserved >= max_chars:
+            return notice[-max_chars:]
+        preserved_stderr = stderr[: max_chars - reserved]
+        return f"{preserved_stderr}\n{notice}"
 
     def _resolve_policy_for_profile(self, profile_name: str | None) -> RuntimePolicy:
         selected_profile = profile_name or self._settings.runtime_default_profile_name

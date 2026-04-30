@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
+from typing import Any
 
+from sqlalchemy import func
 from sqlmodel import Session as DBSession
 from sqlmodel import col, or_, select
 
@@ -18,6 +21,45 @@ from app.db.models import (
 class RuntimeRepository:
     def __init__(self, db_session: DBSession):
         self.db_session = db_session
+
+    @staticmethod
+    def _apply_runtime_run_filters(
+        statement: Any,
+        *,
+        session_id: str | None,
+        query: str | None,
+    ) -> Any:
+        if session_id is not None:
+            statement = statement.where(RuntimeExecutionRun.session_id == session_id)
+        if query is not None and query.strip():
+            statement = statement.where(col(RuntimeExecutionRun.command).like(f"%{query.strip()}%"))
+        return statement
+
+    @staticmethod
+    def _apply_runtime_artifact_filters(
+        statement: Any,
+        *,
+        session_id: str | None,
+        query: str | None,
+    ) -> Any:
+        if session_id is not None:
+            statement = statement.where(
+                col(RuntimeArtifact.run_id).in_(
+                    select(RuntimeExecutionRun.id).where(
+                        RuntimeExecutionRun.session_id == session_id
+                    )
+                )
+            )
+        if query is not None and query.strip():
+            like_query = f"%{query.strip()}%"
+            statement = statement.where(
+                or_(
+                    col(RuntimeArtifact.relative_path).like(like_query),
+                    col(RuntimeArtifact.host_path).like(like_query),
+                    col(RuntimeArtifact.container_path).like(like_query),
+                )
+            )
+        return statement
 
     def create_run(
         self,
@@ -97,6 +139,24 @@ class RuntimeRepository:
         )
         return list(self.db_session.exec(statement).all())
 
+    def list_artifacts_for_runs(self, run_ids: Iterable[str]) -> dict[str, list[RuntimeArtifact]]:
+        run_id_values = list(dict.fromkeys(run_ids))
+        if not run_id_values:
+            return {}
+        statement = (
+            select(RuntimeArtifact)
+            .where(col(RuntimeArtifact.run_id).in_(run_id_values))
+            .order_by(
+                col(RuntimeArtifact.run_id).asc(),
+                col(RuntimeArtifact.created_at).asc(),
+                col(RuntimeArtifact.id).asc(),
+            )
+        )
+        artifacts_by_run_id: dict[str, list[RuntimeArtifact]] = {}
+        for artifact in self.db_session.exec(statement).all():
+            artifacts_by_run_id.setdefault(artifact.run_id, []).append(artifact)
+        return artifacts_by_run_id
+
     def list_runs(
         self,
         *,
@@ -108,10 +168,11 @@ class RuntimeRepository:
         sort_order: str = "desc",
     ) -> list[RuntimeExecutionRun]:
         statement = select(RuntimeExecutionRun)
-        if session_id is not None:
-            statement = statement.where(RuntimeExecutionRun.session_id == session_id)
-        if query is not None and query.strip():
-            statement = statement.where(col(RuntimeExecutionRun.command).like(f"%{query.strip()}%"))
+        statement = self._apply_runtime_run_filters(
+            statement,
+            session_id=session_id,
+            query=query,
+        )
 
         order_column = (
             col(RuntimeExecutionRun.created_at)
@@ -126,12 +187,13 @@ class RuntimeRepository:
         return list(self.db_session.exec(statement).all())
 
     def count_runs(self, *, session_id: str | None = None, query: str | None = None) -> int:
-        statement = select(RuntimeExecutionRun)
-        if session_id is not None:
-            statement = statement.where(RuntimeExecutionRun.session_id == session_id)
-        if query is not None and query.strip():
-            statement = statement.where(col(RuntimeExecutionRun.command).like(f"%{query.strip()}%"))
-        return len(self.db_session.exec(statement).all())
+        statement = select(func.count()).select_from(RuntimeExecutionRun)
+        statement = self._apply_runtime_run_filters(
+            statement,
+            session_id=session_id,
+            query=query,
+        )
+        return int(self.db_session.exec(statement).one())
 
     def list_artifacts(
         self,
@@ -144,23 +206,11 @@ class RuntimeRepository:
         sort_order: str = "desc",
     ) -> list[RuntimeArtifact]:
         statement = select(RuntimeArtifact)
-        if session_id is not None:
-            statement = statement.where(
-                col(RuntimeArtifact.run_id).in_(
-                    select(RuntimeExecutionRun.id).where(
-                        RuntimeExecutionRun.session_id == session_id
-                    )
-                )
-            )
-        if query is not None and query.strip():
-            like_query = f"%{query.strip()}%"
-            statement = statement.where(
-                or_(
-                    col(RuntimeArtifact.relative_path).like(like_query),
-                    col(RuntimeArtifact.host_path).like(like_query),
-                    col(RuntimeArtifact.container_path).like(like_query),
-                )
-            )
+        statement = self._apply_runtime_artifact_filters(
+            statement,
+            session_id=session_id,
+            query=query,
+        )
 
         if sort_by == "relative_path":
             statement = statement.order_by(
@@ -184,14 +234,13 @@ class RuntimeRepository:
         return list(self.db_session.exec(statement).all())
 
     def count_artifacts(self, *, session_id: str | None = None, query: str | None = None) -> int:
-        return len(
-            self.list_artifacts(
-                session_id=session_id,
-                query=query,
-                offset=0,
-                limit=1_000_000,
-            )
+        statement = select(func.count()).select_from(RuntimeArtifact)
+        statement = self._apply_runtime_artifact_filters(
+            statement,
+            session_id=session_id,
+            query=query,
         )
+        return int(self.db_session.exec(statement).one())
 
     def list_artifacts_ordered_newest(self) -> list[RuntimeArtifact]:
         statement = select(RuntimeArtifact).order_by(

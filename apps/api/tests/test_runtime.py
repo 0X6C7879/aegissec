@@ -384,12 +384,102 @@ def test_runtime_upload_download_and_cleanup_artifacts(client: TestClient) -> No
     download_response = client.get("/api/runtime/download", params={"path": "uploads/report.txt"})
     assert download_response.status_code == 200
     assert download_response.content == b"uploaded-data"
+    assert "attachment" in download_response.headers["content-disposition"]
+    assert "report.txt" in download_response.headers["content-disposition"]
 
     cleanup_response = client.post("/api/runtime/artifacts/cleanup")
     assert cleanup_response.status_code == 200
     cleanup_payload = api_data(cleanup_response)
     assert "deleted_rows" in cleanup_payload
     assert "deleted_files" in cleanup_payload
+
+
+def test_runtime_upload_rejects_payload_over_max_size(client: TestClient) -> None:
+    app.state.settings.runtime_upload_max_bytes = 8
+    upload_response = client.post(
+        "/api/runtime/upload",
+        files={"file": ("too-large.bin", b"0123456789", "application/octet-stream")},
+        data={"path": "uploads/too-large.bin", "overwrite": "true"},
+    )
+    assert upload_response.status_code == 413
+    assert "Upload exceeds configured maximum size" in upload_response.json()["detail"]
+
+
+def test_runtime_execute_truncates_persisted_output(
+    client: TestClient,
+    runtime_backend: Any,
+) -> None:
+    app.state.settings.runtime_output_max_chars = 80
+    runtime_backend.queue_result(
+        status=ExecutionStatus.SUCCESS,
+        exit_code=0,
+        stdout="S" * 200,
+        stderr="E" * 200,
+    )
+
+    execute_response = client.post(
+        "/api/runtime/execute",
+        json={
+            "command": "printf huge-output",
+            "artifact_paths": [],
+        },
+    )
+
+    assert execute_response.status_code == 200
+    payload = api_data(execute_response)
+    assert len(payload["stdout"]) == 80
+    assert len(payload["stderr"]) <= 80
+    assert "truncated" in payload["stderr"]
+
+    runs_response = client.get("/api/runtime/runs")
+    assert runs_response.status_code == 200
+    runs_payload = api_data(runs_response)
+    assert len(runs_payload[0]["stdout"]) == 80
+    assert len(runs_payload[0]["stderr"]) <= 80
+
+
+def test_runtime_runs_and_status_include_artifacts_without_n_plus_one_shape_breakage(
+    client: TestClient,
+) -> None:
+    session_response = client.post("/api/sessions", json={"title": "Runtime N+1 Session"})
+    session_id = api_data(session_response)["id"]
+
+    first_run_response = client.post(
+        "/api/runtime/execute",
+        json={
+            "session_id": session_id,
+            "command": "printf 'one' > reports/one.txt",
+            "artifact_paths": ["reports/one.txt"],
+        },
+    )
+    second_run_response = client.post(
+        "/api/runtime/execute",
+        json={
+            "session_id": session_id,
+            "command": "printf 'two'",
+            "artifact_paths": [],
+        },
+    )
+
+    assert first_run_response.status_code == 200
+    assert second_run_response.status_code == 200
+
+    runs_response = client.get(
+        "/api/runtime/runs",
+        params={"session_id": session_id, "sort_order": "asc", "page_size": 10},
+    )
+    assert runs_response.status_code == 200
+    runs = api_data(runs_response)
+    runs_by_command = {run["command"]: run for run in runs}
+    assert runs_by_command["printf 'one' > reports/one.txt"]["artifacts"][0]["relative_path"] == (
+        "reports/one.txt"
+    )
+    assert runs_by_command["printf 'two'"]["artifacts"] == []
+
+    status_response = client.get("/api/runtime/status")
+    assert status_response.status_code == 200
+    status_runs = api_data(status_response)["recent_runs"]
+    assert all("artifacts" in run for run in status_runs)
 
 
 def test_runtime_can_clear_recent_runs(client: TestClient) -> None:

@@ -84,6 +84,16 @@ class Settings(BaseSettings):
         default=20,
         alias="AEGISSEC_RUNTIME_RECENT_ARTIFACTS_LIMIT",
     )
+    runtime_upload_max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        alias="AEGISSEC_RUNTIME_UPLOAD_MAX_BYTES",
+        gt=0,
+    )
+    runtime_output_max_chars: int = Field(
+        default=65_536,
+        alias="AEGISSEC_RUNTIME_OUTPUT_MAX_CHARS",
+        gt=0,
+    )
     terminal_disconnect_grace_seconds: float = Field(
         default=1.0,
         alias="AEGISSEC_TERMINAL_DISCONNECT_GRACE_SECONDS",

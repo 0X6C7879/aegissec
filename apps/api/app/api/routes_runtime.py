@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session as DBSession
 
@@ -26,6 +26,7 @@ from app.services.runtime import (
     RuntimeOperationError,
     RuntimePolicyViolationError,
     RuntimeService,
+    RuntimeUploadTooLargeError,
     get_runtime_service,
 )
 
@@ -130,11 +131,12 @@ async def list_runtime_runs(
         sort_order=sort_order,
     )
     total = repository.count_runs(session_id=session_id, query=q)
+    artifacts_by_run_id = repository.list_artifacts_for_runs(run.id for run in runs)
     return ok_response(
         [
-            to_runtime_execution_run_read(
-                run, repository.list_artifacts_for_run(run.id)
-            ).model_dump(mode="json")
+            to_runtime_execution_run_read(run, artifacts_by_run_id.get(run.id, [])).model_dump(
+                mode="json"
+            )
             for run in runs
         ],
         pagination=PaginationMeta(page=page, page_size=page_size, total=total),
@@ -221,7 +223,7 @@ async def execute_runtime_command(
             ) from exc
 
     try:
-        return runtime_service.execute(payload, runtime_policy=runtime_policy)
+        return await runtime_service.execute_async(payload, runtime_policy=runtime_policy)
     except RuntimeArtifactPathError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimePolicyViolationError as exc:
@@ -251,15 +253,18 @@ async def upload_runtime_artifact(
     if session_id is not None:
         _ensure_session_exists(db_session, session_id)
     try:
-        content = await file.read()
-        return runtime_service.upload_artifact(
+        return runtime_service.upload_artifact_stream(
             destination_path=path,
-            content=content,
+            source=file.file,
             session_id=session_id,
             overwrite=overwrite,
         )
+    except RuntimeUploadTooLargeError as exc:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)) from exc
     except RuntimeArtifactPathError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    finally:
+        await file.close()
 
 
 @router.get("/download")
@@ -268,13 +273,13 @@ async def download_runtime_artifact(
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> Response:
     try:
-        file_path, content = runtime_service.download_artifact_bytes(artifact_path=path)
+        file_path = runtime_service.resolve_artifact_path(artifact_path=path)
     except RuntimeArtifactPathError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return Response(
-        content=content,
+    return FileResponse(
+        path=file_path,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={file_path.name}"},
+        filename=file_path.name,
     )
 
 

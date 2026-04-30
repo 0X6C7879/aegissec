@@ -33,7 +33,6 @@ from app.db.models import (
     ChatGeneration,
     ChatGenerationRead,
     GenerationStatus,
-    GenerationStep,
     GenerationStepRead,
     Message,
     MessageKind,
@@ -315,30 +314,18 @@ def _build_generation_reads(
     stp_limit = step_limit or settings.session_initial_step_limit
     generation_ids = [generation.id for generation in generations]
     steps_by_generation_id: dict[str, list[GenerationStepRead]] = {}
-    step_has_more = False
+    has_more_steps_by_generation: dict[str, bool] = {}
     if generation_ids:
-        statement = select(GenerationStep).where(
-            col(GenerationStep.generation_id).in_(generation_ids)
+        steps_by_generation, has_more_steps_by_generation = (
+            repository.list_generation_steps_limited(
+                generation_ids=generation_ids,
+                per_generation_limit=stp_limit,
+            )
         )
-        rows = list(
-            repository.db_session.exec(
-                statement.order_by(
-                    col(GenerationStep.started_at).desc(),
-                    col(GenerationStep.id).desc(),
-                ).limit(stp_limit + 1)
-            ).all()
-        )
-        step_has_more = len(rows) > stp_limit
-        steps = sorted(
-            rows[:stp_limit],
-            key=lambda item: (item.generation_id, item.sequence, item.started_at, item.id),
-        )
-    else:
-        steps = []
-    for step in steps:
-        steps_by_generation_id.setdefault(step.generation_id, []).append(
-            to_generation_step_read(step)
-        )
+        for generation_id, steps in steps_by_generation.items():
+            steps_by_generation_id[generation_id] = [
+                to_generation_step_read(step) for step in steps
+            ]
 
     queue_positions = {
         generation.id: index
@@ -353,7 +340,11 @@ def _build_generation_reads(
         generation_read = to_chat_generation_read(generation)
         generation_read.steps = list(steps_by_generation_id.get(generation.id, []))
         generation_read.queue_position = queue_positions.get(generation.id)
-        object.__setattr__(generation_read, "has_more_steps", step_has_more)
+        object.__setattr__(
+            generation_read,
+            "has_more_steps",
+            bool(has_more_steps_by_generation.get(generation.id, False)),
+        )
         reads.append(generation_read)
     return reads
 

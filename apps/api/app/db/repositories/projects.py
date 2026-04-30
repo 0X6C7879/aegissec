@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+from sqlalchemy import func
 from sqlmodel import Session as DBSession
 from sqlmodel import col, or_, select
 
@@ -9,6 +12,26 @@ from app.db.models import Project, Session, utc_now
 class ProjectRepository:
     def __init__(self, db_session: DBSession):
         self.db_session = db_session
+
+    @staticmethod
+    def _apply_project_filters(
+        statement: Any,
+        *,
+        include_deleted: bool,
+        query: str | None,
+    ) -> Any:
+        if not include_deleted:
+            statement = statement.where(col(Project.deleted_at).is_(None))
+
+        if query is not None and query.strip():
+            like_query = f"%{query.strip()}%"
+            statement = statement.where(
+                or_(
+                    col(Project.name).like(like_query),
+                    col(Project.description).like(like_query),
+                )
+            )
+        return statement
 
     def create_project(self, *, name: str, description: str | None = None) -> Project:
         project = Project(name=name, description=description)
@@ -28,17 +51,11 @@ class ProjectRepository:
         sort_order: str = "desc",
     ) -> list[Project]:
         statement = select(Project)
-        if not include_deleted:
-            statement = statement.where(col(Project.deleted_at).is_(None))
-
-        if query is not None and query.strip():
-            like_query = f"%{query.strip()}%"
-            statement = statement.where(
-                or_(
-                    col(Project.name).like(like_query),
-                    col(Project.description).like(like_query),
-                )
-            )
+        statement = self._apply_project_filters(
+            statement,
+            include_deleted=include_deleted,
+            query=query,
+        )
 
         sort_column = {
             "created_at": col(Project.created_at),
@@ -52,14 +69,13 @@ class ProjectRepository:
         return list(self.db_session.exec(statement).all())
 
     def count_projects(self, *, include_deleted: bool = False, query: str | None = None) -> int:
-        return len(
-            self.list_projects(
-                include_deleted=include_deleted,
-                query=query,
-                offset=0,
-                limit=1_000_000,
-            )
+        statement = select(func.count()).select_from(Project)
+        statement = self._apply_project_filters(
+            statement,
+            include_deleted=include_deleted,
+            query=query,
         )
+        return int(self.db_session.exec(statement).one())
 
     def get_project(self, project_id: str, *, include_deleted: bool = False) -> Project | None:
         statement = select(Project).where(Project.id == project_id)

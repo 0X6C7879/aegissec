@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from asyncio import QueueEmpty, QueueFull
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
@@ -88,6 +89,26 @@ _GRAPH_PERSIST_KEYS = (
     "hypothesis_ids",
     "artifacts",
     "reason",
+)
+
+_DROPPABLE_EVENT_TYPES = frozenset(
+    {
+        SessionEventType.MESSAGE_DELTA,
+        SessionEventType.MESSAGE_UPDATED,
+        SessionEventType.ASSISTANT_TRACE,
+        SessionEventType.GRAPH_UPDATED,
+    }
+)
+
+_CRITICAL_EVENT_TYPES = frozenset(
+    {
+        SessionEventType.MESSAGE_COMPLETED,
+        SessionEventType.GENERATION_FAILED,
+        SessionEventType.GENERATION_CANCELLED,
+        SessionEventType.SESSION_UPDATED,
+        SessionEventType.SESSION_DELETED,
+        SessionEventType.SESSION_RESTORED,
+    }
 )
 
 
@@ -213,16 +234,23 @@ def _build_persisted_payload(
 
 
 class SessionEventBroker:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        subscriber_queue_maxsize: int = 512,
+        publish_timeout_seconds: float = 0.05,
+    ) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[SessionEvent]]] = {}
         self._lock = asyncio.Lock()
         self._session_factory: Callable[[], DBSession] | None = None
+        self._subscriber_queue_maxsize = max(1, subscriber_queue_maxsize)
+        self._publish_timeout_seconds = max(0.001, publish_timeout_seconds)
 
     def configure_persistence(self, session_factory: Callable[[], DBSession]) -> None:
         self._session_factory = session_factory
 
     async def subscribe(self, session_id: str) -> asyncio.Queue[SessionEvent]:
-        queue: asyncio.Queue[SessionEvent] = asyncio.Queue()
+        queue: asyncio.Queue[SessionEvent] = asyncio.Queue(maxsize=self._subscriber_queue_maxsize)
         async with self._lock:
             subscribers = self._subscribers.setdefault(session_id, set())
             subscribers.add(queue)
@@ -244,7 +272,31 @@ class SessionEventBroker:
             subscribers = list(self._subscribers.get(persisted_event.session_id, set()))
 
         for queue in subscribers:
-            await queue.put(persisted_event)
+            if self._enqueue_nowait(queue, persisted_event):
+                continue
+
+            if self._is_droppable_event(persisted_event):
+                continue
+
+            if not self._is_critical_event(persisted_event):
+                continue
+
+            if self._evict_oldest_droppable_event(queue) and self._enqueue_nowait(
+                queue, persisted_event
+            ):
+                continue
+
+            try:
+                await asyncio.wait_for(
+                    queue.put(persisted_event),
+                    timeout=self._publish_timeout_seconds,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Dropping event for slow subscriber queue [session_id=%s event_type=%s]",
+                    persisted_event.session_id,
+                    persisted_event.type.value,
+                )
 
     async def replay(
         self,
@@ -316,6 +368,40 @@ class SessionEventBroker:
             timestamp=persisted.timestamp,
             payload=dict(event.payload),
         )
+
+    @staticmethod
+    def _is_droppable_event(event: SessionEvent) -> bool:
+        return event.type in _DROPPABLE_EVENT_TYPES
+
+    @staticmethod
+    def _is_critical_event(event: SessionEvent) -> bool:
+        return event.type in _CRITICAL_EVENT_TYPES
+
+    @staticmethod
+    def _enqueue_nowait(queue: asyncio.Queue[SessionEvent], event: SessionEvent) -> bool:
+        try:
+            queue.put_nowait(event)
+        except QueueFull:
+            return False
+        return True
+
+    @staticmethod
+    def _evict_oldest_droppable_event(queue: asyncio.Queue[SessionEvent]) -> bool:
+        buffered_events: list[SessionEvent] = []
+        evicted = False
+        while True:
+            try:
+                queued_event = queue.get_nowait()
+            except QueueEmpty:
+                break
+            if not evicted and queued_event.type in _DROPPABLE_EVENT_TYPES:
+                evicted = True
+                continue
+            buffered_events.append(queued_event)
+
+        for queued_event in buffered_events:
+            queue.put_nowait(queued_event)
+        return evicted
 
 
 event_broker = SessionEventBroker()

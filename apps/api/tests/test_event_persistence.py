@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from time import perf_counter
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from pytest import MonkeyPatch
 
@@ -131,7 +132,7 @@ def test_publish_persists_thin_payload_but_keeps_live_payload(monkeypatch: Monke
     monkeypatch.setattr(repositories_module, "SessionRepository", _DummyRepository)
 
     broker = SessionEventBroker()
-    broker.configure_persistence(_DummySessionFactory())
+    broker.configure_persistence(cast(Any, _DummySessionFactory()))
     event = SessionEvent(
         type=SessionEventType.MESSAGE_UPDATED,
         session_id="session-1",
@@ -158,3 +159,91 @@ def test_publish_persists_thin_payload_but_keeps_live_payload(monkeypatch: Monke
     assert captured_payload["__thin_replay"] is True
     assert captured_payload["content"] == ""
     assert captured_payload["content_length"] == len("live content should stay intact")
+
+
+def test_broker_drops_delta_when_subscriber_queue_is_full() -> None:
+    broker = SessionEventBroker(subscriber_queue_maxsize=1, publish_timeout_seconds=0.01)
+
+    async def _exercise() -> tuple[int, SessionEvent]:
+        queue = await broker.subscribe("session-1")
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.MESSAGE_DELTA,
+                session_id="session-1",
+                payload={"delta": "part-1"},
+            )
+        )
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.MESSAGE_DELTA,
+                session_id="session-1",
+                payload={"delta": "part-2"},
+            )
+        )
+        queued_count = queue.qsize()
+        queued_event = await queue.get()
+        await broker.unsubscribe("session-1", queue)
+        return queued_count, queued_event
+
+    queued_count, queued_event = asyncio.run(_exercise())
+    assert queued_count == 1
+    assert queued_event.type == SessionEventType.MESSAGE_DELTA
+
+
+def test_broker_keeps_critical_event_by_evicting_droppable_event() -> None:
+    broker = SessionEventBroker(subscriber_queue_maxsize=1, publish_timeout_seconds=0.01)
+
+    async def _exercise() -> tuple[int, SessionEvent]:
+        queue = await broker.subscribe("session-1")
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.MESSAGE_DELTA,
+                session_id="session-1",
+                payload={"delta": "streaming"},
+            )
+        )
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.MESSAGE_COMPLETED,
+                session_id="session-1",
+                payload={"message_id": "msg-1"},
+            )
+        )
+        queued_count = queue.qsize()
+        queued_event = await queue.get()
+        await broker.unsubscribe("session-1", queue)
+        return queued_count, queued_event
+
+    queued_count, queued_event = asyncio.run(_exercise())
+    assert queued_count == 1
+    assert queued_event.type == SessionEventType.MESSAGE_COMPLETED
+
+
+def test_broker_publish_timeout_prevents_infinite_wait_for_full_queue() -> None:
+    broker = SessionEventBroker(subscriber_queue_maxsize=1, publish_timeout_seconds=0.01)
+
+    async def _exercise() -> tuple[float, SessionEvent]:
+        queue = await broker.subscribe("session-1")
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.SESSION_UPDATED,
+                session_id="session-1",
+                payload={"status": "running"},
+            )
+        )
+        start = perf_counter()
+        await broker.publish(
+            SessionEvent(
+                type=SessionEventType.SESSION_UPDATED,
+                session_id="session-1",
+                payload={"status": "done"},
+            )
+        )
+        elapsed = perf_counter() - start
+        queued_event = await queue.get()
+        await broker.unsubscribe("session-1", queue)
+        return elapsed, queued_event
+
+    elapsed, queued_event = asyncio.run(_exercise())
+    assert elapsed < 0.2
+    assert queued_event.payload["status"] == "running"

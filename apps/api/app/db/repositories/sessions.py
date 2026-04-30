@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timedelta
+from typing import Any
 
+from sqlalchemy import and_, func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session as DBSession
 from sqlmodel import col, delete, or_, select
 
@@ -38,6 +41,36 @@ from app.db.models import (
 class SessionRepository:
     def __init__(self, db_session: DBSession):
         self.db_session = db_session
+
+    @staticmethod
+    def _apply_session_filters(
+        statement: Any,
+        *,
+        include_deleted: bool,
+        project_id: str | None,
+        status: SessionStatus | None,
+        query: str | None,
+    ) -> Any:
+        if not include_deleted:
+            statement = statement.where(col(Session.deleted_at).is_(None))
+
+        if project_id is not None:
+            statement = statement.where(Session.project_id == project_id)
+
+        if status is not None:
+            statement = statement.where(Session.status == status)
+
+        if query is not None and query.strip():
+            like_query = f"%{query.strip()}%"
+            statement = statement.where(
+                or_(
+                    col(Session.title).like(like_query),
+                    col(Session.goal).like(like_query),
+                    col(Session.scenario_type).like(like_query),
+                    col(Session.current_phase).like(like_query),
+                )
+            )
+        return statement
 
     def create_session(
         self,
@@ -85,25 +118,13 @@ class SessionRepository:
         sort_order: str = "desc",
     ) -> list[Session]:
         statement = select(Session)
-        if not include_deleted:
-            statement = statement.where(col(Session.deleted_at).is_(None))
-
-        if project_id is not None:
-            statement = statement.where(Session.project_id == project_id)
-
-        if status is not None:
-            statement = statement.where(Session.status == status)
-
-        if query is not None and query.strip():
-            like_query = f"%{query.strip()}%"
-            statement = statement.where(
-                or_(
-                    col(Session.title).like(like_query),
-                    col(Session.goal).like(like_query),
-                    col(Session.scenario_type).like(like_query),
-                    col(Session.current_phase).like(like_query),
-                )
-            )
+        statement = self._apply_session_filters(
+            statement,
+            include_deleted=include_deleted,
+            project_id=project_id,
+            status=status,
+            query=query,
+        )
 
         sort_column = {
             "created_at": col(Session.created_at),
@@ -125,16 +146,15 @@ class SessionRepository:
         status: SessionStatus | None = None,
         query: str | None = None,
     ) -> int:
-        return len(
-            self.list_sessions(
-                include_deleted=include_deleted,
-                project_id=project_id,
-                status=status,
-                query=query,
-                offset=0,
-                limit=1_000_000,
-            )
+        statement = select(func.count()).select_from(Session)
+        statement = self._apply_session_filters(
+            statement,
+            include_deleted=include_deleted,
+            project_id=project_id,
+            status=status,
+            query=query,
         )
+        return int(self.db_session.exec(statement).one())
 
     def get_session(self, session_id: str, *, include_deleted: bool = False) -> Session | None:
         statement = select(Session).where(Session.id == session_id)
@@ -571,21 +591,42 @@ class SessionRepository:
         max_messages: int = 24,
         rough_token_budget: int = 12_000,
     ) -> list[Message]:
-        visible_messages = self.list_messages(
-            session_id, branch_id=branch_id, include_superseded=False
+        candidate_limit = max(max_messages * 4, max_messages, 1)
+        statement = (
+            select(Message)
+            .where(Message.session_id == session_id)
+            .where(Message.branch_id == branch_id)
+            .where(Message.message_kind == MessageKind.MESSAGE)
+            .where(col(Message.role).in_({MessageRole.USER, MessageRole.ASSISTANT}))
+            .where(
+                col(Message.status).in_(
+                    {
+                        MessageStatus.COMPLETED,
+                        MessageStatus.STREAMING,
+                        MessageStatus.FAILED,
+                    }
+                )
+            )
+            .where(
+                or_(
+                    col(Message.role) == MessageRole.USER,
+                    and_(
+                        col(Message.role) == MessageRole.ASSISTANT,
+                        func.length(func.trim(col(Message.content))) > 0,
+                    ),
+                )
+            )
+            .order_by(
+                col(Message.sequence).desc(),
+                col(Message.created_at).desc(),
+                col(Message.id).desc(),
+            )
+            .limit(candidate_limit)
         )
-        eligible_messages = [
-            message
-            for message in visible_messages
-            if message.message_kind == MessageKind.MESSAGE
-            and message.role in {MessageRole.USER, MessageRole.ASSISTANT}
-            and message.status
-            in {MessageStatus.COMPLETED, MessageStatus.STREAMING, MessageStatus.FAILED}
-            and (message.role == MessageRole.USER or bool(message.content.strip()))
-        ]
+        eligible_messages_desc = list(self.db_session.exec(statement).all())
         truncated: list[Message] = []
         consumed_tokens = 0
-        for message in reversed(eligible_messages):
+        for message in eligible_messages_desc:
             rough_tokens = max(1, len(message.content) // 4) + (len(message.attachments_json) * 16)
             if truncated and (
                 len(truncated) >= max_messages
@@ -680,6 +721,77 @@ class SessionRepository:
             col(GenerationStep.started_at).asc(),
         )
         return list(self.db_session.exec(statement).all())
+
+    def list_generation_steps_limited(
+        self,
+        *,
+        generation_ids: Iterable[str],
+        per_generation_limit: int,
+    ) -> tuple[dict[str, list[GenerationStep]], dict[str, bool]]:
+        generation_id_values = list(dict.fromkeys(generation_ids))
+        if per_generation_limit < 1 or not generation_id_values:
+            return {}, {}
+
+        has_more_by_generation = {generation_id: False for generation_id in generation_id_values}
+
+        steps_by_generation: dict[str, list[GenerationStep]] = {}
+        try:
+            ranked_steps = (
+                select(
+                    col(GenerationStep.id).label("step_id"),
+                    col(GenerationStep.generation_id).label("generation_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=col(GenerationStep.generation_id),
+                        order_by=(
+                            col(GenerationStep.started_at).desc(),
+                            col(GenerationStep.id).desc(),
+                        ),
+                    )
+                    .label("step_rank"),
+                )
+                .where(col(GenerationStep.generation_id).in_(generation_id_values))
+                .subquery()
+            )
+            ranked_statement = (
+                select(GenerationStep, ranked_steps.c.step_rank)
+                .join(ranked_steps, col(GenerationStep.id) == ranked_steps.c.step_id)
+                .where(ranked_steps.c.step_rank <= per_generation_limit + 1)
+                .order_by(col(GenerationStep.generation_id).asc(), ranked_steps.c.step_rank.asc())
+            )
+            ranked_rows = list(self.db_session.exec(ranked_statement).all())
+            for row in ranked_rows:
+                step = row[0]
+                step_rank = int(row[1])
+                generation_id = step.generation_id
+                if step_rank > per_generation_limit:
+                    has_more_by_generation[generation_id] = True
+                    continue
+                steps_by_generation.setdefault(generation_id, []).append(step)
+        except SQLAlchemyError:
+            fallback_statement = (
+                select(GenerationStep)
+                .where(col(GenerationStep.generation_id).in_(generation_id_values))
+                .order_by(
+                    col(GenerationStep.generation_id).asc(),
+                    col(GenerationStep.started_at).desc(),
+                    col(GenerationStep.id).desc(),
+                )
+            )
+            fallback_rows = list(self.db_session.exec(fallback_statement).all())
+            counts_by_generation: dict[str, int] = {}
+            for step in fallback_rows:
+                generation_id = step.generation_id
+                generation_count = counts_by_generation.get(generation_id, 0)
+                if generation_count < per_generation_limit:
+                    steps_by_generation.setdefault(generation_id, []).append(step)
+                elif generation_count == per_generation_limit:
+                    has_more_by_generation[generation_id] = True
+                counts_by_generation[generation_id] = generation_count + 1
+
+        for steps in steps_by_generation.values():
+            steps.sort(key=lambda item: (item.sequence, item.started_at, item.id))
+        return steps_by_generation, has_more_by_generation
 
     def get_next_generation_step_sequence(self, generation_id: str) -> int:
         steps = self.list_generation_steps(generation_id=generation_id)
