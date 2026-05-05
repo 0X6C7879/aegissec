@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -89,6 +90,10 @@ logger = logging.getLogger("aegissec.api")
 
 DEFAULT_CONTEXT_WINDOW_TOKENS = 400_000
 DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.8
+
+_worker_terminal_backend: Any | None = None
+_worker_terminal_registry: Any | None = None
+_worker_terminal_job_registry: Any | None = None
 
 
 @dataclass(slots=True)
@@ -828,6 +833,7 @@ async def build_autorouted_skill_context(
 
 def build_tool_executor(
     *,
+    db_engine: Engine,
     session: Session,
     assistant_message: Message,
     repository: SessionRepository,
@@ -839,9 +845,10 @@ def build_tool_executor(
     mcp_tool_inventory: list[dict[str, Any]] | None = None,
     session_state: Any | None = None,
     swarm_coordinator: Any | None = None,
+    terminal_runtime_service: Any | None = None,
+    terminal_runtime_service_factory: Callable[[SessionEventBroker], Any] | None = None,
 ) -> Any:
     terminal_runtime_module = importlib.import_module("app.services.terminal_runtime")
-    app_module = importlib.import_module("app.main")
     executor_runtime = importlib.import_module("app.harness.executor").build_tool_runtime(
         skill_service=skill_service,
         session_id=session.id,
@@ -854,10 +861,35 @@ def build_tool_executor(
         TerminalRepository(repository.db_session),
         RunLogRepository(repository.db_session),
     )
-    terminal_runtime_service = terminal_runtime_module.build_terminal_runtime_service(
-        app=app_module.app,
-        event_broker=event_broker,
-    )
+    if terminal_runtime_service is None:
+        runtime_service_factory = terminal_runtime_service_factory
+        if runtime_service_factory is None:
+            settings = get_settings()
+
+            def runtime_service_factory(event_broker_value: SessionEventBroker) -> Any:
+                global _worker_terminal_backend
+                global _worker_terminal_registry
+                global _worker_terminal_job_registry
+                if _worker_terminal_backend is None:
+                    _worker_terminal_backend = terminal_runtime_module.DockerTerminalBackend(
+                        settings
+                    )
+                if _worker_terminal_registry is None:
+                    _worker_terminal_registry = terminal_runtime_module.LiveTerminalRegistry()
+                if _worker_terminal_job_registry is None:
+                    _worker_terminal_job_registry = (
+                        terminal_runtime_module.LiveTerminalJobRegistry()
+                    )
+                return terminal_runtime_module.TerminalRuntimeService(
+                    settings=settings,
+                    database_engine=db_engine,
+                    event_broker=event_broker_value,
+                    backend=_worker_terminal_backend,
+                    registry=_worker_terminal_registry,
+                    job_registry=_worker_terminal_job_registry,
+                )
+
+        terminal_runtime_service = runtime_service_factory(event_broker)
     lifecycle = ToolRuntimeLifecycleRunner(
         session=session,
         assistant_message=assistant_message,
@@ -1352,6 +1384,7 @@ async def process_generation(
                 latest_message_text=latest_message_text,
             )
             execute_tool = build_tool_executor(
+                db_engine=db_engine,
                 session=session,
                 assistant_message=loaded_assistant_message,
                 repository=repository,

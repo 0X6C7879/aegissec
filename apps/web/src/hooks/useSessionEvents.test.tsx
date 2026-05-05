@@ -89,6 +89,7 @@ describe("useSessionEvents", () => {
         queries: { retry: false },
       },
     });
+    const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
     const session = createSessionSummary();
     const sessionDetail: SessionDetail = { ...session, messages: [] };
     const sessionConversation: SessionConversation = {
@@ -125,6 +126,7 @@ describe("useSessionEvents", () => {
         },
       });
     });
+    expect(invalidateQueriesSpy).not.toHaveBeenCalled();
 
     expect(
       queryClient.getQueryData<SessionConversation>(["conversation", session.id])?.messages,
@@ -141,6 +143,13 @@ describe("useSessionEvents", () => {
 
     act(() => {
       secondSocket.emitOpen();
+    });
+    expect(invalidateQueriesSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+      queryKey: ["session-queue", session.id],
+    });
+
+    act(() => {
       secondSocket.emitMessage({
         type: "message.created",
         cursor: 12,
@@ -188,6 +197,65 @@ describe("useSessionEvents", () => {
       },
     ]);
     expect(useUiStore.getState().lastServerCursorBySession[session.id]).toBe(14);
+
+    unmount();
+  });
+
+  it("does not invalidate session queue when generation.started is merged while websocket is open", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const session = createSessionSummary();
+    const queue: SessionQueue = {
+      session,
+      active_generation: null,
+      queued_generations: [
+        {
+          id: "generation-queued-1",
+          session_id: session.id,
+          branch_id: "branch-1",
+          action: "reply",
+          assistant_message_id: "assistant-message-1",
+          status: "queued",
+          reasoning_trace: [],
+          queue_position: 1,
+          created_at: "2026-04-01T10:00:00.000Z",
+          updated_at: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      active_generation_id: null,
+      queued_generation_count: 1,
+    };
+
+    queryClient.setQueryData(["session-queue", session.id], queue);
+
+    const { unmount } = renderHook(() => useSessionEvents(session.id), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    const socket = MockWebSocket.instances[0]!;
+    act(() => {
+      socket.emitOpen();
+      socket.emitMessage({
+        type: "generation.started",
+        cursor: 1,
+        created_at: "2026-04-01T10:00:01.000Z",
+        data: {
+          generation_id: "generation-queued-1",
+        },
+      });
+    });
+
+    expect(queryClient.getQueryData<SessionQueue>(["session-queue", session.id])).toMatchObject({
+      active_generation_id: "generation-queued-1",
+      active_generation: { id: "generation-queued-1", status: "running" },
+      queued_generations: [],
+      queued_generation_count: 0,
+    });
+    expect(invalidateQueriesSpy).not.toHaveBeenCalled();
 
     unmount();
   });

@@ -8,11 +8,16 @@ from alembic import command  # pyright: ignore[reportMissingImports, reportAttri
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 
 
-def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
-    database_path = tmp_path / "alembic.db"
+def _build_alembic_config(database_path: Path) -> Config:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    return config
+
+
+def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "alembic.db"
+    config = _build_alembic_config(database_path)
 
     command.upgrade(config, "head")
 
@@ -99,3 +104,33 @@ def test_alembic_upgrade_head_creates_module_a_tables(tmp_path: Path) -> None:
         "ended_at",
         "metadata",
     }.issubset(terminal_job_columns)
+
+
+def test_alembic_latest_revision_upgrade_and_downgrade(tmp_path: Path) -> None:
+    database_path = tmp_path / "alembic-indexes.db"
+    config = _build_alembic_config(database_path)
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+
+    command.upgrade(config, "head")
+
+    inspector = inspect(engine)
+    message_index_names = {
+        index["name"] for index in inspector.get_indexes("message")
+    }
+    runtime_run_index_names = {
+        index["name"] for index in inspector.get_indexes("runtime_execution_run")
+    }
+    assert "ix_message_session_branch_status_sequence" in message_index_names
+    assert "ix_runtime_execution_run_started_id" in runtime_run_index_names
+
+    command.downgrade(config, "-1")
+
+    downgraded_inspector = inspect(engine)
+    downgraded_message_index_names = {
+        index["name"] for index in downgraded_inspector.get_indexes("message")
+    }
+    downgraded_runtime_run_index_names = {
+        index["name"] for index in downgraded_inspector.get_indexes("runtime_execution_run")
+    }
+    assert "ix_message_session_branch_status_sequence" not in downgraded_message_index_names
+    assert "ix_runtime_execution_run_started_id" not in downgraded_runtime_run_index_names

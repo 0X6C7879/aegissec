@@ -651,6 +651,67 @@ describe("SessionWorkspaceWorkbench", () => {
     expect(mockUseSessionEvents).not.toHaveBeenLastCalledWith(null);
   });
 
+  it("disables queue polling while websocket is open even with active generation", async () => {
+    vi.useFakeTimers();
+    try {
+      const activeGeneration = createActiveGeneration("session-1");
+      const queue = createQueue("session-1");
+      queue.active_generation = activeGeneration;
+      queue.active_generation_id = activeGeneration.id;
+
+      mockUseSessionEvents.mockReturnValue("open");
+      mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+      mockGetSessionQueue.mockResolvedValue(queue);
+
+      renderWorkbench("/sessions/session-1/chat");
+
+      await waitFor(() => {
+        expect(mockGetSessionQueue).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(1700);
+        await Promise.resolve();
+      });
+
+      expect(mockGetSessionQueue).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["closed", "error"] as const)(
+    "enables queue fallback polling when websocket is %s and generation is active",
+    async (connectionState) => {
+      vi.useFakeTimers();
+      try {
+        const activeGeneration = createActiveGeneration("session-1");
+        const queue = createQueue("session-1");
+        queue.active_generation = activeGeneration;
+        queue.active_generation_id = activeGeneration.id;
+
+        mockUseSessionEvents.mockReturnValue(connectionState);
+        mockListSessions.mockResolvedValue([createSessionSummary("session-1")]);
+        mockGetSessionQueue.mockResolvedValue(queue);
+
+        renderWorkbench("/sessions/session-1/chat");
+
+        await waitFor(() => {
+          expect(mockGetSessionQueue).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+          vi.advanceTimersByTime(1700);
+          await Promise.resolve();
+        });
+
+        expect(mockGetSessionQueue.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps explicit queue-send on the existing optimistic queue path while generation is active", async () => {
     const user = userEvent.setup();
     const activeGeneration = createActiveGeneration("session-1");

@@ -78,6 +78,8 @@ class RuntimeCommandResult:
     started_at: datetime
     ended_at: datetime
     container_state: RuntimeContainerState
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 class RuntimeBackend(Protocol):
@@ -173,12 +175,43 @@ class DockerClientProtocol(Protocol):
 
 
 class _ExecCollector:
-    def __init__(self, api_client: Any, exec_id: str) -> None:
+    def __init__(self, api_client: Any, exec_id: str, *, max_chars: int) -> None:
         self._api_client = api_client
         self._exec_id = exec_id
-        self.stdout_chunks: list[bytes] = []
-        self.stderr_chunks: list[bytes] = []
+        self._max_chars = max(1, max_chars)
+        self._stdout = ""
+        self._stderr = ""
+        self.stdout_truncated = False
+        self.stderr_truncated = False
         self.error: RuntimeOperationError | None = None
+
+    def _append_stdout(self, chunk: bytes) -> None:
+        decoded = chunk.decode("utf-8", errors="replace")
+        if not decoded:
+            return
+        remaining = self._max_chars - len(self._stdout)
+        if remaining <= 0:
+            self.stdout_truncated = True
+            return
+        if len(decoded) > remaining:
+            self._stdout += decoded[:remaining]
+            self.stdout_truncated = True
+            return
+        self._stdout += decoded
+
+    def _append_stderr(self, chunk: bytes) -> None:
+        decoded = chunk.decode("utf-8", errors="replace")
+        if not decoded:
+            return
+        remaining = self._max_chars - len(self._stderr)
+        if remaining <= 0:
+            self.stderr_truncated = True
+            return
+        if len(decoded) > remaining:
+            self._stderr += decoded[:remaining]
+            self.stderr_truncated = True
+            return
+        self._stderr += decoded
 
     def collect(self) -> None:
         try:
@@ -189,17 +222,17 @@ class _ExecCollector:
 
                 stdout_chunk, stderr_chunk = chunk
                 if isinstance(stdout_chunk, bytes) and stdout_chunk:
-                    self.stdout_chunks.append(stdout_chunk)
+                    self._append_stdout(stdout_chunk)
                 if isinstance(stderr_chunk, bytes) and stderr_chunk:
-                    self.stderr_chunks.append(stderr_chunk)
+                    self._append_stderr(stderr_chunk)
         except DockerException:
             self.error = RuntimeOperationError("Failed to collect command output from Docker.")
 
     def stdout_text(self) -> str:
-        return b"".join(self.stdout_chunks).decode("utf-8", errors="replace")
+        return self._stdout
 
     def stderr_text(self) -> str:
-        return b"".join(self.stderr_chunks).decode("utf-8", errors="replace")
+        return self._stderr
 
 
 class DockerRuntimeBackend:
@@ -296,7 +329,11 @@ class DockerRuntimeBackend:
         if not isinstance(exec_id, str) or not exec_id:
             raise RuntimeOperationError("Docker did not return a valid exec identifier.")
 
-        collector = _ExecCollector(api_client, exec_id)
+        collector = _ExecCollector(
+            api_client,
+            exec_id,
+            max_chars=max(1, self._settings.runtime_output_max_chars),
+        )
         thread = Thread(target=collector.collect, daemon=True)
         thread.start()
         thread.join(timeout=float(timeout_seconds))
@@ -334,6 +371,8 @@ class DockerRuntimeBackend:
             started_at=started_at,
             ended_at=ended_at,
             container_state=container_state,
+            stdout_truncated=collector.stdout_truncated,
+            stderr_truncated=collector.stderr_truncated,
         )
 
     def _get_container(self) -> DockerContainer | None:
@@ -900,7 +939,12 @@ class RuntimeService:
         artifacts: list[tuple[str, str, str]],
     ) -> RuntimeExecutionRunRead:
         persisted_stdout, persisted_stderr, stdout_truncated, stderr_truncated = (
-            self._truncate_persisted_output(stdout=result.stdout, stderr=result.stderr)
+            self._truncate_persisted_output(
+                stdout=result.stdout,
+                stderr=result.stderr,
+                stdout_was_truncated=result.stdout_truncated,
+                stderr_was_truncated=result.stderr_truncated,
+            )
         )
         run, artifact_rows = self._repository.create_run(
             session_id=payload.session_id,
@@ -940,10 +984,12 @@ class RuntimeService:
         *,
         stdout: str,
         stderr: str,
+        stdout_was_truncated: bool = False,
+        stderr_was_truncated: bool = False,
     ) -> tuple[str, str, bool, bool]:
         max_chars = max(1, self._settings.runtime_output_max_chars)
-        stdout_truncated = len(stdout) > max_chars
-        stderr_truncated = len(stderr) > max_chars
+        stdout_truncated = stdout_was_truncated or len(stdout) > max_chars
+        stderr_truncated = stderr_was_truncated or len(stderr) > max_chars
         truncated_stdout = stdout[:max_chars]
         truncated_stderr = stderr[:max_chars]
         notices: list[str] = []

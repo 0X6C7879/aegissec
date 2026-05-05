@@ -2,10 +2,12 @@ from typing import Any
 
 from docker.errors import DockerException
 from fastapi.testclient import TestClient
+from sqlmodel import Session as DBSession
+from sqlmodel import col, select
 
-from app.db.models import ExecutionStatus
+from app.db.models import ExecutionStatus, RunLog
 from app.main import app
-from app.services.runtime import get_runtime_backend
+from app.services.runtime import _ExecCollector, get_runtime_backend
 from tests.utils import api_data
 
 
@@ -436,6 +438,39 @@ def test_runtime_execute_truncates_persisted_output(
     runs_payload = api_data(runs_response)
     assert len(runs_payload[0]["stdout"]) == 80
     assert len(runs_payload[0]["stderr"]) <= 80
+    with DBSession(app.state.database_engine) as db_session:
+        log_entry = db_session.exec(
+            select(RunLog)
+            .where(RunLog.run_id == payload["id"], RunLog.event_type == "runtime.execute")
+            .order_by(col(RunLog.created_at).desc())
+            .limit(1)
+        ).first()
+    assert log_entry is not None
+    assert log_entry.payload_json.get("stdout_truncated") is True
+    assert log_entry.payload_json.get("stderr_truncated") is True
+
+
+def test_exec_collector_caps_in_memory_output_buffers() -> None:
+    class FakeExecApi:
+        def exec_start(
+            self, exec_id: str, *, stream: bool, demux: bool
+        ) -> list[tuple[bytes, bytes]]:
+            del exec_id, stream, demux
+            return [
+                (b"A" * 40, b""),
+                (b"A" * 40, b"B" * 60),
+                (b"A" * 40, b"B" * 60),
+            ]
+
+    collector = _ExecCollector(FakeExecApi(), "exec-1", max_chars=80)
+    collector.collect()
+
+    assert len(collector.stdout_text()) == 80
+    assert len(collector.stderr_text()) == 80
+    assert collector.stdout_truncated is True
+    assert collector.stderr_truncated is True
+    assert not hasattr(collector, "stdout_chunks")
+    assert not hasattr(collector, "stderr_chunks")
 
 
 def test_runtime_runs_and_status_include_artifacts_without_n_plus_one_shape_breakage(

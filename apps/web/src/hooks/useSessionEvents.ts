@@ -23,7 +23,7 @@ import type {
   SessionSummary,
 } from "../types/sessions";
 
-type ConnectionState = "connecting" | "open" | "closed" | "error";
+export type ConnectionState = "connecting" | "open" | "closed" | "error";
 
 function normalizeEventEnvelope(value: unknown): SessionEventEnvelope {
   if (!isRecord(value)) {
@@ -107,6 +107,11 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let currentSocket: WebSocket | null = null;
     let isDisposed = false;
+    let hasOpenedConnection = false;
+
+    function requestQueueResync(): void {
+      void queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] });
+    }
 
     function clearReconnectTimer(): void {
       if (reconnectTimer !== null) {
@@ -128,7 +133,12 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
           return;
         }
 
+        const isReconnect = hasOpenedConnection;
+        hasOpenedConnection = true;
         setConnectionState("open");
+        if (isReconnect) {
+          requestQueueResync();
+        }
       };
 
       websocket.onmessage = (event) => {
@@ -293,11 +303,18 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
               envelope.data.state.startsWith("generation."));
 
           if (shouldMergeQueueState) {
+            let queueMerged = false;
             queryClient.setQueryData<SessionQueue | undefined>(
               ["session-queue", targetSessionId],
-              (currentValue) => mergeQueueState(currentValue, envelope.type, envelope.data),
+              (currentValue) => {
+                const mergedValue = mergeQueueState(currentValue, envelope.type, envelope.data);
+                queueMerged = currentValue !== undefined && mergedValue !== currentValue;
+                return mergedValue;
+              },
             );
-            void queryClient.invalidateQueries({ queryKey: ["session-queue", targetSessionId] });
+            if (!queueMerged) {
+              requestQueueResync();
+            }
           }
         } catch {
           appendEvent(targetSessionId, {
@@ -309,6 +326,7 @@ export function useSessionEvents(sessionId: string | null): ConnectionState {
             summary: "Received an unreadable websocket event.",
             payload: null,
           });
+          requestQueueResync();
         }
       };
 

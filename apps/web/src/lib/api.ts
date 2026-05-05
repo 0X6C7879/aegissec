@@ -158,7 +158,7 @@ export function clearApiBasicCredentials(emitAuthExpired = false): void {
   }
 }
 
-type ApiEnvelope<T> = {
+export type ApiEnvelope<T> = {
   data: T;
   meta?: {
     request_id?: string | null;
@@ -173,6 +173,10 @@ type ApiEnvelope<T> = {
     } | null;
   } | null;
 };
+
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  return Boolean(value) && typeof value === "object" && "data" in value;
+}
 
 type ApiErrorOptions = {
   message: string;
@@ -303,7 +307,7 @@ async function readErrorResponse(response: Response): Promise<{ message: string;
   }
 }
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function apiRequestRaw<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T> | T | undefined> {
   const isFormDataBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const authorizationHeader = getAuthorizationHeader();
 
@@ -337,14 +341,35 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (response.status === 204) {
-    return undefined as T;
+    return undefined;
   }
 
-  const payload = (await response.json()) as ApiEnvelope<T> | T;
-  if (payload && typeof payload === "object" && "data" in payload) {
+  return (await response.json()) as ApiEnvelope<T> | T;
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const payload = await apiRequestRaw<T>(path, init);
+  if (payload === undefined) {
+    return undefined as T;
+  }
+  if (isApiEnvelope<T>(payload)) {
     return payload.data;
   }
   return payload as T;
+}
+
+export async function apiRequestEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<ApiEnvelope<T>> {
+  const payload = await apiRequestRaw<T>(path, init);
+  if (payload === undefined) {
+    return { data: undefined as T, meta: null };
+  }
+  if (isApiEnvelope<T>(payload)) {
+    return payload;
+  }
+  return { data: payload as T, meta: null };
 }
 
 function buildQueryString(
@@ -412,6 +437,25 @@ export async function getSessionHistory(
   );
 }
 
+export async function getSessionHistoryWithMeta(
+  sessionId: string,
+  params: {
+    page?: number;
+    page_size?: number;
+    level?: string | null;
+    source?: string | null;
+    event_type?: string | null;
+    q?: string | null;
+    sort_order?: "asc" | "desc";
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiEnvelope<SessionHistoryEntry[]>> {
+  return apiRequestEnvelope<SessionHistoryEntry[]>(
+    `/api/sessions/${sessionId}/history${buildQueryString(params)}`,
+    { signal },
+  );
+}
+
 export async function getSessionArtifacts(
   sessionId: string,
   params: {
@@ -424,6 +468,23 @@ export async function getSessionArtifacts(
   signal?: AbortSignal,
 ): Promise<RuntimeArtifact[]> {
   return apiRequest<RuntimeArtifact[]>(
+    `/api/sessions/${sessionId}/artifacts${buildQueryString(params)}`,
+    { signal },
+  );
+}
+
+export async function getSessionArtifactsWithMeta(
+  sessionId: string,
+  params: {
+    page?: number;
+    page_size?: number;
+    q?: string | null;
+    sort_by?: "created_at" | "relative_path";
+    sort_order?: "asc" | "desc";
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiEnvelope<RuntimeArtifact[]>> {
+  return apiRequestEnvelope<RuntimeArtifact[]>(
     `/api/sessions/${sessionId}/artifacts${buildQueryString(params)}`,
     { signal },
   );
@@ -894,6 +955,22 @@ export async function listRuntimeRuns(
   });
 }
 
+export async function listRuntimeRunsWithMeta(
+  params: {
+    page?: number;
+    page_size?: number;
+    q?: string | null;
+    session_id?: string | null;
+    sort_by?: "started_at" | "created_at";
+    sort_order?: "asc" | "desc";
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiEnvelope<RuntimeExecutionRun[]>> {
+  return apiRequestEnvelope<RuntimeExecutionRun[]>(`/api/runtime/runs${buildQueryString(params)}`, {
+    signal,
+  });
+}
+
 export async function listRuntimeArtifacts(
   params: {
     page?: number;
@@ -908,6 +985,25 @@ export async function listRuntimeArtifacts(
   return apiRequest<RuntimeArtifact[]>(`/api/runtime/artifacts${buildQueryString(params)}`, {
     signal,
   });
+}
+
+export async function listRuntimeArtifactsWithMeta(
+  params: {
+    page?: number;
+    page_size?: number;
+    q?: string | null;
+    session_id?: string | null;
+    sort_by?: "created_at" | "relative_path";
+    sort_order?: "asc" | "desc";
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiEnvelope<RuntimeArtifact[]>> {
+  return apiRequestEnvelope<RuntimeArtifact[]>(
+    `/api/runtime/artifacts${buildQueryString(params)}`,
+    {
+      signal,
+    },
+  );
 }
 
 export async function listRuntimeProfiles(signal?: AbortSignal): Promise<RuntimeProfile[]> {

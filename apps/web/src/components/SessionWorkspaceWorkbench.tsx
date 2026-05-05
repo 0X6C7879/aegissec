@@ -359,6 +359,7 @@ export function SessionWorkspaceWorkbench() {
     queryFn: ({ signal }) => getSessionConversation(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
   });
+  const connectionState = useSessionEvents(activeSessionId);
 
   const sessionQueueQuery = useQuery({
     enabled: Boolean(activeSessionId),
@@ -366,11 +367,18 @@ export function SessionWorkspaceWorkbench() {
     queryFn: ({ signal }) => getSessionQueue(activeSessionId!, signal),
     placeholderData: (previousValue) => previousValue,
     refetchInterval: (query) => {
+      if (connectionState === "open" || connectionState === "connecting") {
+        return false;
+      }
       const value = query.state.data;
       if (!value) {
         return false;
       }
-      return value.active_generation || value.queued_generations.length > 0 ? 1500 : false;
+      return connectionState === "closed" || connectionState === "error"
+        ? value.active_generation || value.queued_generations.length > 0
+          ? 1500
+          : false
+        : false;
     },
   });
 
@@ -420,7 +428,6 @@ export function SessionWorkspaceWorkbench() {
     setSelectedAttackNodeId(null);
   }, [sessionAttackGraphQuery.data?.nodes]);
 
-  useSessionEvents(activeSessionId);
   const sessionRuns = useMemo(
     () =>
       (runtimeStatusQuery.data?.recent_runs ?? []).filter(

@@ -4187,6 +4187,12 @@ def test_session_runner_source_has_no_routes_chat_fallback_import() -> None:
     assert "app.api.routes_chat" not in session_runner_source
 
 
+def test_session_runner_source_has_no_app_main_import() -> None:
+    session_runner_source = Path(harness_session_runner.__file__).read_text(encoding="utf-8")
+    assert 'importlib.import_module("app.main")' not in session_runner_source
+    assert "app.main" not in session_runner_source
+
+
 def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
     client: TestClient,
     monkeypatch: MonkeyPatch,
@@ -4290,6 +4296,10 @@ def test_startup_recovery_abandons_stale_continuation_and_requeues_generation(
             if name == "app.api.routes_chat":
                 raise AssertionError(
                     "session_runner should not import routes_chat during worker start"
+                )
+            if name == "app.main":
+                raise AssertionError(
+                    "session_runner should not import app.main during worker start"
                 )
             return original_import_module(name, package)
 

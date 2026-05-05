@@ -5,7 +5,7 @@ import {
   executeRuntimeCommand,
   getRuntimeHealth,
   getRuntimeStatus,
-  listRuntimeRuns,
+  listRuntimeRunsWithMeta,
   startRuntime,
   stopRuntime,
 } from "../lib/api";
@@ -97,7 +97,7 @@ export function RuntimeWorkspace() {
 
   const runtimeRunsQuery = useQuery({
     queryKey: RUNTIME_RUNS_QUERY_KEY,
-    queryFn: ({ signal }) => listRuntimeRuns({ page_size: 20 }, signal),
+    queryFn: ({ signal }) => listRuntimeRunsWithMeta({ page_size: 20 }, signal),
     placeholderData: (previousValue) => previousValue,
   });
 
@@ -150,7 +150,10 @@ export function RuntimeWorkspace() {
         RUNTIME_STATUS_QUERY_KEY,
         (currentValue) => clearRecentRunsCache(currentValue),
       );
-      queryClient.setQueryData<RuntimeExecutionRun[] | undefined>(RUNTIME_RUNS_QUERY_KEY, []);
+      queryClient.setQueryData(RUNTIME_RUNS_QUERY_KEY, {
+        data: [] as RuntimeExecutionRun[],
+        meta: null,
+      });
       await queryClient.invalidateQueries({ queryKey: RUNTIME_STATUS_QUERY_KEY });
       await queryClient.invalidateQueries({ queryKey: RUNTIME_RUNS_QUERY_KEY });
     },
@@ -244,7 +247,7 @@ export function RuntimeWorkspace() {
 
   const runtime = runtimeStatusQuery.data.runtime;
   const runtimeHealth = runtimeHealthQuery.data ?? null;
-  const recentRuns = runtimeRunsQuery.data ?? runtimeStatusQuery.data.recent_runs;
+  const recentRuns = runtimeRunsQuery.data?.data ?? runtimeStatusQuery.data.recent_runs;
   const isLifecyclePending = startRuntimeMutation.isPending || stopRuntimeMutation.isPending;
   const isExecuteDisabled =
     runtime.status !== "running" || executeRuntimeMutation.isPending || command.trim().length === 0;
